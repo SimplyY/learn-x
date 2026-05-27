@@ -37,7 +37,7 @@
 
 ## Index 与 Review 的区别
 
-`index/weekly/YYYY-WW.index.md` 是处理清单，只声明本周要读取哪些输入文件。
+`index/weekly/YYYY-WW.index.md` 是显式处理清单和排除修正，不再是唯一入口；脚本还会把本周 mtime 命中的文件作为自动候选读入。
 
 `log/weekly/YYYY-WW.review.md` 是真正的周记 / 周复盘，记录状态、判断变化、行动质量和自我反馈。
 
@@ -62,11 +62,11 @@
 1. 把信息输入放入 `03_input/inbox/`。
 2. 把行动证据放入 `03_input/action/`。
 3. 把日记、周记、月记放入 `03_input/log/`。
-4. 在 `03_input/index/weekly/YYYY-WW.index.md` 中列出本周要处理的路径。
-5. 运行 `npm run process:weekly` 生成 `04_output/_dist/YYYY-WW/` 中间材料。
+4. 在 `03_input/index/weekly/YYYY-WW.index.md` 中列出明确要处理的路径；如需排除自动候选，在 `## 排除` / `## 不进入本周` / `## 忽略` 下列出路径。
+5. 运行 `npm run process:weekly` 生成 `04_output/_dist/YYYY-WW/` 中间材料；脚本会合并 index 显式路径和本周 mtime 自动候选。
 6. Codex 读取中间材料和 Skill 规则，生成 `04_output/weekly/YYYY-WW.md`。
 
-兼容说明：旧清单里引用的 `input/...` 路径会被脚本映射到 `03_input/inbox/...`；新清单请直接使用 `03_input/...`。
+兼容说明：旧清单里引用的 `input/...` 路径会被脚本映射到 `03_input/inbox/...`；新清单请直接使用 `03_input/...`。mtime 只是候选信号，尤其 reading / podcast / theme-read 这类持续维护内容需要在 Weekly Output 中谨慎判断。
 
 ## 支持格式
 

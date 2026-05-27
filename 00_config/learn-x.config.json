@@ -26,32 +26,6 @@
       "placeholder": "这里预留给“知行合一”的行动系统：任务实验、复盘闭环、真实世界反馈和下一步行动编排。"
     }
   ],
-  "learningScenarios": [
-    {
-      "id": "global-audit",
-      "title": "全局认知审计",
-      "subtitle": "审计道法脱节、逻辑漏洞和 AI 异化风险",
-      "needsDomain": false,
-      "recommendedSources": [
-        "README.md",
-        "01_core",
-        "03_input/README.md",
-        "04_output/README.md",
-        ".agents/skills/learn-x-process",
-        "app/code/docs"
-      ]
-    },
-    {
-      "id": "domain-research",
-      "title": "领域研究",
-      "subtitle": "围绕当前问题研究某个领域的结构、边界和行动抓手",
-      "needsDomain": true,
-      "recommendedSources": [
-        "README.md",
-        "01_core/法/{{domain}}"
-      ]
-    }
-  ],
   "contextWeights": {
     "version": 1,
     "defaults": {
