@@ -2,4 +2,7 @@ node_modules/
 code/node_modules/
 code/public/data/
 code/public/.nojekyll
+app/code/node_modules/
+app/code/public/data/
+app/code/public/.nojekyll
 dist/

@@ -1,0 +1,129 @@
+{
+  "contextBudget": {
+    "recommendedRatio": 0.6666666667,
+    "recommendedChineseChars": 30000,
+    "tokensPerChineseChar": 1.8,
+    "latinCharsPerToken": 4,
+    "models": [
+      {
+        "id": "chatgpt-gemini",
+        "label": "ChatGPT Thinking / Gemini Pro",
+        "contextTokens": 1000000
+      }
+    ]
+  },
+  "dialogueTypes": [
+    {
+      "id": "clarify-question",
+      "name": "问清问题",
+      "useCases": "把模糊问题变清楚，识别隐藏前提，找到最值得优先回答的问题。",
+      "behaviorDirections": [
+        "先识别模糊词、跳跃假设和未说明约束。",
+        "优先追问最影响判断的少数关键问题。",
+        "必要时把问题重写为更可回答、更可验证的版本。"
+      ],
+      "outputGoal": "先问对，再回答。",
+      "subtypes": [
+        {
+          "id": "clarify-question.clarify",
+          "name": "问题澄清",
+          "promptPath": "02_prompts/chatpack/clarify-question/clarify.md"
+        },
+        {
+          "id": "clarify-question.rewrite",
+          "name": "问题重写",
+          "promptPath": "02_prompts/chatpack/clarify-question/rewrite.md"
+        }
+      ],
+      "avoid": [
+        "直接泛泛给答案",
+        "堆砌建议",
+        "忽略问题定义"
+      ]
+    },
+    {
+      "id": "learn-understand",
+      "name": "学习理解",
+      "useCases": "真正学会一个知识、概念、领域或能力，适合解释、陪练、练习与反馈。",
+      "behaviorDirections": [
+        "先判断我当前理解可能卡在哪里。",
+        "用分层解释、例子、反例和练习帮助我理解。",
+        "鼓励我输出、复述、迁移和自检。"
+      ],
+      "outputGoal": "帮助我理解、提取、练习、输出。",
+      "subtypes": [
+        {
+          "id": "learn-understand.concept",
+          "name": "概念理解",
+          "promptPath": "02_prompts/chatpack/learn-understand/concept.md"
+        },
+        {
+          "id": "learn-understand.practice",
+          "name": "练习反馈",
+          "promptPath": "02_prompts/chatpack/learn-understand/practice.md"
+        }
+      ],
+      "avoid": [
+        "只给结论",
+        "过度术语化",
+        "替我完成本该练习的部分"
+      ]
+    },
+    {
+      "id": "judge-decide",
+      "name": "判断决策",
+      "useCases": "做重要判断和选择，覆盖金钱、时间、精力、关系和人生方向等广义投资。",
+      "behaviorDirections": [
+        "先明确决策目标、约束、时间尺度和不可逆成本。",
+        "同时分析风险、反例、机会成本和可验证信号。",
+        "把判断拆成可检验假设，而不是只给立场。"
+      ],
+      "outputGoal": "帮助我做更清醒、更可验证的判断。",
+      "subtypes": [
+        {
+          "id": "judge-decide.one-step-deeper",
+          "name": "多思考一步",
+          "promptPath": "02_prompts/chatpack/judge-decide/one-step-deeper.md"
+        },
+        {
+          "id": "judge-decide.risk",
+          "name": "风险反例",
+          "promptPath": "02_prompts/chatpack/judge-decide/risk.md"
+        }
+      ],
+      "avoid": [
+        "替我拍脑袋决策",
+        "忽略反例",
+        "把偏好包装成事实"
+      ]
+    },
+    {
+      "id": "create-execute",
+      "name": "创造执行",
+      "useCases": "把想法变成作品、行动或可执行任务，适合 Demo、写作、构建和验收。",
+      "behaviorDirections": [
+        "先把目标转成可交付物、约束和验收标准。",
+        "优先给出最小可执行版本。",
+        "把任务拆成清晰步骤，并指出下一步行动。"
+      ],
+      "outputGoal": "从想法走向产物。",
+      "subtypes": [
+        {
+          "id": "create-execute.action",
+          "name": "行动实验",
+          "promptPath": "02_prompts/chatpack/create-execute/action.md"
+        },
+        {
+          "id": "create-execute.build",
+          "name": "构建执行",
+          "promptPath": "02_prompts/chatpack/create-execute/build.md"
+        }
+      ],
+      "avoid": [
+        "停留在想法层",
+        "任务拆得过碎",
+        "缺少验收标准"
+      ]
+    }
+  ]
+}

@@ -17,8 +17,8 @@ Weekly Memory 是人工审核后的极薄跨周上下文，不是正式长期资
 
 主要读取：
 
-- `output/weekly/YYYY-WW.md`
-- `output/candidates/YYYY-WW.memory-candidates.md`
+- `04_output/weekly/YYYY-WW.md`
+- `04_output/_dist/YYYY-WW/memory-candidates.md`
 
 重点看：
 
@@ -30,7 +30,7 @@ Weekly Memory 是人工审核后的极薄跨周上下文，不是正式长期资
 
 写入季度文件：
 
-`output/memory/YYYY-QN.memory.md`
+`01_core/memory/YYYY-QN.memory.md`
 
 每周新增或更新一个小节：
 

@@ -5,9 +5,9 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
-const inputRoot = path.join(repoRoot, "input");
-const outputRoot = path.join(repoRoot, "output/candidates");
-const weeklyInputRoot = path.join(inputRoot, "weekly");
+const inputRoot = path.join(repoRoot, "03_input");
+const legacyInputRoot = path.join(repoRoot, "input");
+const weeklyInputRoot = path.join(inputRoot, "index/weekly");
 const supportedExtensions = new Set([".md", ".txt", ".json", ".html", ".htm"]);
 const ignoredFileNames = new Set(["README.md", ".gitkeep"]);
 
@@ -25,6 +25,7 @@ export async function collectWeeklyInput(options = {}) {
 
     inWeekFiles.push({
       path: file.relativePath,
+      category: file.category,
       source: file.source,
       modifiedAt: info.mtime.toISOString(),
       size: info.size
@@ -35,6 +36,7 @@ export async function collectWeeklyInput(options = {}) {
     rawItems.push(
       ...parsedItems.map((item, index) => ({
         id: `${file.relativePath}#${index + 1}`,
+        category: file.category,
         source: file.source,
         path: file.relativePath,
         modifiedAt: info.mtime.toISOString(),
@@ -78,16 +80,25 @@ export async function collectWeeklyInput(options = {}) {
 
 export async function writeWeeklyInput(options = {}) {
   const payload = await collectWeeklyInput(options);
+  const outputRoot = path.join(repoRoot, "04_output/_dist", distWeekId(payload.week));
   await mkdir(outputRoot, { recursive: true });
-  const outputPath = path.join(outputRoot, `${payload.week}.input.json`);
+  const outputPath = path.join(outputRoot, "input.json");
   await writeFile(outputPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   return { payload, outputPath };
 }
 
 async function readWeeklyManifest(week) {
-  const candidates = [`${week}.md`, `${week.replace("-", "-W")}.md`];
-  for (const fileName of candidates) {
-    const absolutePath = path.join(weeklyInputRoot, fileName);
+  const withW = distWeekId(week);
+  const withoutW = withW.replace("-W", "-");
+  const candidates = [
+    path.join(weeklyInputRoot, `${withoutW}.index.md`),
+    path.join(weeklyInputRoot, `${withW}.index.md`),
+    path.join(weeklyInputRoot, `${withoutW}.md`),
+    path.join(weeklyInputRoot, `${withW}.md`),
+    path.join(legacyInputRoot, "weekly", `${withoutW}.md`),
+    path.join(legacyInputRoot, "weekly", `${withW}.md`)
+  ];
+  for (const absolutePath of candidates) {
     try {
       const content = await readFile(absolutePath, "utf8");
       return {
@@ -104,7 +115,7 @@ async function readWeeklyManifest(week) {
 
 function parseManifestPaths(content) {
   const paths = new Set();
-  const pathPattern = /(?:`([^`]+)`|(?<=^|[\s([{<])((?:input\/)[^\s)\]}>`]+))/gm;
+  const pathPattern = /(?:`([^`]+)`|(?<=^|[\s([{<])((?:03_input\/|input\/)[^\s)\]}>`]+))/gm;
   let ignoredSection = false;
   for (const line of content.split(/\r?\n/)) {
     const heading = line.match(/^#{1,6}\s+(.+)$/);
@@ -117,8 +128,8 @@ function parseManifestPaths(content) {
     for (const match of line.matchAll(pathPattern)) {
       const rawPath = (match[1] || match[2] || "").trim();
       const cleanPath = rawPath.replace(/^\.?\//, "").split("#")[0].replace(/[，。,.;；:：]+$/, "");
-      if (!cleanPath || cleanPath.startsWith("input/weekly/")) continue;
-      paths.add(cleanPath);
+      if (!cleanPath || cleanPath.startsWith("03_input/index/") || cleanPath.startsWith("input/weekly/")) continue;
+      paths.add(normalizeInputReference(cleanPath));
     }
   }
   return [...paths].sort((a, b) => a.localeCompare(b, "zh-Hans-CN"));
@@ -148,13 +159,13 @@ async function collectManifestFiles(manifest) {
     files.push({
       absolutePath,
       relativePath: toWebPath(path.relative(repoRoot, absolutePath)),
-      source: sourceFromRelativePath(relativePath)
+      ...inputKindFromRelativePath(relativePath)
     });
   }
   return files.sort((a, b) => a.relativePath.localeCompare(b.relativePath, "zh-Hans-CN"));
 }
 
-async function collectInputFiles(dir = inputRoot, source = "") {
+async function collectInputFiles(dir = inputRoot) {
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
@@ -167,11 +178,11 @@ async function collectInputFiles(dir = inputRoot, source = "") {
   for (const entry of entries) {
     const absolutePath = path.join(dir, entry.name);
     const relativePath = toWebPath(path.relative(repoRoot, absolutePath));
-    const nextSource = source || (dir === inputRoot ? entry.name : "input");
+    const kind = inputKindFromRelativePath(relativePath);
 
     if (entry.isDirectory()) {
-      if (dir === inputRoot && entry.name === "weekly") continue;
-      files.push(...(await collectInputFiles(absolutePath, nextSource)));
+      if (relativePath === "03_input/index" || relativePath.startsWith("03_input/index/")) continue;
+      files.push(...(await collectInputFiles(absolutePath)));
       continue;
     }
 
@@ -180,7 +191,7 @@ async function collectInputFiles(dir = inputRoot, source = "") {
     if (ignoredFileNames.has(entry.name)) continue;
     if (!supportedExtensions.has(path.extname(entry.name).toLowerCase())) continue;
 
-    files.push({ absolutePath, relativePath, source: nextSource });
+    files.push({ absolutePath, relativePath, ...kind });
   }
 
   return files.sort((a, b) => a.relativePath.localeCompare(b.relativePath, "zh-Hans-CN"));
@@ -301,7 +312,45 @@ function titleFromPath(filePath) {
 
 function sourceFromRelativePath(relativePath) {
   const parts = toWebPath(relativePath).split("/");
-  return parts[0] === "input" && parts[1] ? parts[1] : "input";
+  if (parts[0] === "03_input") return inputKindFromRelativePath(relativePath).source;
+  if (parts[0] === "input" && parts[1]) return parts[1];
+  return "input";
+}
+
+function inputKindFromRelativePath(relativePath) {
+  const parts = toWebPath(relativePath).split("/");
+  const category = parts[0] === "03_input" && parts[1] ? parts[1] : "input";
+  if (category === "inbox") {
+    return {
+      category,
+      source: parts[2] ? `inbox/${parts[2]}` : "inbox"
+    };
+  }
+  if (category === "action") {
+    return {
+      category,
+      source: parts[2] ? `action/${parts[2]}` : "action"
+    };
+  }
+  if (category === "log") {
+    return {
+      category,
+      source: parts[2] ? `log/${parts[2]}` : "log"
+    };
+  }
+  return { category, source: category };
+}
+
+function normalizeInputReference(relativePath) {
+  const cleanPath = toWebPath(relativePath);
+  if (!cleanPath.startsWith("input/")) return cleanPath;
+  const suffix = cleanPath.slice("input/".length);
+  if (suffix.startsWith("weekly/")) return `03_input/index/${suffix}`;
+  return `03_input/inbox/${suffix}`;
+}
+
+function distWeekId(weekId) {
+  return String(weekId).replace(/^(\d{4})-(\d{1,2})$/, (_match, year, week) => `${year}-W${String(week).padStart(2, "0")}`);
 }
 
 export function currentIsoWeek(date = new Date()) {

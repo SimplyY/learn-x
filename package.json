@@ -4,12 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node code/scripts/build-static-data.mjs",
-    "dev": "npm run build && node code/server.mjs",
+    "build": "node app/code/scripts/build-static-data.mjs",
+    "dev": "npm run build && node app/code/server.mjs",
     "snapshot": "npm run build",
     "process:weekly": "node .agents/skills/learn-x-process/scripts/generate-weekly-process-pack.mjs",
     "memory:weekly": "node .agents/skills/learn-x-process/scripts/prepare-weekly-memory.mjs",
-    "release": "node code/scripts/release.mjs"
+    "release": "node app/code/scripts/release.mjs"
   },
   "dependencies": {
     "dompurify": "^3.4.2",
