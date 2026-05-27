@@ -5,16 +5,16 @@ import { currentIsoWeek, writeWeeklyInput } from "./collect-weekly-input.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
-const candidatesRoot = path.join(repoRoot, "output/candidates");
 
 export async function generateWeeklyProcessPack(options = {}) {
   const week = options.week || currentIsoWeek();
   const { payload } = await writeWeeklyInput({ week });
   const sourceSummaries = buildSourceSummaries(payload);
   const processPack = renderProcessPack(payload, sourceSummaries);
+  const outputRoot = path.join(repoRoot, "04_output/_dist", distWeekId(payload.week));
 
-  await mkdir(candidatesRoot, { recursive: true });
-  const outputPath = path.join(candidatesRoot, `${payload.week}.process-pack.md`);
+  await mkdir(outputRoot, { recursive: true });
+  const outputPath = path.join(outputRoot, "process-pack.md");
   await writeFile(outputPath, processPack, "utf8");
 
   return {
@@ -35,7 +35,7 @@ function renderProcessPack(payload, sourceSummaries) {
     "",
     "1. 先读取本文件和同周 `.input.json`。",
     "2. 再读取 `.agents/skills/learn-x-process/resources/output-requirements.md` 和 `layer-rules.md`。",
-    "3. 由 Codex 按 Skill 规则生成 `output/weekly/YYYY-WW.md`。",
+    "3. 由 Codex 按 Skill 规则生成 `04_output/weekly/YYYY-WW.md`。",
     "4. 人再决定是否进入正式 `道/`、`法/`、`术/`、Prompt 或 Skill。",
     "",
     "## 1. 处理信息",
@@ -48,7 +48,7 @@ function renderProcessPack(payload, sourceSummaries) {
     `- 有效材料数：${payload.stats.itemCount}`,
     `- 去重后材料数：${payload.stats.uniqueItemCount}`,
     `- 去重数量：${payload.stats.duplicateCount}`,
-    `- JSON 中间材料：\`output/candidates/${payload.week}.input.json\``,
+    `- JSON 中间材料：\`04_output/_dist/${distWeekId(payload.week)}/input.json\``,
     "",
     "## 2. 来源覆盖",
     "",
@@ -67,8 +67,10 @@ function renderProcessPack(payload, sourceSummaries) {
 function buildSourceSummaries(payload) {
   const bySource = new Map();
   for (const file of payload.files) {
-    if (!bySource.has(file.source)) {
-      bySource.set(file.source, {
+    const key = `${file.category}:${file.source}`;
+    if (!bySource.has(key)) {
+      bySource.set(key, {
+        category: file.category || "input",
         source: file.source,
         fileCount: 0,
         itemCount: 0,
@@ -76,25 +78,28 @@ function buildSourceSummaries(payload) {
       });
     }
 
-    const entry = bySource.get(file.source);
+    const entry = bySource.get(key);
     entry.fileCount += 1;
     entry.files.push(file.path);
   }
 
   for (const item of payload.items) {
+    const category = item.category || "input";
     const source = item.source || "input";
-    if (!bySource.has(source)) {
-      bySource.set(source, {
+    const key = `${category}:${source}`;
+    if (!bySource.has(key)) {
+      bySource.set(key, {
+        category,
         source,
         fileCount: 0,
         itemCount: 0,
         files: []
       });
     }
-    bySource.get(source).itemCount += 1;
+    bySource.get(key).itemCount += 1;
   }
 
-  return [...bySource.values()].sort((a, b) => a.source.localeCompare(b.source, "zh-Hans-CN"));
+  return [...bySource.values()].sort((a, b) => `${a.category}/${a.source}`.localeCompare(`${b.category}/${b.source}`, "zh-Hans-CN"));
 }
 
 function renderSourceCoverage(sourceSummaries) {
@@ -102,16 +107,16 @@ function renderSourceCoverage(sourceSummaries) {
 
   const rows = sourceSummaries.map((source) => {
     const sampleFiles = source.files.slice(0, 3).map((file) => `\`${file}\``).join("、") || "-";
-    return `| ${source.source} | ${source.fileCount} | ${source.itemCount} | ${sampleFiles} |`;
+    return `| ${source.category} | ${source.source} | ${source.fileCount} | ${source.itemCount} | ${sampleFiles} |`;
   });
 
-  const expected = ["ai", "flomo", "reading", "podcast", "docs", "theme-read"];
-  const covered = new Set(sourceSummaries.filter((source) => source.itemCount > 0 || source.fileCount > 0).map((source) => source.source));
+  const expected = ["inbox", "action", "log"];
+  const covered = new Set(sourceSummaries.filter((source) => source.itemCount > 0 || source.fileCount > 0).map((source) => source.category));
   const missing = expected.filter((source) => !covered.has(source));
 
   return [
-    "| 来源 | 文件数 | 有效材料数 | 示例文件 |",
-    "| --- | ---: | ---: | --- |",
+    "| 输入类型 | 来源 | 文件数 | 有效材料数 | 示例文件 |",
+    "| --- | --- | ---: | ---: | --- |",
     ...rows,
     "",
     `明显缺口：${missing.length ? missing.map((source) => `\`${source}/\``).join("、") : "本周常见来源均有覆盖或已有自定义来源。"}`
@@ -123,12 +128,12 @@ function renderFileTable(files) {
 
   const rows = files.map((file, index) => {
     const sourceId = sourceFileId(index);
-    return `| ${sourceId} | ${file.source} | \`${file.path}\` | ${file.modifiedAt} | ${file.size} |`;
+    return `| ${sourceId} | ${file.category} | ${file.source} | \`${file.path}\` | ${file.modifiedAt} | ${file.size} |`;
   });
 
   return [
-    "| source id | 来源 | 原始路径 | 文件时间 | 字节数 |",
-    "| --- | --- | --- | --- | ---: |",
+    "| source id | 输入类型 | 来源 | 原始路径 | 文件时间 | 字节数 |",
+    "| --- | --- | --- | --- | --- | ---: |",
     ...rows
   ].join("\n");
 }
@@ -143,7 +148,7 @@ function renderItems(items) {
       : "";
 
     return [
-      `### ${itemId}｜${item.source}｜${item.title}`,
+      `### ${itemId}｜${item.category}｜${item.source}｜${item.title}`,
       "",
       `- 原始路径：\`${item.path}\``,
       `- 原始片段 id：\`${item.id}\``,
@@ -188,9 +193,13 @@ function parseArgs(argv) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const result = await generateWeeklyProcessPack(parseArgs(process.argv.slice(2)));
 
-  console.log(`Weekly input pack generated: output/candidates/${result.payload.week}.input.json`);
+  console.log(`Weekly input pack generated: 04_output/_dist/${distWeekId(result.payload.week)}/input.json`);
   console.log(`Weekly process pack generated: ${path.relative(repoRoot, result.outputPath)}`);
   console.log(`Input files: ${result.payload.stats.fileCount}`);
   console.log(`Unique items: ${result.payload.stats.uniqueItemCount}`);
   console.log(`Sources: ${result.sourceSummaries.map((source) => `${source.source}:${source.itemCount}`).join(", ") || "none"}`);
+}
+
+function distWeekId(weekId) {
+  return String(weekId).replace(/^(\d{4})-(\d{1,2})$/, (_match, year, week) => `${year}-W${String(week).padStart(2, "0")}`);
 }

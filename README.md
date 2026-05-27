@@ -22,6 +22,20 @@ AI 效果 = Prompt × Context × Model × Feedback × Action
 Prompt + Context → Chat Pack
 ```
 
+每周学习闭环：
+
+```text
+信息输入 + 行动证据 + 自我反馈
+↓
+Weekly Output
+↓
+人工判断
+↓
+Memory
+↓
+下一轮行动
+```
+
 ## 2. 核心思想
 
 * **为学日增**：flomo、飞书、书籍、播客、AI 对话、真实项目，用于积累术与器。
@@ -159,3 +173,14 @@ AI 深度对话
 Skill 用于可复用工作流。
 Prompt 用于一次性任务。
 人负责最终价值判断。
+
+## 11. Input 边界
+
+```text
+03_input/inbox  记录我接收了什么
+03_input/action 记录我做了什么
+03_input/log    记录我如何理解自己
+03_input/index  记录本次处理什么
+```
+
+`03_input/index/weekly/*.index.md` 是处理清单；`03_input/log/weekly/*.review.md` 才是真正周记。`01_core/memory/` 是人工确认后的输出，不和 log 混淆。

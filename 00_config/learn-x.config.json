@@ -1,0 +1,255 @@
+{
+  "brand": {
+    "title": "Learn-X",
+    "subtitle": "学习动力引擎",
+    "mark": "LX"
+  },
+  "promptDirectory": "02_prompts/meta",
+  "menu": [
+    {
+      "id": "browse",
+      "label": "知",
+      "module": "browse",
+      "title": "知识库浏览"
+    },
+    {
+      "id": "learning",
+      "label": "学",
+      "module": "learning",
+      "title": "学习动力引擎"
+    },
+    {
+      "id": "action",
+      "label": "行",
+      "module": "action",
+      "title": "行动动力引擎",
+      "placeholder": "这里预留给“知行合一”的行动系统：任务实验、复盘闭环、真实世界反馈和下一步行动编排。"
+    }
+  ],
+  "learningScenarios": [
+    {
+      "id": "global-audit",
+      "title": "全局认知审计",
+      "subtitle": "审计道法脱节、逻辑漏洞和 AI 异化风险",
+      "needsDomain": false,
+      "recommendedSources": [
+        "README.md",
+        "01_core",
+        "03_input/README.md",
+        "04_output/README.md",
+        ".agents/skills/learn-x-process",
+        "app/code/docs"
+      ]
+    },
+    {
+      "id": "domain-research",
+      "title": "领域研究",
+      "subtitle": "围绕当前问题研究某个领域的结构、边界和行动抓手",
+      "needsDomain": true,
+      "recommendedSources": [
+        "README.md",
+        "01_core/法/{{domain}}"
+      ]
+    }
+  ],
+  "contextWeights": {
+    "version": 1,
+    "defaults": {
+      "baseWeight": 50,
+      "defaultStrategy": "normal",
+      "modeMultipliers": {
+        "global-audit": 1,
+        "domain-research": 1,
+        "learning": 1,
+        "action": 1,
+        "writing": 1
+      }
+    },
+    "layers": {
+      "dao": {
+        "baseWeight": 70,
+        "tags": [
+          "道"
+        ],
+        "modeMultipliers": {
+          "global-audit": 1.25,
+          "domain-research": 1.05,
+          "learning": 1.1,
+          "action": 1,
+          "writing": 1.05
+        }
+      },
+      "fa": {
+        "baseWeight": 65,
+        "tags": [
+          "法"
+        ],
+        "modeMultipliers": {
+          "global-audit": 1,
+          "domain-research": 1.25,
+          "learning": 1.1,
+          "action": 1,
+          "writing": 1
+        }
+      },
+      "shu": {
+        "baseWeight": 55,
+        "tags": [
+          "术"
+        ],
+        "modeMultipliers": {
+          "global-audit": 0.9,
+          "domain-research": 1,
+          "learning": 1.05,
+          "action": 1.2,
+          "writing": 1
+        }
+      },
+      "qi": {
+        "baseWeight": 45,
+        "tags": [
+          "器"
+        ],
+        "modeMultipliers": {
+          "global-audit": 0.8,
+          "domain-research": 0.8,
+          "learning": 0.9,
+          "action": 1.1,
+          "writing": 0.8
+        }
+      },
+      "read": {
+        "baseWeight": 45,
+        "tags": [
+          "阅读",
+          "素材"
+        ],
+        "modeMultipliers": {
+          "global-audit": 0.8,
+          "domain-research": 0.9,
+          "learning": 1.1,
+          "action": 0.8,
+          "writing": 0.9
+        },
+        "defaultStrategy": "normal"
+      },
+      "prompt": {
+        "baseWeight": 90,
+        "tags": [
+          "Prompt"
+        ],
+        "modeMultipliers": {
+          "global-audit": 1,
+          "domain-research": 1,
+          "learning": 1,
+          "action": 1,
+          "writing": 1
+        }
+      },
+      "memory": {
+        "baseWeight": 95,
+        "tags": [
+          "过程记忆",
+          "Memory"
+        ],
+        "modeMultipliers": {
+          "global-audit": 1.2,
+          "domain-research": 1.1,
+          "learning": 1.2,
+          "action": 1.15,
+          "writing": 1.1
+        },
+        "defaultStrategy": "high"
+      }
+    },
+    "paths": [
+      {
+        "path": "01_core/memory/**",
+        "layer": "memory",
+        "baseWeight": 95,
+        "tags": [
+          "过程记忆",
+          "跨周记忆"
+        ],
+        "defaultStrategy": "high"
+      },
+      {
+        "path": "README.md",
+        "layer": "dao",
+        "baseWeight": 85,
+        "tags": [
+          "项目内核"
+        ],
+        "defaultStrategy": "normal"
+      },
+      {
+        "path": "01_core/道/00_README.md",
+        "layer": "dao",
+        "baseWeight": 85,
+        "tags": [
+          "道",
+          "总纲"
+        ],
+        "defaultStrategy": "high"
+      },
+      {
+        "path": "01_core/道/01_自我认知.md",
+        "layer": "dao",
+        "baseWeight": 85,
+        "tags": [
+          "道",
+          "自我认知"
+        ],
+        "defaultStrategy": "normal"
+      },
+      {
+        "path": "01_core/道/02_人生导师.md",
+        "layer": "dao",
+        "baseWeight": 85,
+        "tags": [
+          "道",
+          "人生导师"
+        ],
+        "defaultStrategy": "normal"
+      },
+      {
+        "path": "01_core/道/03_世界之道.md",
+        "layer": "dao",
+        "baseWeight": 85,
+        "tags": [
+          "道",
+          "世界观"
+        ],
+        "defaultStrategy": "normal"
+      },
+      {
+        "path": "01_core/法/*/领域地图.md",
+        "layer": "fa",
+        "baseWeight": 80,
+        "tags": [
+          "法",
+          "领域地图"
+        ],
+        "defaultStrategy": "normal"
+      },
+      {
+        "path": "01_core/法/read/**",
+        "layer": "read",
+        "baseWeight": 45,
+        "tags": [
+          "阅读"
+        ],
+        "defaultStrategy": "normal"
+      },
+      {
+        "path": "01_core/法/theme-read/**",
+        "layer": "read",
+        "baseWeight": 45,
+        "tags": [
+          "主题阅读"
+        ],
+        "defaultStrategy": "normal"
+      }
+    ]
+  }
+}

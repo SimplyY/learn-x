@@ -5,8 +5,7 @@ import { currentIsoWeek } from "./collect-weekly-input.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
-const weeklyRoot = path.join(repoRoot, "output/weekly");
-const candidatesRoot = path.join(repoRoot, "output/candidates");
+const weeklyRoot = path.join(repoRoot, "04_output/weekly");
 
 const explicitSignals = ["进入记忆", "继续追踪", "重要", "保留", "确认"];
 
@@ -17,9 +16,10 @@ export async function prepareWeeklyMemory(options = {}) {
   const content = await readFile(weeklyPath, "utf8");
   const candidates = extractMemoryCandidates(content);
   const candidatePack = renderCandidatePack(week, quarter, weeklyPath, candidates);
+  const candidatesRoot = path.join(repoRoot, "04_output/_dist", distWeekId(week));
 
   await mkdir(candidatesRoot, { recursive: true });
-  const outputPath = path.join(candidatesRoot, `${week}.memory-candidates.md`);
+  const outputPath = path.join(candidatesRoot, "memory-candidates.md");
   await writeFile(outputPath, candidatePack, "utf8");
 
   return {
@@ -81,7 +81,7 @@ function renderCandidatePack(week, quarter, weeklyPath, candidates) {
     "## 处理信息",
     "",
     `- Weekly Output：\`${path.relative(repoRoot, weeklyPath).split(path.sep).join("/")}\``,
-    `- 输出目标：\`output/memory/${quarter}.memory.md\``,
+    `- 输出目标：\`01_core/memory/${quarter}.memory.md\``,
     `- 建议小节：\`## ${week}\``,
     "",
     "## 已勾选内容",
@@ -163,8 +163,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const result = await prepareWeeklyMemory(parseArgs(process.argv.slice(2)));
 
   console.log(`Weekly memory candidates generated: ${path.relative(repoRoot, result.outputPath)}`);
-  console.log(`Quarterly memory target: output/memory/${result.quarter}.memory.md`);
+  console.log(`Quarterly memory target: 01_core/memory/${result.quarter}.memory.md`);
   console.log(`Checked items: ${result.counts.checked}`);
   console.log(`Explicit markers: ${result.counts.explicit}`);
   console.log(`Core clues: ${result.counts.core}`);
+}
+
+function distWeekId(weekId) {
+  return String(weekId).replace(/^(\d{4})-(\d{1,2})$/, (_match, year, week) => `${year}-W${String(week).padStart(2, "0")}`);
 }
