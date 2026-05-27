@@ -1,3 +1,5 @@
 node_modules/
-public/data/
-public/.nojekyll
+code/node_modules/
+code/public/data/
+code/public/.nojekyll
+dist/

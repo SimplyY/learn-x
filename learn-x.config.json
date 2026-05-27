@@ -1,0 +1,276 @@
+{
+  "brand": {
+    "title": "Learn-X",
+    "subtitle": "学习动力引擎",
+    "mark": "LX"
+  },
+  "promptDirectory": "01_meta-prompts",
+  "contextBudget": {
+    "recommendedRatio": 0.6666666667,
+    "recommendedChineseChars": 30000,
+    "tokensPerChineseChar": 1.8,
+    "latinCharsPerToken": 4,
+    "models": [
+      {
+        "id": "chatgpt-gemini",
+        "label": "ChatGPT Thinking / Gemini Pro",
+        "contextTokens": 1000000
+      }
+    ]
+  },
+  "menu": [
+    {
+      "id": "browse",
+      "label": "知",
+      "module": "browse",
+      "title": "知识库浏览"
+    },
+    {
+      "id": "learning",
+      "label": "学",
+      "module": "learning",
+      "title": "学习动力引擎"
+    },
+    {
+      "id": "action",
+      "label": "行",
+      "module": "action",
+      "title": "行动动力引擎",
+      "placeholder": "这里预留给“知行合一”的行动系统：任务实验、复盘闭环、真实世界反馈和下一步行动编排。"
+    }
+  ],
+  "learningScenarios": [
+    {
+      "id": "global-audit",
+      "title": "全局认知审计",
+      "subtitle": "审计道法脱节、逻辑漏洞和 AI 异化风险",
+      "needsDomain": false,
+      "recommendedSources": "all"
+    },
+    {
+      "id": "domain-research",
+      "title": "领域研究",
+      "subtitle": "围绕当前问题研究某个领域的结构、边界和行动抓手",
+      "needsDomain": true,
+      "recommendedSources": ["README.md", "法/{{domain}}"]
+    }
+  ],
+  "dialogueTypes": [
+    {
+      "id": "clarify-question",
+      "name": "问清问题",
+      "useCases": "把模糊问题变清楚，适合问题澄清、问题重写、隐藏前提识别和第一性原理追问。",
+      "behaviorDirections": [
+        "先识别当前问题中的模糊词、跳跃假设和未说明约束。",
+        "优先追问最影响判断的少数关键问题。",
+        "必要时把问题重写为更可回答、更可验证的版本。",
+        "帮助找到最值得优先回答的问题。"
+      ],
+      "outputGoal": "先问对，再回答。",
+      "subtypes": ["问题澄清", "问题重写", "隐藏前提识别", "第一性原理追问", "优先问题定位"],
+      "avoid": ["直接泛泛给答案", "堆砌建议", "忽略问题定义"]
+    },
+    {
+      "id": "learn-understand",
+      "name": "学习理解",
+      "useCases": "真正学会一个知识、概念、领域或能力，适合解释、陪练、练习与反馈。",
+      "behaviorDirections": [
+        "先判断我当前理解可能卡在哪里。",
+        "用分层解释、例子、反例和练习帮助我理解。",
+        "鼓励我输出、复述、迁移和自检。",
+        "必要时构建轻量知识图谱，但不追求形式复杂。"
+      ],
+      "outputGoal": "不是直接给答案，而是帮助我理解、提取、练习、输出。",
+      "subtypes": ["AI 私教", "概念解释", "读书陪练", "能力训练", "练习与反馈", "学习型知识图谱"],
+      "avoid": ["只给结论", "过度术语化", "替我完成本该练习的部分"]
+    },
+    {
+      "id": "judge-decide",
+      "name": "判断决策",
+      "useCases": "做重要判断和选择，覆盖金钱、时间、精力、关系和人生方向等广义投资。",
+      "behaviorDirections": [
+        "先明确决策目标、约束、时间尺度和不可逆成本。",
+        "同时分析风险、反例、机会成本和可验证信号。",
+        "把判断拆成可检验假设，而不是只给立场。",
+        "需要时审计道法术器是否脱节。"
+      ],
+      "outputGoal": "帮助我做更清醒、更可验证的判断。",
+      "subtypes": ["资产决策", "时间精力决策", "职业 / 城市 / 创业决策", "投资判断", "系统进化", "道法术器审计", "风险与机会成本分析"],
+      "avoid": ["替我拍脑袋决策", "忽略反例", "把偏好包装成事实"]
+    },
+    {
+      "id": "create-execute",
+      "name": "创造执行",
+      "useCases": "把想法变成作品、行动或可执行任务，适合 Demo、写作、构建和验收。",
+      "behaviorDirections": [
+        "先把目标转成可交付物、约束和验收标准。",
+        "优先给出最小可执行版本。",
+        "把任务拆成清晰步骤，并指出下一步行动。",
+        "需要创作时兼顾表达质量和落地路径。"
+      ],
+      "outputGoal": "从想法走向产物。",
+      "subtypes": ["行动实验", "Demo 设计", "写作表达", "分享型一览图", "生图提示词", "Codex / 构建执行", "任务拆解与验收标准"],
+      "avoid": ["停留在想法层", "任务拆得过碎", "缺少验收标准"]
+    }
+  ],
+  "contextWeights": {
+    "version": 1,
+    "defaults": {
+      "baseWeight": 50,
+      "defaultStrategy": "normal",
+      "modeMultipliers": {
+        "global-audit": 1,
+        "domain-research": 1,
+        "learning": 1,
+        "action": 1,
+        "writing": 1
+      }
+    },
+    "layers": {
+      "dao": {
+        "baseWeight": 70,
+        "tags": ["道"],
+        "modeMultipliers": {
+          "global-audit": 1.25,
+          "domain-research": 1.05,
+          "learning": 1.1,
+          "action": 1,
+          "writing": 1.05
+        }
+      },
+      "fa": {
+        "baseWeight": 65,
+        "tags": ["法"],
+        "modeMultipliers": {
+          "global-audit": 1,
+          "domain-research": 1.25,
+          "learning": 1.1,
+          "action": 1,
+          "writing": 1
+        }
+      },
+      "shu": {
+        "baseWeight": 55,
+        "tags": ["术"],
+        "modeMultipliers": {
+          "global-audit": 0.9,
+          "domain-research": 1,
+          "learning": 1.05,
+          "action": 1.2,
+          "writing": 1
+        }
+      },
+      "qi": {
+        "baseWeight": 45,
+        "tags": ["器"],
+        "modeMultipliers": {
+          "global-audit": 0.8,
+          "domain-research": 0.8,
+          "learning": 0.9,
+          "action": 1.1,
+          "writing": 0.8
+        }
+      },
+      "read": {
+        "baseWeight": 45,
+        "tags": ["阅读", "素材"],
+        "modeMultipliers": {
+          "global-audit": 0.8,
+          "domain-research": 0.9,
+          "learning": 1.1,
+          "action": 0.8,
+          "writing": 0.9
+        },
+        "defaultStrategy": "summary"
+      },
+      "prompt": {
+        "baseWeight": 90,
+        "tags": ["Prompt"],
+        "modeMultipliers": {
+          "global-audit": 1,
+          "domain-research": 1,
+          "learning": 1,
+          "action": 1,
+          "writing": 1
+        }
+      },
+      "memory": {
+        "baseWeight": 95,
+        "tags": ["过程记忆", "Memory"],
+        "modeMultipliers": {
+          "global-audit": 1.2,
+          "domain-research": 1.1,
+          "learning": 1.2,
+          "action": 1.15,
+          "writing": 1.1
+        },
+        "defaultStrategy": "high"
+      }
+    },
+    "paths": [
+      {
+        "path": "output/memory/**",
+        "layer": "memory",
+        "baseWeight": 95,
+        "tags": ["过程记忆", "跨周记忆"],
+        "defaultStrategy": "high"
+      },
+      {
+        "path": "README.md",
+        "layer": "dao",
+        "baseWeight": 85,
+        "tags": ["项目内核"],
+        "defaultStrategy": "normal"
+      },
+      {
+        "path": "道/00_README.md",
+        "layer": "dao",
+        "baseWeight": 85,
+        "tags": ["道", "总纲"],
+        "defaultStrategy": "high"
+      },
+      {
+        "path": "道/01_自我认知.md",
+        "layer": "dao",
+        "baseWeight": 85,
+        "tags": ["道", "自我认知"],
+        "defaultStrategy": "normal"
+      },
+      {
+        "path": "道/02_人生导师.md",
+        "layer": "dao",
+        "baseWeight": 85,
+        "tags": ["道", "人生导师"],
+        "defaultStrategy": "normal"
+      },
+      {
+        "path": "道/03_世界之道.md",
+        "layer": "dao",
+        "baseWeight": 85,
+        "tags": ["道", "世界观"],
+        "defaultStrategy": "normal"
+      },
+      {
+        "path": "法/*/领域地图.md",
+        "layer": "fa",
+        "baseWeight": 80,
+        "tags": ["法", "领域地图"],
+        "defaultStrategy": "normal"
+      },
+      {
+        "path": "法/read/**",
+        "layer": "read",
+        "baseWeight": 45,
+        "tags": ["阅读"],
+        "defaultStrategy": "summary"
+      },
+      {
+        "path": "法/theme-read/**",
+        "layer": "read",
+        "baseWeight": 45,
+        "tags": ["主题阅读"],
+        "defaultStrategy": "summary"
+      }
+    ]
+  }
+}
