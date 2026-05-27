@@ -14,81 +14,92 @@
   },
   "dialogueTypes": [
     {
-      "id": "clarify-question",
-      "name": "问清问题",
-      "useCases": "把模糊问题变清楚，识别隐藏前提，找到最值得优先回答的问题。",
-      "behaviorDirections": [
-        "先识别模糊词、跳跃假设和未说明约束。",
-        "优先追问最影响判断的少数关键问题。",
-        "必要时把问题重写为更可回答、更可验证的版本。"
-      ],
-      "outputGoal": "先问对，再回答。",
-      "subtypes": [
-        {
-          "id": "clarify-question.clarify",
-          "name": "问题澄清",
-          "promptPath": "02_prompts/chatpack/clarify-question/clarify.md"
-        },
-        {
-          "id": "clarify-question.rewrite",
-          "name": "问题重写",
-          "promptPath": "02_prompts/chatpack/clarify-question/rewrite.md"
-        }
-      ],
+      "id": "plain-context",
+      "name": "空提示词",
+      "emptyPrompt": true,
+      "useCases": "只装配当前问题和上下文，不加入场景提示词约束。",
+      "outputGoal": "轻量生成 Chat Pack，让 AI 自行根据问题和上下文回答。",
+      "subtypes": [],
       "avoid": [
-        "直接泛泛给答案",
-        "堆砌建议",
-        "忽略问题定义"
+        "额外注入场景约束",
+        "自动套用子类型模板"
       ]
     },
     {
-      "id": "learn-understand",
-      "name": "学习理解",
-      "useCases": "真正学会一个知识、概念、领域或能力，适合解释、陪练、练习与反馈。",
+      "id": "learning-insight",
+      "name": "学习洞察",
+      "useCases": "把知识、材料和经验变成理解、结构与洞察。",
       "behaviorDirections": [
-        "先判断我当前理解可能卡在哪里。",
-        "用分层解释、例子、反例和练习帮助我理解。",
-        "鼓励我输出、复述、迁移和自检。"
+        "先抓住材料背后的核心问题和结构。",
+        "把零散输入压缩成可解释、可迁移、可复述的理解。",
+        "优先输出洞察、关系和下一步学习抓手。"
       ],
-      "outputGoal": "帮助我理解、提取、练习、输出。",
+      "outputGoal": "把知识、材料和经验变成理解、结构与洞察。",
       "subtypes": [
         {
-          "id": "learn-understand.concept",
-          "name": "概念理解",
-          "promptPath": "02_prompts/chatpack/learn-understand/concept.md"
+          "id": "learning-insight.book-decode",
+          "name": "读书解码",
+          "summary": "书魂捕手、书的结构、X 光阅读。"
         },
         {
-          "id": "learn-understand.practice",
-          "name": "练习反馈",
-          "promptPath": "02_prompts/chatpack/learn-understand/practice.md"
+          "id": "learning-insight.domain-research",
+          "name": "领域研究",
+          "summary": "教育、AI、投资、创业等领域地图。",
+          "needsDomain": true,
+          "recommendedSources": [
+            "README.md",
+            "01_core/法/{{domain}}"
+          ]
+        },
+        {
+          "id": "learning-insight.ai-tutor",
+          "name": "AI 私教",
+          "summary": "追问、练习、纠错、输出。"
         }
       ],
       "avoid": [
-        "只给结论",
-        "过度术语化",
-        "替我完成本该练习的部分"
+        "只总结材料",
+        "堆概念不建结构",
+        "替代用户练习"
       ]
     },
     {
-      "id": "judge-decide",
-      "name": "判断决策",
-      "useCases": "做重要判断和选择，覆盖金钱、时间、精力、关系和人生方向等广义投资。",
+      "id": "reflective-decision",
+      "name": "判断决策自省",
+      "useCases": "审计系统、判断选择、校准价值与行动。",
       "behaviorDirections": [
-        "先明确决策目标、约束、时间尺度和不可逆成本。",
-        "同时分析风险、反例、机会成本和可验证信号。",
-        "把判断拆成可检验假设，而不是只给立场。"
+        "先明确目标、约束、证据和不可逆成本。",
+        "同时检查动机、风险、反例和现实反馈。",
+        "把判断拆成可验证假设，而不是只给立场。"
       ],
-      "outputGoal": "帮助我做更清醒、更可验证的判断。",
+      "outputGoal": "帮助我做更清醒、更可验证的判断，并暴露自我欺骗。",
       "subtypes": [
         {
-          "id": "judge-decide.one-step-deeper",
-          "name": "多思考一步",
-          "promptPath": "02_prompts/chatpack/judge-decide/one-step-deeper.md"
+          "id": "reflective-decision.system-audit",
+          "name": "Learn-X系统审计",
+          "summary": "Learn-X、Chat Pack、Skill、目录结构、复杂度、反馈闭环。",
+          "recommendedSources": [
+            "README.md",
+            "01_core",
+            "03_input/README.md",
+            "04_output/README.md",
+            ".agents/skills/learn-x-process",
+            "app/code/docs"
+          ]
         },
         {
-          "id": "judge-decide.risk",
-          "name": "风险反例",
-          "promptPath": "02_prompts/chatpack/judge-decide/risk.md"
+          "id": "reflective-decision.broad-investment-decision",
+          "name": "广义投资决策",
+          "summary": "资产、时间、精力、职业、城市、创业、关系等选择。"
+        },
+        {
+          "id": "reflective-decision.daofashuqi-audit",
+          "name": "道法术器审计",
+          "summary": "检查价值、判断、行动、工具是否错位。",
+          "recommendedSources": [
+            "README.md",
+            "01_core"
+          ]
         }
       ],
       "avoid": [
@@ -100,23 +111,23 @@
     {
       "id": "create-execute",
       "name": "创造执行",
-      "useCases": "把想法变成作品、行动或可执行任务，适合 Demo、写作、构建和验收。",
+      "useCases": "把想法变成作品、行动或可执行任务。",
       "behaviorDirections": [
         "先把目标转成可交付物、约束和验收标准。",
         "优先给出最小可执行版本。",
-        "把任务拆成清晰步骤，并指出下一步行动。"
+        "输出能直接交给 Codex 或自己执行的任务表达。"
       ],
       "outputGoal": "从想法走向产物。",
       "subtypes": [
         {
-          "id": "create-execute.action",
-          "name": "行动实验",
-          "promptPath": "02_prompts/chatpack/create-execute/action.md"
-        },
-        {
-          "id": "create-execute.build",
-          "name": "构建执行",
-          "promptPath": "02_prompts/chatpack/create-execute/build.md"
+          "id": "create-execute.codex-build",
+          "name": "Codex 构建",
+          "summary": "生成给 Codex 的高层任务提示词。",
+          "recommendedSources": [
+            "README.md",
+            "app/code/docs",
+            ".agents/skills/learn-x-process"
+          ]
         }
       ],
       "avoid": [
@@ -124,6 +135,51 @@
         "任务拆得过碎",
         "缺少验收标准"
       ]
+    },
+    {
+      "id": "diagram-generate",
+      "name": "画图生成",
+      "useCases": "把概念、领域和表达压缩成可视化结构。",
+      "behaviorDirections": [
+        "先判断图要解决的理解或传播问题。",
+        "选择最能降低理解成本的结构，而不是为了好看画图。",
+        "输出可直接交给绘图、生成图片或前端实现的图稿说明。"
+      ],
+      "outputGoal": "生成清晰、可用、可复用的图形表达。",
+      "subtypes": [
+        {
+          "id": "diagram-generate.knowledge-graph",
+          "name": "知识图谱",
+          "summary": "概念关系、领域结构、学习地图。"
+        },
+        {
+          "id": "diagram-generate.share-overview",
+          "name": "分享一览图",
+          "summary": "朋友圈、文章、课程、演示中的精炼表达。"
+        }
+      ],
+      "avoid": [
+        "装饰性画图",
+        "信息过载",
+        "忽略使用场景"
+      ]
+    }
+  ],
+  "enhancers": [
+    {
+      "id": "clarify-question",
+      "name": "问清问题",
+      "summary": "问题模糊时启用，先澄清目标、约束和真正问题。"
+    },
+    {
+      "id": "one-step-deeper",
+      "name": "多思考一步",
+      "summary": "复杂问题时启用，向上看系统，向下看结构，旁边找反例。"
+    },
+    {
+      "id": "reality-check",
+      "name": "现实验证",
+      "summary": "容易停留在想法时启用，逼近真实行动、反馈和可证伪信号。"
     }
   ]
 }
