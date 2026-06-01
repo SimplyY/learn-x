@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, "../..");
+const repoRoot = path.resolve(__dirname, "..");
 const message = process.argv.slice(2).join(" ").trim() || "Update Learn-X";
 
 function run(command, args, options = {}) {
@@ -29,10 +29,10 @@ function status(command, args) {
   }).status;
 }
 
-run("node", ["--check", "code/server.mjs"]);
-run("node", ["--check", "code/public/app.js"]);
-run("node", ["--check", "code/public/config.js"]);
-run("npm", ["run", "snapshot"], { cwd: path.join(repoRoot, "code") });
+run("node", ["--check", "server.mjs"]);
+run("node", ["--check", "public/app.js"]);
+run("node", ["--check", "public/config.js"]);
+run("npm", ["run", "snapshot"]);
 
 const remote = run("git", ["remote", "get-url", "origin"], { capture: true });
 if (!remote) {
