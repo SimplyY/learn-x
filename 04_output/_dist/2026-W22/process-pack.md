@@ -16,7 +16,7 @@
 - 选择方式：hybrid manifest + mtime candidates (03_input/index/weekly/2026-22.index.md)
 - Manifest 引用路径数：12
 - Manifest 排除路径数：2
-- 生成时间：2026-05-27T06:56:48.676Z
+- 生成时间：2026-05-28T06:07:56.305Z
 - 原始文件数：11
 - 有效材料数：132
 - 去重后材料数：132
