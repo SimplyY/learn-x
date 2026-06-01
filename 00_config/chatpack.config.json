@@ -14,18 +14,6 @@
   },
   "dialogueTypes": [
     {
-      "id": "plain-context",
-      "name": "空提示词",
-      "emptyPrompt": true,
-      "useCases": "只装配当前问题和上下文，不加入场景提示词约束。",
-      "outputGoal": "轻量生成 Chat Pack，让 AI 自行根据问题和上下文回答。",
-      "subtypes": [],
-      "avoid": [
-        "额外注入场景约束",
-        "自动套用子类型模板"
-      ]
-    },
-    {
       "id": "learning-insight",
       "name": "学习洞察",
       "useCases": "把知识、材料和经验变成理解、结构与洞察。",
@@ -38,7 +26,7 @@
       "subtypes": [
         {
           "id": "learning-insight.book-decode",
-          "name": "读书解码",
+          "name": "读书 with ai",
           "summary": "书魂捕手、书的结构、X 光阅读。"
         },
         {
@@ -80,7 +68,7 @@
           "summary": "Learn-X、Chat Pack、Skill、目录结构、复杂度、反馈闭环。",
           "recommendedSources": [
             "README.md",
-            "01_core",
+            "01_core/道",
             "03_input/README.md",
             "04_output/README.md",
             ".agents/skills/learn-x-process",
@@ -90,6 +78,9 @@
         {
           "id": "reflective-decision.broad-investment-decision",
           "name": "广义投资决策",
+          "recommendedSources": [
+            "01_core/道"
+          ],
           "summary": "资产、时间、精力、职业、城市、创业、关系等选择。"
         },
         {
@@ -128,6 +119,11 @@
             "app/code/docs",
             ".agents/skills/learn-x-process"
           ]
+        },
+        {
+          "id": "create-execute.meta-prompt",
+          "name": "提示词重构",
+          "summary": "把原始需求压缩成更清晰、更锋利、更可执行的 Prompt。"
         }
       ],
       "avoid": [
@@ -163,6 +159,38 @@
         "信息过载",
         "忽略使用场景"
       ]
+    },
+    {
+      "id": "other-prompts",
+      "name": "其他提示词",
+      "useCases": "承载常用但不属于学习、判断、创造或画图主流程的 Prompt。",
+      "behaviorDirections": [
+        "优先遵守所选小类 Prompt，不额外扩展类型体系。",
+        "让 Prompt 服务 Current Question 和 Context，而不是反过来主导问题。",
+        "保持低维护，适合长期积累常用提示词。"
+      ],
+      "outputGoal": "复用常用 Prompt，快速生成可交给 AI 的 Chat Pack。",
+      "subtypes": [
+        {
+          "id": "other-prompts.empty-prompt",
+          "name": "空提示词",
+          "summary": "不加入大类或子类型约束，只装配问题、上下文和可选增强器。",
+          "emptyPrompt": true
+        },
+        {
+          "id": "other-prompts.munger-soul",
+          "name": "芒格之魂",
+          "summary": "用查理·芒格式多元模型、反过来想和长期理性审视问题。",
+          "recommendedSources": [
+            "01_core/道"
+          ]
+        }
+      ],
+      "avoid": [
+        "把常用 Prompt 膨胀成复杂流程",
+        "替代 Current Question",
+        "无差别套用人格或风格"
+      ]
     }
   ],
   "enhancers": [
@@ -180,6 +208,35 @@
       "id": "reality-check",
       "name": "现实验证",
       "summary": "容易停留在想法时启用，逼近真实行动、反馈和可证伪信号。"
+    },
+    {
+      "id": "challenge-assumption",
+      "name": "挑战观点",
+      "summary": "不要顺着用户的话说，主动找盲点、盲区和可能错误的前提。"
+    },
+    {
+      "id": "length-200",
+      "name": "200字",
+      "group": "length",
+      "summary": "控制输出在约 200 字，适合极简结论。"
+    },
+    {
+      "id": "length-500",
+      "name": "500字",
+      "group": "length",
+      "summary": "控制输出在约 500 字，适合快速结论。"
+    },
+    {
+      "id": "length-1000",
+      "name": "1000字",
+      "group": "length",
+      "summary": "控制输出在约 1000 字，适合中等展开。"
+    },
+    {
+      "id": "length-2000",
+      "name": "2000字",
+      "group": "length",
+      "summary": "控制输出在约 2000 字，适合较完整分析。"
     }
   ]
 }
