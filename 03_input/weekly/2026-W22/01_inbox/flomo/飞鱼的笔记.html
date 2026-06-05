@@ -1,0 +1,250 @@
+
+    <html>
+      <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+        <title>flomo · 浮墨笔记</title>
+        <style type="text/css">
+          * { margin: 0; padding: 0; }
+          body { background: #fafafa; }
+          header .logo { text-align: center; border-bottom: 1px solid #efefef; }
+          header .top { display: flex; justify-content: space-between; align-items: center; }
+          header .logo, header .top .user { padding: 40px 0; }
+          header .top .user .name { color: #454545; font-size: 16px; }
+          header .top .user .date { font-size: 12px; color: #9d9d9d; }
+          header .top .filter { display: none; justify-content: space-between; align-items: center; }
+          header .top .filter button { padding: 9px 10px; background: #30cf79; border-radius: 3px; color: #fff; font-size: 14px; border: none; cursor: pointer; }
+          header, .memos { width: 600px; margin: 0 auto; }
+          .memos h1 { margin-top: 30px; }
+          .memo { margin: 20px 0; background: #fff; padding: 20px; border-radius: 6px; word-wrap: break-word; }
+          .memo:hover { box-shadow: 0px 2px 10px #dddddd; }
+          .memo .time { color: #8d8d8d; font-size: 12px; }
+          .memo .content { color: #323232; font-size: 14px; }
+          .memo .content p { line-height: 1.8; min-height: 20px; margin: 0; }
+          .memo .content ul, .memo .content ol { padding-inline-start: 22px; margin: 0; }
+          .memo .content li { line-height: 1.8; }
+          .memo .files img { max-width: 100%; border: 1px solid #e6e6e6; border-radius: 4px; margin: 6px 0; }
+          .custom-select { position: relative; font-size: 14px; color: #9d9d9d; background: #efefef; border-radius: 3px; border: none; margin-right: 10px; }
+          .custom-select select { display: none; }
+          .select-selected { background: #efefef; color: #9d9d9d; }
+          .select-selected:after { position: absolute; content: ""; top: 14px; right: 10px; width: 0; height: 0; border: 6px solid transparent; border-color: #7d7d7d transparent transparent transparent; }
+          .select-selected.select-arrow-active:after { border-color: transparent transparent #7d7d7d transparent; top: 7px; }
+          .select-items div, .select-selected { color: rgba(157, 157, 157, 1); padding: 9px 12px; font-size: 14px; color: #9d9d9d; border: none; cursor: pointer; border-radius: 3px; border: none; width: 120px; user-select: none; }
+          .select-items { position: absolute; background-color: white; top: 100%; left: 0; right: 0; z-index: 99; max-height: 200px; overflow-y: auto; overflow-x: hidden; box-shadow: 0px 4px 2px #dddddd; }
+          .select-items::-webkit-scrollbar { width: 5px; }
+          .select-items::-webkit-scrollbar-track { background: #f1f1f1; }
+          .select-items::-webkit-scrollbar-thumb { background: #888; }
+          .select-hide { display: none; }
+          .select-items div:hover, .same-as-selected { background-color: rgba(0, 0, 0, 0.1); }
+            /* --- Audio Player Styles --- */
+          .audio-player {
+            width: 100%;
+            background: #f7f7f7; /* 替换 var(--commentItemBg) 为一个具体的颜色值 */
+            border-radius: 6px;
+            margin-top: 10px;
+            padding: 10px;
+            box-sizing: border-box;
+          }
+
+          .audio-player audio {
+            /* 设置宽度确保它充满容器 */
+            width: 100%;
+          }
+
+          /* 音频转录内容的样式 */
+          .audio-player__content {
+            padding-top: 10px;
+            margin-top: 10px;
+            border-top: 1px solid #eeeeee; /* 添加一个分割线，使其更清晰 */
+            font-size: 14px;
+            color: #555555; /* 替换 #9d9d9d 为一个更清晰的颜色 */
+            line-height: 1.8;
+            white-space: pre-wrap; /* 保留换行和空格 */
+            word-wrap: break-word; /* 确保长文本能正常换行 */
+          } 
+          </style>
+      </head>
+      <body>
+        <header>
+          <div class="logo">
+            <svg width="96" height="31" viewBox="0 0 96 31" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path fill-rule="evenodd" clip-rule="evenodd" d="M4.87056 9.11086C4.87056 6.25522 5.89594 4.89539 7.81854 4.89539H12.5609V0H7.81854C2.69163 0 0 3.39957 0 9.11086V10.8786V14.9581V30.3242H4.87056V15.3661H12.5609V10.8786H4.87056V9.11086ZM79.5937 27.8765C81.3881 29.7803 83.6952 30.7321 86.3868 30.7321C89.0785 30.7321 91.2574 29.7803 93.18 27.8765C95.1026 25.9727 95.9998 23.525 95.9998 20.5334C95.9998 17.5418 94.9744 15.0941 93.18 13.1903C91.2574 11.2866 89.0785 10.3347 86.3868 10.3347C83.6952 10.3347 81.5163 11.2866 79.5937 13.1903C77.6711 15.0941 76.7739 17.5418 76.7739 20.5334C76.7739 23.525 77.7993 25.9727 79.5937 27.8765ZM81.6444 20.5334C81.6444 17.5418 83.6952 15.502 86.3868 15.502C89.0785 15.502 91.2574 17.5418 91.1292 20.5334C91.1292 23.661 89.0785 25.7008 86.3868 25.7008C83.6952 25.7008 81.6444 23.661 81.6444 20.5334ZM32.8147 30.7321C30.1231 30.7321 27.816 29.7802 26.0215 27.8765C24.2271 25.9727 23.2017 23.661 23.2017 20.6694C23.2017 17.6777 24.0989 15.23 26.0215 13.3263C27.9441 11.4225 30.1231 10.4706 32.8147 10.4706C35.5063 10.4706 37.6853 11.4225 39.6079 13.3263C41.5305 15.23 42.4277 17.6777 42.4277 20.6694C42.4277 23.661 41.5305 26.1087 39.6079 28.0124C37.6853 29.9162 35.5063 30.7321 32.8147 30.7321ZM32.8147 15.502C30.1231 15.502 28.0723 17.5418 28.0723 20.5334C28.0723 23.661 30.1231 25.7007 32.8147 25.7007C35.5063 25.7007 37.5571 23.661 37.5571 20.5334C37.5571 17.5418 35.5063 15.502 32.8147 15.502ZM62.0358 19.9894V30.4601H57.2934V19.7175C57.2934 17.1338 55.8835 15.502 53.9609 15.502C51.7819 15.502 50.1157 16.8618 50.1157 19.9894V30.4601H45.3733V10.8786H50.1157V13.7342C51.0129 11.5585 53.32 10.4706 55.3708 10.4706C58.3187 10.6066 60.2413 11.8305 61.2667 14.1422C62.5484 11.6945 64.471 10.4706 67.0345 10.4706C71.5205 10.4706 74.084 13.5982 74.084 19.3095V30.4601H69.3416V19.8535C69.3416 17.1338 67.9317 15.502 65.8809 15.502C63.5738 15.502 62.0358 17.1338 62.0358 19.9894ZM15.6366 4.89539V0H20.379V30.4602H15.6366V7.2071V4.89539Z" fill="#202020"/>
+            </svg>
+          </div>
+          <div class="top">
+            <div class="user">
+              <div class="name">@飞鱼</div>
+              <div class="date">于 2026-6-4 导出 6 条 MEMO</div>
+            </div>
+            <div class="filter">
+              <div class='custom-select'>
+                <select name="date" id="date">
+                  <option value="">选择年月</option>
+                  <option value="2026-06">2026-06</option><option value="2026-05">2026-05</option>
+                </select>
+              </div>
+              <div class='custom-select'>
+                <select name="tag" id="tag">
+                  <option value="">选择标签</option>
+                  <option value="记录">记录</option><option value="记录/思考">记录/思考</option><option value="写诗">写诗</option><option value="哲学">哲学</option>
+                </select>
+              </div>
+              <button>筛选</button>
+            </div>
+          </div>
+        </header>
+        <div class="memos">
+    <div class="memo">
+      <div class="time">2026-06-02 21:03:17</div>
+      <div class="content"><p>我觉得我们都有很好的命。</p><p></p><p>我们出生的时间点，我们出生的地点，已经决定了命的百分之七八十。其次便是父母家庭。</p><p></p><p>但时间点和地点更为重要，在中国、在世界、在人类历史，现在正是最好的时代。当然某种意义上也是最差的时代。</p><p></p><p>好在于物质、知识都几乎无限，差在算法、网络、茧房、信息过载、整个社会的焦虑。</p><p></p><p>但我觉得还是人心被困住了，被过剩困住了。</p><p>#记录/思考</p><p></p><p>外部世界给了现代人前所未有的资源，但人的内在系统没有同步升级，于是丰盛反而变成了新的牢笼。</p><p>这句话非常重要。</p><p>古代人更多是被匮乏困住；</p><p>现代人更多是被过剩困住。</p></div>
+      <div class="files">
+        
+        
+      </div>
+    </div>
+  
+    <div class="memo">
+      <div class="time">2026-06-02 20:21:35</div>
+      <div class="content"><p>命运命运，出生即命，一生即运，</p><p>命运之外，不变的是本心，变的是环境，</p><p>人只有超越环境，才能拥有真正的自由。</p><p></p><p>#记录/思考 #哲学 </p></div>
+      <div class="files">
+        
+        
+      </div>
+    </div>
+  
+    <div class="memo">
+      <div class="time">2026-05-31 22:43:43</div>
+      <div class="content"><p>因为黑暗，才有光明，</p><p>因为有苦，所以有乐。</p><p></p><p>人生亦如是，松紧有度之。</p><p>#记录/思考 </p></div>
+      <div class="files">
+        
+        
+      </div>
+    </div>
+  
+    <div class="memo">
+      <div class="time">2026-05-31 18:11:44</div>
+      <div class="content"><p>感觉ai 时代，读书的方式会颠覆了，不过大体分为两种：</p><ol data-digits="1" style="--digits: 1; padding-inline-start: 22px !important;"><li><p>沉浸体验式，比如文学、小说，本质上是通过文字带你去另一个世界。</p></li><li><p>知识学习类，需要跟 ai 一起读了，借助 ai 超强的智力，更深入的理解书，以及运用书，最后实现做中学，这才是学习的最高效方式（而不是把90%的时间用于硬啃书，应该花 90% 时间使用书）。</p></li></ol><p>沉浸体验式读法不变，知识学习类读法将完全颠覆。</p></div>
+      <div class="files">
+        
+        
+      </div>
+    </div>
+  
+    <div class="memo">
+      <div class="time">2026-05-30 09:41:44</div>
+      <div class="content"><p>野鸭争渡戏浮萍，</p><p>春色渐晚山鸟鸣。</p><p>梦里蝴蝶穿花过，</p><p>月夜闲人听风吟。</p><p>#写诗 </p></div>
+      <div class="files">
+        
+        
+      </div>
+    </div>
+  
+    <div class="memo">
+      <div class="time">2026-05-30 09:32:18</div>
+      <div class="content"><p>遍地花海人可知？</p><p>清风明月照花开。</p><p>梦里蝴蝶穿花过，</p><p>五色花路梦中来。</p><p></p><p>#写诗 </p></div>
+      <div class="files">
+        
+        
+      </div>
+    </div>
+  </div>
+        <script>
+          // 检测 JS 是否可执行，如果可执行则显示 filter
+          (function() {
+            try {
+              const filterEl = document.querySelector(".filter");
+              if (filterEl) {
+                filterEl.style.display = "flex";
+              }
+            } catch (e) {
+              // JS 不可执行时保持隐藏状态
+            }
+          })();
+          
+          const memos = document.querySelectorAll(".memo");
+          const dateSelect = document.querySelector("#date");
+          const tagSelect = document.querySelector("#tag");
+          const filterBtn = document.querySelector("button");
+          filterBtn.addEventListener("click", () => {
+            const date = dateSelect.value;
+            const tag = tagSelect.value;
+            memos.forEach((memo) => {
+              const time = memo.querySelector(".time").innerText;
+              const content = memo.querySelector(".content").innerText;
+              const isDateMatch = !date || time.includes(date);
+              const isTagMatch = !tag || content.includes(tag);
+              memo.style.display = (isDateMatch && isTagMatch) ? "block" : "none";
+            });
+          });
+          
+          // 自定义选择框功能
+          var x, i, j, l, ll, selElmnt, a, b, c;
+          x = document.getElementsByClassName("custom-select");
+          l = x.length;
+          for (i = 0; i < l; i++) {
+            selElmnt = x[i].getElementsByTagName("select")[0];
+            ll = selElmnt.length;
+            a = document.createElement("DIV");
+            a.setAttribute("class", "select-selected");
+            a.innerHTML = selElmnt.options[selElmnt.selectedIndex].innerHTML;
+            x[i].appendChild(a);
+            b = document.createElement("DIV");
+            b.setAttribute("class", "select-items select-hide");
+            for (j = 0; j < ll; j++) {
+              c = document.createElement("DIV");
+              c.innerHTML = selElmnt.options[j].innerHTML;
+              c.addEventListener("click", function (e) {
+                var y, i, k, s, h, sl, yl;
+                s = this.parentNode.parentNode.getElementsByTagName("select")[0];
+                sl = s.length;
+                h = this.parentNode.previousSibling;
+                for (i = 0; i < sl; i++) {
+                  if (s.options[i].innerHTML == this.innerHTML) {
+                    s.selectedIndex = i;
+                    h.innerHTML = this.innerHTML;
+                    y = this.parentNode.getElementsByClassName("same-as-selected");
+                    yl = y.length;
+                    for (k = 0; k < yl; k++) {
+                      y[k].removeAttribute("class");
+                    }
+                    this.setAttribute("class", "same-as-selected");
+                    break;
+                  }
+                }
+                h.click();
+              });
+              b.appendChild(c);
+            }
+            x[i].appendChild(b);
+            a.addEventListener("click", function (e) {
+              e.stopPropagation();
+              closeAllSelect(this);
+              this.nextSibling.classList.toggle("select-hide");
+              this.classList.toggle("select-arrow-active");
+            });
+          }
+          
+          function closeAllSelect(elmnt) {
+            var x, y, i, xl, yl, arrNo = [];
+            x = document.getElementsByClassName("select-items");
+            y = document.getElementsByClassName("select-selected");
+            xl = x.length;
+            yl = y.length;
+            for (i = 0; i < yl; i++) {
+              if (elmnt == y[i]) {
+                arrNo.push(i);
+              } else {
+                y[i].classList.remove("select-arrow-active");
+              }
+            }
+            for (i = 0; i < xl; i++) {
+              if (arrNo.indexOf(i)) {
+                x[i].classList.add("select-hide");
+              }
+            }
+          }
+
+          document.addEventListener("click", closeAllSelect);
+        </script>
+      </body>
+    </html>
+  

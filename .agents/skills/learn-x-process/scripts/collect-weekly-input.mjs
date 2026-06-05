@@ -5,49 +5,46 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
-const inputRoot = path.join(repoRoot, "03_input");
-const legacyInputRoot = path.join(repoRoot, "input");
-const weeklyInputRoot = path.join(inputRoot, "index/weekly");
+const inputRoot = path.join(repoRoot, "03_input", "weekly");
 const supportedExtensions = new Set([".md", ".txt", ".json", ".html", ".htm"]);
 const ignoredFileNames = new Set(["README.md", ".gitkeep"]);
 
 export async function collectWeeklyInput(options = {}) {
   const week = options.week || currentIsoWeek();
+  const weekDirectory = distWeekId(week);
+  const weekInputRoot = path.join(inputRoot, weekDirectory);
+  const weekPrefix = `03_input/weekly/${weekDirectory}/`;
   const range = isoWeekRange(week);
-  const manifest = await readWeeklyManifest(week);
-  const files = manifest ? await collectManifestFiles(manifest) : await collectInputFiles();
-  const inWeekFiles = [];
+  const files = await collectInputFiles(weekInputRoot);
+  const activeFiles = [];
   const rawItems = [];
 
   for (const file of files) {
     const info = await stat(file.absolutePath);
-    if (!manifest && (info.mtime < range.start || info.mtime >= range.end)) continue;
-
-    inWeekFiles.push({
-      path: file.relativePath,
-      category: file.category,
-      source: file.source,
-      modifiedAt: info.mtime.toISOString(),
-      size: info.size
-    });
-
     const content = await readFile(file.absolutePath, "utf8");
     const parsedItems = parseInputFile(content, file);
-    rawItems.push(
-      ...parsedItems.map((item, index) => ({
+    const fileItems = parsedItems
+      .map((item, index) => ({
         id: `${file.relativePath}#${index + 1}`,
         category: file.category,
         source: file.source,
         path: file.relativePath,
+        shortPath: shortWeeklyPath(file.relativePath, weekPrefix),
         modifiedAt: info.mtime.toISOString(),
         text: cleanText(item.text),
         title: item.title || titleFromPath(file.relativePath)
       }))
-    );
+      .filter((item) => item.text.length >= 12);
+
+    if (!fileItems.length) continue;
+
+    file.modifiedAt = info.mtime.toISOString();
+    file.size = info.size;
+    activeFiles.push(file);
+    rawItems.push(...fileItems);
   }
 
-  const cleanedItems = rawItems.filter((item) => item.text.length >= 12);
-  const uniqueItems = dedupeItems(cleanedItems);
+  const uniqueItems = dedupeItems(rawItems);
 
   return {
     week,
@@ -55,117 +52,36 @@ export async function collectWeeklyInput(options = {}) {
       start: range.start.toISOString(),
       end: range.end.toISOString()
     },
-    selection: manifest
-      ? {
-          mode: "manifest",
-          path: manifest.relativePath,
-          referencedPathCount: manifest.paths.length
-        }
-      : {
-          mode: "mtime",
-          path: null,
-          referencedPathCount: 0
-        },
+    selection: {
+      mode: "week-directory",
+      path: toWebPath(path.relative(repoRoot, weekInputRoot))
+    },
     generatedAt: new Date().toISOString(),
-    files: inWeekFiles,
+    files: activeFiles.map(({ absolutePath: _absolutePath, relativePath, ...file }) => ({
+      path: relativePath,
+      shortPath: shortWeeklyPath(relativePath, weekPrefix),
+      ...file
+    })),
     items: uniqueItems,
     stats: {
-      fileCount: inWeekFiles.length,
-      itemCount: cleanedItems.length,
+      fileCount: activeFiles.length,
+      itemCount: rawItems.length,
       uniqueItemCount: uniqueItems.length,
-      duplicateCount: cleanedItems.length - uniqueItems.length
+      duplicateCount: rawItems.length - uniqueItems.length
     }
   };
 }
 
 export async function writeWeeklyInput(options = {}) {
   const payload = await collectWeeklyInput(options);
-  const outputRoot = path.join(repoRoot, "04_output/_dist", distWeekId(payload.week));
+  const outputRoot = path.join(repoRoot, "04_output/_dist/weekly", distWeekId(payload.week));
   await mkdir(outputRoot, { recursive: true });
   const outputPath = path.join(outputRoot, "input.json");
   await writeFile(outputPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   return { payload, outputPath };
 }
 
-async function readWeeklyManifest(week) {
-  const withW = distWeekId(week);
-  const withoutW = withW.replace("-W", "-");
-  const candidates = [
-    path.join(weeklyInputRoot, `${withoutW}.index.md`),
-    path.join(weeklyInputRoot, `${withW}.index.md`),
-    path.join(weeklyInputRoot, `${withoutW}.md`),
-    path.join(weeklyInputRoot, `${withW}.md`),
-    path.join(legacyInputRoot, "weekly", `${withoutW}.md`),
-    path.join(legacyInputRoot, "weekly", `${withW}.md`)
-  ];
-  for (const absolutePath of candidates) {
-    try {
-      const content = await readFile(absolutePath, "utf8");
-      return {
-        absolutePath,
-        relativePath: toWebPath(path.relative(repoRoot, absolutePath)),
-        paths: parseManifestPaths(content)
-      };
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-    }
-  }
-  return null;
-}
-
-function parseManifestPaths(content) {
-  const paths = new Set();
-  const pathPattern = /(?:`([^`]+)`|(?<=^|[\s([{<])((?:03_input\/|input\/)[^\s)\]}>`]+))/gm;
-  let ignoredSection = false;
-  for (const line of content.split(/\r?\n/)) {
-    const heading = line.match(/^#{1,6}\s+(.+)$/);
-    if (heading) {
-      ignoredSection = /待确认|人工备注/.test(heading[1]);
-      continue;
-    }
-    if (ignoredSection) continue;
-
-    for (const match of line.matchAll(pathPattern)) {
-      const rawPath = (match[1] || match[2] || "").trim();
-      const cleanPath = rawPath.replace(/^\.?\//, "").split("#")[0].replace(/[，。,.;；:：]+$/, "");
-      if (!cleanPath || cleanPath.startsWith("03_input/index/") || cleanPath.startsWith("input/weekly/")) continue;
-      paths.add(normalizeInputReference(cleanPath));
-    }
-  }
-  return [...paths].sort((a, b) => a.localeCompare(b, "zh-Hans-CN"));
-}
-
-async function collectManifestFiles(manifest) {
-  const files = [];
-  for (const relativePath of manifest.paths) {
-    const absolutePath = path.resolve(repoRoot, relativePath);
-    if (!absolutePath.startsWith(inputRoot + path.sep)) continue;
-
-    let info;
-    try {
-      info = await stat(absolutePath);
-    } catch (error) {
-      if (error.code === "ENOENT") continue;
-      throw error;
-    }
-
-    if (info.isDirectory()) {
-      files.push(...(await collectInputFiles(absolutePath, sourceFromRelativePath(relativePath))));
-      continue;
-    }
-
-    if (!info.isFile()) continue;
-    if (!supportedExtensions.has(path.extname(relativePath).toLowerCase())) continue;
-    files.push({
-      absolutePath,
-      relativePath: toWebPath(path.relative(repoRoot, absolutePath)),
-      ...inputKindFromRelativePath(relativePath)
-    });
-  }
-  return files.sort((a, b) => a.relativePath.localeCompare(b.relativePath, "zh-Hans-CN"));
-}
-
-async function collectInputFiles(dir = inputRoot) {
+async function collectInputFiles(dir) {
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
@@ -181,7 +97,6 @@ async function collectInputFiles(dir = inputRoot) {
     const kind = inputKindFromRelativePath(relativePath);
 
     if (entry.isDirectory()) {
-      if (relativePath === "03_input/index" || relativePath.startsWith("03_input/index/")) continue;
       files.push(...(await collectInputFiles(absolutePath)));
       continue;
     }
@@ -189,12 +104,17 @@ async function collectInputFiles(dir = inputRoot) {
     if (!entry.isFile()) continue;
     if (entry.name.startsWith("_")) continue;
     if (ignoredFileNames.has(entry.name)) continue;
+    if (isExcludedWeeklyPath(relativePath)) continue;
     if (!supportedExtensions.has(path.extname(entry.name).toLowerCase())) continue;
 
     files.push({ absolutePath, relativePath, ...kind });
   }
 
   return files.sort((a, b) => a.relativePath.localeCompare(b.relativePath, "zh-Hans-CN"));
+}
+
+function isExcludedWeeklyPath(relativePath) {
+  return /\/(?:00_log|log)\/monthly(?:\.md|\/)/.test(toWebPath(relativePath));
 }
 
 function parseInputFile(content, file) {
@@ -210,16 +130,13 @@ function parseInputFile(content, file) {
     }
   }
   if (extension === ".html" || extension === ".htm") {
-    return splitTextItems(htmlToText(content)).map((text, index) => ({
-      title: `${titleFromPath(file.relativePath)} ${index + 1}`,
-      text
-    }));
+    const flomoItems = extractFlomoMemoItems(content, file);
+    if (flomoItems.length) return flomoItems;
+
+    return [{ title: titleFromPath(file.relativePath), text: htmlToText(content) }];
   }
 
-  return splitTextItems(content).map((text, index) => ({
-    title: index === 0 ? titleFromMarkdown(content, file.relativePath) : `${titleFromPath(file.relativePath)} ${index + 1}`,
-    text
-  }));
+  return [{ title: titleFromMarkdown(content, file.relativePath), text: content }];
 }
 
 function extractJsonItems(value) {
@@ -239,23 +156,6 @@ function extractJsonItems(value) {
   return [];
 }
 
-function splitTextItems(content) {
-  const normalized = content.replace(/\r\n/g, "\n").trim();
-  if (!normalized) return [];
-
-  const blocks = normalized
-    .split(/\n\s*(?:---|\*\*\*|#{1,3}\s+.+|[-*]\s+\[[ x]\])\s*\n/g)
-    .map(cleanText)
-    .filter(Boolean);
-
-  if (blocks.length > 1) return blocks;
-
-  const paragraphs = normalized.split(/\n{2,}/).map(cleanText).filter(Boolean);
-  if (paragraphs.length > 1 && normalized.length > 1200) return paragraphs;
-
-  return [normalized];
-}
-
 function htmlToText(content) {
   return String(content)
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
@@ -271,6 +171,24 @@ function htmlToText(content) {
     .replace(/&#39;|&apos;/gi, "'")
     .replace(/&#(\d+);/g, (_match, code) => String.fromCodePoint(Number(code)))
     .replace(/&#x([0-9a-f]+);/gi, (_match, code) => String.fromCodePoint(Number.parseInt(code, 16)));
+}
+
+function extractFlomoMemoItems(content, file) {
+  if (!/<div class="memo">/.test(content) || !/<div class="content">/.test(content)) return [];
+
+  const items = [];
+  const memoPattern = /<div class="memo">[\s\S]*?<div class="time">([\s\S]*?)<\/div>[\s\S]*?<div class="content">([\s\S]*?)<\/div>\s*<div class="files">/g;
+  for (const match of content.matchAll(memoPattern)) {
+    const time = cleanText(htmlToText(match[1]));
+    const text = cleanText(htmlToText(match[2]));
+    if (!text) continue;
+    items.push({
+      title: `${titleFromPath(file.relativePath)} ${time}`,
+      text: time ? `${time}\n${text}` : text
+    });
+  }
+
+  return items;
 }
 
 function dedupeItems(items) {
@@ -310,47 +228,31 @@ function titleFromPath(filePath) {
   return path.basename(filePath, path.extname(filePath));
 }
 
-function sourceFromRelativePath(relativePath) {
-  const parts = toWebPath(relativePath).split("/");
-  if (parts[0] === "03_input") return inputKindFromRelativePath(relativePath).source;
-  if (parts[0] === "input" && parts[1]) return parts[1];
-  return "input";
-}
-
 function inputKindFromRelativePath(relativePath) {
   const parts = toWebPath(relativePath).split("/");
-  const category = parts[0] === "03_input" && parts[1] ? parts[1] : "input";
-  if (category === "inbox") {
-    return {
-      category,
-      source: parts[2] ? `inbox/${parts[2]}` : "inbox"
-    };
-  }
-  if (category === "action") {
-    return {
-      category,
-      source: parts[2] ? `action/${parts[2]}` : "action"
-    };
-  }
-  if (category === "log") {
-    return {
-      category,
-      source: parts[2] ? `log/${parts[2]}` : "log"
-    };
-  }
+  const category = categoryFromPathPart(parts[3] || "input");
+  const sourceGroup = parts[4] ? sourceNameFromPathPart(parts[4]) : undefined;
+
+  if (category === "inbox") return { category, source: sourceGroup ? `inbox/${sourceGroup}` : "inbox" };
+  if (category === "action") return { category, source: sourceGroup ? `action/${sourceGroup}` : "action" };
+  if (category === "log") return { category, source: sourceGroup ? `log/${sourceGroup}` : "log" };
   return { category, source: category };
 }
 
-function normalizeInputReference(relativePath) {
-  const cleanPath = toWebPath(relativePath);
-  if (!cleanPath.startsWith("input/")) return cleanPath;
-  const suffix = cleanPath.slice("input/".length);
-  if (suffix.startsWith("weekly/")) return `03_input/index/${suffix}`;
-  return `03_input/inbox/${suffix}`;
+function categoryFromPathPart(part) {
+  if (part === "00_log") return "log";
+  if (part === "01_inbox") return "inbox";
+  if (part === "02_action") return "action";
+  return part;
+}
+
+function sourceNameFromPathPart(part) {
+  const extension = path.extname(part);
+  return extension ? path.basename(part, extension) : part;
 }
 
 function distWeekId(weekId) {
-  return String(weekId).replace(/^(\d{4})-(\d{1,2})$/, (_match, year, week) => `${year}-W${String(week).padStart(2, "0")}`);
+  return String(weekId).replace(/^(\d{4})-W?(\d{1,2})$/, (_match, year, week) => `${year}-W${String(week).padStart(2, "0")}`);
 }
 
 export function currentIsoWeek(date = new Date()) {
@@ -364,7 +266,7 @@ export function currentIsoWeek(date = new Date()) {
 
 export function isoWeekRange(weekId) {
   const match = String(weekId).match(/^(\d{4})-W?(\d{1,2})$/);
-  if (!match) throw new Error(`Invalid week format: ${weekId}. Use YYYY-WW, for example 2026-22.`);
+  if (!match) throw new Error(`Invalid week format: ${weekId}. Use YYYY-WW or YYYY-Www, for example 2026-W22.`);
 
   const year = Number(match[1]);
   const week = Number(match[2]);
@@ -380,6 +282,11 @@ export function isoWeekRange(weekId) {
 
 function toWebPath(filePath) {
   return filePath.split(path.sep).join("/");
+}
+
+function shortWeeklyPath(relativePath, weekPrefix) {
+  const webPath = toWebPath(relativePath);
+  return webPath.startsWith(weekPrefix) ? webPath.slice(weekPrefix.length) : webPath;
 }
 
 function parseArgs(argv) {
