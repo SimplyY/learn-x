@@ -34,8 +34,8 @@ Weekly Process 相关脚本统一放在 `.agents/skills/learn-x-process/scripts/
 
 - 类型、子类型、推荐上下文和增强器统一维护在 `00_config/chatpack.config.json`。
 - 子类型 Prompt 放在 `02_prompts/chatpack/<type>/<slug>.md`；增强器 Prompt 放在 `02_prompts/chatpack/enhancers/<id>.md`。
-- 周、月、年 Output 子类型属于 `reflective-decision`，默认推荐 `01_core/道`、`01_core/memory`、对应 output rules、`04_output/README.md` 和 `04_output/usage.md`。
-- 前端只在周、月、年 Output 子类型下显示周期快捷选择；选择具体周/月/年时，自动勾选对应 `04_output/_dist/<period>/...` 目录下的 `.md` 文件，不自动勾选 `input.json`。
+- 周、月、年 Output 子类型属于 `reflective-decision`；默认推荐 `01_core/道`、`01_core/memory` 和对应的 `*-output-rules.md` 模板。周输出保持现有推荐源；月 / 年输出不默认勾选 `04_output/README.md` 或 `04_output/usage.md`。
+- 前端只在周、月、年 Output 子类型下显示周期快捷选择；周输出保持只勾选对应 `04_output/_dist/weekly/<period>/process-pack.md`，月输出自动勾选对应 `04_output/_dist/monthly/<period>/process-pack.md`，年输出优先勾选未来 `04_output/_dist/yearly/<year>/process-pack.md`，没有年度过程包时再勾选本年度已生成的 `04_output/monthly/<year>-*.md`；不自动勾选 `input.json`，也不回捞 `03_input/` 原始材料。
 - 字数控制是 `group: "length"` 增强器，在前端显示为“字数”下拉框；同组只能选一个。
 - `04_output/_dist/` 下的 `.md` 和 `.json` 仍可以通过自定义上下文手动选择；`input.json` 主要用于来源审计，不作为周期快捷选择的默认材料。
 

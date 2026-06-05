@@ -50,6 +50,22 @@ Memory / 道 / 法 / 术
 器：我用什么实现。
 ```
 
+## Learn-X 完整闭环
+
+Learn-X 不以 Output 为终点。
+
+标准流程是：
+
+1. 收集输入：`03_input/`
+2. 生成中间材料：`04_output/_dist/`
+3. AI Chat 生成人读 Output：`04_output/weekly|monthly|yearly/`
+4. 人工确认值得保留的判断
+5. 生成 Weekly Memory：`01_core/memory/YYYY-QN.memory.md`
+6. 月度 / 年度再审计 Memory 与 Output，形成少量道 / 法 / 术候选
+7. 人工确认后，才允许更新 `01_core/道/`、`01_core/法/`
+
+原则：Output 是审稿台，Memory 是跨周上下文，Core 是长期真值源。
+
 ## 入口地图
 
 | 位置 | 职责 |

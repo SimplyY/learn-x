@@ -39,7 +39,15 @@ Weekly Output 可发现少量必要候选：
 - 道 / 法 / 术 / 素材 / 删除候选；
 - 做中学复盘，含行动闭环检查；
 
-Chat Pack 里的「判断决策自省」提供周、月、年 Output 子类型。选择对应子类型后，页面会出现周期快捷选择，只需选择第几周、第几月或第几年；系统只会自动勾选对应 `_dist` 目录下的 `process-pack.md`。
+Chat Pack 里的「判断决策自省」提供周、月、年 Output 子类型。选择对应子类型后，页面会出现周期快捷选择，只需选择第几周、第几月或第几年。
+
+默认上下文边界：
+
+- 周 / 月 / 年子类型会自动勾选对应的 `*-output-rules.md` 模板、`01_core/道/` 和 `01_core/memory/`。
+- 周输出保持现有推荐源，并自动勾选对应 `04_output/_dist/weekly/YYYY-Www/process-pack.md`。
+- 月输出自动勾选对应 `04_output/_dist/monthly/YYYY-MM/process-pack.md`。
+- 年输出优先勾选未来 `04_output/_dist/yearly/YYYY/process-pack.md`；如果年度过程包不存在，则勾选本年度已生成的 `04_output/monthly/YYYY-*.md`。
+- 月 / 年输出不默认回捞 `03_input/` 原始材料，因为这些材料已经通过 `_dist/process-pack.md` 或 Monthly Output 进入下游。
 
 `input.json` 是结构化中间态，不会被周期快捷选择默认勾选。只有需要核查来源覆盖、重复来源或清洗结果时，再通过自定义上下文手动加入。
 

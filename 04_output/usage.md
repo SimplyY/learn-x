@@ -8,22 +8,33 @@
 
 ### 生成 `_dist` 前
 
-使用 `03_input/usage.md`：
+使用 `03_input/usage.md` 生成 dist
 
-- 建立 `03_input/weekly/YYYY-Www/` 等输入目录；
-- 放入 `00_log/`、`01_inbox/`、`02_action/` 材料；
-- 让 Codex 调用 `learn-x-process`；
-- 生成 `04_output/_dist/weekly/YYYY-Www/input.json` 和 `process-pack.md`；
-- 创建 `04_output/weekly/YYYY-WW.md` 最小壳。
 
 ### 生成 `_dist` 后
 
 使用本文件：
 
 - 检查 `_dist` 中的来源覆盖和材料包；
-- 自己在 AI Chat 中生成 Output 正文；
+- 自己在 AI Chat（chat pack 功能） 中生成 Output 正文；
 - 手动写入 `04_output/weekly/`、`04_output/monthly/` 或 `04_output/yearly/`；
 - 人工确认是否生成 Memory 或进入长期资产。
+
+## Output 后处理流程
+
+生成 Weekly Output 后，不直接结束。
+
+### 1. 人工勾选
+
+在 Weekly Output 中用 checkbox 标记：
+
+- [x] 值得进入 Memory
+- [x] 值得继续追踪
+- [x] 值得作为道 / 法 / 术候选观察
+
+### 2. 生成 Memory 候选
+
+
 
 ## Weekly Output
 
@@ -41,33 +52,16 @@
 
 ### 2. 准备 AI Chat 上下文
 
-推荐用 Chat Pack 组装上下文：
+推荐用 Chat Pack 功能组装上下文
 
-1. 选择「判断决策自省」。
-2. 按周期选择「周输出」「月输出」或「年输出」。
-3. 在周期快捷选择里选择具体第几周、第几月或第几年。
-4. 页面会自动勾选对应 `_dist` 目录下的 `process-pack.md`；需要排错或核查来源时，再通过自定义上下文手动加入 `input.json`。
+选择「周输出」时，Chat Pack 会自动勾选：
 
-Weekly 常用路径：
-
-```text
-04_output/_dist/weekly/YYYY-Www/process-pack.md
-```
-
-脚本中间态路径，常规不加入 AI Chat：
-
-```text
-04_output/_dist/weekly/YYYY-Www/input.json
-```
-
-需要输出规则时，自己打开：
-
-```text
-.agents/skills/learn-x-process/resources/weekly-output-rules.md
-.agents/skills/learn-x-process/resources/layer-rules.md
-```
-
-不要让 Codex 在 `process:weekly` 阶段代写 Weekly Output 正文。Weekly Output 正文应由用户自己基于 AI Chat 生成和判断。
+- `01_core/道/`
+- `01_core/memory/`
+- `.agents/skills/learn-x-process/resources/weekly-output-rules.md`
+- `04_output/README.md`
+- `04_output/usage.md`
+- 对应周的 `04_output/_dist/weekly/YYYY-Www/process-pack.md`
 
 ### 3. 写入正式 Output 文件
 
@@ -77,37 +71,30 @@ AI Chat 生成正文后，手动写入：
 04_output/weekly/YYYY-WW.md
 ```
 
-如果文件已有最小壳，保留标题也可以；正文由你自己决定是否替换、扩写或重写。
 
 ## Monthly / Yearly Output
 
-Monthly 和 Yearly 的原则与 Weekly 一致：
+Monthly 和 Yearly 的原则与 Weekly 一致，但数据流更长，默认不要重复读取原始输入。
 
-- 自动化产物只进入 `04_output/_dist/weekly/`、`04_output/_dist/monthly/` 或 `04_output/_dist/yearly/`；
-- 正式 Output 文件只作为人工写入容器；
-- AI Chat 的默认上下文来自对应周期的 `_dist/process-pack.md`；`input.json` 只在需要来源审计时手动加入；
-- 不由脚本自动做长期价值判断。
+选择「月输出」时，Chat Pack 会自动勾选：
 
-建议路径：
+- `01_core/道/`
+- `01_core/memory/`
+- `.agents/skills/learn-x-process/resources/monthly-output-rules.md`
+- 对应月的 `04_output/_dist/monthly/YYYY-MM/process-pack.md`
 
-```text
-04_output/monthly/YYYY-MM.md
-04_output/yearly/YYYY.md
-```
+月度 `process-pack.md` 已经包含 `03_input/monthly/YYYY-M/` 下月记和周记等清洗正文；除非核查来源覆盖或补洞，不要再手动加入同月 `03_input/` 原始材料。
 
-当前自动化支持 Weekly 和 Monthly；Yearly 在脚本成熟前可以手动汇总对应 `_dist` 或输入材料后再生成。
+选择「年输出」时，Chat Pack 会自动勾选：
 
-Monthly `_dist` 生成命令：
+- `01_core/道/`
+- `01_core/memory/`
+- `.agents/skills/learn-x-process/resources/yearly-output-rules.md`
+- 如果存在，优先使用 `04_output/_dist/yearly/YYYY/process-pack.md`
+- 如果年度过程包不存在，使用本年度已生成的 `04_output/monthly/YYYY-*.md`
 
-```bash
-npm run process:monthly -- --month YYYY-MM
-```
+年度默认数据流是 `03_input` → monthly `_dist/process-pack.md` → Monthly Output → Yearly Output。不要默认直接读取 `03_input/` 原始材料。
 
-也可以一次生成多个存量月份：
-
-```bash
-npm run process:monthly -- --months 2026-01,2026-02,2026-03
-```
 
 ## Weekly Memory
 

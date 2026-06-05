@@ -113,9 +113,7 @@
           "recommendedSources": [
             "01_core/道",
             "01_core/memory",
-            ".agents/skills/learn-x-process/resources/monthly-output-rules.md",
-            "04_output/README.md",
-            "04_output/usage.md"
+            ".agents/skills/learn-x-process/resources/monthly-output-rules.md"
           ]
         },
         {
@@ -126,9 +124,7 @@
           "recommendedSources": [
             "01_core/道",
             "01_core/memory",
-            ".agents/skills/learn-x-process/resources/yearly-output-rules.md",
-            "04_output/README.md",
-            "04_output/usage.md"
+            ".agents/skills/learn-x-process/resources/yearly-output-rules.md"
           ]
         }
       ],
