@@ -6,3 +6,4 @@ app/code/node_modules/
 app/code/public/data/
 app/code/public/.nojekyll
 dist/
+*.DS_Store
