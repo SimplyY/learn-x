@@ -91,6 +91,45 @@
             "README.md",
             "01_core"
           ]
+        },
+        {
+          "id": "reflective-decision.weekly-output",
+          "name": "周输出",
+          "summary": "基于 Weekly Output 规则和 _dist 材料生成周度报告。",
+          "includeBaseRecommendedSources": false,
+          "recommendedSources": [
+            "01_core/道",
+            "01_core/memory",
+            ".agents/skills/learn-x-process/resources/weekly-output-rules.md",
+            "04_output/README.md",
+            "04_output/usage.md"
+          ]
+        },
+        {
+          "id": "reflective-decision.monthly-output",
+          "name": "月输出",
+          "summary": "基于 Monthly Output 规则和 _dist 材料生成月度报告。",
+          "includeBaseRecommendedSources": false,
+          "recommendedSources": [
+            "01_core/道",
+            "01_core/memory",
+            ".agents/skills/learn-x-process/resources/monthly-output-rules.md",
+            "04_output/README.md",
+            "04_output/usage.md"
+          ]
+        },
+        {
+          "id": "reflective-decision.yearly-output",
+          "name": "年输出",
+          "summary": "基于 Yearly Output 规则和 _dist 材料生成年度报告。",
+          "includeBaseRecommendedSources": false,
+          "recommendedSources": [
+            "01_core/道",
+            "01_core/memory",
+            ".agents/skills/learn-x-process/resources/yearly-output-rules.md",
+            "04_output/README.md",
+            "04_output/usage.md"
+          ]
         }
       ],
       "avoid": [
@@ -176,14 +215,6 @@
           "name": "空提示词",
           "summary": "不加入大类或子类型约束，只装配问题、上下文和可选增强器。",
           "emptyPrompt": true
-        },
-        {
-          "id": "other-prompts.munger-soul",
-          "name": "芒格之魂",
-          "summary": "用查理·芒格式多元模型、反过来想和长期理性审视问题。",
-          "recommendedSources": [
-            "01_core/道"
-          ]
         }
       ],
       "avoid": [
@@ -213,6 +244,13 @@
       "id": "challenge-assumption",
       "name": "挑战观点",
       "summary": "不要顺着用户的话说，主动找盲点、盲区和可能错误的前提。"
+    },
+    {
+      "id": "munger-soul",
+      "name": "芒格之魂",
+      "summary": "以芒格之魂为核心提示词来输出，用多元模型、反过来想和长期理性增强原提示词。",
+      "applicationNote": "以芒格之魂为核心提示词来输出；它只增强原提示词，不替换当前大类、子类型、Current Question、Context、背景和需求。",
+      "promptPath": "02_prompts/chatpack/enhancers/munger-soul.md"
     },
     {
       "id": "length-200",

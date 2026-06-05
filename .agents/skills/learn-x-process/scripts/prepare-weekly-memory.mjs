@@ -16,7 +16,7 @@ export async function prepareWeeklyMemory(options = {}) {
   const content = await readFile(weeklyPath, "utf8");
   const candidates = extractMemoryCandidates(content);
   const candidatePack = renderCandidatePack(week, quarter, weeklyPath, candidates);
-  const candidatesRoot = path.join(repoRoot, "04_output/_dist", distWeekId(week));
+  const candidatesRoot = path.join(repoRoot, "04_output/_dist/weekly", distWeekId(week));
 
   await mkdir(candidatesRoot, { recursive: true });
   const outputPath = path.join(candidatesRoot, "memory-candidates.md");
@@ -76,7 +76,7 @@ function renderCandidatePack(week, quarter, weeklyPath, candidates) {
     `# Learn-X Memory Candidates｜${week}`,
     "",
     "> 这是给 Codex 生成 Weekly Memory 的候选材料，不是最终 Memory。",
-    "> 脚本只抽取已勾选和明确标记内容；最终 Memory 需要 Codex 按 `memory-requirements.md` 压缩、合并、去重、提炼。",
+    "> 脚本只抽取已勾选和明确标记内容；最终 Memory 需要 Codex 按 `memory-rules.md` 压缩、合并、去重、提炼。",
     "",
     "## 处理信息",
     "",

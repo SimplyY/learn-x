@@ -1,4 +1,4 @@
-# Weekly Memory 输出要求
+# Weekly Memory 输出规则
 
 Weekly Memory 是人工审核后的极薄跨周上下文，不是正式长期资产，也不是 Weekly Output 摘要。
 
@@ -18,7 +18,7 @@ Weekly Memory 是人工审核后的极薄跨周上下文，不是正式长期资
 主要读取：
 
 - `04_output/weekly/YYYY-WW.md`
-- `04_output/_dist/YYYY-WW/memory-candidates.md`
+- `04_output/_dist/weekly/YYYY-Www/memory-candidates.md`
 
 重点看：
 

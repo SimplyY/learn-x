@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { currentIsoWeek, writeWeeklyInput } from "./collect-weekly-input.mjs";
@@ -10,8 +10,10 @@ export async function generateWeeklyProcessPack(options = {}) {
   const week = options.week || currentIsoWeek();
   const { payload } = await writeWeeklyInput({ week });
   const sourceSummaries = buildSourceSummaries(payload);
-  const processPack = renderProcessPack(payload, sourceSummaries);
-  const outputRoot = path.join(repoRoot, "04_output/_dist", distWeekId(payload.week));
+  const fileSummaries = buildFileSummaries(payload);
+  const processPack = renderProcessPack(payload, sourceSummaries, fileSummaries);
+  const outputRoot = path.join(repoRoot, "04_output/_dist/weekly", distWeekId(payload.week));
+  const shellPath = await ensureWeeklyOutputShell(payload.week);
 
   await mkdir(outputRoot, { recursive: true });
   const outputPath = path.join(outputRoot, "process-pack.md");
@@ -20,48 +22,75 @@ export async function generateWeeklyProcessPack(options = {}) {
   return {
     payload,
     sourceSummaries,
-    outputPath
+    fileSummaries,
+    outputPath,
+    shellPath
   };
 }
 
-function renderProcessPack(payload, sourceSummaries) {
+function renderProcessPack(payload, sourceSummaries, fileSummaries) {
   return [
     `# Learn-X Process Pack｜${payload.week}`,
     "",
-    "> 这是给 Codex / AI 审稿用的中间材料包，不是最终 Weekly Output。",
-    "> 本文件只保留来源、编号、清洗文本和覆盖情况；不要在这里做道 / 法 / 术 / Prompt / Skill 判断。",
+    "> 这是给 AI Chat 生成 Weekly Output 的上下文材料包，不是最终 Weekly Output。",
+    "> 本文件只保留必要来源索引和清洗正文；不要在这里做道 / 法 / 术 / Prompt / Skill 判断。",
     "",
     "## 0. 使用方式",
     "",
-    "1. 先读取本文件和同周 `.input.json`。",
-    "2. 再读取 `.agents/skills/learn-x-process/resources/output-requirements.md` 和 `layer-rules.md`。",
-    "3. 由 Codex 按 Skill 规则生成 `04_output/weekly/YYYY-WW.md`。",
-    "4. 人再决定是否进入正式 `道/`、`法/`、`术/`、Prompt 或 Skill。",
+    "1. 常规只把本文件交给 AI Chat；`input.json` 是脚本中间态，仅在排错或核查来源时使用。",
+    "2. 如需生成 Weekly Output 正文，由用户自己在 AI Chat 中使用本文件，并按需读取 `.agents/skills/learn-x-process/resources/weekly-output-rules.md` 和 `layer-rules.md`。",
+    "3. Codex / 脚本只生成 `_dist` 和 `04_output/weekly/YYYY-WW.md` 最小壳；如果 Output 文件已有内容，不覆盖。",
+    "4. 人再决定是否把正文写入 `04_output/weekly/YYYY-WW.md`，以及是否进入 Memory、正式 `道/`、`法/`、`术`、Prompt 或 Skill。",
     "",
     "## 1. 处理信息",
     "",
     `- 周期：${payload.range.start.slice(0, 10)} 到 ${payload.range.end.slice(0, 10)}`,
-    `- 选择方式：${payload.selection.mode === "manifest" ? `weekly manifest (${payload.selection.path})` : "文件修改时间"}`,
-    `- Manifest 引用路径数：${payload.selection.referencedPathCount}`,
+    `- 周目录：\`${payload.selection.path}\``,
+    `- 选择方式：${payload.selection.mode}`,
     `- 生成时间：${payload.generatedAt}`,
     `- 原始文件数：${payload.stats.fileCount}`,
     `- 有效材料数：${payload.stats.itemCount}`,
     `- 去重后材料数：${payload.stats.uniqueItemCount}`,
     `- 去重数量：${payload.stats.duplicateCount}`,
-    `- JSON 中间材料：\`04_output/_dist/${distWeekId(payload.week)}/input.json\``,
+    `- JSON 中间材料：\`04_output/_dist/weekly/${distWeekId(payload.week)}/input.json\``,
     "",
     "## 2. 来源覆盖",
     "",
     renderSourceCoverage(sourceSummaries),
     "",
-    "## 3. 文件清单",
+    "## 3. 来源索引",
     "",
-    renderFileTable(payload.files),
+    renderSourceIndex(fileSummaries),
     "",
-    "## 4. 材料清单",
+    "## 4. 材料正文",
     "",
-    renderItems(payload.items)
+    renderFileMaterials(payload.items, fileSummaries)
   ].join("\n");
+}
+
+async function ensureWeeklyOutputShell(weekId) {
+  const outputPath = path.join(repoRoot, "04_output/weekly", `${outputWeekId(weekId)}.md`);
+  await mkdir(path.dirname(outputPath), { recursive: true });
+
+  let existing = "";
+  try {
+    existing = await readFile(outputPath, "utf8");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+
+  if (existing.trim()) return outputPath;
+
+  const distId = distWeekId(weekId);
+  const content = [
+    `# Learn-X Weekly Output｜${outputWeekId(weekId)}`,
+    "",
+    `> 基于 \`04_output/_dist/weekly/${distId}/\` 由用户使用 AI Chat 生成正文后填入。`,
+    ""
+  ].join("\n");
+
+  await writeFile(outputPath, content, "utf8");
+  return outputPath;
 }
 
 function buildSourceSummaries(payload) {
@@ -80,7 +109,7 @@ function buildSourceSummaries(payload) {
 
     const entry = bySource.get(key);
     entry.fileCount += 1;
-    entry.files.push(file.path);
+    entry.files.push(file.shortPath || file.path);
   }
 
   for (const item of payload.items) {
@@ -100,6 +129,35 @@ function buildSourceSummaries(payload) {
   }
 
   return [...bySource.values()].sort((a, b) => `${a.category}/${a.source}`.localeCompare(`${b.category}/${b.source}`, "zh-Hans-CN"));
+}
+
+function buildFileSummaries(payload) {
+  const byPath = new Map();
+  for (const file of payload.files) {
+    byPath.set(file.path, {
+      path: file.path,
+      shortPath: file.shortPath || file.path,
+      category: file.category,
+      source: file.source,
+      modifiedAt: file.modifiedAt,
+      size: file.size,
+      itemCount: 0,
+      totalChars: 0,
+      samples: []
+    });
+  }
+
+  for (const item of payload.items) {
+    if (!byPath.has(item.path)) continue;
+    const file = byPath.get(item.path);
+    file.itemCount += 1;
+    file.totalChars += item.text.length;
+    if (file.samples.length < 2) {
+      file.samples.push(`${item.title}: ${truncateInline(item.text, 120)}`);
+    }
+  }
+
+  return [...byPath.values()].sort((a, b) => a.shortPath.localeCompare(b.shortPath, "zh-Hans-CN"));
 }
 
 function renderSourceCoverage(sourceSummaries) {
@@ -123,39 +181,47 @@ function renderSourceCoverage(sourceSummaries) {
   ].join("\n");
 }
 
-function renderFileTable(files) {
-  if (!files.length) return "- 本周没有读取到输入文件。";
+function renderSourceIndex(fileSummaries) {
+  if (!fileSummaries.length) return "- 本周没有可核对来源。";
 
-  const rows = files.map((file, index) => {
+  const rows = fileSummaries.map((file, index) => {
     const sourceId = sourceFileId(index);
-    return `| ${sourceId} | ${file.category} | ${file.source} | \`${file.path}\` | ${file.modifiedAt} | ${file.size} |`;
+    return `| ${sourceId} | ${file.category} | ${file.source} | \`${file.shortPath}\` | ${file.itemCount} | ${file.totalChars} |`;
   });
 
   return [
-    "| source id | 输入类型 | 来源 | 原始路径 | 文件时间 | 字节数 |",
-    "| --- | --- | --- | --- | --- | ---: |",
+    "> source id 用于在 AI Chat 中回溯来源；完整机器字段见同目录 `input.json`。",
+    "",
+    "| source id | 输入类型 | 来源 | 短路径 | 材料数 | 字符数 |",
+    "| --- | --- | --- | --- | ---: | ---: |",
     ...rows
   ].join("\n");
 }
 
-function renderItems(items) {
+function renderFileMaterials(items, fileSummaries) {
   if (!items.length) return "- 本周没有有效材料。";
 
-  return items.map((item, index) => {
-    const itemId = sourceItemId(index);
-    const duplicateInfo = item.duplicateSources?.length
-      ? `\n- 重复来源：${item.duplicateSources.map((source) => `\`${source}\``).join("、")}`
-      : "";
+  const itemsByPath = new Map();
+  for (const item of items) {
+    if (!itemsByPath.has(item.path)) itemsByPath.set(item.path, []);
+    itemsByPath.get(item.path).push(item);
+  }
+
+  return fileSummaries.map((file, index) => {
+    const sourceId = sourceFileId(index);
+    const fileItems = itemsByPath.get(file.path) || [];
+    const body = fileItems.length === 1
+      ? renderTextBlock(fileItems[0].text)
+      : fileItems.map((item) => [
+        `#### ${item.title}`,
+        "",
+        renderTextBlock(item.text)
+      ].join("\n")).join("\n\n");
 
     return [
-      `### ${itemId}｜${item.category}｜${item.source}｜${item.title}`,
+      `### ${sourceId}｜${file.category}｜${file.source}｜${file.shortPath}`,
       "",
-      `- 原始路径：\`${item.path}\``,
-      `- 原始片段 id：\`${item.id}\``,
-      `- 文件时间：${item.modifiedAt}`,
-      `- 指纹：\`${item.fingerprint}\`${duplicateInfo}`,
-      "",
-      renderTextBlock(truncateText(item.text, 1200))
+      body
     ].join("\n");
   }).join("\n\n");
 }
@@ -164,13 +230,14 @@ function sourceFileId(index) {
   return `F${String(index + 1).padStart(3, "0")}`;
 }
 
-function sourceItemId(index) {
-  return `I${String(index + 1).padStart(3, "0")}`;
+function oneLine(text) {
+  return String(text).replace(/\s+/g, " ").trim();
 }
 
-function truncateText(text, maxLength) {
-  if (text.length <= maxLength) return text;
-  return `${text.slice(0, maxLength).trim()}\n\n[片段已截断，完整内容见同周 .input.json]`;
+function truncateInline(text, maxLength) {
+  const normalized = oneLine(text);
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength).trim()}...`;
 }
 
 function renderTextBlock(text) {
@@ -193,8 +260,9 @@ function parseArgs(argv) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const result = await generateWeeklyProcessPack(parseArgs(process.argv.slice(2)));
 
-  console.log(`Weekly input pack generated: 04_output/_dist/${distWeekId(result.payload.week)}/input.json`);
+  console.log(`Weekly input pack generated: 04_output/_dist/weekly/${distWeekId(result.payload.week)}/input.json`);
   console.log(`Weekly process pack generated: ${path.relative(repoRoot, result.outputPath)}`);
+  console.log(`Weekly output shell ready: ${path.relative(repoRoot, result.shellPath)}`);
   console.log(`Input files: ${result.payload.stats.fileCount}`);
   console.log(`Unique items: ${result.payload.stats.uniqueItemCount}`);
   console.log(`Sources: ${result.sourceSummaries.map((source) => `${source.source}:${source.itemCount}`).join(", ") || "none"}`);
@@ -202,4 +270,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 
 function distWeekId(weekId) {
   return String(weekId).replace(/^(\d{4})-(\d{1,2})$/, (_match, year, week) => `${year}-W${String(week).padStart(2, "0")}`);
+}
+
+function outputWeekId(weekId) {
+  return String(weekId).replace(/^(\d{4})-W?(\d{1,2})$/, (_match, year, week) => `${year}-${String(week).padStart(2, "0")}`);
 }
