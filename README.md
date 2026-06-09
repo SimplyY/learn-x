@@ -4,11 +4,13 @@
 
 ## 核心目标
 
+Learn-X 不是单纯的知识库、日记库或 AI 摘要系统，而是把输入、判断、沉淀、行动和反馈串起来的长期成长系统。
+
 Learn-X 服务三件事：
 
 1. 维护「道」与「法」。
 2. 把可复用的 Prompt、Context 和工作流组织成可调用资产。
-3. 用 AI 辅助学习、复盘、自我认知和真实行动。
+3. 用 AI 辅助学习、复盘、自我认知、真实行动和反馈校准。
 
 核心公式：
 
@@ -23,11 +25,13 @@ Prompt + Context → Chat Pack
 
 信息输入 + 行动证据 + 自我反馈
 ↓
-Weekly Output
+Weekly / Monthly / Yearly Output
 ↓
 人工判断
 ↓
 Memory / 道 / 法 / 术
+↓
+行动反馈
 ```
 
 ## 道法术器
@@ -64,7 +68,7 @@ Learn-X 不以 Output 为终点。
 6. 月度 / 年度再审计 Memory 与 Output，形成少量道 / 法 / 术候选
 7. 人工确认后，才允许更新 `01_core/道/`、`01_core/法/`
 
-原则：Output 是审稿台，Memory 是跨周上下文，Core 是长期真值源。
+原则：Learn-X 是个人认知进化系统；Weekly / Monthly / Yearly Output 是其中的认知审稿环节，Memory 是跨周上下文，Core 是长期真值源。
 
 ## 入口地图
 

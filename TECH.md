@@ -24,15 +24,18 @@ Weekly Process 相关脚本统一放在 `.agents/skills/learn-x-process/scripts/
 
 | 文件 | 作用 |
 | --- | --- |
-| `app/code/server.mjs` | 本地服务入口。 |
+| `app/code/server.mjs` | 本地服务入口；启动后监听 `.md` 变化并重建静态数据。 |
 | `app/code/public/` | 浏览器端 Chat Pack 页面。 |
 | `app/code/scripts/build-static-data.mjs` | 构建静态数据。 |
 | `app/code/scripts/static-graph.mjs` | 生成静态图谱数据。 |
-| `app/code/scripts/release.mjs` | 发布相关脚本。 |
+| `app/code/scripts/release.mjs` | 发布前检查：语法检查并构建静态站点。 |
+
+`app/code/` 按普通目录纳入 Learn-X 主仓库，不作为独立子模块或嵌套仓库维护。Git 提交、推送和远端配置只在主仓库边界处理；`app/code/scripts/` 不执行 `git add`、`git commit` 或 `git push`。
 
 ## Chat Pack 配置边界
 
 - 类型、子类型、推荐上下文和增强器统一维护在 `00_config/chatpack.config.json`。
+- 大类界面名保持短标签：学习、判断、创造、画图、其他；较完整的用途说明放在配置的 `useCases`、`behaviorDirections` 和 `outputGoal` 中。
 - 子类型 Prompt 放在 `02_prompts/chatpack/<type>/<slug>.md`；增强器 Prompt 放在 `02_prompts/chatpack/enhancers/<id>.md`。
 - 周、月、年 Output 子类型属于 `reflective-decision`；默认推荐 `01_core/道`、`01_core/memory` 和对应的 `*-output-rules.md` 模板。周输出保持现有推荐源；月 / 年输出不默认勾选 `04_output/README.md` 或 `04_output/usage.md`。
 - 前端只在周、月、年 Output 子类型下显示周期快捷选择；周输出保持只勾选对应 `04_output/_dist/weekly/<period>/process-pack.md`，月输出自动勾选对应 `04_output/_dist/monthly/<period>/process-pack.md`，年输出优先勾选未来 `04_output/_dist/yearly/<year>/process-pack.md`，没有年度过程包时再勾选本年度已生成的 `04_output/monthly/<year>-*.md`；不自动勾选 `input.json`，也不回捞 `03_input/` 原始材料。

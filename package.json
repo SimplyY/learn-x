@@ -10,6 +10,8 @@
     "process:weekly": "node .agents/skills/learn-x-process/scripts/generate-weekly-process-pack.mjs",
     "process:monthly": "node .agents/skills/learn-x-process/scripts/generate-monthly-process-pack.mjs",
     "memory:weekly": "node .agents/skills/learn-x-process/scripts/prepare-weekly-memory.mjs",
+    "memory:monthly": "node .agents/skills/learn-x-process/scripts/prepare-period-memory.mjs --month",
+    "memory:yearly": "node .agents/skills/learn-x-process/scripts/prepare-period-memory.mjs --year",
     "release": "node app/code/scripts/release.mjs"
   },
   "dependencies": {
