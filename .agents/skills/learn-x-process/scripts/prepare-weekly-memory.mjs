@@ -10,9 +10,9 @@ const weeklyRoot = path.join(repoRoot, "04_output/weekly");
 const explicitSignals = ["进入记忆", "继续追踪", "重要", "保留", "确认"];
 
 export async function prepareWeeklyMemory(options = {}) {
-  const week = options.week || currentIsoWeek();
+  const week = normalizeWeekId(options.week || currentIsoWeek());
   const quarter = quarterFromIsoWeek(week);
-  const weeklyPath = path.join(weeklyRoot, `${week}.md`);
+  const weeklyPath = path.join(weeklyRoot, `${outputWeekFileId(week)}.md`);
   const content = await readFile(weeklyPath, "utf8");
   const candidates = extractMemoryCandidates(content);
   const candidatePack = renderCandidatePack(week, quarter, weeklyPath, candidates);
@@ -73,16 +73,16 @@ function extractMemoryCandidates(content) {
 
 function renderCandidatePack(week, quarter, weeklyPath, candidates) {
   return [
-    `# Learn-X Memory Candidates｜${week}`,
+    `# Learn-X Memory Candidates｜${memoryWeekSectionId(week)}`,
     "",
     "> 这是给 Codex 生成 Weekly Memory 的候选材料，不是最终 Memory。",
-    "> 脚本只抽取已勾选和明确标记内容；最终 Memory 需要 Codex 按 `memory-rules.md` 压缩、合并、去重、提炼。",
+    "> 脚本只抽取已勾选和明确标记内容；最终 Memory 需要 Codex 按 `memory-rules.md` 无损整理并写入。",
     "",
     "## 处理信息",
     "",
     `- Weekly Output：\`${path.relative(repoRoot, weeklyPath).split(path.sep).join("/")}\``,
     `- 输出目标：\`01_core/memory/${quarter}.memory.md\``,
-    `- 建议小节：\`## ${week}\``,
+    `- 建议小节：\`## ${memoryWeekSectionId(week)}\``,
     "",
     "## 已勾选内容",
     "",
@@ -98,26 +98,47 @@ function renderCandidatePack(week, quarter, weeklyPath, candidates) {
     "",
     "## 生成要求",
     "",
-    "- 只写人工确认后值得跨周复用的内容。",
-    "- 每周 4-5 条以内。",
-    "- 每条 20-30 字左右，最多不超过 40 字。",
-    "- 不要机械复制周报。",
+    "- 已勾选内容必须进入 Memory，不设数量上限。",
+    "- 只做无损整理：去掉 checkbox、归类、去除完全重复项。",
+    "- 不要改写用户已确认的关键语义。",
+    "- 道 / 法 / 术候选观察写入目标 Memory 文件顶部的 `候选观察池`，并保留来源周。",
+    "- 未勾选内容默认不写入。",
     "- 不要替代正式 `道/`、`法/`、`术/`。"
   ].join("\n");
 }
 
 function quarterFromIsoWeek(weekId) {
-  const match = String(weekId).match(/^(\d{4})-W?(\d{1,2})$/);
-  if (!match) throw new Error(`Invalid week format: ${weekId}. Use YYYY-WW, for example 2026-22.`);
-
-  const year = Number(match[1]);
-  const week = Number(match[2]);
+  const { year, week } = parseWeekId(weekId);
   const jan4 = new Date(Date.UTC(year, 0, 4));
   const jan4Day = jan4.getUTCDay() || 7;
   const start = new Date(jan4);
   start.setUTCDate(jan4.getUTCDate() - jan4Day + 1 + (week - 1) * 7);
   const quarter = Math.floor(start.getUTCMonth() / 3) + 1;
   return `${year}-Q${quarter}`;
+}
+
+function normalizeWeekId(weekId) {
+  const { year, week } = parseWeekId(weekId);
+  return `${year}-${String(week).padStart(2, "0")}`;
+}
+
+function parseWeekId(weekId) {
+  const match = String(weekId).match(/^(\d{4})-W?(\d{1,2})$/);
+  if (!match) throw new Error(`Invalid week format: ${weekId}. Use YYYY-WW or YYYY-Www, for example 2026-22 or 2026-W22.`);
+
+  return {
+    year: Number(match[1]),
+    week: Number(match[2])
+  };
+}
+
+function outputWeekFileId(weekId) {
+  return normalizeWeekId(weekId);
+}
+
+function memoryWeekSectionId(weekId) {
+  const { year, week } = parseWeekId(weekId);
+  return `${year}-W${String(week).padStart(2, "0")}`;
 }
 
 function renderList(items) {
@@ -170,5 +191,5 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 }
 
 function distWeekId(weekId) {
-  return String(weekId).replace(/^(\d{4})-(\d{1,2})$/, (_match, year, week) => `${year}-W${String(week).padStart(2, "0")}`);
+  return memoryWeekSectionId(weekId);
 }

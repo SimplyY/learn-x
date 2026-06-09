@@ -2,7 +2,7 @@
 
 Learn-X 的 `Input -> Process Pack -> Output Shell` 工作流。
 
-本 Skill 从 `03_input/weekly/` 或 `03_input/monthly/` 读取手动导入材料，生成可追溯的 Input Pack 和 Process Pack，并创建 Output 最小壳。Output 正文由用户自己基于 AI Chat 生成和写入。人工审核后，它也可以生成极薄 Weekly Memory 候选。它不自动修改正式长期资产。
+本 Skill 从 `03_input/weekly/` 或 `03_input/monthly/` 读取手动导入材料，生成可追溯的 Input Pack 和 Process Pack，并创建 Output 最小壳。Output 正文由用户自己基于 AI Chat 生成和写入。人工审核后，Codex 可以调用内部脚本生成 Memory 候选，再由 Codex 按规则无损整理并写入 Memory。它不自动修改正式长期资产。
 
 ## Skill 本质
 
@@ -15,7 +15,7 @@ Learn-X 的 `Input -> Process Pack -> Output Shell` 工作流。
 | `03_input/weekly/YYYY-Www/02_action/` | 行动证据：我做了什么、世界如何反馈 |
 | `03_input/weekly/00_template/` | 每周输入目录模板 |
 | `resources/` | 判断规则、输出要求、参考材料 |
-| `scripts/` | 确定性处理：读取、清洗、合并、去重、编号、来源覆盖、生成 Process Pack |
+| `scripts/` | 确定性处理：读取、清洗、合并、去重、编号、来源覆盖、生成 Process Pack、抽取 Memory 候选 |
 | `04_output/` | `_dist` 中间材料、Output 最小壳和人工写入报告 |
 
 一句话：
@@ -36,7 +36,8 @@ Learn-X 的 `Input -> Process Pack -> Output Shell` 工作流。
 - 可以在 `04_output/weekly/YYYY-WW.md` 不存在或为空时创建最小壳；如果已有内容，不覆盖、不改写。
 - 可以生成中间材料 `04_output/_dist/weekly/YYYY-Www/input.json` 和 `04_output/_dist/weekly/YYYY-Www/process-pack.md`。
 - 可以生成中间材料 `04_output/_dist/monthly/YYYY-MM/input.json` 和 `04_output/_dist/monthly/YYYY-MM/process-pack.md`。
-- 可以读取 `04_output/weekly/YYYY-WW.md`，抽取已勾选或明确标记的内容，生成 `04_output/_dist/weekly/YYYY-Www/memory-candidates.md`，再由 Codex 压缩写入 `01_core/memory/YYYY-QN.memory.md`。
+- 可以读取 `04_output/weekly/YYYY-WW.md`，抽取已勾选或明确标记的内容，生成 `04_output/_dist/weekly/YYYY-Www/memory-candidates.md`，再由 Codex 无损整理写入 `01_core/memory/YYYY-QN.memory.md`。
+- 可以读取 `04_output/monthly/YYYY-MM.md` 或 `04_output/yearly/YYYY.md`，抽取 Memory 候选包，供 Codex 无损整理写入季度或年度 Memory。
 - Weekly Output 默认不固定输出图谱、第一性原理、Prompt、Skill、写作或 Demo 候选；必要时才可在做中学复盘或下周行动中简短提及。
 - 可以维护 `03_input/README.md`、`04_output/README.md` 和 `03_input/weekly/00_template/` 下划线模板。
 - 不要自动修改 `README.md`、`01_core/道/`、`01_core/法/`、`02_prompts/` 或 `.agents/skills/` 的正式资产。
@@ -75,13 +76,20 @@ Learn-X 的 `Input -> Process Pack -> Output Shell` 工作流。
 6. Codex 报告 `_dist` 路径、Output 最小壳路径和输入缺口，不生成 Weekly Output 正文。
 7. 用户按 `04_output/usage.md`，把 `process-pack.md` 与需要的规则文件交给 AI Chat，自行生成并写入 Weekly Output 正文。
 8. 人工审核候选，不要直接写入正式 core 文件。
-9. 如果用户要求生成 Memory，先调用：
+9. 如果用户要求 Memorize，由 Codex 判断周期并内部调用候选抽取脚本；用户不需要手动执行命令。Weekly 可调用：
 
    ```bash
    npm run memory:weekly
    ```
 
-   然后读取 `resources/memory-rules.md` 和 `04_output/_dist/weekly/YYYY-Www/memory-candidates.md`，压缩写入 `01_core/memory/YYYY-QN.memory.md` 的对应周小节。
+   Monthly / Yearly 可调用：
+
+   ```bash
+   npm run memory:monthly -- YYYY-MM
+   npm run memory:yearly -- YYYY
+   ```
+
+   然后读取 `resources/memory-rules.md` 和对应 `memory-candidates.md`，把已确认内容无损迁移到 Memory；候选不足时报告不建议写入。
 
 ## 输出要求
 
@@ -97,7 +105,7 @@ Weekly Output 要综合三类输入：
 
 Weekly Output 默认围绕核心问题、做中学复盘、下周 3 件事、道 / 法 / 术和处理信息；行动闭环检查并入做中学复盘，不单独成节。
 
-Weekly Memory 必须遵守 `resources/memory-rules.md`，每周 4-5 条以内，每条 20-30 字左右、最多不超过 40 字。它只保存人工确认后值得跨周复用的内容，不保存过程和完整候选。具体用法见 `04_output/usage.md`。
+Memory 必须遵守 `resources/memory-rules.md`。已勾选内容全部进入，不设数量上限；只做无损整理，不做有损压缩。已勾选道 / 法 / 术候选观察统一进入季度 Memory 文件顶部的候选观察池，并保留来源；未勾选内容默认不写入，只作为候选池。具体用法见 `04_output/usage.md`。
 
 ## 三层架构
 
@@ -105,7 +113,7 @@ Weekly Memory 必须遵守 `resources/memory-rules.md`，每周 4-5 条以内，
 2. Process Pack：代码生成给 AI 读的材料包，按来源聚合正文，不做道 / 法 / 术 / Prompt / Skill 判断。
 3. Output Shell：脚本只创建 `04_output/weekly/YYYY-WW.md` 最小壳；已有内容不改。
 4. AI Chat Review：用户基于 Process Pack 和规则文件，在 AI Chat 中生成 Output 正文。
-5. Weekly Memory：人工审核后，脚本抽取确认线索，再按规则压缩为极薄跨周上下文。
+5. Memory：人工审核后，脚本抽取确认线索，Codex 再按规则无损整理为跨期上下文。
 
 代码负责把混乱材料变成可信输入；AI Chat 负责辅助生成判断草稿；人负责决定什么值得写入 Output 和进入长期生命系统。
 
@@ -128,5 +136,5 @@ Weekly Memory 必须遵守 `resources/memory-rules.md`，每周 4-5 条以内，
 - `04_output/README.md` 是报告阅读和人工审核说明，报告结构或审核流程改变时要同步更新。
 - `03_input/weekly/00_template/` 是每周输入目录模板，以下划线开头的文件会被脚本忽略。
 - `resources/weekly-output-rules.md` 是用户生成 Weekly Output 正文时的质量规则；`resources/layer-rules.md` 是判断规则。
-- `resources/memory-rules.md` 是 Weekly Memory 的质量规则。
+- `resources/memory-rules.md` 是 Memory 的质量规则。
 - 脚本只能做确定性整理、来源覆盖、Process Pack 生成和 Output 最小壳创建，不要把最终判断写死进代码。

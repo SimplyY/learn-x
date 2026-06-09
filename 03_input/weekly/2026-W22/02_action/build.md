@@ -8,11 +8,11 @@
 
 ## 核心构建事项
 
-1. 将 Learn-X 的定位从“知识库 / Prompt 仓库”进一步收敛为“个人认知审稿台”。核心边界变成：人做最终价值判断，AI 做判断草稿和压缩，脚本只做确定性搬运、清洗、索引、追踪。
+1. 将 Learn-X 的定位从“知识库 / Prompt 仓库”进一步收敛为“个人认知进化系统”。核心边界变成：审稿只是 Weekly / Monthly / Yearly Output 的周期环节，人做最终价值判断，AI 做判断草稿和压缩，脚本只做确定性搬运、清洗、索引、追踪。
 
 2. 完成一次大目录重构：把长期认知资产、Prompt、输入、输出、应用代码拆成 `01_core/`、`02_prompts/`、`03_input/`、`04_output/`、`app/`。同时把旧的 `道/法/input/output/code/assets` 迁入新结构。
 
-3. 推进 Chat Pack 体系：从普通 Prompt 入口升级为“对话类型 + 子类型 + 增强器 + 上下文编排”的对话启动器。沉淀了学习洞察、判断决策、创造执行、画图生成、其他提示词等入口。
+3. 推进 Chat Pack 体系：从普通 Prompt 入口升级为“对话类型 + 子类型 + 增强器 + 上下文编排”的对话启动器。沉淀了学习、判断、创造、画图、其他等入口；更完整的语义放入各大类描述中。
 
 4. 系统性整理 Prompt 资产：重写或新增 `book-decode`、`ai-tutor`、`domain-research`、`system-audit`、`daofashuqi-audit`、`broad-investment-decision`、`codex-build`、`meta-prompt`、`munger-soul`，并补充长度增强器和挑战观点、现实验证等思考增强器。
 

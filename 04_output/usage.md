@@ -1,135 +1,81 @@
 # 04_output Usage
 
-`04_output/usage.md` 用于 `_dist` 已经生成之后。
+本文件只处理 `_dist` 已生成之后的流程。
 
-`03_input/usage.md` 负责输入源管理和生成 `_dist`；本文件负责说明如何基于 `_dist`，由用户自己使用 AI Chat 生成 Weekly / Monthly / Yearly Output 正文，并在人工确认后处理 Memory。
+如果还没有生成材料包，先看 `03_input/usage.md` 或调用 `learn-x-process`。
 
-## 阶段边界
-
-### 生成 `_dist` 前
-
-使用 `03_input/usage.md` 生成 dist
-
-
-### 生成 `_dist` 后
-
-使用本文件：
-
-- 检查 `_dist` 中的来源覆盖和材料包；
-- 自己在 AI Chat（chat pack 功能） 中生成 Output 正文；
-- 手动写入 `04_output/weekly/`、`04_output/monthly/` 或 `04_output/yearly/`；
-- 人工确认是否生成 Memory 或进入长期资产。
-
-## Output 后处理流程
-
-生成 Weekly Output 后，不直接结束。
-
-### 1. 人工勾选
-
-在 Weekly Output 中用 checkbox 标记：
-
-- [x] 值得进入 Memory
-- [x] 值得继续追踪
-- [x] 值得作为道 / 法 / 术候选观察
-
-### 2. 生成 Memory 候选
-
-
-
-## Weekly Output
-
-### 1. 检查自动化产物
-
-确认以下文件存在：
+## 流程
 
 ```text
-04_output/_dist/weekly/YYYY-Www/input.json
+03_input -> _dist/process-pack.md -> AI Chat 生成 Output -> 人工审核 -> Memorize
+```
+
+## 1. 确认材料包
+
+按周期确认 `process-pack.md` 存在：
+
+```text
 04_output/_dist/weekly/YYYY-Www/process-pack.md
-04_output/weekly/YYYY-WW.md
+04_output/_dist/monthly/YYYY-MM/process-pack.md
+04_output/_dist/yearly/YYYY/process-pack.md
 ```
 
-`input.json` 是脚本中间态；`process-pack.md` 是给 AI Chat 使用的默认上下文材料包。
+常规只把 `process-pack.md` 交给 AI Chat。`input.json` 只在核查来源、缺口、重复或脚本结果时使用。
 
-### 2. 准备 AI Chat 上下文
+## 2. 生成并写入 Output
 
-推荐用 Chat Pack 功能组装上下文
+在 Chat Pack 选择对应的判断类 Output：
 
-选择「周输出」时，Chat Pack 会自动勾选：
+- Weekly Output
+- Monthly Output
+- Yearly Output
 
-- `01_core/道/`
-- `01_core/memory/`
-- `.agents/skills/learn-x-process/resources/weekly-output-rules.md`
-- `04_output/README.md`
-- `04_output/usage.md`
-- 对应周的 `04_output/_dist/weekly/YYYY-Www/process-pack.md`
-
-### 3. 写入正式 Output 文件
-
-AI Chat 生成正文后，手动写入：
+生成后，由用户人工确认并写入：
 
 ```text
 04_output/weekly/YYYY-WW.md
+04_output/monthly/YYYY-MM.md
+04_output/yearly/YYYY.md
 ```
 
+Output 正文应服务于审稿：哪些输入改变了理解，哪些判断值得追踪，哪些只是噪声。
 
-## Monthly / Yearly Output
+## 3. 人工标记
 
-Monthly 和 Yearly 的原则与 Weekly 一致，但数据流更长，默认不要重复读取原始输入。
+在 Output 候选区用 checkbox 标记确认内容：
 
-选择「月输出」时，Chat Pack 会自动勾选：
+```md
+- [x] 值得进入 Memory
+- [ ] 值得继续追踪
+- [ ] 法：候选内容
+```
 
-- `01_core/道/`
-- `01_core/memory/`
-- `.agents/skills/learn-x-process/resources/monthly-output-rules.md`
-- 对应月的 `04_output/_dist/monthly/YYYY-MM/process-pack.md`
+只有已勾选或明确标记的内容进入 Memorize。未确认的漂亮表达不写入 Memory。
 
-月度 `process-pack.md` 已经包含 `03_input/monthly/YYYY-M/` 下月记和周记等清洗正文；除非核查来源覆盖或补洞，不要再手动加入同月 `03_input/` 原始材料。
+## 4. Memorize
 
-选择「年输出」时，Chat Pack 会自动勾选：
+Memorize 交给 Codex 执行，不需要用户手动跑脚本。
 
-- `01_core/道/`
-- `01_core/memory/`
-- `.agents/skills/learn-x-process/resources/yearly-output-rules.md`
-- 如果存在，优先使用 `04_output/_dist/yearly/YYYY/process-pack.md`
-- 如果年度过程包不存在，使用本年度已生成的 `04_output/monthly/YYYY-*.md`
-
-年度默认数据流是 `03_input` → monthly `_dist/process-pack.md` → Monthly Output → Yearly Output。不要默认直接读取 `03_input/` 原始材料。
-
-
-## Weekly Memory
-
-Memory 不是 Weekly Output 摘要，也不是正式 `道/`、`法/`、`术` 入库结论。
-
-它的用途是：把人工确认后、值得跨周复用或追踪的少量判断，压缩到季度 Memory 文件中，给后续 AI Chat / Chat Pack 提供更干净的上下文。
-
-规则位置：
+可以直接说：
 
 ```text
-.agents/skills/learn-x-process/resources/memory-rules.md
+调用 learn-x-process，Memorize 2026-W24
+Memorize 2026-05 月报
+Memorize 2026 年度输出
 ```
 
-生成候选时使用：
-
-```bash
-npm run memory:weekly
-```
-
-脚本会读取 Weekly Output，生成：
-
-```text
-04_output/_dist/weekly/YYYY-Www/memory-candidates.md
-```
-
-之后再按 `memory-rules.md` 人工压缩并写入：
+Codex 会读取对应 Output 和规则，必要时生成 `memory-candidates.md`，再把已确认内容无损迁移到：
 
 ```text
 01_core/memory/YYYY-QN.memory.md
+01_core/memory/YYYY.memory.md
 ```
+
+如果确认内容不足，Codex 应报告“不建议写入 Memory”，不要硬凑。
 
 ## 边界
 
-- `04_output/_dist/weekly/`、`04_output/_dist/monthly/`、`04_output/_dist/yearly/` 是自动化材料区，不是最终报告。
-- `04_output/weekly/`、`monthly/`、`yearly/` 是人工写入的 Output 区。
-- Codex 可以生成 `_dist` 和最小壳，但不代写 Output 正文。
-- `weekly-output-rules.md` 和 `layer-rules.md` 是生成正文时的参考规则，不复制到 `_dist`，避免冗余。
-- `memory-rules.md` 只用于人工确认后的 Memory 压缩，不用于自动改写长期资产。
+- `_dist` 是材料区，不是最终报告。
+- Output 是审稿区，不是长期真值源。
+- Memory 是跨期上下文，不替代 `道/`、`法/`、`术/`。
+- 人保留最终确认权；Codex 不自动升级正式资产。

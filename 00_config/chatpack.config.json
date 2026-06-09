@@ -15,7 +15,7 @@
   "dialogueTypes": [
     {
       "id": "learning-insight",
-      "name": "学习洞察",
+      "name": "学习",
       "useCases": "把知识、材料和经验变成理解、结构与洞察。",
       "behaviorDirections": [
         "先抓住材料背后的核心问题和结构。",
@@ -53,8 +53,8 @@
     },
     {
       "id": "reflective-decision",
-      "name": "判断决策自省",
-      "useCases": "审计系统、判断选择、校准价值与行动。",
+      "name": "判断",
+      "useCases": "审计系统、判断选择、自我省察，校准价值与行动。",
       "behaviorDirections": [
         "先明确目标、约束、证据和不可逆成本。",
         "同时检查动机、风险、反例和现实反馈。",
@@ -136,8 +136,8 @@
     },
     {
       "id": "create-execute",
-      "name": "创造执行",
-      "useCases": "把想法变成作品、行动或可执行任务。",
+      "name": "创造",
+      "useCases": "把想法变成作品、行动或可执行任务，覆盖创造与执行。",
       "behaviorDirections": [
         "先把目标转成可交付物、约束和验收标准。",
         "优先给出最小可执行版本。",
@@ -169,8 +169,8 @@
     },
     {
       "id": "diagram-generate",
-      "name": "画图生成",
-      "useCases": "把概念、领域和表达压缩成可视化结构。",
+      "name": "画图",
+      "useCases": "把概念、领域和表达压缩成可视化结构，生成清晰可用的图稿说明。",
       "behaviorDirections": [
         "先判断图要解决的理解或传播问题。",
         "选择最能降低理解成本的结构，而不是为了好看画图。",
@@ -197,7 +197,7 @@
     },
     {
       "id": "other-prompts",
-      "name": "其他提示词",
+      "name": "其他",
       "useCases": "承载常用但不属于学习、判断、创造或画图主流程的 Prompt。",
       "behaviorDirections": [
         "优先遵守所选小类 Prompt，不额外扩展类型体系。",
@@ -211,6 +211,11 @@
           "name": "空提示词",
           "summary": "不加入大类或子类型约束，只装配问题、上下文和可选增强器。",
           "emptyPrompt": true
+        },
+        {
+          "id": "other-prompts.munger-soul",
+          "name": "芒格之魂",
+          "summary": "以芒格之魂作为子类型 Prompt，用多元模型、反过来想和长期理性展开问题。"
         }
       ],
       "avoid": [
@@ -245,7 +250,7 @@
       "id": "munger-soul",
       "name": "芒格之魂",
       "summary": "以芒格之魂为核心提示词来输出，用多元模型、反过来想和长期理性增强原提示词。",
-      "applicationNote": "以芒格之魂为核心提示词来输出；它只增强原提示词，不替换当前大类、子类型、Current Question、Context、背景和需求。",
+      "applicationNote": "点击后默认将 Current Question 设为「使用芒格之魂的提示词来解析所有上下文。」；它增强当前大类、子类型、Context、背景和需求。",
       "promptPath": "02_prompts/chatpack/enhancers/munger-soul.md"
     },
     {
