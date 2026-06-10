@@ -5,7 +5,7 @@
 输入先按处理周期分成三个维度：
 
 - `weekly/`：周度输入，进入 Weekly Process。
-- `monthly/`：月度输入，预留给 Monthly Process。
+- `monthly/`：月度输入，进入 Monthly Process。
 - `yearly/`：年度输入，预留给 Yearly Process。
 
 Weekly 输入由周目录决定，不再依赖 weekly index 或文件修改时间。
@@ -52,6 +52,7 @@ Weekly 周目录内部保留三类输入边界：
 
 - 周目录命名统一使用 `YYYY-Www`，例如 `2026-W22`。
 - `npm run process:weekly -- --week 2026-22` 会读取 `03_input/weekly/2026-W22/`。
+- `npm run process:monthly -- --month 2026-05` 会读取 `03_input/monthly/2026-5/`。
 - 脚本只读取 `03_input/weekly/` 下的对应周目录，不扫描其它周，不按 mtime 猜测范围。
 - `weekly/00_template/` 只放模板和导入提示，不进入 Weekly Process。
 

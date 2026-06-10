@@ -1,7 +1,7 @@
 # 03_input Usage
 > 本文件描述 Weekly Input 在 `_dist` 生成前的输入管理：哪些来源由自动化采集，哪些由其他自动化写入，哪些仍由人手动补充。
 
-`03_input/` 按处理周期分为 `weekly/`、`monthly/`、`yearly/`。当前已自动化的是 Weekly Process。
+`03_input/` 按处理周期分为 `weekly/`、`monthly/`、`yearly/`。当前已自动化采集的是 Weekly Input；Monthly Process 可由脚本读取月目录生成 `_dist`。
 
 **注意： `_dist` 生成后的报告写作、人工审核和 Memory 流程见 `04_output/usage.md`。**
 
@@ -11,7 +11,7 @@ Weekly Input 的周目录由三类来源共同填充：
 
 | 来源层 | 负责内容 | 写入位置 | 说明 |
 | --- | --- | --- | --- |
-| 每周输入自动采集 | 飞书日记、飞书周记 / 周复盘、Flomo、AI 对话摘要 | `00_log/daily.md`、`00_log/weekly.md`、`01_inbox/flomo/`、`01_inbox/ai.md` | 由 Codex 自动化 `Learn-X 每周「输入自动采集 & 报告」` 每周一采集刚结束的上一 ISO 周；AI 对话摘要是半自动项，失败时由人补。 |
+| 每周输入自动采集 | 飞书日记、飞书周记 / 周复盘、Flomo、AI 对话摘要 | `00_log/daily.md`、`00_log/weekly.md`、`01_inbox/flomo/`、`01_inbox/ai.md` | 由 Codex 自动化 `Learn-X 每周「输入自动采集 & 报告」` 分阶段处理：周一 08:00 先采集飞书日记、Flomo 和 AI 对话摘要；周记写完后在同一线程回复继续，再采集飞书周记并自动生成 `_dist`。 |
 | 其他专项自动化 | Codex / Code X 构建复盘 | `02_action/build.md` | 由 Codex 自动化 `Learn-X 每周「 Codex Build 复盘」` 写入；每周输入自动采集不再处理 build。 |
 | 手动补充 | 会议、聊天、反馈、研究、读书、播客、外部资料等 | `01_inbox/`、`02_action/` 下对应文件 | 没有稳定线上来源或需要人工判断的材料，由人补充。 |
 
@@ -30,10 +30,15 @@ cp -R 03_input/weekly/00_template 03_input/weekly/YYYY-Www
 
 自动化能覆盖的来源先由自动化写入；自动化没有覆盖或需要人工判断的材料，再由人补充。
 
+每周输入自动采集分两阶段：
+
+1. 周一 08:00 自动运行：采集飞书日记、Flomo、AI 对话摘要；不采集飞书周记，不生成 `_dist`，结束时提醒你写周记。
+2. 周记写完后，在同一自动化线程回复“继续”或“周记已写完，继续采集”：自动化采集飞书周记 / 周复盘，并在 P0 状态检查通过后自动生成 `04_output/_dist/weekly/YYYY-Www/input.json` 和 `process-pack.md`。
+
 #### 2.1 自我反馈：`00_log/`
 
 - `00_log/daily.md`：飞书日记多维表格，由每周输入自动采集写入。采集时必须使用全量字段表头和 field id 映射，不允许输出无表头的评分字段。来源参考：https://ywhome.feishu.cn/wiki/FGQgwU2aciOzNVk1uxKcI6OknYg?table=tblgc6xySQgsUuam&view=vewJ5FBHo1
-- `00_log/weekly.md`：飞书周记、周复盘，由每周输入自动采集写入。飞书周记标题通常是周一，但内容对应刚结束的上一周。来源参考：https://ywhome.feishu.cn/wiki/EOlbwTVLyiQp7Fkrr9ucdI9hnac
+- `00_log/weekly.md`：飞书周记、周复盘，在你写完周记并回复继续后由每周输入自动采集写入。飞书周记标题通常是周一，但内容对应刚结束的上一周。来源参考：https://ywhome.feishu.cn/wiki/EOlbwTVLyiQp7Fkrr9ucdI9hnac
 - 月记、月复盘不放入 Weekly，后续进入 `03_input/monthly/`。
 
 #### 2.2 信息输入：`01_inbox/`
@@ -55,7 +60,7 @@ cp -R 03_input/weekly/00_template 03_input/weekly/YYYY-Www
 
 ### 3. 生成 Weekly Output Dist
 
-自动化采集和人工补充完成后，调用 `learn-x-process` 处理周目录。手动触发时复制这段给 Codex：
+分阶段自动化中，周记采集完成且 P0 状态检查通过后，会自动调用 `learn-x-process` 处理周目录并生成 `_dist`。如果需要手动触发，复制这段给 Codex：
 
 ```text
 todo： 明确是第几周
@@ -71,12 +76,13 @@ todo： 明确是第几周
 你只检查这几件事：
 
 - [ ] 本周目录存在：`03_input/weekly/YYYY-Www/`
-- [ ] 每周输入自动采集已写入或报告缺口：`00_log/daily.md`、`00_log/weekly.md`、`01_inbox/flomo/`、`01_inbox/ai.md`。
+- [ ] 阶段 1 已写入或报告缺口：`00_log/daily.md`、`01_inbox/flomo/`、`01_inbox/ai.md`。
+- [ ] 周记写完后，已在同一自动化线程回复继续，并由阶段 2 写入 `00_log/weekly.md`。
 - [ ] 如果自动化报告 AI 对话摘要失败或超时，已手动补充 `01_inbox/ai.md`，或明确接受本周缺口。
 - [ ] Codex Build 专项自动化已写入或报告缺口：`02_action/build.md`。
 - [ ] 手动补充项已按需放入：meeting、chat、research、feedback、reading、podcast、docs 等。
 - [ ] `00_log/daily.md` 中飞书多维表格材料包含字段表头；评分类数字必须有真实表头，例如 `今日心情`、`今日运动`、`今日饮食`。
-- [ ] 已生成 `04_output/_dist/weekly/YYYY-Www/input.json` 和 `process-pack.md`。
+- [ ] 阶段 2 已自动生成 `04_output/_dist/weekly/YYYY-Www/input.json` 和 `process-pack.md`；如阶段 2 阻塞，已按报告补齐缺口后重跑。
 - [ ] 已进入 `04_output/usage.md` 的输出阶段。
 
 ## 边界
