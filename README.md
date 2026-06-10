@@ -64,7 +64,7 @@ Learn-X 不以 Output 为终点。
 2. 生成中间材料：`04_output/_dist/`
 3. AI Chat 生成人读 Output：`04_output/weekly|monthly|yearly/`
 4. 人工确认值得保留的判断
-5. 生成 Weekly Memory：`01_core/memory/YYYY-QN.memory.md`
+5. 生成周期 Memory：`01_core/memory/YYYY-QN.memory.md`
 6. 月度 / 年度再审计 Memory 与 Output，形成少量道 / 法 / 术候选
 7. 人工确认后，才允许更新 `01_core/道/`、`01_core/法/`
 

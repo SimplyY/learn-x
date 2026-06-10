@@ -2,6 +2,12 @@ const STORAGE_PREFIX = "learn-x";
 const MUNGER_SOUL_ENHANCER_ID = "munger-soul";
 const MUNGER_SOUL_SUBTYPE_ID = "other-prompts.munger-soul";
 const MUNGER_SOUL_QUESTION = "使用芒格之魂的提示词来解析所有上下文。";
+const MUNGER_SOUL_PERIOD_LENGTH_ID = "length-1000";
+const MUNGER_SOUL_PERIOD_QUESTIONS = {
+  weekly: "使用芒格之魂的提示词来解析所有上下文。不要输出 Weekly Output，仅洞察。",
+  monthly: "使用芒格之魂的提示词来解析所有上下文。不要输出 Monthly Output，仅洞察。",
+  yearly: "使用芒格之魂的提示词来解析所有上下文。不要输出 Yearly Output，仅洞察。"
+};
 let APP_CONFIG = {
   brand: { title: "Learn-X", subtitle: "学习动力引擎", mark: "LX" },
   promptDirectory: "01_meta-prompts",
@@ -487,12 +493,28 @@ function renderEnhancers() {
         state.activeEnhancerIds.add(enhancer.id);
       }
       state.activeEnhancerIds = new Set(normalizeEnhancerIds([...state.activeEnhancerIds]));
+      const periodMode = activePeriodOutputMode();
+      if (enhancer.id === MUNGER_SOUL_ENHANCER_ID && !enhancerWasActive && periodMode) {
+        const lengthEnhancer = ENHANCERS.find((item) => item.id === MUNGER_SOUL_PERIOD_LENGTH_ID);
+        clearEnhancerGroup(lengthEnhancer);
+        state.activeEnhancerIds.add(MUNGER_SOUL_PERIOD_LENGTH_ID);
+      }
       localStorage.setItem(enhancerKey(), JSON.stringify([...state.activeEnhancerIds]));
       renderEnhancers();
       syncCurrentQuestionDefault(undefined, undefined, {
         force: enhancer.id === MUNGER_SOUL_ENHANCER_ID && !enhancerWasActive
       });
-      applyPromptOnlySelection(`增强器已更新：${selectedEnhancers().map((item) => item.name).join("、") || "无"}。`);
+      const message = `增强器已更新：${selectedEnhancers().map((item) => item.name).join("、") || "无"}。`;
+      if (enhancer.id === MUNGER_SOUL_ENHANCER_ID && periodMode) {
+        applyRecommendedSources();
+        applyPeriodContextSelection(periodMode, state.activePeriodValues[periodMode]);
+        resetExpandedContextDirs();
+        renderSourceChecklist();
+        els.metaPrompt.value = assembledPrompt();
+        resetGeneratedContext(message);
+      } else {
+        applyPromptOnlySelection(message);
+      }
     });
     els.enhancerList.append(button);
   }
@@ -579,6 +601,10 @@ function applyPromptOnlySelection(message) {
 }
 
 function defaultQuestionText(type, subtype) {
+  const periodMode = activePeriodOutputMode();
+  if (periodMode && state.activeEnhancerIds.has(MUNGER_SOUL_ENHANCER_ID)) {
+    return MUNGER_SOUL_PERIOD_QUESTIONS[periodMode];
+  }
   if (shouldUseMungerSoulQuestion(subtype)) return MUNGER_SOUL_QUESTION;
   return subtype?.name || type?.name || "";
 }
@@ -826,7 +852,16 @@ function recommendedSourcesForSelection() {
   const includeBase = subtype?.includeBaseRecommendedSources !== false;
   const baseSources = includeBase && type?.id !== "diagram-generate" ? ["01_core/道", "01_core/memory"] : [];
   const configured = subtype?.recommendedSources?.length ? subtype.recommendedSources : type?.recommendedSources || [];
-  return uniqueList([...baseSources, ...configured]);
+  const recommended = uniqueList([...baseSources, ...configured]);
+  const periodMode = activePeriodOutputMode();
+  if (!periodMode || !state.activeEnhancerIds.has(MUNGER_SOUL_ENHANCER_ID)) return recommended;
+
+  const excludedSources = new Set([
+    `.agents/skills/learn-x-process/resources/${periodMode}-output-rules.md`,
+    "04_output/README.md",
+    "04_output/usage.md"
+  ]);
+  return recommended.filter((sourcePath) => !excludedSources.has(sourcePath));
 }
 
 function uniqueList(items) {
