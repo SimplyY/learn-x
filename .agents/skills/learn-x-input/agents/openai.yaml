@@ -1,0 +1,4 @@
+interface:
+  display_name: "Learn-X Input"
+  short_description: "Collect weekly external inputs for Learn-X"
+  default_prompt: "Use $learn-x-input to collect the requested weekly external inputs into 03_input with traceable source data."

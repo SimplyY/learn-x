@@ -951,13 +951,13 @@ button:disabled {
   min-height: 150px;
 }
 
-.question-input {
-  min-height: 76px;
+#currentQuestion {
+  min-height: 152px;
 }
 
 #metaPrompt {
-  min-height: 150px;
-  max-height: 220px;
+  min-height: 228px;
+  max-height: 300px;
 }
 
 .chat-pack-preview {

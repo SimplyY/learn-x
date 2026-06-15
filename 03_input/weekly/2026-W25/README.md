@@ -26,8 +26,8 @@
 - `00_log/daily.md`：每天的日记，可批量导入。
 - `00_log/weekly.md`：周记、周复盘。
 - 月记、月复盘不放入 Weekly 目录，后续进入 `03_input/monthly/`。
-- `01_inbox/ai.md`：本周 AI 对话摘要，由用户使用 `02_prompts/meta/_ai-chat-extract-prompt.md` 手动生成；自动化只检查，不写入或覆盖。
-- `01_inbox/weread/`：本周微信读书阅读时长、书籍、最近阅读章节、个人划线与想法，由阶段 1 自动运行 `npm run input:weread -- --week YYYY-Www` 生成；`notes.md` 进入 Process，`_raw.json` 仅用于审计。
+- `01_inbox/ai.md`：本周 AI 对话摘要。
+- `01_inbox/weread/`：本周微信读书阅读时长、书籍、最近阅读章节、个人划线与想法，由 `npm run input:weread -- --week YYYY-Www` 自动生成。
 - `02_action/build.md`：构建、调试、上线、Codex 工作记录。
 - `02_action/feedback.md`：他人反馈、用户反馈、市场反馈。
 - `02_action/chat.md`：微信聊天、访谈记录。

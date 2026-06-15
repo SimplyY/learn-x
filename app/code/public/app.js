@@ -494,10 +494,14 @@ function renderEnhancers() {
       }
       state.activeEnhancerIds = new Set(normalizeEnhancerIds([...state.activeEnhancerIds]));
       const periodMode = activePeriodOutputMode();
-      if (enhancer.id === MUNGER_SOUL_ENHANCER_ID && !enhancerWasActive && periodMode) {
-        const lengthEnhancer = ENHANCERS.find((item) => item.id === MUNGER_SOUL_PERIOD_LENGTH_ID);
-        clearEnhancerGroup(lengthEnhancer);
-        state.activeEnhancerIds.add(MUNGER_SOUL_PERIOD_LENGTH_ID);
+      if (enhancer.id === MUNGER_SOUL_ENHANCER_ID) {
+        if (!enhancerWasActive && periodMode) {
+          const lengthEnhancer = ENHANCERS.find((item) => item.id === MUNGER_SOUL_PERIOD_LENGTH_ID);
+          clearEnhancerGroup(lengthEnhancer);
+          state.activeEnhancerIds.add(MUNGER_SOUL_PERIOD_LENGTH_ID);
+        } else if (enhancerWasActive) {
+          state.activeEnhancerIds.delete(MUNGER_SOUL_PERIOD_LENGTH_ID);
+        }
       }
       localStorage.setItem(enhancerKey(), JSON.stringify([...state.activeEnhancerIds]));
       renderEnhancers();
