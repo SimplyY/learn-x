@@ -7,6 +7,8 @@
     "build": "node app/code/scripts/build-static-data.mjs",
     "dev": "npm run build && node app/code/server.mjs",
     "snapshot": "npm run build",
+    "input:weread": "node .agents/skills/learn-x-input/scripts/collect-weread-weekly.mjs",
+    "test:input:weread": "node --test .agents/skills/learn-x-input/scripts/collect-weread-weekly.test.mjs",
     "process:weekly": "node .agents/skills/learn-x-process/scripts/generate-weekly-process-pack.mjs",
     "process:monthly": "node .agents/skills/learn-x-process/scripts/generate-monthly-process-pack.mjs",
     "memory:weekly": "node .agents/skills/learn-x-process/scripts/prepare-weekly-memory.mjs",

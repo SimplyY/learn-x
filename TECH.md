@@ -13,6 +13,17 @@
 
 Weekly Process 相关脚本统一放在 `.agents/skills/learn-x-process/scripts/`。不要在 `app/code/scripts/` 里复制一份相同工作流。
 
+## 项目内 Skills
+
+| Skill | 职责 |
+| --- | --- |
+| `learn-x-input` | 把外部周度证据确定性写入 `03_input/`，保留来源，不做长期判断。 |
+| `learn-x-process` | 从指定周期 Input 生成可追溯的 Process Pack、Output 最小壳和 Memory 候选。 |
+| `learn-x-prompt-review` | 评审和优化 `02_prompts/` 与 Chat Pack Prompt，要求先定义契约和代表性评测案例。 |
+| `learn-x-verification` | 在声称完成前按改动范围运行新鲜验证，并明确未验证项和残余风险。 |
+
+第三方 Skill 的筛选来源、固定版本和许可证归属见 `THIRD_PARTY_NOTICES.md`。项目内适配只保留与 Learn-X 边界一致的原则，不引入原仓库的 Python、LangChain、多 Agent 或外部服务依赖。
+
 ## 技术栈
 
 - 后端：Node.js 原生 HTTP 服务，动态读取文件系统。
