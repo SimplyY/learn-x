@@ -46,7 +46,7 @@ Weekly Process 相关脚本统一放在 `.agents/skills/learn-x-process/scripts/
 ## Chat Pack 配置边界
 
 - 类型、子类型、推荐上下文和增强器统一维护在 `00_config/chatpack.config.json`。
-- 大类界面名保持短标签：学习、判断、创造、画图、其他；较完整的用途说明放在配置的 `useCases`、`behaviorDirections` 和 `outputGoal` 中。
+- 大类界面名保持短标签：学习、判断、创造、其他；较完整的用途说明放在配置的 `useCases`、`behaviorDirections` 和 `outputGoal` 中。
 - 子类型 Prompt 放在 `02_prompts/chatpack/<type>/<slug>.md`；增强器 Prompt 放在 `02_prompts/chatpack/enhancers/<id>.md`。
 - 周、月、年 Output 子类型属于 `reflective-decision`；默认推荐 `01_core/道`、`01_core/memory` 和对应的 `*-output-rules.md` 模板。周输出保持现有推荐源；月 / 年输出不默认勾选 `04_output/README.md` 或 `04_output/usage.md`。
 - 周、月、年 Output 启用“芒格之魂”增强器时，只做周期材料洞察，不生成 Output；默认问题会明确“仅洞察”，字数自动选择 `1000字`，并从推荐上下文中移除对应的 `*-output-rules.md`、`04_output/README.md` 和 `04_output/usage.md`。关闭增强器后恢复该 Output 子类型的普通推荐上下文。

@@ -1,38 +1,15 @@
 # Weekly Input Template
 
-复制本目录结构创建新周目录，例如：
+复制本目录中的 Markdown 到新的 `03_input/weekly/YYYY-Www/`，然后只保留本周确实有内容的文件。
 
-```text
-03_input/weekly/2026-W22/
-  00_log/
-    daily.md
-    weekly.md
-  01_inbox/
-    ai.md
-    flomo/
-    weread/
-    reading/
-    podcast/
-    docs/
-    theme-read/
-  02_action/
-    meeting.md
-    chat.md
-    research.md
-    build.md
-    feedback.md
-```
+常用来源：
 
-- `00_log/daily.md`：每天的日记，可批量导入。
-- `00_log/weekly.md`：周记、周复盘。
-- 月记、月复盘不放入 Weekly 目录，后续进入 `03_input/monthly/`。
-- `01_inbox/ai.md`：本周 AI 对话摘要，由用户使用 `02_prompts/meta/_ai-chat-extract-prompt.md` 手动生成；自动化只检查，不写入或覆盖。
-- `01_inbox/weread/`：本周微信读书阅读时长、书籍、最近阅读章节、个人划线与想法，由阶段 1 自动运行 `npm run input:weread -- --week YYYY-Www` 生成；`notes.md` 进入 Process，`_raw.json` 仅用于审计。
-- `02_action/build.md`：构建、调试、上线、Codex 工作记录。
-- `02_action/feedback.md`：他人反馈、用户反馈、市场反馈。
-- `02_action/chat.md`：微信聊天、访谈记录。
-- `02_action/meeting.md`：会议记录。
-- `02_action/research.md`：调研过程和结果。
-- `01_inbox/flomo/`、`01_inbox/podcast/`、`01_inbox/docs/`、`01_inbox/reading/`、`01_inbox/theme-read/` 保留为文件夹，用于外部导出、多份材料或持续主题输入。
+- `daily.md`：日记与每日反馈。
+- `weekly.md`：周记与周复盘。
+- `ai.md`：AI 对话摘要。
+- `flomo.md`：Flomo 周度输入。
+- `weread.md`：微信读书周度输入，由 `npm run input:weread -- --week YYYY-Www` 生成。
+- `build.md`：Codex / Code X 构建复盘。
+- `research.md`：重要调研。
 
-以下划线开头的文件会被 Weekly Process 脚本忽略，可用作提示词或模板。
+周目录采用扁平结构，不创建 `log / inbox / action` 或来源子目录。没有有效内容的文件应删除；需要新来源时按需新增 `<source>.md`。

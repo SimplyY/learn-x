@@ -168,16 +168,10 @@ function renderSourceCoverage(sourceSummaries) {
     return `| ${source.category} | ${source.source} | ${source.fileCount} | ${source.itemCount} | ${sampleFiles} |`;
   });
 
-  const expected = ["inbox", "action", "log"];
-  const covered = new Set(sourceSummaries.filter((source) => source.itemCount > 0 || source.fileCount > 0).map((source) => source.category));
-  const missing = expected.filter((source) => !covered.has(source));
-
   return [
     "| 输入类型 | 来源 | 文件数 | 有效材料数 | 示例文件 |",
     "| --- | --- | ---: | ---: | --- |",
-    ...rows,
-    "",
-    `明显缺口：${missing.length ? missing.map((source) => `\`${source}/\``).join("、") : "本周常见来源均有覆盖或已有自定义来源。"}`
+    ...rows
   ].join("\n");
 }
 
@@ -241,9 +235,10 @@ function truncateInline(text, maxLength) {
 }
 
 function renderTextBlock(text) {
-  const longestFence = Math.max(2, ...[...text.matchAll(/`+/g)].map((match) => match[0].length));
+  const normalized = String(text).replace(/[ \t]+$/gm, "");
+  const longestFence = Math.max(2, ...[...normalized.matchAll(/`+/g)].map((match) => match[0].length));
   const fence = "`".repeat(longestFence + 1);
-  return [fence, text, fence].join("\n");
+  return [fence, normalized, fence].join("\n");
 }
 
 function parseArgs(argv) {

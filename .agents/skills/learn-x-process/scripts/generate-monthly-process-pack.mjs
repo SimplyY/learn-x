@@ -235,7 +235,7 @@ async function ensureMonthlyOutputShell(month) {
   const content = [
     `# Learn-X Monthly Output｜${month}`,
     "",
-    `> 基于 \`04_output/_dist/monthly/${month}/\` 由用户使用 AI Chat 生成正文后填入。`,
+    `> 基于 \`04_output/_dist/monthly/${month}/\` 由用户使用 AI Chat 生成正文后填入(chat pack 判断输出 + 芒格之魂)。`,
     ""
   ].join("\n");
 

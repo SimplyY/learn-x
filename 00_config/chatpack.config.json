@@ -168,37 +168,9 @@
       ]
     },
     {
-      "id": "diagram-generate",
-      "name": "画图",
-      "useCases": "把概念、领域和表达压缩成可视化结构，生成清晰可用的图稿说明。",
-      "behaviorDirections": [
-        "先判断图要解决的理解或传播问题。",
-        "选择最能降低理解成本的结构，而不是为了好看画图。",
-        "输出可直接交给绘图、生成图片或前端实现的图稿说明。"
-      ],
-      "outputGoal": "生成清晰、可用、可复用的图形表达。",
-      "subtypes": [
-        {
-          "id": "diagram-generate.knowledge-graph",
-          "name": "知识图谱",
-          "summary": "概念关系、领域结构、学习地图。"
-        },
-        {
-          "id": "diagram-generate.share-overview",
-          "name": "分享一览图",
-          "summary": "朋友圈、文章、课程、演示中的精炼表达。"
-        }
-      ],
-      "avoid": [
-        "装饰性画图",
-        "信息过载",
-        "忽略使用场景"
-      ]
-    },
-    {
       "id": "other-prompts",
       "name": "其他",
-      "useCases": "承载常用但不属于学习、判断、创造或画图主流程的 Prompt。",
+      "useCases": "承载常用但不属于学习、判断或创造主流程的 Prompt。",
       "behaviorDirections": [
         "优先遵守所选小类 Prompt，不额外扩展类型体系。",
         "让 Prompt 服务 Current Question 和 Context，而不是反过来主导问题。",

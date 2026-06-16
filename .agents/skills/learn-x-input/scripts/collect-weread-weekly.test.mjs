@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
-import { collectWereadWeekly, isoWeekRangeShanghai, normalizeWeek, renderMarkdown } from "./collect-weread-weekly.mjs";
+import { collectWereadWeekly, isoWeekRangeShanghai, normalizeWeek, renderMarkdown, writeWereadWeekly } from "./collect-weread-weekly.mjs";
 
 test("normalizes week ids and calculates Shanghai boundaries", () => {
   assert.equal(normalizeWeek("2026-24"), "2026-W24");
@@ -71,4 +74,28 @@ test("collects only highlights and thoughts inside the requested week", async ()
   assert.match(markdown, /本周想法内容/);
   assert.doesNotMatch(markdown, /上周划线内容/);
   assert.doesNotMatch(markdown, /ID：|位置：|weread:\/\//);
+});
+
+test("writes one flat weread.md file", async () => {
+  const outputRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-weread-"));
+  const emptyResponses = new Map([
+    ["/user/notebooks", { hasMore: 0, books: [] }],
+    ["/readdata/detail", { totalReadTime: 0, readDays: 0, dayAverageReadTime: 0, readTimes: {} }],
+    ["/shelf/sync", { books: [] }]
+  ]);
+
+  try {
+    const result = await writeWereadWeekly({
+      week: "2026-W25",
+      apiKey: "test",
+      outputRoot,
+      callApi: async ({ api_name }) => emptyResponses.get(api_name)
+    });
+
+    assert.equal(result.notesPath, path.join(outputRoot, "weread.md"));
+    assert.deepEqual(await readdir(outputRoot), ["weread.md"]);
+    assert.match(await readFile(result.notesPath, "utf8"), /# 微信读书｜2026-W25/);
+  } finally {
+    await rm(outputRoot, { recursive: true, force: true });
+  }
 });

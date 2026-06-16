@@ -230,13 +230,14 @@ function titleFromPath(filePath) {
 
 function inputKindFromRelativePath(relativePath) {
   const parts = toWebPath(relativePath).split("/");
-  const category = categoryFromPathPart(parts[3] || "input");
-  const sourceGroup = parts[4] ? sourceNameFromPathPart(parts[4]) : undefined;
+  const pathPart = parts[3] || "input";
+  const category = categoryFromPathPart(pathPart);
+  const sourceGroup = parts[4] ? sourceNameFromPathPart(parts[4]) : sourceNameFromPathPart(pathPart);
 
   if (category === "inbox") return { category, source: sourceGroup ? `inbox/${sourceGroup}` : "inbox" };
   if (category === "action") return { category, source: sourceGroup ? `action/${sourceGroup}` : "action" };
   if (category === "log") return { category, source: sourceGroup ? `log/${sourceGroup}` : "log" };
-  return { category, source: category };
+  return { category: categoryFromSourceName(sourceGroup), source: sourceGroup || "input" };
 }
 
 function categoryFromPathPart(part) {
@@ -244,6 +245,13 @@ function categoryFromPathPart(part) {
   if (part === "01_inbox") return "inbox";
   if (part === "02_action") return "action";
   return part;
+}
+
+function categoryFromSourceName(source) {
+  if (["daily", "weekly"].includes(source)) return "log";
+  if (["build", "research", "meeting", "chat", "feedback"].includes(source)) return "action";
+  if (["ai", "flomo", "weread", "reading", "podcast", "docs", "theme-read"].includes(source)) return "inbox";
+  return "input";
 }
 
 function sourceNameFromPathPart(part) {
