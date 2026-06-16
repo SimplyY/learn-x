@@ -10,10 +10,8 @@ Learn-X 的 `Input -> Process Pack -> Output Shell` 工作流。
 
 | 组件 | 作用 |
 | --- | --- |
-| `03_input/weekly/YYYY-Www/00_log/` | 自我反馈：我如何理解自己的状态和变化 |
-| `03_input/weekly/YYYY-Www/01_inbox/` | 信息输入：我接收了什么 |
-| `03_input/weekly/YYYY-Www/02_action/` | 行动证据：我做了什么、世界如何反馈 |
-| `03_input/weekly/00_template/` | 每周输入目录模板 |
+| `03_input/weekly/YYYY-Www/*.md` | 扁平周输入；文件名表达来源，不用目录预分类 |
+| `03_input/weekly/00_template/*.md` | 每周输入文件模板 |
 | `resources/` | 判断规则、输出要求、参考材料 |
 | `scripts/` | 确定性处理：读取、清洗、合并、去重、编号、来源覆盖、生成 Process Pack、抽取 Memory 候选 |
 | `04_output/` | `_dist` 中间材料、Output 最小壳和人工写入报告 |
@@ -21,7 +19,7 @@ Learn-X 的 `Input -> Process Pack -> Output Shell` 工作流。
 一句话：
 
 ```text
-每个周目录记录本周接收、行动和自我反馈。
+每个周目录用少量 Markdown 文件记录本周重要输入。
 ```
 
 ## 使用时机
@@ -47,11 +45,8 @@ Learn-X 的 `Input -> Process Pack -> Output Shell` 工作流。
 ## 标准流程
 
 1. 先理解 `03_input/usage.md` 和 `04_output/usage.md` 的阶段边界：本 Skill 只负责生成 `_dist` 和 Output 最小壳，不代写正文。
-2. 用户把本周材料放入 `03_input/weekly/YYYY-Www/`：
-   - `00_log/`：daily、weekly 等自我反馈；monthly 进入 `03_input/monthly/`。
-   - `01_inbox/`：AI、flomo、reading、podcast、docs 等信息输入。
-   - `02_action/`：meeting、chat、research、build、feedback 等行动证据。
-3. 如需新建周目录，复制 `03_input/weekly/00_template/` 的结构。
+2. 用户把本周重要材料直接放入 `03_input/weekly/YYYY-Www/*.md`。常用文件为 `daily.md`、`weekly.md`、`ai.md`、`flomo.md`、`weread.md`、`build.md`、`research.md`。
+3. 如需新建周目录，复制 `03_input/weekly/00_template/` 的 Markdown 文件。
 4. 用户日常可以直接要求 Codex「调用 learn-x-process，处理本周输入，生成 Weekly Output Dist」。
 5. Skill 内部先调用确定性脚本：
 
@@ -90,6 +85,7 @@ Learn-X 的 `Input -> Process Pack -> Output Shell` 工作流。
    ```
 
    然后读取 `resources/memory-rules.md` 和对应 `memory-candidates.md`，把已确认内容无损迁移到 Memory；候选不足时报告不建议写入。
+   Weekly 自动化将此作为阶段 3：只接受已勾选 checkbox 或行首结构化明确标记；未勾选条目即使包含‘继续追踪’‘重要’‘保留’等关键词也不得迁移。重复执行时不得重复追加同一条目。
 
 ## 输出要求
 
@@ -134,7 +130,7 @@ Memory 必须遵守 `resources/memory-rules.md`。已勾选内容全部进入，
 
 - `03_input/README.md` 是人和 Codex 共同使用的输入说明，新增来源目录或导入规则时要同步更新。
 - `04_output/README.md` 是报告阅读和人工审核说明，报告结构或审核流程改变时要同步更新。
-- `03_input/weekly/00_template/` 是每周输入目录模板，以下划线开头的文件会被脚本忽略。
+- `03_input/weekly/00_template/` 是每周输入文件模板，只保留 Markdown 文件。
 - `resources/weekly-output-rules.md` 是用户生成 Weekly Output 正文时的质量规则；`resources/layer-rules.md` 是判断规则。
 - `resources/memory-rules.md` 是 Memory 的质量规则。
 - 脚本只能做确定性整理、来源覆盖、Process Pack 生成和 Output 最小壳创建，不要把最终判断写死进代码。

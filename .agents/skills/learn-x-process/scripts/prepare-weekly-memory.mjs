@@ -34,8 +34,9 @@ export async function prepareWeeklyMemory(options = {}) {
   };
 }
 
-function extractMemoryCandidates(content) {
+export function extractMemoryCandidates(content) {
   const checked = [];
+  const unchecked = [];
   const explicit = [];
   const core = [];
   let section = "";
@@ -54,7 +55,13 @@ function extractMemoryCandidates(content) {
       continue;
     }
 
-    if (explicitSignals.some((signal) => line.includes(signal))) {
+    const uncheckedMatch = line.match(/^[-*]\s+\[\s\]\s+(.+)$/);
+    if (uncheckedMatch) {
+      unchecked.push({ section, text: cleanLine(uncheckedMatch[1]) });
+      continue;
+    }
+
+    if (matchesExplicitSignal(line)) {
       explicit.push({ section, text: cleanLine(line) });
       continue;
     }
@@ -66,6 +73,7 @@ function extractMemoryCandidates(content) {
 
   return {
     checked: uniqueCandidates(checked),
+    unchecked: uniqueCandidates(unchecked),
     explicit: uniqueCandidates(explicit),
     core: uniqueCandidates(core)
   };
@@ -159,6 +167,11 @@ function uniqueCandidates(items) {
     result.push(item);
   }
   return result;
+}
+
+function matchesExplicitSignal(line) {
+  const normalized = line.replace(/^[-*]\s*/, "");
+  return explicitSignals.some((signal) => new RegExp(`^(?:明确)?${signal}[：:]`).test(normalized));
 }
 
 function cleanLine(line) {

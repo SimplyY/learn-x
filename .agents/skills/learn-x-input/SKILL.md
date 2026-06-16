@@ -24,8 +24,7 @@ Collect external evidence into the requested `03_input/weekly/YYYY-Www/` directo
    ```
 
 3. Verify these files:
-   - `03_input/weekly/YYYY-Www/01_inbox/weread/notes.md`
-   - `03_input/weekly/YYYY-Www/01_inbox/weread/_raw.json`
+   - `03_input/weekly/YYYY-Www/weread.md`
 4. Run `npm run process:weekly -- --week YYYY-Www` only when the user also wants the Weekly Process Pack refreshed.
 
 The collector exports weekly reading time, books whose latest reading time falls in the requested ISO week, each book's latest progress and current chapter, plus personal highlights and thoughts created during that week. The current chapter is a progress snapshot, not a complete chapter-by-chapter reading history. It may use notebook recency to limit candidate books, but must filter every exported note by its own creation time.
@@ -34,8 +33,8 @@ Render all seven days from the weekly `readTimes` buckets, including zero-minute
 
 ## Boundaries
 
-- Treat WeRead as `01_inbox` evidence, not `00_log` or Memory.
-- Keep `_raw.json` for content and collection audit; its leading underscore keeps it out of `learn-x-process`. Do not persist WeRead IDs, ranges, chapter UIDs, or position links.
+- Treat WeRead as information input, not self-feedback, action evidence, or Memory.
+- Keep the weekly Markdown source-preserving: include the collection range, timezone, generated time, reading statistics, progress snapshots, highlights, and thoughts. Do not persist WeRead IDs, ranges, chapter UIDs, or position links.
 - Use `/readdata/detail` weekly statistics as the total-time source. Use `readUpdateTime` only to identify books read during the week; do not infer per-book duration from timestamps.
 - Label the mapped progress chapter as the latest current chapter. Do not claim that it is the complete list of chapters read during the week.
 - Do not collect public reviews, popular highlights, or bookmark positions without content.

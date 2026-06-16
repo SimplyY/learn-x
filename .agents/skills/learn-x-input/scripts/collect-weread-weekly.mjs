@@ -137,22 +137,16 @@ async function collectReadingActivity(callApi, range, readingDetail, shelf) {
 
 export async function writeWereadWeekly(options = {}) {
   const payload = await collectWereadWeekly(options);
-  const outputRoot = path.join(repoRoot, "03_input/weekly", payload.week, "01_inbox/weread");
-  const notesPath = path.join(outputRoot, "notes.md");
-  const rawPath = path.join(outputRoot, "_raw.json");
+  const outputRoot = options.outputRoot || path.join(repoRoot, "03_input/weekly", payload.week);
+  const notesPath = path.join(outputRoot, "weread.md");
   const suffix = `${process.pid}-${Date.now()}`;
   const notesTempPath = `${notesPath}.${suffix}.tmp`;
-  const rawTempPath = `${rawPath}.${suffix}.tmp`;
 
   await mkdir(outputRoot, { recursive: true });
-  await Promise.all([
-    writeFile(notesTempPath, renderMarkdown(payload), "utf8"),
-    writeFile(rawTempPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8")
-  ]);
+  await writeFile(notesTempPath, renderMarkdown(payload), "utf8");
   await rename(notesTempPath, notesPath);
-  await rename(rawTempPath, rawPath);
 
-  return { payload, notesPath, rawPath };
+  return { payload, notesPath };
 }
 
 async function collectCandidateBooks(callApi, startEpoch) {
