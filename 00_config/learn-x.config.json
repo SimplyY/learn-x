@@ -1,7 +1,7 @@
 {
   "brand": {
     "title": "Learn-X",
-    "subtitle": "学习动力引擎",
+    "subtitle": "认知进化系统",
     "mark": "LX"
   },
   "promptDirectory": "02_prompts/meta",
@@ -16,7 +16,7 @@
       "id": "learning",
       "label": "学",
       "module": "learning",
-      "title": "学习动力引擎"
+      "title": "认知进化系统"
     },
     {
       "id": "action",

@@ -41,6 +41,8 @@ Weekly Process 相关脚本统一放在 `.agents/skills/learn-x-process/scripts/
 | `app/code/scripts/static-graph.mjs` | 生成静态图谱数据。 |
 | `app/code/scripts/release.mjs` | 发布前检查：语法检查并构建静态站点。 |
 
+`npm run build` 会生成 `dist/`，并把 `app.js`、`styles.css`、`data/graph.js`、`data/graph.json` 写成内容哈希文件名，例如 `app.<hash>.js`。`dist/index.html` 在每次构建时自动引用新的哈希路径，避免 GitHub Pages / CDN / 浏览器继续命中旧静态资源缓存。不要手动维护 `dist/index.html` 中的资源路径。
+
 `app/code/` 按普通目录纳入 Learn-X 主仓库，不作为独立子模块或嵌套仓库维护。Git 提交、推送和远端配置只在主仓库边界处理；`app/code/scripts/` 不执行 `git add`、`git commit` 或 `git push`。
 
 ## Chat Pack 配置边界

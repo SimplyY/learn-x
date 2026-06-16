@@ -8,12 +8,13 @@ const MUNGER_SOUL_PERIOD_QUESTIONS = {
   monthly: "使用芒格之魂的提示词来解析所有上下文。不要输出 Monthly Output，仅洞察。",
   yearly: "使用芒格之魂的提示词来解析所有上下文。不要输出 Yearly Output，仅洞察。"
 };
+const GRAPH_DATA_URL = window.LEARN_X_GRAPH_URL || "data/graph.json";
 let APP_CONFIG = {
-  brand: { title: "Learn-X", subtitle: "学习动力引擎", mark: "LX" },
+  brand: { title: "Learn-X", subtitle: "认知进化系统", mark: "LX" },
   promptDirectory: "01_meta-prompts",
   menu: [
     { id: "browse", label: "知", module: "browse", title: "知识库浏览" },
-    { id: "learning", label: "学", module: "learning", title: "学习动力引擎" },
+    { id: "learning", label: "学", module: "learning", title: "认知进化系统" },
     { id: "action", label: "行", module: "action", title: "行动动力引擎" }
   ]
 };
@@ -203,7 +204,7 @@ async function boot() {
 
 async function loadGraph() {
   if (window.LEARN_X_GRAPH) return window.LEARN_X_GRAPH;
-  const response = await fetch("data/graph.json");
+  const response = await fetch(GRAPH_DATA_URL);
   if (!response.ok) throw new Error(`Static graph missing: ${response.status}`);
   return response.json();
 }
