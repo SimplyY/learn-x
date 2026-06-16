@@ -170,11 +170,22 @@ async function boot() {
   state.mode = initialMode();
   state.activeDialogueTypeId =
     localStorage.getItem(dialogueTypeKey()) || state.activeDialogueTypeId || DIALOGUE_TYPES[0]?.id || "";
+  let migratedDialogueSubtypeId = "";
   if (state.activeDialogueTypeId === "plain-context") state.activeDialogueTypeId = "other-prompts";
+  if (state.activeDialogueTypeId === "create-execute") {
+    const legacySubtypeId = localStorage.getItem(dialogueSubtypeKey("create-execute")) || "";
+    state.activeDialogueTypeId = "reflective-decision";
+    migratedDialogueSubtypeId = legacySubtypeId.replace(/^create-execute\./, "reflective-decision.");
+    localStorage.setItem(dialogueTypeKey(), state.activeDialogueTypeId);
+    if (migratedDialogueSubtypeId) {
+      localStorage.setItem(dialogueSubtypeKey(state.activeDialogueTypeId), migratedDialogueSubtypeId);
+    }
+  }
   if (!DIALOGUE_TYPES.some((type) => type.id === state.activeDialogueTypeId)) {
     state.activeDialogueTypeId = DIALOGUE_TYPES[0]?.id || "";
   }
-  state.activeDialogueSubtypeId = localStorage.getItem(dialogueSubtypeKey(state.activeDialogueTypeId)) || "";
+  state.activeDialogueSubtypeId =
+    migratedDialogueSubtypeId || localStorage.getItem(dialogueSubtypeKey(state.activeDialogueTypeId)) || "";
   state.activeEnhancerIds = new Set(readEnhancerIds());
   ensureActiveDialogueSubtype();
   applyAppConfig();
