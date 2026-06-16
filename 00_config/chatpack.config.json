@@ -53,14 +53,14 @@
     },
     {
       "id": "reflective-decision",
-      "name": "判断",
-      "useCases": "审计系统、判断选择、自我省察，校准价值与行动。",
+      "name": "判断创造",
+      "useCases": "审计系统、判断选择、自我省察，并把想法变成作品、行动或可执行任务。",
       "behaviorDirections": [
-        "先明确目标、约束、证据和不可逆成本。",
+        "先明确目标、约束、证据、不可逆成本和可交付物。",
         "同时检查动机、风险、反例和现实反馈。",
-        "把判断拆成可验证假设，而不是只给立场。"
+        "把判断拆成可验证假设，把创造压缩成可执行版本。"
       ],
-      "outputGoal": "帮助我做更清醒、更可验证的判断，并暴露自我欺骗。",
+      "outputGoal": "帮助我做更清醒、更可验证的判断，并把想法推进成产物或行动。",
       "subtypes": [
         {
           "id": "reflective-decision.system-audit",
@@ -126,27 +126,9 @@
             "01_core/memory",
             ".agents/skills/learn-x-process/resources/yearly-output-rules.md"
           ]
-        }
-      ],
-      "avoid": [
-        "替我拍脑袋决策",
-        "忽略反例",
-        "把偏好包装成事实"
-      ]
-    },
-    {
-      "id": "create-execute",
-      "name": "创造",
-      "useCases": "把想法变成作品、行动或可执行任务，覆盖创造与执行。",
-      "behaviorDirections": [
-        "先把目标转成可交付物、约束和验收标准。",
-        "优先给出最小可执行版本。",
-        "输出能直接交给 Codex 或自己执行的任务表达。"
-      ],
-      "outputGoal": "从想法走向产物。",
-      "subtypes": [
+        },
         {
-          "id": "create-execute.codex-build",
+          "id": "reflective-decision.codex-build",
           "name": "Codex 构建",
           "summary": "生成给 Codex 的高层任务提示词。",
           "recommendedSources": [
@@ -156,14 +138,16 @@
           ]
         },
         {
-          "id": "create-execute.meta-prompt",
+          "id": "reflective-decision.meta-prompt",
           "name": "提示词重构",
           "summary": "把原始需求压缩成更清晰、更锋利、更可执行的 Prompt。"
         }
       ],
       "avoid": [
+        "替我拍脑袋决策",
+        "忽略反例",
+        "把偏好包装成事实",
         "停留在想法层",
-        "任务拆得过碎",
         "缺少验收标准"
       ]
     },
