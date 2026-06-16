@@ -195,6 +195,74 @@
         "替代 Current Question",
         "无差别套用人格或风格"
       ]
+    },
+    {
+      "id": "ljg-skills",
+      "name": "李继刚提示词",
+      "useCases": "把李继刚 Skill 转成可在 AI Chat 中直接调用的提示词。",
+      "behaviorDirections": [
+        "优先遵守所选 Skill 原文中的角色、流程、判断标准和输出格式。",
+        "把原本面向 Agent 的文件读写或脚本动作，转换为 Chat 中可执行的输入索取、材料处理和 Markdown 输出。",
+        "保留 Skill 的能力边界，不把本地文件访问、命令执行或保存结果伪装成已经完成。"
+      ],
+      "outputGoal": "复用李继刚 Skill 的思考、学习、表达和研究能力，快速生成可交给 AI 的 Chat Pack。",
+      "subtypes": [
+        {
+          "id": "ljg-skills.ljg-think",
+          "name": "ljg-think",
+          "summary": "追问问题本质，把观点或现象钻到底。"
+        },
+        {
+          "id": "ljg-skills.ljg-learn",
+          "name": "ljg-learn",
+          "summary": "多角度拆解一个概念。"
+        },
+        {
+          "id": "ljg-skills.ljg-qa",
+          "name": "ljg-qa",
+          "summary": "把文章、书、材料转成问题链。"
+        },
+        {
+          "id": "ljg-skills.ljg-book",
+          "name": "ljg-book",
+          "summary": "以问题为轴拆书。"
+        },
+        {
+          "id": "ljg-skills.ljg-rank",
+          "name": "ljg-rank",
+          "summary": "给领域降秩，找最小生成器。"
+        },
+        {
+          "id": "ljg-skills.ljg-roundtable",
+          "name": "ljg-roundtable",
+          "summary": "多角色圆桌讨论推进复杂议题。"
+        },
+        {
+          "id": "ljg-skills.ljg-writes",
+          "name": "ljg-writes",
+          "summary": "把一个观点展开成文章。"
+        },
+        {
+          "id": "ljg-skills.ljg-plain",
+          "name": "ljg-plain",
+          "summary": "把复杂内容讲给普通人听。"
+        },
+        {
+          "id": "ljg-skills.ljg-travel",
+          "name": "ljg-travel",
+          "summary": "城市文化研究、旅行卡片、深度漫游。"
+        },
+        {
+          "id": "ljg-skills.ljg-present",
+          "name": "ljg-present",
+          "summary": "做分享稿、演讲稿、课件结构。"
+        }
+      ],
+      "avoid": [
+        "删改原 Skill 原文",
+        "声称已经执行 Chat 环境做不到的本地动作",
+        "把 Skill 输出自动沉淀进道、法、术或记忆"
+      ]
     }
   ],
   "enhancers": [
