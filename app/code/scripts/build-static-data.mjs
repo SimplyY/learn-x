@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildGraphPayload } from "./static-graph.mjs";
+import { buildGraphPayload, isPublicPrivatePath } from "./static-graph.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../..");
@@ -10,7 +10,9 @@ const publicRoot = path.join(repoRoot, "app/code/public");
 const distRoot = path.join(repoRoot, "dist");
 const dataRoot = path.join(distRoot, "data");
 
-const graph = await buildGraphPayload({ includeContent: true });
+const targetArg = process.argv.find((argument) => argument.startsWith("--target="));
+const target = targetArg?.split("=")[1] || "public";
+const graph = await buildGraphPayload({ includeContent: true, target });
 const assetReferences = new Map();
 
 await rm(distRoot, { recursive: true, force: true });
@@ -38,9 +40,24 @@ assetReferences.set("app.js", await renameWithHash(distRoot, "app.js"));
 await rewriteIndexReferences(path.join(distRoot, "index.html"), assetReferences);
 await writeFile(path.join(distRoot, ".nojekyll"), "", "utf8");
 
+if (target === "public") assertPublicArtifact(graph);
+
 console.log(
-  `Static site generated: dist (${graph.files.length} files, ${Object.keys(graph.prompts).length} prompts, ${assetReferences.size} hashed assets)`
+  `Static site generated: dist/${target} (${graph.files.length} files, ${Object.keys(graph.prompts).length} prompts, ${assetReferences.size} hashed assets)`
 );
+
+function assertPublicArtifact(graphPayload) {
+  const exposedPaths = [
+    ...(graphPayload.files || []).map((file) => file.path),
+    ...(graphPayload.contextFiles || []).map((file) => file.path),
+    ...(graphPayload.customContextFiles || []).map((file) => file.path),
+    ...(graphPayload.chatPackConfig?.dialogueTypes || []).flatMap((type) =>
+      (type.subtypes || []).flatMap((subtype) => subtype.recommendedSources || [])
+    )
+  ];
+  const leakedPath = exposedPaths.find(isPublicPrivatePath);
+  if (leakedPath) throw new Error(`Public build exposes private path: ${leakedPath}`);
+}
 
 async function writeHashedFile(directory, basename, extension, content) {
   const hash = contentHash(content);

@@ -74,6 +74,7 @@ const PERIOD_OUTPUTS = {
 };
 
 const state = {
+  runtime: { target: "public", canEditChatPack: false, includesPrivateContext: false },
   mode: initialMode(),
   files: [],
   sources: [],
@@ -94,7 +95,11 @@ const state = {
   expandedContextDirs: new Set(["", "01_core", "01_core/道", "01_core/法"]),
   expandedContextFilePreviews: new Set(),
   currentQuestionTouched: false,
-  chatPack: ""
+  chatPack: "",
+  promptEditorMode: "",
+  promptEditorDraft: null,
+  promptEditorEntityId: "",
+  promptEditorPrompt: null
 };
 
 const els = {
@@ -138,7 +143,6 @@ const els = {
   customSources: document.querySelector("#customSourcesBtn"),
   resetSources: document.querySelector("#resetSourcesBtn"),
   metaPrompt: document.querySelector("#metaPrompt"),
-  insightLog: document.querySelector("#insightLog"),
   progressBar: document.querySelector("#progressBar"),
   currentQuestion: document.querySelector("#currentQuestion"),
   chatPackFramePreview: document.querySelector("#chatPackFramePreview"),
@@ -149,8 +153,18 @@ const els = {
   contextBudgetList: document.querySelector("#contextBudgetList"),
   generateChatPack: document.querySelector("#generateChatPackBtn"),
   resetPrompt: document.querySelector("#resetPromptBtn"),
-  copyLog: document.querySelector("#copyLogBtn"),
-  clearLog: document.querySelector("#clearLogBtn"),
+  sortPromptCatalog: document.querySelector("#sortPromptCatalogBtn"),
+  editPromptCatalog: document.querySelector("#editPromptCatalogBtn"),
+  promptCatalogEditor: document.querySelector("#promptCatalogEditor"),
+  promptEditorTitle: document.querySelector("#promptEditorTitle"),
+  promptEditorHint: document.querySelector("#promptEditorHint"),
+  promptSortEditor: document.querySelector("#promptSortEditor"),
+  promptContentEditor: document.querySelector("#promptContentEditor"),
+  promptEntitySelect: document.querySelector("#promptEntitySelect"),
+  promptEntityFields: document.querySelector("#promptEntityFields"),
+  promptEditorStatus: document.querySelector("#promptEditorStatus"),
+  closePromptEditor: document.querySelector("#closePromptEditorBtn"),
+  savePromptEditor: document.querySelector("#savePromptEditorBtn"),
   customContextDialog: document.querySelector("#customContextDialog"),
   closeCustomContext: document.querySelector("#closeCustomContextBtn"),
   customContextSearch: document.querySelector("#customContextSearch"),
@@ -158,11 +172,16 @@ const els = {
   customContextCount: document.querySelector("#customContextCount"),
   selectAllCustomContext: document.querySelector("#selectAllCustomContextBtn"),
   clearCustomContext: document.querySelector("#clearCustomContextBtn"),
-  applyCustomContext: document.querySelector("#applyCustomContextBtn")
+  applyCustomContext: document.querySelector("#applyCustomContextBtn"),
+  toastMessage: document.querySelector("#toastMessage")
 };
+
+let toastTimer;
+let toastHideTimer;
 
 async function boot() {
   const graph = await loadGraph();
+  state.runtime = graph.runtime || state.runtime;
   APP_CONFIG = graph.appConfig || APP_CONFIG;
   CHATPACK_CONFIG = graph.chatPackConfig || CHATPACK_CONFIG;
   DIALOGUE_TYPES = CHATPACK_CONFIG.dialogueTypes || [];
@@ -204,6 +223,7 @@ async function boot() {
   renderDialogueTypes();
   renderEnhancers();
   renderTopNav();
+  renderEditorAvailability();
   bindEvents();
   applyChatPackSelection("已加载 Chat Pack 类型体系。");
   setMode(state.mode);
@@ -292,8 +312,15 @@ function bindEvents() {
 
   els.generateChatPack.addEventListener("click", generateChatPack);
   els.resetPrompt.addEventListener("click", resetPrompt);
-  els.copyLog.addEventListener("click", () => copyText(els.insightLog.value, "更新日志已复制。"));
-  els.clearLog.addEventListener("click", clearInsightLog);
+  els.sortPromptCatalog.addEventListener("click", () => openPromptEditor("sort"));
+  els.editPromptCatalog.addEventListener("click", () => openPromptEditor("content"));
+  els.closePromptEditor.addEventListener("click", closePromptEditor);
+  els.savePromptEditor.addEventListener("click", savePromptEditor);
+  els.promptEntitySelect.addEventListener("change", () => {
+    state.promptEditorEntityId = els.promptEntitySelect.value;
+    state.promptEditorDraft = structuredClone({ dialogueTypes: DIALOGUE_TYPES, enhancers: ENHANCERS });
+    renderPromptEntityFields();
+  });
   els.periodSelect.addEventListener("change", () => {
     const mode = activePeriodOutputMode();
     if (!mode) return;
@@ -314,9 +341,6 @@ function bindEvents() {
     renderChatPackPreview();
   });
 
-  els.insightLog.addEventListener("input", () => {
-    localStorage.setItem(logKey(), els.insightLog.value);
-  });
 }
 
 function applyAppConfig() {
@@ -561,6 +585,262 @@ function renderEnhancers() {
   }
 }
 
+function renderEditorAvailability() {
+  const enabled = Boolean(state.runtime.canEditChatPack);
+  els.sortPromptCatalog.hidden = !enabled;
+  els.editPromptCatalog.hidden = !enabled;
+  if (!enabled) closePromptEditor();
+}
+
+function openPromptEditor(mode) {
+  if (!state.runtime.canEditChatPack) return;
+  state.promptEditorMode = mode;
+  state.promptEditorDraft = structuredClone({ dialogueTypes: DIALOGUE_TYPES, enhancers: ENHANCERS });
+  state.promptEditorEntityId = mode === "content" ? `subtype:${state.activeDialogueSubtypeId}` : "";
+  state.promptEditorPrompt = null;
+  els.promptCatalogEditor.hidden = false;
+  els.promptSortEditor.hidden = mode !== "sort";
+  els.promptContentEditor.hidden = mode !== "content";
+  els.promptEditorTitle.textContent = mode === "sort" ? "调整提示词顺序" : "编辑提示词内容";
+  els.promptEditorHint.textContent =
+    mode === "sort"
+      ? "拖动或使用方向按钮调整，保存后写入配置。"
+      : "每次编辑并保存一个对象；切换对象会放弃当前未保存内容。";
+  els.promptEditorStatus.textContent = "";
+  if (mode === "sort") renderPromptSortEditor();
+  else renderPromptContentEditor();
+  els.promptCatalogEditor.scrollIntoView({ block: "nearest" });
+}
+
+function closePromptEditor() {
+  state.promptEditorMode = "";
+  state.promptEditorDraft = null;
+  state.promptEditorEntityId = "";
+  state.promptEditorPrompt = null;
+  if (els.promptCatalogEditor) els.promptCatalogEditor.hidden = true;
+}
+
+function renderPromptSortEditor() {
+  const draft = state.promptEditorDraft;
+  const selectedTypeId = els.promptSortEditor.dataset.typeId || state.activeDialogueTypeId || draft.dialogueTypes[0]?.id;
+  const selectedType = draft.dialogueTypes.find((type) => type.id === selectedTypeId) || draft.dialogueTypes[0];
+  els.promptSortEditor.dataset.typeId = selectedType?.id || "";
+  els.promptSortEditor.innerHTML = `
+    <div class="editor-sort-columns">
+      <section class="editor-sort-group">
+        <h4>大类</h4>
+        <div class="editor-sort-list" data-sort-kind="type"></div>
+      </section>
+      <section class="editor-sort-group">
+        <label class="editor-field"><span>子类型所属大类</span><select id="sortSubtypeTypeSelect">${draft.dialogueTypes
+          .map((type) => `<option value="${escapeHtml(type.id)}"${type.id === selectedType?.id ? " selected" : ""}>${escapeHtml(type.name)}</option>`)
+          .join("")}</select></label>
+        <div class="editor-sort-list" data-sort-kind="subtype"></div>
+      </section>
+      <section class="editor-sort-group">
+        <h4>增强器</h4>
+        <div class="editor-sort-list" data-sort-kind="enhancer"></div>
+      </section>
+    </div>`;
+  renderSortableRows(els.promptSortEditor.querySelector('[data-sort-kind="type"]'), draft.dialogueTypes, "type");
+  renderSortableRows(els.promptSortEditor.querySelector('[data-sort-kind="subtype"]'), selectedType?.subtypes || [], "subtype", selectedType?.id);
+  renderSortableRows(els.promptSortEditor.querySelector('[data-sort-kind="enhancer"]'), draft.enhancers, "enhancer");
+  els.promptSortEditor.querySelector("#sortSubtypeTypeSelect").addEventListener("change", (event) => {
+    els.promptSortEditor.dataset.typeId = event.target.value;
+    renderPromptSortEditor();
+  });
+}
+
+function renderSortableRows(container, items, kind, typeId = "") {
+  items.forEach((item, index) => {
+    const row = document.createElement("div");
+    row.className = "editor-sort-row";
+    row.draggable = true;
+    row.dataset.index = String(index);
+    row.innerHTML = `<span>${escapeHtml(item.name)}</span><div class="editor-row-actions"><button type="button" aria-label="上移 ${escapeHtml(item.name)}"${index === 0 ? " disabled" : ""}>↑</button><button type="button" aria-label="下移 ${escapeHtml(item.name)}"${index === items.length - 1 ? " disabled" : ""}>↓</button></div>`;
+    const [up, down] = row.querySelectorAll("button");
+    up.addEventListener("click", () => movePromptEditorItem(kind, index, -1, typeId));
+    down.addEventListener("click", () => movePromptEditorItem(kind, index, 1, typeId));
+    row.addEventListener("dragstart", () => {
+      row.classList.add("dragging");
+      container.dataset.dragIndex = String(index);
+    });
+    row.addEventListener("dragend", () => row.classList.remove("dragging"));
+    row.addEventListener("dragover", (event) => event.preventDefault());
+    row.addEventListener("drop", (event) => {
+      event.preventDefault();
+      const fromIndex = Number(container.dataset.dragIndex);
+      if (Number.isInteger(fromIndex) && fromIndex !== index) movePromptEditorItem(kind, fromIndex, index - fromIndex, typeId);
+    });
+    container.append(row);
+  });
+}
+
+function movePromptEditorItem(kind, index, delta, typeId) {
+  const draft = state.promptEditorDraft;
+  const list =
+    kind === "type"
+      ? draft.dialogueTypes
+      : kind === "enhancer"
+        ? draft.enhancers
+        : draft.dialogueTypes.find((type) => type.id === typeId)?.subtypes;
+  const nextIndex = index + delta;
+  if (!list || nextIndex < 0 || nextIndex >= list.length) return;
+  const [item] = list.splice(index, 1);
+  list.splice(nextIndex, 0, item);
+  renderPromptSortEditor();
+}
+
+function renderPromptContentEditor() {
+  const options = [];
+  for (const type of state.promptEditorDraft.dialogueTypes) {
+    options.push({ value: `type:${type.id}`, label: `大类 · ${type.name}` });
+    for (const subtype of type.subtypes || []) options.push({ value: `subtype:${subtype.id}`, label: `子类型 · ${subtype.name}` });
+  }
+  for (const enhancer of state.promptEditorDraft.enhancers) {
+    options.push({ value: `enhancer:${enhancer.id}`, label: `增强器 · ${enhancer.name}` });
+  }
+  if (!options.some((option) => option.value === state.promptEditorEntityId)) state.promptEditorEntityId = options[0]?.value || "";
+  els.promptEntitySelect.innerHTML = options
+    .map((option) => `<option value="${escapeHtml(option.value)}"${option.value === state.promptEditorEntityId ? " selected" : ""}>${escapeHtml(option.label)}</option>`)
+    .join("");
+  renderPromptEntityFields();
+}
+
+function promptEditorEntity() {
+  const [kind, id] = state.promptEditorEntityId.split(":");
+  if (kind === "type") return { kind, item: state.promptEditorDraft.dialogueTypes.find((type) => type.id === id) };
+  if (kind === "subtype") {
+    for (const type of state.promptEditorDraft.dialogueTypes) {
+      const item = type.subtypes.find((subtype) => subtype.id === id);
+      if (item) return { kind, item, type };
+    }
+  }
+  return { kind, item: state.promptEditorDraft.enhancers.find((enhancer) => enhancer.id === id) };
+}
+
+function renderPromptEntityFields() {
+  const entity = promptEditorEntity();
+  if (!entity.item) return;
+  state.promptEditorPrompt = ["subtype", "enhancer"].includes(entity.kind)
+    ? { kind: entity.kind, id: entity.item.id, content: entity.item.protocol || "" }
+    : null;
+  els.promptEntityFields.innerHTML = "";
+  appendEditorTextField("正式名称", "name", entity.item.name || "");
+  if (entity.kind === "type") {
+    appendEditorTextField("用途说明", "useCases", entity.item.useCases || "", true);
+    appendEditorTextField("输出目标", "outputGoal", entity.item.outputGoal || "", true);
+    appendEditorTextField("行为规则，每行一条", "behaviorDirections", (entity.item.behaviorDirections || []).join("\n"), true, true);
+    appendEditorTextField("避免事项，每行一条", "avoid", (entity.item.avoid || []).join("\n"), true, true);
+  } else {
+    appendEditorTextField("简介", "summary", entity.item.summary || "", true);
+    if (entity.kind === "enhancer") {
+      appendEditorTextField("应用说明", "applicationNote", entity.item.applicationNote || "", true);
+    }
+    if (entity.kind === "subtype") appendRecommendedSourcesEditor(entity.item);
+    appendEditorTextField("Prompt Markdown", "protocol", entity.item.protocol || "", true, false, "prompt-source-editor");
+  }
+}
+
+function appendEditorTextField(labelText, fieldName, value, multiline = false, lines = false, className = "") {
+  const label = document.createElement("label");
+  label.className = "editor-field";
+  const caption = document.createElement("span");
+  caption.textContent = labelText;
+  const control = document.createElement(multiline ? "textarea" : "input");
+  if (!multiline) control.type = "text";
+  control.value = value;
+  control.className = className;
+  control.addEventListener("input", () => {
+    const entity = promptEditorEntity();
+    if (fieldName === "protocol") {
+      entity.item.protocol = control.value;
+      state.promptEditorPrompt.content = control.value;
+    } else {
+      entity.item[fieldName] = lines ? control.value.split("\n").map((line) => line.trim()).filter(Boolean) : control.value;
+    }
+  });
+  label.append(caption, control);
+  els.promptEntityFields.append(label);
+}
+
+function appendRecommendedSourcesEditor(subtype) {
+  const section = document.createElement("section");
+  section.className = "editor-field";
+  section.innerHTML = `<span>推荐上下文</span><label class="editor-checkbox"><input type="checkbox"${subtype.includeBaseRecommendedSources !== false ? " checked" : ""}>继承基础推荐上下文</label><div class="recommended-source-picker"><select aria-label="可选上下文路径"></select><button type="button">添加</button></div><div class="recommended-source-list"></div>`;
+  const checkbox = section.querySelector('input[type="checkbox"]');
+  checkbox.addEventListener("change", () => {
+    subtype.includeBaseRecommendedSources = checkbox.checked;
+  });
+  const picker = section.querySelector("select");
+  const candidates = recommendedSourceCandidates().filter((path) => !(subtype.recommendedSources || []).includes(path));
+  picker.innerHTML = candidates.map((path) => `<option value="${escapeHtml(path)}">${escapeHtml(path)}</option>`).join("");
+  const addButton = section.querySelector(".recommended-source-picker button");
+  addButton.disabled = !candidates.length;
+  addButton.addEventListener("click", () => {
+    if (!picker.value) return;
+    subtype.recommendedSources = [...(subtype.recommendedSources || []), picker.value];
+    renderPromptEntityFields();
+  });
+  const list = section.querySelector(".recommended-source-list");
+  (subtype.recommendedSources || []).forEach((source, index, sources) => {
+    const row = document.createElement("div");
+    row.className = "recommended-source-row";
+    row.innerHTML = `<code>${escapeHtml(source)}</code><div class="editor-row-actions"><button type="button" aria-label="上移推荐上下文"${index === 0 ? " disabled" : ""}>↑</button><button type="button" aria-label="下移推荐上下文"${index === sources.length - 1 ? " disabled" : ""}>↓</button><button type="button" aria-label="移除推荐上下文">×</button></div>`;
+    const [up, down, remove] = row.querySelectorAll("button");
+    up.addEventListener("click", () => moveRecommendedSource(subtype, index, -1));
+    down.addEventListener("click", () => moveRecommendedSource(subtype, index, 1));
+    remove.addEventListener("click", () => {
+      subtype.recommendedSources.splice(index, 1);
+      renderPromptEntityFields();
+    });
+    list.append(row);
+  });
+  els.promptEntityFields.append(section);
+}
+
+function moveRecommendedSource(subtype, index, delta) {
+  const nextIndex = index + delta;
+  if (nextIndex < 0 || nextIndex >= subtype.recommendedSources.length) return;
+  const [source] = subtype.recommendedSources.splice(index, 1);
+  subtype.recommendedSources.splice(nextIndex, 0, source);
+  renderPromptEntityFields();
+}
+
+function recommendedSourceCandidates() {
+  const paths = new Set(["README.md"]);
+  for (const file of state.customContextFiles) {
+    paths.add(file.path);
+    const parts = file.path.split("/");
+    for (let index = 1; index < parts.length; index += 1) paths.add(parts.slice(0, index).join("/"));
+  }
+  return [...paths].sort((left, right) => left.localeCompare(right, "zh-CN"));
+}
+
+async function savePromptEditor() {
+  if (!state.promptEditorDraft || !state.runtime.canEditChatPack) return;
+  els.savePromptEditor.disabled = true;
+  els.promptEditorStatus.textContent = "正在保存并重建本地页面…";
+  try {
+    const response = await fetch("api/chatpack/editor", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        dialogueTypes: state.promptEditorDraft.dialogueTypes,
+        enhancers: state.promptEditorDraft.enhancers,
+        prompt: state.promptEditorMode === "content" ? state.promptEditorPrompt : null
+      })
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "保存失败");
+    els.promptEditorStatus.textContent = "保存成功，正在刷新。";
+    window.location.reload();
+  } catch (error) {
+    els.promptEditorStatus.textContent = error.message;
+    els.savePromptEditor.disabled = false;
+  }
+}
+
 function clearEnhancerGroup(enhancer) {
   if (!enhancer.group) return;
   for (const item of ENHANCERS) {
@@ -603,7 +883,6 @@ function applyChatPackSelection(message) {
   els.domainField.hidden = !subtype?.needsDomain;
   els.metaPrompt.value = assembledPrompt();
   syncCurrentQuestionDefault(type, subtype);
-  els.insightLog.value = localStorage.getItem(logKey()) || "";
   applyRecommendedSources();
   renderPeriodPicker();
   renderSourceChecklist();
@@ -786,10 +1065,6 @@ function isEmptyPromptSelection(type, subtype) {
 
 function renderPromptTemplate(template) {
   return template.replaceAll("{{domain}}", state.selectedDomain || "当前领域");
-}
-
-function logKey() {
-  return `${STORAGE_PREFIX}:log:${state.activeDialogueSubtypeId || state.activeDialogueTypeId}:${state.selectedDomain || "global"}`;
 }
 
 function dialogueTypeKey() {
@@ -1223,17 +1498,12 @@ function resetPrompt() {
   renderChatPackPreview();
 }
 
-function clearInsightLog() {
-  els.insightLog.value = "";
-  localStorage.removeItem(logKey());
-  els.learningStatus.textContent = "更新日志已清空。";
-}
-
 async function generateChatPack() {
   await generateContext();
   if (!state.context) return;
   const chatPack = buildChatPack();
-  await copyText(chatPack, "Chat Pack 已生成并复制。");
+  const copied = await copyText(chatPack, "Chat Pack 已生成并复制。");
+  if (copied) showToast("已复制到剪贴板，请去 ai chat");
 }
 
 function buildChatPack() {
@@ -1671,9 +1941,25 @@ async function copyText(text, message) {
   try {
     await navigator.clipboard.writeText(text);
     target.textContent = message;
+    return true;
   } catch {
     target.textContent = `${message.replace("已生成并复制", "已生成")}（浏览器未允许自动复制）`;
+    return false;
   }
+}
+
+function showToast(message) {
+  window.clearTimeout(toastTimer);
+  window.clearTimeout(toastHideTimer);
+  els.toastMessage.textContent = message;
+  els.toastMessage.hidden = false;
+  requestAnimationFrame(() => els.toastMessage.classList.add("visible"));
+  toastTimer = window.setTimeout(() => {
+    els.toastMessage.classList.remove("visible");
+    toastHideTimer = window.setTimeout(() => {
+      els.toastMessage.hidden = true;
+    }, 180);
+  }, 2200);
 }
 
 function attachPreviewHandlers() {
@@ -1725,7 +2011,7 @@ function formatBytes(bytes) {
 }
 
 function escapeHtml(value) {
-  return value
+  return String(value)
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
