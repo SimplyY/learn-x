@@ -79,9 +79,12 @@ Learn-X 不以 Output 为终点。
 | `03_input/` | 原始输入区，只保存进入处理流程的证据和反馈。详见 `03_input/README.md`。 |
 | `04_output/` | 周度处理结果和中间材料区。详见 `04_output/README.md`。 |
 | `.agents/skills/` | 可复用工作流，例如 Weekly Process。 |
-| `app/code/` | Chat Pack 与本地应用代码。技术边界详见 `TECH.md`。 |
-| `SECURITY.md` | 开源与提交前的敏感信息护栏。 |
-| `TODO.md` | 当前任务清单。 |
+| `app/code/` | Chat Pack 与本地应用代码。技术边界详见 `docs/TECH.md`。 |
+| `docs/CHAT_PACK.md` | Chat Pack 的目标、组成、使用流程和功能边界。 |
+| `docs/LEARN_X_PROCESS.md` | `learn-x-process` 的阶段、产物、职责和功能边界。 |
+| `docs/SECURITY.md` | 开源与提交前的敏感信息护栏。 |
+| `docs/THIRD_PARTY_NOTICES.md` | 第三方 Skill 的来源、许可证与归属说明。 |
+| `docs/TODO.md` | 当前任务清单。 |
 
 ## 维护原则
 

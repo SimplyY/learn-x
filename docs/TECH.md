@@ -1,6 +1,6 @@
 # 技术边界与验证 (TECH)
 
-本文档是 Learn-X 的项目级技术索引，覆盖本地应用代码、静态构建和验证边界。项目级认知原则留在根 README；输入、输出和 Weekly Process 的细节留在各自目录或 Skill 文档。
+本文档是 Learn-X 的项目级技术索引，覆盖本地应用代码、静态构建和验证边界。功能说明见 `CHAT_PACK.md` 和 `LEARN_X_PROCESS.md`；项目级认知原则留在根 README。
 
 ## 代码 vs Skill
 
@@ -51,16 +51,12 @@ Chat Pack 编辑器只在本地桌面端显示。排序、名称、说明、Prom
 
 `app/code/` 按普通目录纳入 Learn-X 主仓库，不作为独立子模块或嵌套仓库维护。Git 提交、推送和远端配置只在主仓库边界处理；`app/code/scripts/` 不执行 `git add`、`git commit` 或 `git push`。
 
-## Chat Pack 配置边界
+## Chat Pack 技术边界
 
-- 类型、子类型、推荐上下文和增强器统一维护在 `00_config/chatpack.config.json`。
-- 大类界面名保持短标签：学习、判断、创造、其他；较完整的用途说明放在配置的 `useCases`、`behaviorDirections` 和 `outputGoal` 中。
-- 子类型 Prompt 放在 `02_prompts/chatpack/<type>/<slug>.md`；增强器 Prompt 放在 `02_prompts/chatpack/enhancers/<id>.md`。
-- 周、月、年 Output 子类型属于 `reflective-decision`；默认推荐 `01_core/道`、`01_core/memory` 和对应的 `*-output-rules.md` 模板。周输出保持现有推荐源；月 / 年输出不默认勾选 `04_output/README.md` 或 `04_output/usage.md`。
-- 周、月、年 Output 启用“芒格之魂”增强器时，只做周期材料洞察，不生成 Output；默认问题会明确“仅洞察”，字数自动选择 `1000字`，并从推荐上下文中移除对应的 `*-output-rules.md`、`04_output/README.md` 和 `04_output/usage.md`。关闭增强器后恢复该 Output 子类型的普通推荐上下文。
-- 前端只在周、月、年 Output 子类型下显示周期快捷选择；周输出保持只勾选对应 `04_output/_dist/weekly/<period>/process-pack.md`，月输出自动勾选对应 `04_output/_dist/monthly/<period>/process-pack.md`，年输出优先勾选未来 `04_output/_dist/yearly/<year>/process-pack.md`，没有年度过程包时再勾选本年度已生成的 `04_output/monthly/<year>-*.md`；不自动勾选 `input.json`，也不回捞 `03_input/` 原始材料。
-- 字数控制是 `group: "length"` 增强器，在前端显示为“字数”下拉框；同组只能选一个。
-- `04_output/_dist/` 下的 `.md` 和 `.json` 仍可以通过自定义上下文手动选择；`input.json` 主要用于来源审计，不作为周期快捷选择的默认材料。
+- 配置统一维护在 `00_config/chatpack.config.json`；Prompt 分别放在 `02_prompts/chatpack/<type>/` 和 `02_prompts/chatpack/enhancers/`。
+- 前端负责组装 Prompt、Context 和增强器；Context 统一通过 `/api/context` 获取。
+- 周、月、年快捷选择、芒格之魂模式和人工确认边界见 `docs/CHAT_PACK.md`，不要在 TECH 重复维护产品规则。
+- Process Pack 的生成与 Memory 候选不属于应用代码，见 `docs/LEARN_X_PROCESS.md` 和 `.agents/skills/learn-x-process/`。
 
 ## API 边界
 
@@ -86,7 +82,9 @@ Chat Pack 编辑器只在本地桌面端显示。排序、名称、说明、Prom
 node --check app/code/server.mjs
 node --check app/code/public/app.js
 node --check app/code/scripts/static-graph.mjs
-npm run build
+npm run test:app
+npm run build:public
+npm run build:local
 ```
 
 本地启动地址：`http://127.0.0.1:4173`。

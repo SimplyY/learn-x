@@ -143,27 +143,29 @@
                     <span>增强器</span>
                   </div>
                   <div id="enhancerList" class="dialogue-subtype-list" aria-label="增强器"></div>
-                  <section id="promptCatalogEditor" class="prompt-catalog-editor local-desktop-only" hidden>
-                    <header class="editor-header">
-                      <div>
-                        <strong id="promptEditorTitle">编辑提示词</strong>
-                        <p id="promptEditorHint">修改会保存到项目源文件。</p>
+                  <dialog id="promptCatalogEditor" class="modal-dialog prompt-catalog-dialog local-desktop-only" hidden>
+                    <section class="prompt-catalog-editor">
+                      <header class="editor-header">
+                        <div>
+                          <strong id="promptEditorTitle">编辑提示词</strong>
+                          <p id="promptEditorHint">修改会保存到项目源文件。</p>
+                        </div>
+                        <button id="closePromptEditorBtn" type="button">取消</button>
+                      </header>
+                      <div id="promptSortEditor" hidden></div>
+                      <div id="promptContentEditor" class="prompt-content-editor" hidden>
+                        <label class="editor-field">
+                          <span>编辑对象</span>
+                          <select id="promptEntitySelect"></select>
+                        </label>
+                        <div id="promptEntityFields" class="prompt-entity-fields"></div>
                       </div>
-                      <button id="closePromptEditorBtn" type="button">取消</button>
-                    </header>
-                    <div id="promptSortEditor" hidden></div>
-                    <div id="promptContentEditor" class="prompt-content-editor" hidden>
-                      <label class="editor-field">
-                        <span>编辑对象</span>
-                        <select id="promptEntitySelect"></select>
-                      </label>
-                      <div id="promptEntityFields" class="prompt-entity-fields"></div>
-                    </div>
-                    <footer class="editor-footer">
-                      <span id="promptEditorStatus" role="status" aria-live="polite"></span>
-                      <button id="savePromptEditorBtn" class="primary-action" type="button">保存修改</button>
-                    </footer>
-                  </section>
+                      <footer class="editor-footer">
+                        <span id="promptEditorStatus" role="status" aria-live="polite"></span>
+                        <button id="savePromptEditorBtn" class="primary-action" type="button">保存修改</button>
+                      </footer>
+                    </section>
+                  </dialog>
                 </section>
                 <label class="prompt-editor">
                   <span>当前问题</span>

@@ -8,4 +8,3 @@ Learn-X includes project-specific adaptations of the following agent skills. The
 - Used by: `.agents/skills/learn-x-prompt-review/SKILL.md`
 - License: MIT
 - Copyright: Copyright (c) 2024 Seth Hobson
-

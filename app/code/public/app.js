@@ -99,7 +99,8 @@ const state = {
   promptEditorMode: "",
   promptEditorDraft: null,
   promptEditorEntityId: "",
-  promptEditorPrompt: null
+  promptEditorPrompt: null,
+  promptEditorExpandedSourceDirs: new Set()
 };
 
 const els = {
@@ -315,6 +316,7 @@ function bindEvents() {
   els.sortPromptCatalog.addEventListener("click", () => openPromptEditor("sort"));
   els.editPromptCatalog.addEventListener("click", () => openPromptEditor("content"));
   els.closePromptEditor.addEventListener("click", closePromptEditor);
+  els.promptCatalogEditor.addEventListener("close", closePromptEditor);
   els.savePromptEditor.addEventListener("click", savePromptEditor);
   els.promptEntitySelect.addEventListener("change", () => {
     state.promptEditorEntityId = els.promptEntitySelect.value;
@@ -366,7 +368,7 @@ function initialMode() {
   const hashMode = window.location.hash.replace(/^#\/?/, "");
   return APP_CONFIG.menu.some((item) => item.id === hashMode)
     ? hashMode
-    : APP_CONFIG.menu[0]?.id || "browse";
+    : getMenuIdByModule("learning");
 }
 
 function navigateMode(mode) {
@@ -598,6 +600,7 @@ function openPromptEditor(mode) {
   state.promptEditorDraft = structuredClone({ dialogueTypes: DIALOGUE_TYPES, enhancers: ENHANCERS });
   state.promptEditorEntityId = mode === "content" ? `subtype:${state.activeDialogueSubtypeId}` : "";
   state.promptEditorPrompt = null;
+  state.promptEditorExpandedSourceDirs = new Set();
   els.promptCatalogEditor.hidden = false;
   els.promptSortEditor.hidden = mode !== "sort";
   els.promptContentEditor.hidden = mode !== "content";
@@ -609,7 +612,7 @@ function openPromptEditor(mode) {
   els.promptEditorStatus.textContent = "";
   if (mode === "sort") renderPromptSortEditor();
   else renderPromptContentEditor();
-  els.promptCatalogEditor.scrollIntoView({ block: "nearest" });
+  els.promptCatalogEditor.showModal();
 }
 
 function closePromptEditor() {
@@ -617,6 +620,8 @@ function closePromptEditor() {
   state.promptEditorDraft = null;
   state.promptEditorEntityId = "";
   state.promptEditorPrompt = null;
+  state.promptEditorExpandedSourceDirs = new Set();
+  if (els.promptCatalogEditor?.open) els.promptCatalogEditor.close();
   if (els.promptCatalogEditor) els.promptCatalogEditor.hidden = true;
 }
 
@@ -737,7 +742,7 @@ function renderPromptEntityFields() {
     if (entity.kind === "enhancer") {
       appendEditorTextField("应用说明", "applicationNote", entity.item.applicationNote || "", true);
     }
-    if (entity.kind === "subtype") appendRecommendedSourcesEditor(entity.item);
+    if (entity.kind === "subtype") appendRecommendedSourcesEditor(entity.item, entity.type);
     appendEditorTextField("Prompt Markdown", "protocol", entity.item.protocol || "", true, false, "prompt-source-editor");
   }
 }
@@ -764,47 +769,71 @@ function appendEditorTextField(labelText, fieldName, value, multiline = false, l
   els.promptEntityFields.append(label);
 }
 
-function appendRecommendedSourcesEditor(subtype) {
+function appendRecommendedSourcesEditor(subtype, type) {
   const section = document.createElement("section");
   section.className = "editor-field";
-  section.innerHTML = `<span>推荐上下文</span><label class="editor-checkbox"><input type="checkbox"${subtype.includeBaseRecommendedSources !== false ? " checked" : ""}>继承基础推荐上下文</label><div class="recommended-source-picker"><select aria-label="可选上下文路径"></select><button type="button">添加</button></div><div class="recommended-source-list"></div>`;
-  const checkbox = section.querySelector('input[type="checkbox"]');
-  checkbox.addEventListener("change", () => {
-    subtype.includeBaseRecommendedSources = checkbox.checked;
-  });
-  const picker = section.querySelector("select");
-  const candidates = recommendedSourceCandidates().filter((path) => !(subtype.recommendedSources || []).includes(path));
-  picker.innerHTML = candidates.map((path) => `<option value="${escapeHtml(path)}">${escapeHtml(path)}</option>`).join("");
-  const addButton = section.querySelector(".recommended-source-picker button");
-  addButton.disabled = !candidates.length;
-  addButton.addEventListener("click", () => {
-    if (!picker.value) return;
-    subtype.recommendedSources = [...(subtype.recommendedSources || []), picker.value];
-    renderPromptEntityFields();
-  });
-  const list = section.querySelector(".recommended-source-list");
-  (subtype.recommendedSources || []).forEach((source, index, sources) => {
+  section.innerHTML = `<span>推荐上下文</span><div class="recommended-source-checklist source-checklist"></div><small class="recommended-source-count"></small>`;
+  const inherited = subtype.includeBaseRecommendedSources !== false && type?.id !== "diagram-generate"
+    ? ["01_core/道", "01_core/memory"]
+    : [];
+  const selected = new Set([...inherited, ...(subtype.recommendedSources || [])]);
+  subtype.includeBaseRecommendedSources = false;
+  subtype.recommendedSources = [...selected];
+  const tree = buildRecommendedSourceTree([...new Set([...recommendedSourceCandidates(), ...selected])]);
+  for (const source of selected) {
+    const parts = source.split("/");
+    for (let index = 1; index < parts.length; index += 1) {
+      state.promptEditorExpandedSourceDirs.add(parts.slice(0, index).join("/"));
+    }
+  }
+  const list = section.querySelector(".recommended-source-checklist");
+  const renderNode = (node, depth) => {
     const row = document.createElement("div");
-    row.className = "recommended-source-row";
-    row.innerHTML = `<code>${escapeHtml(source)}</code><div class="editor-row-actions"><button type="button" aria-label="上移推荐上下文"${index === 0 ? " disabled" : ""}>↑</button><button type="button" aria-label="下移推荐上下文"${index === sources.length - 1 ? " disabled" : ""}>↓</button><button type="button" aria-label="移除推荐上下文">×</button></div>`;
-    const [up, down, remove] = row.querySelectorAll("button");
-    up.addEventListener("click", () => moveRecommendedSource(subtype, index, -1));
-    down.addEventListener("click", () => moveRecommendedSource(subtype, index, 1));
-    remove.addEventListener("click", () => {
-      subtype.recommendedSources.splice(index, 1);
+    row.className = "recommended-source-option";
+    row.style.setProperty("--depth", String(depth));
+    const expanded = state.promptEditorExpandedSourceDirs.has(node.path);
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = node.children.length ? "tree-toggle" : "tree-toggle spacer";
+    toggle.textContent = node.children.length ? (expanded ? "▾" : "▸") : "";
+    toggle.addEventListener("click", () => {
+      if (expanded) state.promptEditorExpandedSourceDirs.delete(node.path);
+      else state.promptEditorExpandedSourceDirs.add(node.path);
       renderPromptEntityFields();
     });
+    const label = document.createElement("label");
+    label.innerHTML = `<input type="checkbox"${selected.has(node.path) ? " checked" : ""}><span>${escapeHtml(node.name)}${node.children.length ? "/" : ""}</span>`;
+    label.querySelector("input").addEventListener("change", (event) => {
+      if (event.target.checked) selected.add(node.path);
+      else selected.delete(node.path);
+      subtype.recommendedSources = [...selected];
+      section.querySelector(".recommended-source-count").textContent = `已选 ${selected.size} 项`;
+    });
+    row.append(toggle, label);
     list.append(row);
-  });
+    if (expanded) for (const child of node.children) renderNode(child, depth + 1);
+  };
+  for (const node of tree.children) renderNode(node, 0);
+  section.querySelector(".recommended-source-count").textContent = `已选 ${selected.size} 项`;
   els.promptEntityFields.append(section);
 }
 
-function moveRecommendedSource(subtype, index, delta) {
-  const nextIndex = index + delta;
-  if (nextIndex < 0 || nextIndex >= subtype.recommendedSources.length) return;
-  const [source] = subtype.recommendedSources.splice(index, 1);
-  subtype.recommendedSources.splice(nextIndex, 0, source);
-  renderPromptEntityFields();
+function buildRecommendedSourceTree(paths) {
+  const root = { children: [] };
+  for (const path of paths) {
+    const parts = path.split("/");
+    let cursor = root;
+    for (const [index, name] of parts.entries()) {
+      const nodePath = parts.slice(0, index + 1).join("/");
+      let node = cursor.children.find((item) => item.path === nodePath);
+      if (!node) {
+        node = { name, path: nodePath, children: [] };
+        cursor.children.push(node);
+      }
+      cursor = node;
+    }
+  }
+  return root;
 }
 
 function recommendedSourceCandidates() {

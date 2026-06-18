@@ -660,10 +660,23 @@ button:disabled {
   box-shadow: 0 1px 3px rgba(31, 35, 41, 0.1);
 }
 
+.modal-dialog.prompt-catalog-dialog {
+  width: min(1080px, calc(100vw - 36px));
+  max-height: calc(100vh - 36px);
+}
+
+.prompt-catalog-dialog .prompt-catalog-editor {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--panel);
+  box-shadow: none;
+  overflow: auto;
+}
+
 .editor-header,
 .editor-footer,
-.editor-sort-row,
-.recommended-source-row {
+.editor-sort-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -690,8 +703,7 @@ button:disabled {
 }
 
 .editor-sort-group,
-.prompt-entity-fields,
-.recommended-source-list {
+.prompt-entity-fields {
   display: grid;
   gap: 8px;
 }
@@ -707,8 +719,7 @@ button:disabled {
   gap: 5px;
 }
 
-.editor-sort-row,
-.recommended-source-row {
+.editor-sort-row {
   min-width: 0;
   padding: 6px 7px;
   border: 1px solid var(--line);
@@ -724,8 +735,7 @@ button:disabled {
   opacity: 0.45;
 }
 
-.editor-sort-row span,
-.recommended-source-row code {
+.editor-sort-row span {
   min-width: 0;
   overflow-wrap: anywhere;
   font-size: 12px;
@@ -780,18 +790,41 @@ button:disabled {
   font-size: 12px;
 }
 
-.editor-checkbox {
+.recommended-source-checklist {
+  max-height: 300px;
+}
+
+.recommended-source-option {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
+  min-height: 31px;
+  padding-left: calc(var(--depth) * 16px);
+}
+
+.recommended-source-option label {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: var(--ink);
-  font-size: 13px;
+  min-width: 0;
+  cursor: pointer;
 }
 
-.recommended-source-picker {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 6px;
+.recommended-source-option input {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.recommended-source-option span {
+  overflow-wrap: anywhere;
+}
+
+.recommended-source-count {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .period-picker {
