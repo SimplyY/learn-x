@@ -61,4 +61,4 @@ For prompt-only changes, also inspect `git diff -- 02_prompts 00_config/chatpack
 
 ## Origin
 
-Adapted for Learn-X from `prompt-engineering-patterns` in `wshobson/agents`. The original is MIT licensed; see `THIRD_PARTY_NOTICES.md`.
+Adapted for Learn-X from `prompt-engineering-patterns` in `wshobson/agents`. The original is MIT licensed; see `docs/THIRD_PARTY_NOTICES.md`.
