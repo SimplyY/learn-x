@@ -53,10 +53,21 @@ const IGNORED_DIRS = new Set([
   ".vite"
 ]);
 const IGNORED_FILES = new Set(["AGENTS.md", "CONTEXT_MASTER.md"]);
-const CUSTOM_CONTEXT_IGNORED_DIRS = new Set([".git", "node_modules", "dist", "build", ".next", ".vite"]);
+const CUSTOM_CONTEXT_IGNORED_DIRS = new Set([".git", ".test-tmp", "node_modules", "dist", "build", ".next", ".vite"]);
 const CUSTOM_CONTEXT_IGNORED_FILES = new Set(["AGENTS.md", "CONTEXT_MASTER.md"]);
 const PROMPT_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
 const CHATPACK_PROMPT_ROOT = "02_prompts/chatpack";
+const PUBLIC_PRIVATE_PREFIXES = ["03_input/", ".agents/skills/learn-x-process/", "04_output/_dist/"];
+const PERIOD_OUTPUT_SUBTYPE_IDS = new Set([
+  "reflective-decision.weekly-output",
+  "reflective-decision.monthly-output",
+  "reflective-decision.yearly-output"
+]);
+const PUBLIC_PRIVATE_FILES = new Set([
+  "02_prompts/chatpack/reflective-decision/weekly-output.md",
+  "02_prompts/chatpack/reflective-decision/monthly-output.md",
+  "02_prompts/chatpack/reflective-decision/yearly-output.md"
+]);
 
 export async function readAppConfig() {
   return JSON.parse(await readFile(configPath, "utf8"));
@@ -98,17 +109,18 @@ export async function collectMarkdownFiles(dir = repoRoot) {
   return files.sort(compareFilePaths);
 }
 
-export async function collectCustomContextFiles(dir = repoRoot) {
+export async function collectCustomContextFiles(dir = repoRoot, { excludePrivate = false } = {}) {
   const entries = await readdir(dir, { withFileTypes: true });
   const files = [];
 
   for (const entry of entries) {
     const absolutePath = path.join(dir, entry.name);
     const relativePath = toWebPath(path.relative(repoRoot, absolutePath));
+    if (excludePrivate && isPublicPrivatePath(relativePath)) continue;
 
     if (entry.isDirectory()) {
       if (CUSTOM_CONTEXT_IGNORED_DIRS.has(entry.name)) continue;
-      files.push(...(await collectCustomContextFiles(absolutePath)));
+      files.push(...(await collectCustomContextFiles(absolutePath, { excludePrivate })));
       continue;
     }
 
@@ -164,15 +176,23 @@ export function buildContext(files, label = "Learn-X") {
   return `# CONTEXT_MASTER\n\nSource: ${label}\nGenerated from Learn-X at ${generatedAt}.\n\n${body}\n`;
 }
 
-export async function buildGraphPayload({ includeContent = false } = {}) {
+export async function buildGraphPayload({ includeContent = false, target = "public" } = {}) {
+  if (!new Set(["local", "public"]).has(target)) throw new Error(`Unknown build target: ${target}`);
   const appConfig = await readAppConfig();
-  const chatPackConfig = await readChatPackConfig();
-  const files = await collectMarkdownFiles();
-  const customFiles = await collectCustomContextFiles();
+  const sourceChatPackConfig = await readChatPackConfig();
+  const chatPackConfig = target === "public" ? publicChatPackConfig(sourceChatPackConfig) : sourceChatPackConfig;
+  const allFiles = await collectMarkdownFiles();
+  const files = target === "public" ? allFiles.filter((file) => !isPublicPrivatePath(file.path)) : allFiles;
+  const customFiles = await collectCustomContextFiles(repoRoot, { excludePrivate: target === "public" });
   const prompts = await buildPromptMap(appConfig);
   const contextWeights = appConfig.contextWeights || fallbackContextWeights();
 
   return {
+    runtime: {
+      target,
+      canEditChatPack: target === "local",
+      includesPrivateContext: target === "local"
+    },
     appConfig,
     chatPackConfig,
     files: files.map((file) => {
@@ -203,7 +223,7 @@ export async function buildGraphPayload({ includeContent = false } = {}) {
   };
 }
 
-function validateChatPackConfig(config) {
+export function validateChatPackConfig(config) {
   const ids = new Set();
   for (const type of config.dialogueTypes || []) {
     assertUniqueId(type.id, ids, "dialogue type");
@@ -224,6 +244,28 @@ function validateChatPackConfig(config) {
       throw new Error(`Enhancer id must map to one file name: ${enhancer.id}`);
     }
   }
+}
+
+export function isPublicPrivatePath(filePath) {
+  return (
+    PUBLIC_PRIVATE_FILES.has(filePath) ||
+    PUBLIC_PRIVATE_PREFIXES.some((prefix) => filePath === prefix.slice(0, -1) || filePath.startsWith(prefix))
+  );
+}
+
+function publicChatPackConfig(config) {
+  return {
+    ...config,
+    dialogueTypes: (config.dialogueTypes || []).map((type) => ({
+      ...type,
+      subtypes: (type.subtypes || [])
+        .filter((subtype) => !PERIOD_OUTPUT_SUBTYPE_IDS.has(subtype.id))
+        .map((subtype) => ({
+          ...subtype,
+          recommendedSources: (subtype.recommendedSources || []).filter((source) => !isPublicPrivatePath(source))
+        }))
+    }))
+  };
 }
 
 async function hydrateChatPackPrompts(config) {

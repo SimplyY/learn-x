@@ -5,13 +5,16 @@ import { spawn } from "node:child_process";
 import { watch } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { prepareChatPackEdits, writePreparedEdits } from "./scripts/chatpack-editor.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../..");
 const distRoot = path.join(repoRoot, "dist");
 const port = Number(process.env.PORT || 4173);
 const host = process.env.HOST || "127.0.0.1";
-const ignoredWatchDirs = new Set([".git", "node_modules", "dist"]);
+const ignoredWatchDirs = new Set([".git", ".test-tmp", "node_modules", "dist"]);
+let suppressWatchUntil = 0;
+let editorSaveInProgress = false;
 
 async function serveStatic(_req, res, url) {
   const requested = url.pathname === "/" ? "/index.html" : decodeURIComponent(url.pathname);
@@ -69,7 +72,7 @@ function startMarkdownBuildWatcher() {
     isBuilding = true;
     console.log(`Markdown changed (${reason}); rebuilding static site...`);
 
-    const build = spawn(process.execPath, ["app/code/scripts/build-static-data.mjs"], {
+    const build = spawn(process.execPath, ["app/code/scripts/build-static-data.mjs", "--target=local"], {
       cwd: repoRoot,
       stdio: "inherit"
     });
@@ -91,6 +94,7 @@ function startMarkdownBuildWatcher() {
 
   const watcher = watch(repoRoot, { recursive: true }, (_eventType, filename) => {
     const changedPath = filename ? filename.toString() : "";
+    if (Date.now() < suppressWatchUntil) return;
     if (!shouldRebuild(changedPath)) return;
 
     clearTimeout(timer);
@@ -104,10 +108,86 @@ function startMarkdownBuildWatcher() {
   return watcher;
 }
 
+async function handleChatPackSave(req, res) {
+  if (!isLocalRequest(req)) {
+    sendJson(res, 403, { error: "Local editor requests only" });
+    return;
+  }
+  if (!(req.headers["content-type"] || "").toLowerCase().startsWith("application/json")) {
+    sendJson(res, 415, { error: "Content-Type must be application/json" });
+    return;
+  }
+  if (editorSaveInProgress) {
+    sendJson(res, 409, { error: "Another Chat Pack save is still running" });
+    return;
+  }
+  editorSaveInProgress = true;
+  try {
+    const payload = await readJsonBody(req);
+    const writes = await prepareChatPackEdits({ repoRoot, payload });
+    suppressWatchUntil = Date.now() + 2_000;
+    await writePreparedEdits(writes);
+    await runLocalBuild();
+    sendJson(res, 200, { ok: true });
+  } catch (error) {
+    sendJson(res, 400, { error: error.message || "Unable to save Chat Pack configuration" });
+  } finally {
+    editorSaveInProgress = false;
+  }
+}
+
+function isLocalRequest(req) {
+  const remoteAddress = req.socket.remoteAddress || "";
+  if (!new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]).has(remoteAddress)) return false;
+  const hostHeader = req.headers.host || "";
+  if (!/^(?:127\.0\.0\.1|localhost)(?::\d+)?$/.test(hostHeader)) return false;
+  const origin = req.headers.origin;
+  return !origin || origin === `http://${hostHeader}`;
+}
+
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk) => {
+      body += chunk;
+      if (Buffer.byteLength(body, "utf8") > 1_000_000) req.destroy(new Error("Request body is too large"));
+    });
+    req.on("end", () => {
+      try {
+        resolve(JSON.parse(body));
+      } catch {
+        reject(new Error("Invalid JSON body"));
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
+function runLocalBuild() {
+  return new Promise((resolve, reject) => {
+    const build = spawn(process.execPath, ["app/code/scripts/build-static-data.mjs", "--target=local"], {
+      cwd: repoRoot,
+      stdio: "inherit"
+    });
+    build.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`Local rebuild failed: ${code}`))));
+    build.on("error", reject);
+  });
+}
+
+function sendJson(res, status, payload) {
+  res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify(payload));
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const watcher = startMarkdownBuildWatcher();
   const server = createServer(async (req, res) => {
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
+    if (req.method === "PUT" && url.pathname === "/api/chatpack/editor") {
+      await handleChatPackSave(req, res);
+      return;
+    }
     await serveStatic(req, res, url);
   });
 

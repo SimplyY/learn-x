@@ -152,6 +152,124 @@
       ]
     },
     {
+      "id": "ljg-skills",
+      "name": "李继刚提示词",
+      "useCases": "把李继刚 Skill 转成可在 AI Chat 中直接调用的提示词。",
+      "behaviorDirections": [
+        "优先遵守所选 Skill 原文中的角色、流程、判断标准和输出格式。",
+        "把原本面向 Agent 的文件读写或脚本动作，转换为 Chat 中可执行的输入索取、材料处理和 Markdown 输出。",
+        "保留 Skill 的能力边界，不把本地文件访问、命令执行或保存结果伪装成已经完成。"
+      ],
+      "outputGoal": "复用李继刚 Skill 的思考、学习、表达和研究能力，快速生成可交给 AI 的 Chat Pack。",
+      "subtypes": [
+        {
+          "id": "ljg-skills.ljg-think",
+          "name": "ljg-think",
+          "summary": "追问问题本质，把观点或现象钻到底。"
+        },
+        {
+          "id": "ljg-skills.ljg-card",
+          "name": "ljg-card",
+          "summary": "把内容铸造成视觉卡片、信息图、海报或漫画。"
+        },
+        {
+          "id": "ljg-skills.ljg-learn",
+          "name": "ljg-learn",
+          "summary": "多角度拆解一个概念。"
+        },
+        {
+          "id": "ljg-skills.ljg-book",
+          "name": "ljg-book",
+          "summary": "以问题为轴拆书。"
+        },
+        {
+          "id": "ljg-skills.ljg-rank",
+          "name": "ljg-rank",
+          "summary": "给领域降秩，找最小生成器。"
+        },
+        {
+          "id": "ljg-skills.ljg-roundtable",
+          "name": "ljg-roundtable",
+          "summary": "多角色圆桌讨论推进复杂议题。"
+        },
+        {
+          "id": "ljg-skills.ljg-writes",
+          "name": "ljg-writes",
+          "summary": "把一个观点展开成文章。"
+        },
+        {
+          "id": "ljg-skills.ljg-word",
+          "name": "ljg-word",
+          "summary": "从语义、用法与洞见层面掌握一个英文词。"
+        },
+        {
+          "id": "ljg-skills.ljg-plain",
+          "name": "ljg-plain",
+          "summary": "把复杂内容讲给普通人听。"
+        },
+        {
+          "id": "ljg-skills.ljg-travel",
+          "name": "ljg-travel",
+          "summary": "城市文化研究、旅行卡片、深度漫游。"
+        },
+        {
+          "id": "ljg-skills.ljg-present",
+          "name": "ljg-present",
+          "summary": "做分享稿、演讲稿、课件结构。"
+        },
+        {
+          "id": "ljg-skills.ljg-qa",
+          "name": "ljg-qa",
+          "summary": "把文章、书、材料转成问题链。"
+        },
+        {
+          "id": "ljg-skills.ljg-invest",
+          "name": "ljg-invest",
+          "summary": "判断一个项目是否在创造新秩序。"
+        },
+        {
+          "id": "ljg-skills.ljg-read",
+          "name": "ljg-read",
+          "summary": "通过翻译、注释、提问与洞见进行伴读。"
+        },
+        {
+          "id": "ljg-skills.ljg-relationship",
+          "name": "ljg-relationship",
+          "summary": "通过结构诊断与精神分析看见关系模式。"
+        },
+        {
+          "id": "ljg-skills.ljg-skill-map",
+          "name": "ljg-skill-map",
+          "summary": "把可用 Skill 整理成一目了然的能力地图。"
+        },
+        {
+          "id": "ljg-skills.ljg-word-flow",
+          "name": "ljg-word-flow",
+          "summary": "解读英文词并生成词语信息卡。"
+        },
+        {
+          "id": "ljg-skills.ljg-paper",
+          "name": "ljg-paper",
+          "summary": "把研究论文讲成聪明的非专业读者能复述的故事。"
+        },
+        {
+          "id": "ljg-skills.ljg-paper-flow",
+          "name": "ljg-paper-flow",
+          "summary": "读论文并把解读铸成视觉卡片。"
+        },
+        {
+          "id": "ljg-skills.ljg-paper-river",
+          "name": "ljg-paper-river",
+          "summary": "追溯论文的思想源流与后续发展。"
+        }
+      ],
+      "avoid": [
+        "删改原 Skill 原文",
+        "声称已经执行 Chat 环境做不到的本地动作",
+        "把 Skill 输出自动沉淀进道、法、术或记忆"
+      ]
+    },
+    {
       "id": "other-prompts",
       "name": "其他",
       "useCases": "承载常用但不属于学习、判断或创造主流程的 Prompt。",
@@ -179,77 +297,21 @@
         "替代 Current Question",
         "无差别套用人格或风格"
       ]
-    },
-    {
-      "id": "ljg-skills",
-      "name": "李继刚提示词",
-      "useCases": "把李继刚 Skill 转成可在 AI Chat 中直接调用的提示词。",
-      "behaviorDirections": [
-        "优先遵守所选 Skill 原文中的角色、流程、判断标准和输出格式。",
-        "把原本面向 Agent 的文件读写或脚本动作，转换为 Chat 中可执行的输入索取、材料处理和 Markdown 输出。",
-        "保留 Skill 的能力边界，不把本地文件访问、命令执行或保存结果伪装成已经完成。"
-      ],
-      "outputGoal": "复用李继刚 Skill 的思考、学习、表达和研究能力，快速生成可交给 AI 的 Chat Pack。",
-      "subtypes": [
-        {
-          "id": "ljg-skills.ljg-think",
-          "name": "ljg-think",
-          "summary": "追问问题本质，把观点或现象钻到底。"
-        },
-        {
-          "id": "ljg-skills.ljg-learn",
-          "name": "ljg-learn",
-          "summary": "多角度拆解一个概念。"
-        },
-        {
-          "id": "ljg-skills.ljg-qa",
-          "name": "ljg-qa",
-          "summary": "把文章、书、材料转成问题链。"
-        },
-        {
-          "id": "ljg-skills.ljg-book",
-          "name": "ljg-book",
-          "summary": "以问题为轴拆书。"
-        },
-        {
-          "id": "ljg-skills.ljg-rank",
-          "name": "ljg-rank",
-          "summary": "给领域降秩，找最小生成器。"
-        },
-        {
-          "id": "ljg-skills.ljg-roundtable",
-          "name": "ljg-roundtable",
-          "summary": "多角色圆桌讨论推进复杂议题。"
-        },
-        {
-          "id": "ljg-skills.ljg-writes",
-          "name": "ljg-writes",
-          "summary": "把一个观点展开成文章。"
-        },
-        {
-          "id": "ljg-skills.ljg-plain",
-          "name": "ljg-plain",
-          "summary": "把复杂内容讲给普通人听。"
-        },
-        {
-          "id": "ljg-skills.ljg-travel",
-          "name": "ljg-travel",
-          "summary": "城市文化研究、旅行卡片、深度漫游。"
-        },
-        {
-          "id": "ljg-skills.ljg-present",
-          "name": "ljg-present",
-          "summary": "做分享稿、演讲稿、课件结构。"
-        }
-      ],
-      "avoid": [
-        "删改原 Skill 原文",
-        "声称已经执行 Chat 环境做不到的本地动作",
-        "把 Skill 输出自动沉淀进道、法、术或记忆"
-      ]
     }
   ],
   "enhancers": [
+    {
+      "id": "munger-soul",
+      "name": "芒格之魂",
+      "summary": "以芒格之魂为核心提示词来输出，用多元模型、反过来想和长期理性增强原提示词。",
+      "applicationNote": "点击后默认将 Current Question 设为「使用芒格之魂的提示词来解析所有上下文。」；它增强当前大类、子类型、Context、背景和需求。",
+      "promptPath": "02_prompts/chatpack/enhancers/munger-soul.md"
+    },
+    {
+      "id": "language-edge",
+      "name": "语言锋芒",
+      "summary": "把重要判断压缩成短而硬、受证据约束、能触发反思的认知钉子。"
+    },
     {
       "id": "clarify-question",
       "name": "问清问题",
@@ -271,22 +333,10 @@
       "summary": "不要顺着用户的话说，主动找盲点、盲区和可能错误的前提。"
     },
     {
-      "id": "language-edge",
-      "name": "语言锋芒",
-      "summary": "把重要判断压缩成短而硬、受证据约束、能触发反思的认知钉子。"
-    },
-    {
-      "id": "munger-soul",
-      "name": "芒格之魂",
-      "summary": "以芒格之魂为核心提示词来输出，用多元模型、反过来想和长期理性增强原提示词。",
-      "applicationNote": "点击后默认将 Current Question 设为「使用芒格之魂的提示词来解析所有上下文。」；它增强当前大类、子类型、Context、背景和需求。",
-      "promptPath": "02_prompts/chatpack/enhancers/munger-soul.md"
-    },
-    {
-      "id": "length-200",
-      "name": "200字",
+      "id": "length-1000",
+      "name": "1000字",
       "group": "length",
-      "summary": "控制输出在约 200 字，适合极简结论。"
+      "summary": "控制输出在约 1000 字，适合中等展开。"
     },
     {
       "id": "length-500",
@@ -295,10 +345,10 @@
       "summary": "控制输出在约 500 字，适合快速结论。"
     },
     {
-      "id": "length-1000",
-      "name": "1000字",
+      "id": "length-200",
+      "name": "200字",
       "group": "length",
-      "summary": "控制输出在约 1000 字，适合中等展开。"
+      "summary": "控制输出在约 200 字，适合极简结论。"
     },
     {
       "id": "length-2000",

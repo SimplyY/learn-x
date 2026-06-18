@@ -119,7 +119,11 @@
                       <span>提示词分类</span>
                       <p>简单&客观问题直接问 AI，无需 Chat Pack。</p>
                     </div>
-                    <button id="generateChatPackBtn" class="primary-action" type="button">生成 Chat Pack</button>
+                    <div class="prompt-category-actions">
+                      <button id="sortPromptCatalogBtn" class="local-desktop-only" type="button" hidden>调整顺序</button>
+                      <button id="editPromptCatalogBtn" class="local-desktop-only" type="button" hidden>编辑内容</button>
+                      <button id="generateChatPackBtn" class="primary-action" type="button">生成 Chat Pack</button>
+                    </div>
                   </div>
                   <div class="section-title compact">
                     <span>大类</span>
@@ -139,6 +143,27 @@
                     <span>增强器</span>
                   </div>
                   <div id="enhancerList" class="dialogue-subtype-list" aria-label="增强器"></div>
+                  <section id="promptCatalogEditor" class="prompt-catalog-editor local-desktop-only" hidden>
+                    <header class="editor-header">
+                      <div>
+                        <strong id="promptEditorTitle">编辑提示词</strong>
+                        <p id="promptEditorHint">修改会保存到项目源文件。</p>
+                      </div>
+                      <button id="closePromptEditorBtn" type="button">取消</button>
+                    </header>
+                    <div id="promptSortEditor" hidden></div>
+                    <div id="promptContentEditor" class="prompt-content-editor" hidden>
+                      <label class="editor-field">
+                        <span>编辑对象</span>
+                        <select id="promptEntitySelect"></select>
+                      </label>
+                      <div id="promptEntityFields" class="prompt-entity-fields"></div>
+                    </div>
+                    <footer class="editor-footer">
+                      <span id="promptEditorStatus" role="status" aria-live="polite"></span>
+                      <button id="savePromptEditorBtn" class="primary-action" type="button">保存修改</button>
+                    </footer>
+                  </section>
                 </section>
                 <label class="prompt-editor">
                   <span>当前问题</span>
@@ -171,16 +196,6 @@
                 </label>
               </section>
 
-              <section class="log-section">
-                <label class="prompt-editor">
-                  <span>更新日志 / 新洞察</span>
-                  <textarea id="insightLog" spellcheck="false" placeholder="记录 AI 回答后的判断、新问题、反例和下一步行动。"></textarea>
-                </label>
-                <div class="prompt-actions">
-                  <button id="copyLogBtn" type="button">复制日志</button>
-                  <button id="clearLogBtn" type="button">清空</button>
-                </div>
-              </section>
             </div>
           </section>
         </section>
@@ -217,6 +232,7 @@
       </form>
     </dialog>
 
+    <div id="toastMessage" class="toast-message" role="status" aria-live="polite" aria-atomic="true" hidden></div>
     <div id="preview" class="preview" hidden></div>
     <script src="data/graph.js"></script>
     <script type="module" src="app.js"></script>

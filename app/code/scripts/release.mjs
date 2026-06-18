@@ -20,6 +20,7 @@ function run(command, args) {
 run("node", ["--check", "app/code/server.mjs"]);
 run("node", ["--check", "app/code/public/app.js"]);
 run("node", ["--check", "app/code/scripts/static-graph.mjs"]);
-run("npm", ["run", "build"]);
+run("npm", ["run", "test:app"]);
+run("npm", ["run", "build:public"]);
 
 console.log("Release check passed. Commit and push from the Learn-X root repository.");

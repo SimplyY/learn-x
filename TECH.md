@@ -20,7 +20,6 @@ Weekly Process 相关脚本统一放在 `.agents/skills/learn-x-process/scripts/
 | `learn-x-input` | 把外部周度证据确定性写入 `03_input/`，保留来源，不做长期判断。 |
 | `learn-x-process` | 从指定周期 Input 生成可追溯的 Process Pack、Output 最小壳和 Memory 候选。 |
 | `learn-x-prompt-review` | 评审和优化 `02_prompts/` 与 Chat Pack Prompt，要求先定义契约和代表性评测案例。 |
-| `learn-x-verification` | 在声称完成前按改动范围运行新鲜验证，并明确未验证项和残余风险。 |
 
 第三方 Skill 的筛选来源、固定版本和许可证归属见 `THIRD_PARTY_NOTICES.md`。项目内适配只保留与 Learn-X 边界一致的原则，不引入原仓库的 Python、LangChain、多 Agent 或外部服务依赖。
 
@@ -43,6 +42,13 @@ Weekly Process 相关脚本统一放在 `.agents/skills/learn-x-process/scripts/
 
 `npm run build` 会生成 `dist/`，并把 `app.js`、`styles.css`、`data/graph.js`、`data/graph.json` 写成内容哈希文件名，例如 `app.<hash>.js`。`dist/index.html` 在每次构建时自动引用新的哈希路径，避免 GitHub Pages / CDN / 浏览器继续命中旧静态资源缓存。不要手动维护 `dist/index.html` 中的资源路径。
 
+构建分为两个明确目标：
+
+- `npm run build:local`：供 `npm run dev` 使用，保留本地 Input、Process Skill 和 `_dist` 上下文，并启用桌面端 Chat Pack 编辑器。
+- `npm run build:public`：供 GitHub Pages 和 release 使用，在生成图数据时排除 `03_input/`、`.agents/skills/learn-x-process/`、`04_output/_dist/` 及周期 Output 入口；构建产物出现这些路径时直接失败。
+
+Chat Pack 编辑器只在本地桌面端显示。排序、名称、说明、Prompt 正文和推荐上下文通过 localhost 同源写入接口保存回 `00_config/chatpack.config.json` 与 `02_prompts/chatpack/`；ID、Prompt 路径、增强器分组和功能标志不允许从 UI 修改。公开站点和手机端只读取发布后的结果。
+
 `app/code/` 按普通目录纳入 Learn-X 主仓库，不作为独立子模块或嵌套仓库维护。Git 提交、推送和远端配置只在主仓库边界处理；`app/code/scripts/` 不执行 `git add`、`git commit` 或 `git push`。
 
 ## Chat Pack 配置边界
@@ -61,6 +67,7 @@ Weekly Process 相关脚本统一放在 `.agents/skills/learn-x-process/scripts/
 - `/api/graph`：返回文件列表、文件树、可选上下文来源、自动发现的领域列表和 Prompt 映射。
 - `/api/file?path=README.md`：返回单文件 Markdown 原文和已清理 HTML。
 - `/api/context?scene=<场景>&include=<路径>`：按文件或目录切片生成上下文包。
+- `PUT /api/chatpack/editor`：仅本地回环地址和同源页面可用，校验并保存 Chat Pack 排序、文案、推荐上下文及单个 Prompt，然后重建本地静态数据。
 - Chat Pack 在前端组装，Context 来源统一来自 `/api/context`。
 - 静态部署读取构建产物；本地服务优先请求 API。
 
