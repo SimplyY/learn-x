@@ -12,6 +12,7 @@
 | 飞书周记 / 周复盘 | `weekly.md` | 用户完成后由阶段 2 采集 |
 | Flomo | `flomo.md` | 每周输入自动采集 |
 | 微信读书 | `weread.md` | `npm run input:weread -- --week YYYY-Www` |
+| Health-X 健康周报 | `health.md` | Health-X 完成飞书周报同步后自动生成 |
 | AI 对话摘要 | `ai.md` | 用户使用指定提示词手动生成 |
 | Codex / Code X 构建复盘 | `build.md` | 专项自动化或人工补充 |
 | 调研等其他重要输入 | `research.md` 或语义清楚的 `<source>.md` | 按需补充 |
@@ -43,6 +44,7 @@ rm 03_input/weekly/YYYY-Www/README.md
 - `daily.md` 的飞书多维表格材料必须保留字段表头和 field id 映射。
 - `flomo.md` 必须覆盖完整目标周；若只能部分获取，在文件中说明缺口。
 - `weread.md` 保留采集范围、时区、生成时间、统计、进度快照、个人划线和想法；不保存 ID、位置链接或额外 `_raw.json`。
+- `health.md` 只保存周度评分、核心数据和健康提示，不复制截图或原始医疗材料。
 - `ai.md` 由用户维护，自动化不得访问 AI Chat、创建、改写或覆盖。
 - `build.md` 由 Codex Build 专项自动化或人工补充，每周输入自动采集不处理。
 - 阶段 3 只处理 Output、Memory candidates 和季度 Memory，不重新采集输入，也不修改正式 `道/`、`法/`、`术/`。

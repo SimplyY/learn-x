@@ -9,6 +9,7 @@
 - `ai.md`：AI 对话摘要。
 - `flomo.md`：Flomo 周度输入。
 - `weread.md`：微信读书周度输入，由 `npm run input:weread -- --week YYYY-Www` 生成。
+- `health.md`：Health-X 生成的健康评分、核心数据与健康提示。
 - `build.md`：Codex / Code X 构建复盘。
 - `research.md`：重要调研。
 
