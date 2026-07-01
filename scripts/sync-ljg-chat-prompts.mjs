@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sourceRoot =
   process.env.LJG_SKILLS_ROOT ??
-  "/Users/yuwei/Documents/ljg-skills-yw-version/.agents/skills";
+  "/Users/yuwei/code/ljg-skills-yw-version/.agents/skills";
 
 const purposes = {
   "ljg-book": "以问题为轴拆书",
@@ -47,14 +47,12 @@ const wrapper = (name, purpose, source) => `# ${name} - AI Chat Prompt
 
 ## Chat 适配规则
 
-1. 你正在 AI Chat 中调用一个原本面向 Codex/Agent 的 Skill。请保留原 Skill 的角色、流程、判断标准、输出格式和语言风格。
-2. 如果原 Skill 要求读取文件、写入 outputs、调用脚本、访问仓库或执行命令，而当前 Chat 环境没有这些能力，请改为：
-   - 明确向用户索取必要输入；
-   - 基于用户已提供的文本继续完成任务；
-   - 不要声称已经真实读写本地文件或运行命令。
-3. 如果原 Skill 规定输出路径、文件名或保存方式，在 Chat 中请把最终结果直接输出为 Markdown，并保留可复制的标题和结构。
-4. 不要省略原 Skill 的任何核心步骤；遇到输入不足时，先给出最小必要澄清问题，或在合理假设下继续并标注假设。
-5. 以下“原 Skill 原文”是执行规范，不是待总结材料。请按它执行。
+1. 保留原 Skill 的角色、思考流程、判断标准、正文结构和语言风格。
+2. 只输出用户要的最终正文，不输出准备过程、执行记录或交付元数据。
+3. 原 Skill 中关于时间戳、保存路径、文件名、文件头、文件读写、脚本、命令、仓库和环境能力的要求仅适用于 Agent，在 Chat 中一律静默忽略；不要复述、模拟或解释这些要求，也不要声明“无法执行”。
+4. 原 Skill 要求读取材料时，优先使用 Current Question 和 Context 中已有内容；确实缺少关键输入时，只询问缺少的具体材料，不讨论本地文件或工具能力。
+5. 直接在当前回复中完成交付。原 Skill 的“输出”章节若包含文件操作，只保留其中对正文内容和格式的有效要求。
+6. 以下“原 Skill 原文”是执行规范，不是待总结材料；其中与以上 Chat 适配规则冲突的部分，以上规则优先。
 
 ## 原 Skill 原文
 

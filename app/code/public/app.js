@@ -1,8 +1,11 @@
+import { searchCustomContext } from "./custom-context-search.js";
+
 const STORAGE_PREFIX = "learn-x";
 const MUNGER_SOUL_ENHANCER_ID = "munger-soul";
 const MUNGER_SOUL_SUBTYPE_ID = "other-prompts.munger-soul";
 const MUNGER_SOUL_QUESTION = "使用芒格之魂的提示词来解析所有上下文。";
 const MUNGER_SOUL_PERIOD_LENGTH_ID = "length-1000";
+const WEEKLY_WECHAT_LONG_IMAGE_SUBTYPE_ID = "reflective-decision.weekly-wechat-image";
 const MUNGER_SOUL_PERIOD_QUESTIONS = {
   weekly: "使用芒格之魂的提示词来解析所有上下文。不要输出 Weekly Output，仅洞察。",
   monthly: "使用芒格之魂的提示词来解析所有上下文。不要输出 Monthly Output，仅洞察。",
@@ -33,11 +36,17 @@ let DIALOGUE_TYPES = CHATPACK_CONFIG.dialogueTypes;
 let ENHANCERS = CHATPACK_CONFIG.enhancers;
 const PERIOD_OUTPUTS = {
   weekly: {
-    subtypeId: "reflective-decision.weekly-output",
+    subtypeIds: ["reflective-decision.weekly-output", WEEKLY_WECHAT_LONG_IMAGE_SUBTYPE_ID],
     label: "第几周",
     emptyLabel: "暂无周输出包",
     pattern: /^04_output\/_dist\/weekly\/(\d{4})-W(\d{2})\//,
     valueFromMatch: (match) => `${match[1]}-W${match[2]}`,
+    optionPatterns: [
+      {
+        pattern: /^04_output\/weekly\/(\d{4})-(\d{2})\.md$/,
+        valueFromMatch: (match) => `${match[1]}-W${match[2]}`
+      }
+    ],
     labelFromValue: (value) => {
       const match = value.match(/^(\d{4})-W(\d{2})$/);
       return match ? `${match[1]} 年第 ${Number(match[2])} 周` : value;
@@ -92,6 +101,7 @@ const state = {
   selectedDomain: "",
   contextSelections: new Map(),
   customDraftSelections: new Set(),
+  expandedCustomContextDirs: new Set(["Documents"]),
   expandedContextDirs: new Set(["", "01_core", "01_core/道", "01_core/法"]),
   expandedContextFilePreviews: new Set(),
   currentQuestionTouched: false,
@@ -154,12 +164,14 @@ const els = {
   contextBudgetList: document.querySelector("#contextBudgetList"),
   generateChatPack: document.querySelector("#generateChatPackBtn"),
   resetPrompt: document.querySelector("#resetPromptBtn"),
+  editPromptCategories: document.querySelector("#editPromptCategoriesBtn"),
   sortPromptCatalog: document.querySelector("#sortPromptCatalogBtn"),
   editPromptCatalog: document.querySelector("#editPromptCatalogBtn"),
   promptCatalogEditor: document.querySelector("#promptCatalogEditor"),
   promptEditorTitle: document.querySelector("#promptEditorTitle"),
   promptEditorHint: document.querySelector("#promptEditorHint"),
   promptSortEditor: document.querySelector("#promptSortEditor"),
+  promptCategoryEditor: document.querySelector("#promptCategoryEditor"),
   promptContentEditor: document.querySelector("#promptContentEditor"),
   promptEntitySelect: document.querySelector("#promptEntitySelect"),
   promptEntityFields: document.querySelector("#promptEntityFields"),
@@ -212,7 +224,8 @@ async function boot() {
   state.files = graph.files;
   state.sources = graph.sources;
   state.contextFiles = graph.contextFiles || graph.files || [];
-  state.customContextFiles = graph.customContextFiles || state.contextFiles;
+  const documentsContextFiles = state.runtime.target === "local" ? await loadDocumentsContextFiles() : [];
+  state.customContextFiles = [...(graph.customContextFiles || state.contextFiles), ...documentsContextFiles];
   state.contextFileMap = new Map([...state.contextFiles, ...state.customContextFiles].map((file) => [file.path, file]));
   state.domains = graph.domains;
   state.prompts = graph.prompts || {};
@@ -245,8 +258,13 @@ async function getJson(url) {
   const parsedUrl = new URL(url, window.location.href);
   if (parsedUrl.pathname.endsWith("/api/file")) {
     const filePath = parsedUrl.searchParams.get("path");
-    const file = state.files.find((item) => item.path === filePath);
+    const file = state.contextFileMap.get(filePath) || state.files.find((item) => item.path === filePath);
     if (!file) throw new Error(`File not found in static graph: ${filePath}`);
+    if (file.external) {
+      const response = await fetch(parsedUrl);
+      if (!response.ok) throw new Error(`Unable to read Documents context: ${response.status}`);
+      return response.json();
+    }
     return {
       path: file.path,
       title: file.title,
@@ -272,6 +290,17 @@ async function getJson(url) {
   }
 
   throw new Error(`Static route not found: ${url}`);
+}
+
+async function loadDocumentsContextFiles() {
+  try {
+    const response = await fetch("api/context-files");
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return (await response.json()).files || [];
+  } catch (error) {
+    console.warn(`Documents context unavailable: ${error.message}`);
+    return [];
+  }
 }
 
 function bindEvents() {
@@ -313,6 +342,7 @@ function bindEvents() {
 
   els.generateChatPack.addEventListener("click", generateChatPack);
   els.resetPrompt.addEventListener("click", resetPrompt);
+  els.editPromptCategories.addEventListener("click", () => openPromptEditor("category"));
   els.sortPromptCatalog.addEventListener("click", () => openPromptEditor("sort"));
   els.editPromptCatalog.addEventListener("click", () => openPromptEditor("content"));
   els.closePromptEditor.addEventListener("click", closePromptEditor);
@@ -589,6 +619,7 @@ function renderEnhancers() {
 
 function renderEditorAvailability() {
   const enabled = Boolean(state.runtime.canEditChatPack);
+  els.editPromptCategories.hidden = !enabled;
   els.sortPromptCatalog.hidden = !enabled;
   els.editPromptCatalog.hidden = !enabled;
   if (!enabled) closePromptEditor();
@@ -603,14 +634,18 @@ function openPromptEditor(mode) {
   state.promptEditorExpandedSourceDirs = new Set();
   els.promptCatalogEditor.hidden = false;
   els.promptSortEditor.hidden = mode !== "sort";
+  els.promptCategoryEditor.hidden = mode !== "category";
   els.promptContentEditor.hidden = mode !== "content";
-  els.promptEditorTitle.textContent = mode === "sort" ? "调整提示词顺序" : "编辑提示词内容";
+  els.promptEditorTitle.textContent = mode === "sort" ? "调整提示词顺序" : mode === "category" ? "编辑大类" : "编辑提示词";
   els.promptEditorHint.textContent =
     mode === "sort"
       ? "拖动或使用方向按钮调整，保存后写入配置。"
-      : "每次编辑并保存一个对象；切换对象会放弃当前未保存内容。";
+      : mode === "category"
+        ? "新增和调整大类；可把子类型移动到另一个大类。"
+        : "每次编辑并保存一个对象；切换对象会放弃当前未保存内容。";
   els.promptEditorStatus.textContent = "";
   if (mode === "sort") renderPromptSortEditor();
+  else if (mode === "category") renderPromptCategoryEditor();
   else renderPromptContentEditor();
   els.promptCatalogEditor.showModal();
 }
@@ -621,8 +656,161 @@ function closePromptEditor() {
   state.promptEditorEntityId = "";
   state.promptEditorPrompt = null;
   state.promptEditorExpandedSourceDirs = new Set();
+  if (els.promptCategoryEditor) els.promptCategoryEditor.dataset.typeId = "";
   if (els.promptCatalogEditor?.open) els.promptCatalogEditor.close();
   if (els.promptCatalogEditor) els.promptCatalogEditor.hidden = true;
+}
+
+function renderPromptCategoryEditor() {
+  const draft = state.promptEditorDraft;
+  const selectedTypeId = els.promptCategoryEditor.dataset.typeId || state.activeDialogueTypeId || draft.dialogueTypes[0]?.id;
+  const selectedType = draft.dialogueTypes.find((type) => type.id === selectedTypeId) || draft.dialogueTypes[0];
+  els.promptCategoryEditor.dataset.typeId = selectedType?.id || "";
+  els.promptCategoryEditor.innerHTML = `
+    <div class="category-editor-layout">
+      <section class="category-editor-nav">
+        <div class="category-editor-section-head">
+          <h4>大类</h4>
+          <button type="button" data-add-type>新增</button>
+        </div>
+        <div class="editor-sort-list" data-category-list></div>
+      </section>
+      <section class="category-editor-detail">
+        <div class="category-editor-section-head">
+          <h4>大类内容</h4>
+          <button type="button" class="danger-action" data-delete-type>删除大类</button>
+        </div>
+        <div class="prompt-entity-fields" data-category-fields></div>
+      </section>
+      <section class="category-editor-members">
+        <div class="category-editor-section-head">
+          <h4>子类型归属</h4>
+          <button type="button" data-add-subtype>新增子类型</button>
+        </div>
+        <div class="prompt-entity-fields" data-subtype-ownership></div>
+      </section>
+    </div>`;
+  const list = els.promptCategoryEditor.querySelector("[data-category-list]");
+  for (const type of draft.dialogueTypes) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = type.id === selectedType?.id ? "editor-category-pill active" : "editor-category-pill";
+    button.textContent = type.name || type.id;
+    button.addEventListener("click", () => {
+      els.promptCategoryEditor.dataset.typeId = type.id;
+      renderPromptCategoryEditor();
+    });
+    list.append(button);
+  }
+  els.promptCategoryEditor.querySelector("[data-add-type]").addEventListener("click", addPromptCategoryType);
+  els.promptCategoryEditor.querySelector("[data-add-subtype]").addEventListener("click", () => addPromptCategorySubtype(selectedType));
+  els.promptCategoryEditor.querySelector("[data-delete-type]").addEventListener("click", () => selectedType && deletePromptCategoryType(selectedType));
+  if (!selectedType) return;
+  renderPromptCategoryFields(selectedType);
+  renderSubtypeOwnership(selectedType);
+}
+
+function renderPromptCategoryFields(type) {
+  const container = els.promptCategoryEditor.querySelector("[data-category-fields]");
+  container.innerHTML = "";
+  appendEditorTextField("正式名称", "name", type.name || "", false, false, "", container, () => ({ item: type }));
+  appendEditorTextField("用途说明", "useCases", type.useCases || "", true, false, "", container, () => ({ item: type }));
+  appendEditorTextField("输出目标", "outputGoal", type.outputGoal || "", true, false, "", container, () => ({ item: type }));
+  appendEditorTextField("行为规则，每行一条", "behaviorDirections", (type.behaviorDirections || []).join("\n"), true, true, "", container, () => ({ item: type }));
+  appendEditorTextField("避免事项，每行一条", "avoid", (type.avoid || []).join("\n"), true, true, "", container, () => ({ item: type }));
+}
+
+function renderSubtypeOwnership(selectedType) {
+  const container = els.promptCategoryEditor.querySelector("[data-subtype-ownership]");
+  container.innerHTML = "";
+  const allSubtypes = state.promptEditorDraft.dialogueTypes.flatMap((type) =>
+    (type.subtypes || []).map((subtype) => ({ type, subtype }))
+  );
+  for (const { type, subtype } of allSubtypes) {
+    const row = document.createElement("div");
+    row.className = "editor-field compact with-action";
+    row.innerHTML = `<span>${escapeHtml(subtype.name || subtype.id)}</span><select>${state.promptEditorDraft.dialogueTypes
+      .map((item) => `<option value="${escapeHtml(item.id)}"${item.id === type.id ? " selected" : ""}>${escapeHtml(item.name || item.id)}</option>`)
+      .join("")}</select><button type="button" class="danger-action compact" aria-label="删除 ${escapeHtml(subtype.name || subtype.id)}">删</button>`;
+    row.querySelector("select").addEventListener("change", (event) => moveSubtypeToType(subtype, type.id, event.target.value));
+    row.querySelector("button").addEventListener("click", () => deletePromptCategorySubtype(type, subtype));
+    container.append(row);
+  }
+}
+
+function addPromptCategoryType() {
+  const name = prompt("新大类名称");
+  if (!name?.trim()) return;
+  const id = uniquePromptId(asciiSlugify(name) || prompt("请输入英文短标识"));
+  if (!id) return;
+  state.promptEditorDraft.dialogueTypes.push({
+    id,
+    name: name.trim(),
+    useCases: "",
+    behaviorDirections: [],
+    outputGoal: "",
+    subtypes: [],
+    avoid: []
+  });
+  els.promptCategoryEditor.dataset.typeId = id;
+  renderPromptCategoryEditor();
+}
+
+function addPromptCategorySubtype(type) {
+  if (!type) return;
+  const name = prompt("新子类型名称");
+  if (!name?.trim()) return;
+  const slug = uniquePromptId(asciiSlugify(name) || prompt("请输入英文短标识"), (type.subtypes || []).map((subtype) => subtype.id.slice(type.id.length + 1)));
+  if (!slug) return;
+  type.subtypes = type.subtypes || [];
+  type.subtypes.push({
+    id: `${type.id}.${slug}`,
+    name: name.trim(),
+    summary: "",
+    recommendedSources: []
+  });
+  renderPromptCategoryEditor();
+}
+
+function deletePromptCategoryType(type) {
+  const subtypeCount = type.subtypes?.length || 0;
+  const message = subtypeCount
+    ? `删除大类「${type.name || type.id}」及其中 ${subtypeCount} 个子类型？Prompt Markdown 文件会保留在磁盘上。`
+    : `删除大类「${type.name || type.id}」？`;
+  if (!confirm(message)) return;
+  const draft = state.promptEditorDraft;
+  draft.dialogueTypes = draft.dialogueTypes.filter((item) => item.id !== type.id);
+  els.promptCategoryEditor.dataset.typeId = draft.dialogueTypes[0]?.id || "";
+  renderPromptCategoryEditor();
+}
+
+function deletePromptCategorySubtype(type, subtype) {
+  if (!confirm(`删除子类型「${subtype.name || subtype.id}」？Prompt Markdown 文件会保留在磁盘上。`)) return;
+  type.subtypes = (type.subtypes || []).filter((item) => item.id !== subtype.id);
+  renderPromptCategoryEditor();
+}
+
+function moveSubtypeToType(subtype, fromTypeId, toTypeId) {
+  if (fromTypeId === toTypeId) return;
+  const draft = state.promptEditorDraft;
+  const fromType = draft.dialogueTypes.find((type) => type.id === fromTypeId);
+  const toType = draft.dialogueTypes.find((type) => type.id === toTypeId);
+  if (!fromType || !toType) return;
+  const index = fromType.subtypes.findIndex((item) => item.id === subtype.id);
+  if (index < 0) return;
+  const [item] = fromType.subtypes.splice(index, 1);
+  const oldId = item.previousId || item.id;
+  const slug = uniquePromptId(item.id.split(".").pop(), (toType.subtypes || []).map((existing) => existing.id.split(".").pop()));
+  item.previousId = oldId;
+  item.id = `${toType.id}.${slug}`;
+  toType.subtypes = toType.subtypes || [];
+  toType.subtypes.push(item);
+  if (oldId === state.activeDialogueSubtypeId) {
+    localStorage.setItem(dialogueTypeKey(), toType.id);
+    localStorage.setItem(dialogueSubtypeKey(toType.id), item.id);
+  }
+  els.promptCategoryEditor.dataset.typeId = toType.id;
+  renderPromptCategoryEditor();
 }
 
 function renderPromptSortEditor() {
@@ -738,16 +926,19 @@ function renderPromptEntityFields() {
     appendEditorTextField("行为规则，每行一条", "behaviorDirections", (entity.item.behaviorDirections || []).join("\n"), true, true);
     appendEditorTextField("避免事项，每行一条", "avoid", (entity.item.avoid || []).join("\n"), true, true);
   } else {
-    appendEditorTextField("简介", "summary", entity.item.summary || "", true);
+    appendEditorTextField("简介", "summary", entity.item.summary || "", true, false, "summary-editor");
+    if (entity.kind === "subtype") {
+      appendEditorTextField("默认当前问题，为空时使用正式名称", "currentQuestion", entity.item.currentQuestion || "", true, false, "summary-editor");
+    }
     if (entity.kind === "enhancer") {
       appendEditorTextField("应用说明", "applicationNote", entity.item.applicationNote || "", true);
     }
-    if (entity.kind === "subtype") appendRecommendedSourcesEditor(entity.item, entity.type);
     appendEditorTextField("Prompt Markdown", "protocol", entity.item.protocol || "", true, false, "prompt-source-editor");
+    if (entity.kind === "subtype") appendRecommendedSourcesEditor(entity.item, entity.type);
   }
 }
 
-function appendEditorTextField(labelText, fieldName, value, multiline = false, lines = false, className = "") {
+function appendEditorTextField(labelText, fieldName, value, multiline = false, lines = false, className = "", container = els.promptEntityFields, entityResolver = promptEditorEntity) {
   const label = document.createElement("label");
   label.className = "editor-field";
   const caption = document.createElement("span");
@@ -757,7 +948,7 @@ function appendEditorTextField(labelText, fieldName, value, multiline = false, l
   control.value = value;
   control.className = className;
   control.addEventListener("input", () => {
-    const entity = promptEditorEntity();
+    const entity = entityResolver();
     if (fieldName === "protocol") {
       entity.item.protocol = control.value;
       state.promptEditorPrompt.content = control.value;
@@ -766,7 +957,7 @@ function appendEditorTextField(labelText, fieldName, value, multiline = false, l
     }
   });
   label.append(caption, control);
-  els.promptEntityFields.append(label);
+  container.append(label);
 }
 
 function appendRecommendedSourcesEditor(subtype, type) {
@@ -857,6 +1048,8 @@ async function savePromptEditor() {
       body: JSON.stringify({
         dialogueTypes: state.promptEditorDraft.dialogueTypes,
         enhancers: state.promptEditorDraft.enhancers,
+        editorMode: state.promptEditorMode,
+        allowDelete: state.promptEditorMode === "category",
         prompt: state.promptEditorMode === "content" ? state.promptEditorPrompt : null
       })
     });
@@ -930,7 +1123,7 @@ function defaultQuestionText(type, subtype) {
     return MUNGER_SOUL_PERIOD_QUESTIONS[periodMode];
   }
   if (shouldUseMungerSoulQuestion(subtype)) return MUNGER_SOUL_QUESTION;
-  return subtype?.name || type?.name || "";
+  return subtype?.currentQuestion?.trim() || subtype?.name || type?.name || "";
 }
 
 function shouldFillEmptyCurrentQuestion(subtype) {
@@ -949,7 +1142,7 @@ function syncCurrentQuestionDefault(type = activeDialogueType(), subtype = activ
 
 function activePeriodOutputMode() {
   const subtypeId = activeDialogueSubtype()?.id;
-  return Object.keys(PERIOD_OUTPUTS).find((mode) => PERIOD_OUTPUTS[mode].subtypeId === subtypeId) || "";
+  return Object.keys(PERIOD_OUTPUTS).find((mode) => PERIOD_OUTPUTS[mode].subtypeIds?.includes(subtypeId) || PERIOD_OUTPUTS[mode].subtypeId === subtypeId) || "";
 }
 
 function renderPeriodPicker() {
@@ -1013,6 +1206,11 @@ function applyPeriodContextSelection(mode, value) {
 
 function periodContextStrategy(mode, value, filePath) {
   if (mode === "weekly") {
+    if (activeDialogueSubtype()?.id === WEEKLY_WECHAT_LONG_IMAGE_SUBTYPE_ID) {
+      return filePath === `04_output/weekly/${value.replace("-W", "-")}.md`
+        ? normalizeStrategy(state.contextFileMap.get(filePath)?.defaultStrategy || "normal")
+        : "";
+    }
     return filePath === `${PERIOD_OUTPUTS.weekly.prefixFromValue(value)}process-pack.md`
       ? normalizeStrategy(state.contextFileMap.get(filePath)?.defaultStrategy || "normal")
       : "";
@@ -1197,42 +1395,73 @@ function openCustomContextDialog() {
 
 function renderCustomContextList() {
   const query = els.customContextSearch.value.trim().toLowerCase();
-  const files = filteredCustomContextFiles(query);
   els.customContextList.innerHTML = "";
 
-  for (const file of files) {
-    const label = document.createElement("label");
-    label.className = "custom-context-item";
-    label.title = file.path;
-
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.checked = state.customDraftSelections.has(file.path);
-    checkbox.addEventListener("change", () => {
-      if (checkbox.checked) state.customDraftSelections.add(file.path);
-      else state.customDraftSelections.delete(file.path);
-      renderCustomContextCount();
-    });
-
-    const text = document.createElement("span");
-    text.innerHTML = `<strong>${escapeHtml(file.title || file.path)}</strong><em>${escapeHtml(file.path)}</em>`;
-    label.append(checkbox, text);
-    els.customContextList.append(label);
+  if (query) {
+    for (const node of searchCustomContext(state.customContextFiles, query)) renderCustomContextPickerNode(node, 0, true);
+  } else {
+    const tree = buildContextTree(state.customContextFiles);
+    for (const node of tree.children) renderCustomContextPickerNode(node, 0);
   }
 
   renderCustomContextCount();
 }
 
-function filteredCustomContextFiles(query) {
-  if (!query) return state.customContextFiles;
-  return state.customContextFiles.filter((file) =>
-    `${file.path}\n${file.title || ""}`.toLowerCase().includes(query)
-  );
+function renderCustomContextPickerNode(node, depth, searchResult = false) {
+  const row = document.createElement("div");
+  row.className = `custom-context-item ${node.type}`;
+  row.style.setProperty("--depth", String(depth));
+  row.title = node.path;
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "tree-toggle";
+  if (node.type === "folder" && !searchResult) {
+    const expanded = state.expandedCustomContextDirs.has(node.path);
+    toggle.textContent = expanded ? "▾" : "▸";
+    toggle.addEventListener("click", () => {
+      if (expanded) state.expandedCustomContextDirs.delete(node.path);
+      else state.expandedCustomContextDirs.add(node.path);
+      renderCustomContextList();
+    });
+  } else {
+    toggle.classList.add("spacer");
+  }
+
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  const files = node.type === "folder" ? node.files : [node.file];
+  const selectedCount = files.filter((file) => state.customDraftSelections.has(file.path)).length;
+  checkbox.checked = files.length > 0 && selectedCount === files.length;
+  checkbox.indeterminate = selectedCount > 0 && selectedCount < files.length;
+  checkbox.addEventListener("change", () => {
+    for (const file of files) {
+      if (checkbox.checked) state.customDraftSelections.add(file.path);
+      else state.customDraftSelections.delete(file.path);
+    }
+    renderCustomContextList();
+  });
+
+  const text = document.createElement("button");
+  text.type = "button";
+  text.className = "custom-context-label";
+  text.innerHTML = node.type === "folder"
+    ? `<strong>${escapeHtml(node.name)}/</strong><em>${searchResult ? `${escapeHtml(node.path)} · ` : ""}${node.files.length} 个 Markdown</em>`
+    : `<strong>${escapeHtml(node.file.title || node.path)}</strong><em>${escapeHtml(node.path)}</em>`;
+  text.addEventListener("click", () => checkbox.click());
+  row.append(toggle, checkbox, text);
+  els.customContextList.append(row);
+
+  if (node.type === "folder" && state.expandedCustomContextDirs.has(node.path)) {
+    for (const child of node.children) renderCustomContextPickerNode(child, depth + 1);
+  }
 }
 
 function selectAllVisibleCustomContext() {
-  for (const file of filteredCustomContextFiles(els.customContextSearch.value.trim().toLowerCase())) {
-    state.customDraftSelections.add(file.path);
+  const query = els.customContextSearch.value.trim().toLowerCase();
+  const nodes = query ? searchCustomContext(state.customContextFiles, query) : state.customContextFiles.map((file) => ({ type: "file", file }));
+  for (const node of nodes) {
+    for (const file of node.type === "folder" ? node.files : [node.file]) state.customDraftSelections.add(file.path);
   }
   renderCustomContextList();
 }
@@ -1553,6 +1782,7 @@ ${prompt}
     ? "直接围绕 Current Question 回答；不额外套用场景提示词，只根据 Current Question、已选增强器和 Context 回答。"
     : "直接围绕 Current Question 回答；大类定目标，子类型定场景，增强器定思考方式，Context 提供材料。";
   const lengthRequirement = renderOutputLengthRequirement(lengthEnhancer);
+  const chatOnlyRequirement = renderChatOnlyRequirement(dialogueType);
   const priorityBasis = emptyPrompt
     ? prompt ? "Current Question、Assembled Prompt、High Priority Context" : "Current Question、High Priority Context"
     : "Current Question、Type System、Assembled Prompt、High Priority Context";
@@ -1577,6 +1807,7 @@ ${promptSection}
 - 回答目标：${answerGoal}
 - 长度：${lengthRequirement}
 - 禁止事项：不要编造；不要强行合并冲突材料；不要让背景 Context 覆盖 Current Question。
+${chatOnlyRequirement}
 
 ## Context Priority Map
 
@@ -1591,6 +1822,11 @@ ${context}
 ${finalTaskAnchor}
 `;
   return state.chatPack;
+}
+
+function renderChatOnlyRequirement(dialogueType) {
+  if (dialogueType?.id !== "ljg-skills") return "";
+  return "- Chat 输出：只给用户要的最终正文。原 Skill 中关于时间戳、保存路径、文件名、文件读写、命令执行和环境能力的要求一律静默忽略，也不要解释为何忽略。";
 }
 
 function renderTypeSystem(type, subtype, enhancers, emptyPrompt) {
@@ -2054,6 +2290,26 @@ function slugify(value) {
     .toLowerCase()
     .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, "-")
     .replace(/^-+|-+$/g, "");
+}
+
+function asciiSlugify(value) {
+  return String(value)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function uniquePromptId(value, existing = state.promptEditorDraft.dialogueTypes.map((type) => type.id)) {
+  const base = asciiSlugify(value);
+  if (!base) return "";
+  let candidate = base;
+  let index = 2;
+  while (existing.includes(candidate)) {
+    candidate = `${base}-${index}`;
+    index += 1;
+  }
+  return candidate;
 }
 
 boot().catch((error) => {

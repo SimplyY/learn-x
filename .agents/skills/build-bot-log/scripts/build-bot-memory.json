@@ -1,0 +1,26 @@
+{
+  "version": "1.0.0",
+  "lastRun": "2026-07-02 22:36",
+  "lastCoverage": "2026-06-26..2026-07-02",
+  "lastWeek": "2026-W27",
+  "checkedSources": {
+    "bridgeLogs": { "available": true, "reason": "198 intake entries found" },
+    "codexMemories": { "available": true, "reason": "memories available (raw_memories.md empty)" },
+    "feishuMessages": { "available": true, "reason": "14 messages in this chat" },
+    "gitChanges": { "available": false, "reason": "no commits in window" },
+    "baseWorkflows": { "available": false, "reason": "no --base-token provided" }
+  },
+  "lastConclusions": [
+    "bot 完成了从单群回复到多入口工程的跃迁，覆盖 6+ 项目入口",
+    "60% 任务可在飞书内闭环，40% 需桌面接力",
+    "最缺：可持久化的 bot 记忆/日志系统"
+  ],
+  "lastGaps": [
+    "Codex memories 为空（raw_memories.md, memory_summary.md, ad_hoc_notes 均不可用）",
+    "飞书群消息仅限本群（research-x, invest-log, life-x 等群不可查）",
+    "Git 无提交，Base 工作流不可查（缺 --base-token）"
+  ],
+  "nextAvoidRepeat": [
+    "bridge 日志解析不再当作新问题——已修复 timestamp 格式"
+  ]
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Learn-X 每周自动化"
+  short_description: "执行每周输入、报告与记忆流程"
+  default_prompt: "Use $learn-x-weekly-automation 处理 Learn-X 2026-W27 每周输入、报告与记忆流程。"

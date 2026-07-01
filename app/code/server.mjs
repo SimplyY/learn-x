@@ -6,6 +6,7 @@ import { watch } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { prepareChatPackEdits, writePreparedEdits } from "./scripts/chatpack-editor.mjs";
+import { collectDocumentsMarkdown, readDocumentsMarkdown } from "./scripts/documents-context.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../..");
@@ -136,6 +137,23 @@ async function handleChatPackSave(req, res) {
   }
 }
 
+async function handleDocumentsContext(req, res, url) {
+  if (!isLocalRequest(req)) {
+    sendJson(res, 403, { error: "Local context requests only" });
+    return;
+  }
+  try {
+    if (url.pathname === "/api/context-files") {
+      sendJson(res, 200, { files: await collectDocumentsMarkdown(undefined, repoRoot) });
+      return;
+    }
+    const filePath = url.searchParams.get("path") || "";
+    sendJson(res, 200, { path: filePath, content: await readDocumentsMarkdown(filePath) });
+  } catch (error) {
+    sendJson(res, 400, { error: error.message || "Unable to read Documents context" });
+  }
+}
+
 function isLocalRequest(req) {
   const remoteAddress = req.socket.remoteAddress || "";
   if (!new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]).has(remoteAddress)) return false;
@@ -186,6 +204,10 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
     if (req.method === "PUT" && url.pathname === "/api/chatpack/editor") {
       await handleChatPackSave(req, res);
+      return;
+    }
+    if (req.method === "GET" && new Set(["/api/context-files", "/api/file"]).has(url.pathname)) {
+      await handleDocumentsContext(req, res, url);
       return;
     }
     await serveStatic(req, res, url);
