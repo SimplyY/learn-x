@@ -3,7 +3,7 @@ import path from "node:path";
 import { validateChatPackConfig } from "./static-graph.mjs";
 
 const EDITABLE_TYPE_FIELDS = ["name", "useCases", "outputGoal", "behaviorDirections", "avoid"];
-const EDITABLE_SUBTYPE_FIELDS = ["name", "summary", "recommendedSources", "includeBaseRecommendedSources"];
+const EDITABLE_SUBTYPE_FIELDS = ["name", "summary", "currentQuestion", "recommendedSources", "includeBaseRecommendedSources"];
 const EDITABLE_ENHANCER_FIELDS = ["name", "summary", "applicationNote"];
 
 export async function prepareChatPackEdits({ repoRoot, payload }) {
@@ -13,6 +13,7 @@ export async function prepareChatPackEdits({ repoRoot, payload }) {
   validateChatPackConfig(config);
 
   const writes = [{ path: configPath, content: `${JSON.stringify(config, null, 2)}\n` }];
+  writes.push(...(await prepareSubtypePromptWrites(repoRoot, sourceConfig, config, payload)));
   if (payload.prompt) {
     const promptPath = resolvePromptPath(config, payload.prompt);
     writes.push({ path: path.join(repoRoot, promptPath), content: normalizePrompt(payload.prompt.content) });
@@ -37,36 +38,62 @@ export async function writePreparedEdits(writes) {
 }
 
 export function mergeEditableConfig(sourceConfig, payload, repoRoot) {
-  const nextTypes = orderedItems(sourceConfig.dialogueTypes, payload.dialogueTypes, "dialogue type").map(({ source, next }) => {
-    const mergedType = copyEditableFields(source, next, EDITABLE_TYPE_FIELDS);
-    mergedType.subtypes = orderedItems(source.subtypes || [], next.subtypes || [], `subtype of ${source.id}`).map(
-      ({ source: sourceSubtype, next: nextSubtype }) => {
-        const mergedSubtype = copyEditableFields(sourceSubtype, nextSubtype, EDITABLE_SUBTYPE_FIELDS);
-        const recommendedSources = validateRecommendedSources(mergedSubtype.recommendedSources || [], repoRoot);
-        if (Object.hasOwn(mergedSubtype, "recommendedSources") || recommendedSources.length > 0) {
-          mergedSubtype.recommendedSources = recommendedSources;
-        }
-        return mergedSubtype;
+  const allowDelete = payload.allowDelete === true || payload.editorMode === "category";
+  const sourceSubtypes = new Map((sourceConfig.dialogueTypes || []).flatMap((type) => (type.subtypes || []).map((subtype) => [subtype.id, subtype])));
+  const nextSubtypeRefs = new Set();
+  const nextTypes = orderedItems(sourceConfig.dialogueTypes, payload.dialogueTypes, "dialogue type", {
+    allowAdd: true,
+    allowDelete,
+    create: createDialogueType
+  }).map(({ source, next }) => {
+    const mergedType = source ? copyEditableFields(source, next, EDITABLE_TYPE_FIELDS) : copyEditableFields(next, next, EDITABLE_TYPE_FIELDS);
+    mergedType.id = source?.id || next.id;
+    mergedType.subtypes = (next.subtypes || []).map((nextSubtype) => {
+      const sourceSubtype = sourceSubtypes.get(nextSubtype.previousId || nextSubtype.id);
+      if (sourceSubtype) nextSubtypeRefs.add(sourceSubtype.id);
+      const mergedSubtype = sourceSubtype
+        ? copyEditableFields(sourceSubtype, nextSubtype, EDITABLE_SUBTYPE_FIELDS)
+        : copyEditableFields(createDialogueSubtype(nextSubtype, mergedType.id), nextSubtype, EDITABLE_SUBTYPE_FIELDS);
+      mergedSubtype.id = nextSubtype.id;
+      delete mergedSubtype.previousId;
+      const recommendedSources = validateRecommendedSources(mergedSubtype.recommendedSources || [], repoRoot);
+      if (Object.hasOwn(mergedSubtype, "recommendedSources") || recommendedSources.length > 0) {
+        mergedSubtype.recommendedSources = recommendedSources;
       }
-    );
+      return mergedSubtype;
+    });
     return mergedType;
   });
+  for (const id of sourceSubtypes.keys()) {
+    if (!allowDelete && !nextSubtypeRefs.has(id)) throw new Error(`Missing existing subtype: ${id}`);
+  }
   const nextEnhancers = orderedItems(sourceConfig.enhancers || [], payload.enhancers || [], "enhancer").map(
     ({ source, next }) => copyEditableFields(source, next, EDITABLE_ENHANCER_FIELDS)
   );
   return { ...sourceConfig, dialogueTypes: nextTypes, enhancers: nextEnhancers };
 }
 
-function orderedItems(sourceItems, nextItems, label) {
-  if (!Array.isArray(nextItems) || nextItems.length !== sourceItems.length) throw new Error(`Invalid ${label} list`);
+function orderedItems(sourceItems, nextItems, label, options = {}) {
+  if (
+    !Array.isArray(nextItems) ||
+    (!options.allowDelete && nextItems.length < sourceItems.length) ||
+    (!options.allowAdd && nextItems.length !== sourceItems.length)
+  ) {
+    throw new Error(`Invalid ${label} list`);
+  }
   const sourceById = new Map(sourceItems.map((item) => [item.id, item]));
   const seen = new Set();
-  return nextItems.map((next) => {
+  const ordered = nextItems.map((next) => {
     const source = sourceById.get(next?.id);
-    if (!source || seen.has(next.id)) throw new Error(`Invalid ${label} id: ${next?.id || "missing"}`);
+    if ((!source && !options.allowAdd) || seen.has(next?.id)) throw new Error(`Invalid ${label} id: ${next?.id || "missing"}`);
+    if (!source && !options.create) throw new Error(`Invalid ${label} id: ${next?.id || "missing"}`);
     seen.add(next.id);
-    return { source, next };
+    return { source: source || options.create(next), next };
   });
+  for (const id of sourceById.keys()) {
+    if (!options.allowDelete && !seen.has(id)) throw new Error(`Missing existing ${label}: ${id}`);
+  }
+  return ordered;
 }
 
 function copyEditableFields(source, next, fields) {
@@ -90,6 +117,29 @@ function copyEditableFields(source, next, fields) {
     merged[field] = value;
   }
   return merged;
+}
+
+function createDialogueType(next) {
+  if (!next || typeof next.id !== "string" || !next.id.trim()) throw new Error("Missing dialogue type id");
+  return {
+    id: next.id,
+    name: "",
+    useCases: "",
+    behaviorDirections: [],
+    outputGoal: "",
+    subtypes: [],
+    avoid: []
+  };
+}
+
+function createDialogueSubtype(next, typeId) {
+  if (!next || typeof next.id !== "string" || !next.id.startsWith(`${typeId}.`)) throw new Error("Invalid new subtype id");
+  return {
+    id: next.id,
+    name: "",
+    summary: "",
+    recommendedSources: []
+  };
 }
 
 function validateRecommendedSources(sources, repoRoot) {
@@ -126,6 +176,40 @@ function resolvePromptPath(config, prompt) {
     return `02_prompts/chatpack/${type.id}/${subtype.id.slice(type.id.length + 1)}.md`;
   }
   throw new Error(`Unknown subtype: ${prompt.id}`);
+}
+
+async function prepareSubtypePromptWrites(repoRoot, sourceConfig, config, payload) {
+  const sourceSubtypes = new Map();
+  for (const type of sourceConfig.dialogueTypes || []) {
+    for (const subtype of type.subtypes || []) {
+      sourceSubtypes.set(subtype.id, { typeId: type.id, subtype });
+    }
+  }
+  const payloadSubtypes = new Map();
+  for (const type of payload.dialogueTypes || []) {
+    for (const subtype of type.subtypes || []) payloadSubtypes.set(subtype.id, subtype);
+  }
+  const writes = [];
+  for (const type of config.dialogueTypes || []) {
+    for (const subtype of type.subtypes || []) {
+      if (sourceSubtypes.has(subtype.id)) continue;
+      const previousId = payloadSubtypes.get(subtype.id)?.previousId;
+      const previous = previousId ? sourceSubtypes.get(previousId) : null;
+      const content = previous
+        ? await readFile(path.join(repoRoot, subtypePromptPath(previous.typeId, previous.subtype.id)), "utf8")
+        : defaultSubtypePrompt(subtype);
+      writes.push({ path: path.join(repoRoot, subtypePromptPath(type.id, subtype.id)), content: normalizePrompt(content) });
+    }
+  }
+  return writes;
+}
+
+function subtypePromptPath(typeId, subtypeId) {
+  return `02_prompts/chatpack/${typeId}/${subtypeId.slice(typeId.length + 1)}.md`;
+}
+
+function defaultSubtypePrompt(subtype) {
+  return `# ${subtype.name || subtype.id}\n\n请围绕 Current Question 和已选 Context 完成任务。\n`;
 }
 
 function normalizePrompt(content) {

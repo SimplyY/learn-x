@@ -120,8 +120,9 @@
                       <p>简单&客观问题直接问 AI，无需 Chat Pack。</p>
                     </div>
                     <div class="prompt-category-actions">
+                      <button id="editPromptCategoriesBtn" class="local-desktop-only" type="button" hidden>编辑大类</button>
                       <button id="sortPromptCatalogBtn" class="local-desktop-only" type="button" hidden>调整顺序</button>
-                      <button id="editPromptCatalogBtn" class="local-desktop-only" type="button" hidden>编辑内容</button>
+                      <button id="editPromptCatalogBtn" class="local-desktop-only" type="button" hidden>编辑提示词</button>
                       <button id="generateChatPackBtn" class="primary-action" type="button">生成 Chat Pack</button>
                     </div>
                   </div>
@@ -153,6 +154,7 @@
                         <button id="closePromptEditorBtn" type="button">取消</button>
                       </header>
                       <div id="promptSortEditor" hidden></div>
+                      <div id="promptCategoryEditor" hidden></div>
                       <div id="promptContentEditor" class="prompt-content-editor" hidden>
                         <label class="editor-field">
                           <span>编辑对象</span>

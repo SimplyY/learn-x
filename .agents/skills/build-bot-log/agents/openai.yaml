@@ -1,0 +1,4 @@
+interface:
+  display_name: "Build Bot Log"
+  short_description: "Generate weekly Feishu Bot / Code X bot build retrospective for Learn-X weekly input"
+  default_prompt: "Use $build-bot-log to generate this week's Feishu bot build retrospective. Collects evidence from bridge logs, Codex memories, Feishu message search, Git diff, Base workflows, and Skill changes."

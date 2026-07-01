@@ -661,7 +661,7 @@ button:disabled {
 }
 
 .modal-dialog.prompt-catalog-dialog {
-  width: min(1080px, calc(100vw - 36px));
+  width: min(1120px, calc(100vw - 36px));
   max-height: calc(100vh - 36px);
 }
 
@@ -702,6 +702,64 @@ button:disabled {
   gap: 12px;
 }
 
+.category-editor-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(320px, 1fr) minmax(300px, 390px);
+  gap: 14px;
+  height: min(620px, calc(100vh - 190px));
+  min-height: 420px;
+}
+
+.category-editor-nav,
+.category-editor-detail,
+.category-editor-members {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcff;
+}
+
+.category-editor-detail,
+.category-editor-members {
+  background: var(--panel);
+}
+
+.category-editor-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+  margin-bottom: 10px;
+}
+
+.category-editor-section-head h4 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.category-editor-section-head button {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.category-editor-layout .prompt-entity-fields,
+.category-editor-layout .editor-sort-list {
+  align-content: start;
+  min-height: 0;
+  overflow: auto;
+}
+
+.category-editor-detail .editor-field textarea {
+  height: 92px;
+  min-height: 72px;
+}
+
 .editor-sort-group,
 .prompt-entity-fields {
   display: grid;
@@ -717,6 +775,24 @@ button:disabled {
   display: grid;
   align-content: start;
   gap: 5px;
+}
+
+.editor-category-pill {
+  justify-content: flex-start;
+  min-height: 34px;
+  width: 100%;
+  padding: 0 10px;
+  border-color: transparent;
+  background: transparent;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.editor-category-pill.active {
+  border-color: var(--accent);
+  background: #f0f5ff;
+  color: var(--accent-dark);
+  font-weight: 650;
 }
 
 .editor-sort-row {
@@ -759,6 +835,37 @@ button:disabled {
   gap: 7px;
 }
 
+.editor-field.compact {
+  grid-template-columns: minmax(120px, 1fr) minmax(160px, 1fr);
+  align-items: center;
+}
+
+.editor-field.compact.with-action {
+  grid-template-columns: minmax(96px, 1fr) minmax(130px, 1fr) 34px;
+  gap: 8px;
+  min-height: 36px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.danger-action {
+  border-color: #f3d1d1;
+  background: #fffafa;
+  color: #b42318;
+}
+
+.danger-action:hover:not(:disabled) {
+  border-color: #e07b7b;
+  color: #a4161a;
+}
+
+.danger-action.compact {
+  min-width: 34px;
+  min-height: 30px;
+  padding: 0;
+  font-size: 12px;
+}
+
 .editor-field > span,
 .editor-field legend {
   color: var(--muted);
@@ -784,8 +891,12 @@ button:disabled {
   resize: vertical;
 }
 
+.editor-field textarea.summary-editor {
+  min-height: 58px;
+}
+
 .editor-field textarea.prompt-source-editor {
-  min-height: 280px;
+  min-height: 420px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 12px;
 }
@@ -1234,6 +1345,9 @@ button:disabled {
 
 .modal-panel {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  width: 100%;
+  min-width: 0;
   gap: 14px;
   margin: 0;
   padding: 18px;
@@ -1262,6 +1376,7 @@ button:disabled {
 
 .modal-toolbar input {
   flex: 1;
+  min-width: 0;
   height: 36px;
   border: 1px solid var(--faint);
   border-radius: 6px;
@@ -1281,10 +1396,11 @@ button:disabled {
 
 .custom-context-item {
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr);
+  grid-template-columns: 24px 24px minmax(0, 1fr);
   gap: 8px;
-  align-items: start;
+  align-items: center;
   padding: 7px 8px;
+  padding-left: calc(8px + var(--depth, 0) * 16px);
   border-radius: 6px;
 }
 
@@ -1297,19 +1413,24 @@ button:disabled {
   accent-color: var(--accent);
 }
 
-.custom-context-item span {
+.custom-context-label {
   display: grid;
   min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
 }
 
-.custom-context-item strong,
-.custom-context-item em {
+.custom-context-label strong,
+.custom-context-label em {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.custom-context-item em {
+.custom-context-label em {
   color: var(--muted);
   font-size: 12px;
   font-style: normal;

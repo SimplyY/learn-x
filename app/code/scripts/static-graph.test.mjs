@@ -29,7 +29,12 @@ test("public graph excludes private workflow material and local graph retains ca
     type.subtypes.map((subtype) => subtype.id)
   );
   assert.equal(publicSubtypeIds.some((id) => id.endsWith("-output")), false);
-  assert.doesNotMatch(JSON.stringify(publicGraph), /03_input\/|\.agents\/skills\/learn-x-process\/|04_output\/_dist\//);
+  const publicPaths = [
+    ...publicGraph.files.map((file) => file.path),
+    ...publicGraph.customContextFiles.map((file) => file.path),
+    ...publicGraph.contextFiles.map((file) => file.path)
+  ];
+  assert.equal(publicPaths.some((filePath) => isPublicPrivatePath(filePath)), false);
 });
 
 test("editor preserves immutable fields while updating order and editable content", () => {
@@ -43,6 +48,7 @@ test("editor preserves immutable fields while updating order and editable conten
           {
             ...source.dialogueTypes[0].subtypes[0],
             name: "子类型改名",
+            currentQuestion: "默认当前问题",
             recommendedSources: ["README.md"]
           }
         ]
@@ -53,6 +59,7 @@ test("editor preserves immutable fields while updating order and editable conten
   const merged = mergeEditableConfig(source, payload, fixtureRoot);
   assert.deepEqual(merged.dialogueTypes.map((type) => type.id), ["beta", "alpha"]);
   assert.equal(merged.dialogueTypes[1].subtypes[0].name, "子类型改名");
+  assert.equal(merged.dialogueTypes[1].subtypes[0].currentQuestion, "默认当前问题");
   assert.deepEqual(merged.dialogueTypes[1].subtypes[0].recommendedSources, ["README.md"]);
   assert.equal(merged.enhancers[0].name, "增强器改名");
   assert.equal(merged.enhancers[0].group, "length");
@@ -80,6 +87,85 @@ test("editor writes a validated prompt and rejects repository traversal", async 
   const unsafePayload = structuredClone(payload);
   unsafePayload.dialogueTypes[0].subtypes[0].recommendedSources = ["../outside.md"];
   await assert.rejects(() => prepareChatPackEdits({ repoRoot: fixtureRoot, payload: unsafePayload }), /Unsafe recommended/);
+});
+
+test("editor adds categories and moves subtype prompts without deleting existing items", async (context) => {
+  await rm(fixtureRoot, { recursive: true, force: true });
+  context.after(() => rm(fixtureRoot, { recursive: true, force: true }));
+  await mkdir(path.join(fixtureRoot, "00_config"), { recursive: true });
+  await mkdir(path.join(fixtureRoot, "02_prompts/chatpack/alpha"), { recursive: true });
+  await writeFile(path.join(fixtureRoot, "00_config/chatpack.config.json"), `${JSON.stringify(fixtureConfig(), null, 2)}\n`);
+  await writeFile(path.join(fixtureRoot, "02_prompts/chatpack/alpha/one.md"), "# Original prompt\n");
+
+  const source = fixtureConfig();
+  const payload = {
+    dialogueTypes: [
+      { ...source.dialogueTypes[0], subtypes: [] },
+      source.dialogueTypes[1],
+      {
+        id: "frequent",
+        name: "高频",
+        useCases: "常用提示词",
+        behaviorDirections: [],
+        outputGoal: "",
+        avoid: [],
+        subtypes: [{ ...source.dialogueTypes[0].subtypes[0], previousId: "alpha.one", id: "frequent.one" }]
+      }
+    ],
+    enhancers: source.enhancers
+  };
+
+  const writes = await prepareChatPackEdits({ repoRoot: fixtureRoot, payload });
+  await writePreparedEdits(writes);
+  const config = JSON.parse(await readFile(path.join(fixtureRoot, "00_config/chatpack.config.json"), "utf8"));
+  assert.deepEqual(config.dialogueTypes.map((type) => type.id), ["alpha", "beta", "frequent"]);
+  assert.deepEqual(config.dialogueTypes[2].subtypes.map((subtype) => subtype.id), ["frequent.one"]);
+  assert.equal(await readFile(path.join(fixtureRoot, "02_prompts/chatpack/frequent/one.md"), "utf8"), "# Original prompt\n");
+
+  const missingExisting = structuredClone(payload);
+  missingExisting.dialogueTypes = missingExisting.dialogueTypes.filter((type) => type.id !== "beta");
+  await assert.rejects(() => prepareChatPackEdits({ repoRoot: fixtureRoot, payload: missingExisting }), /Invalid dialogue type list|Missing existing dialogue type/);
+
+  await writeFile(path.join(fixtureRoot, "00_config/chatpack.config.json"), `${JSON.stringify(source, null, 2)}\n`);
+  const invalidId = structuredClone(payload);
+  invalidId.dialogueTypes[2].id = "../bad";
+  invalidId.dialogueTypes[2].subtypes[0].id = "../bad.one";
+  await assert.rejects(() => prepareChatPackEdits({ repoRoot: fixtureRoot, payload: invalidId }), /Dialogue type id/);
+});
+
+test("editor deletes categories only when explicitly allowed and keeps prompt files", async (context) => {
+  await rm(fixtureRoot, { recursive: true, force: true });
+  context.after(() => rm(fixtureRoot, { recursive: true, force: true }));
+  await mkdir(path.join(fixtureRoot, "00_config"), { recursive: true });
+  await mkdir(path.join(fixtureRoot, "02_prompts/chatpack/alpha"), { recursive: true });
+  await writeFile(path.join(fixtureRoot, "00_config/chatpack.config.json"), `${JSON.stringify(fixtureConfig(), null, 2)}\n`);
+  await writeFile(path.join(fixtureRoot, "02_prompts/chatpack/alpha/one.md"), "# Original prompt\n");
+
+  const source = fixtureConfig();
+  const deleteSubtypePayload = {
+    dialogueTypes: [{ ...source.dialogueTypes[0], subtypes: [] }, source.dialogueTypes[1]],
+    enhancers: source.enhancers
+  };
+  await assert.rejects(() => prepareChatPackEdits({ repoRoot: fixtureRoot, payload: deleteSubtypePayload }), /Missing existing subtype/);
+
+  const subtypeWrites = await prepareChatPackEdits({
+    repoRoot: fixtureRoot,
+    payload: { ...deleteSubtypePayload, editorMode: "category" }
+  });
+  await writePreparedEdits(subtypeWrites);
+  let config = JSON.parse(await readFile(path.join(fixtureRoot, "00_config/chatpack.config.json"), "utf8"));
+  assert.deepEqual(config.dialogueTypes[0].subtypes, []);
+  assert.equal(await readFile(path.join(fixtureRoot, "02_prompts/chatpack/alpha/one.md"), "utf8"), "# Original prompt\n");
+
+  await writeFile(path.join(fixtureRoot, "00_config/chatpack.config.json"), `${JSON.stringify(source, null, 2)}\n`);
+  const typeWrites = await prepareChatPackEdits({
+    repoRoot: fixtureRoot,
+    payload: { dialogueTypes: [source.dialogueTypes[1]], enhancers: source.enhancers, allowDelete: true }
+  });
+  await writePreparedEdits(typeWrites);
+  config = JSON.parse(await readFile(path.join(fixtureRoot, "00_config/chatpack.config.json"), "utf8"));
+  assert.deepEqual(config.dialogueTypes.map((type) => type.id), ["beta"]);
+  assert.equal(await readFile(path.join(fixtureRoot, "02_prompts/chatpack/alpha/one.md"), "utf8"), "# Original prompt\n");
 });
 
 function fixtureConfig() {

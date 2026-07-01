@@ -414,7 +414,6 @@ function parseArgs(argv) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const result = await writeWereadWeekly(parseArgs(process.argv.slice(2)));
   console.log(`WeRead weekly input written: ${path.relative(repoRoot, result.notesPath)}`);
-  console.log(`WeRead raw audit written: ${path.relative(repoRoot, result.rawPath)}`);
   console.log(`Books: ${result.payload.stats.bookCount}`);
   console.log(`Highlights: ${result.payload.stats.highlightCount}`);
   console.log(`Thoughts: ${result.payload.stats.thoughtCount}`);

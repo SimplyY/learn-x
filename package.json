@@ -20,7 +20,9 @@
     "memory:monthly": "node .agents/skills/learn-x-process/scripts/prepare-period-memory.mjs --month",
     "memory:yearly": "node .agents/skills/learn-x-process/scripts/prepare-period-memory.mjs --year",
     "test:app": "node --test app/code/scripts/*.test.mjs",
-    "release": "node app/code/scripts/release.mjs"
+    "release": "node app/code/scripts/release.mjs",
+    "input:build-bot": "node .agents/skills/build-bot-log/scripts/generate-build-bot.mjs",
+    "wisdom-gate:ingest": "node .agents/skills/wisdom-gate/scripts/ingest.mjs"
   },
   "dependencies": {
     "dompurify": "^3.4.2",
