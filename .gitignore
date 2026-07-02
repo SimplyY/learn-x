@@ -3,6 +3,7 @@ app/code/node_modules/
 app/code/public/data/
 app/code/public/.nojekyll
 dist/
+04_output/
 app/code/.test-tmp/
 *.DS_Store
 

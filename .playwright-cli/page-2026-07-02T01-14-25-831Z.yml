@@ -1,0 +1,205 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - banner [ref=e4]:
+        - generic [ref=e5]: LX
+        - generic [ref=e6]:
+          - heading "Learn-X" [level=1] [ref=e7]
+          - paragraph [ref=e8]: 认知进化系统
+    - main [ref=e9]:
+      - generic [ref=e33]:
+        - generic [ref=e35]:
+          - paragraph [ref=e36]: Learning Mode · Chat Pack
+          - heading "李继刚提示词 · ljg-learn" [level=3] [ref=e212]
+        - generic [ref=e38]:
+          - generic [ref=e39]:
+            - generic [ref=e41]:
+              - generic [ref=e42]:
+                - text: 文件数
+                - strong [ref=e43]: "6"
+              - generic [ref=e44]:
+                - text: 字数
+                - strong [ref=e45]: 约 3,550 字
+            - region "Chat Pack 长度预算" [ref=e46]:
+              - generic [ref=e47]:
+                - generic [ref=e48]: 长度预算
+                - strong [ref=e49]: 约 2,960 字
+              - generic "上下文预算提示" [ref=e50]:
+                - generic "单次推荐不超过 30,000 字；模型 2/3 上限约 370,370 字。" [ref=e213]:
+                  - generic [ref=e214]: ChatGPT Thinking / Gemini Pro · OK
+                  - emphasis [ref=e216]: 推荐 6%
+                  - emphasis [ref=e219]: 推荐≤3.0万字 · 上限≤37万字（1%）
+            - generic [ref=e58]:
+              - generic [ref=e59]:
+                - generic [ref=e60]:
+                  - text: 上下文编排
+                  - emphasis [ref=e61]: 已选 6 个文件 · 约 3,550 字
+                - generic [ref=e62]:
+                  - button "全选" [ref=e63] [cursor=pointer]
+                  - button "全反选" [ref=e64] [cursor=pointer]
+                  - button "自定义" [ref=e65] [cursor=pointer]
+                  - button "推荐路径" [ref=e66] [cursor=pointer]
+              - generic [ref=e67]:
+                - generic [ref=e220]:
+                  - button "▸" [ref=e221] [cursor=pointer]
+                  - button "不选；点击切换整组选择" [ref=e222] [cursor=pointer]
+                  - button ".agents/ 11 个文件" [ref=e223] [cursor=pointer]:
+                    - strong [ref=e224]: .agents/
+                    - generic [ref=e225]: 11 个文件
+                - generic [ref=e226]:
+                  - button "▾" [ref=e227] [cursor=pointer]
+                  - button "−" [ref=e228] [cursor=pointer]
+                  - button "01_core/ 14 个文件" [ref=e229] [cursor=pointer]:
+                    - strong [ref=e230]: 01_core/
+                    - generic [ref=e231]: 14 个文件
+                - generic [ref=e232]:
+                  - button "▸" [ref=e233] [cursor=pointer]
+                  - button "✓" [ref=e234] [cursor=pointer]
+                  - button "道/ 5 个文件" [ref=e235] [cursor=pointer]:
+                    - strong [ref=e236]: 道/
+                    - generic [ref=e237]: 5 个文件
+                - generic [ref=e238]:
+                  - button "▸" [ref=e239] [cursor=pointer]
+                  - button "不选；点击切换整组选择" [ref=e240] [cursor=pointer]
+                  - button "法/ 8 个文件" [ref=e241] [cursor=pointer]:
+                    - strong [ref=e242]: 法/
+                    - generic [ref=e243]: 8 个文件
+                - generic [ref=e244]:
+                  - button "▸" [ref=e245] [cursor=pointer]
+                  - button "✓" [ref=e246] [cursor=pointer]
+                  - button "memory/ 1 个文件" [ref=e247] [cursor=pointer]:
+                    - strong [ref=e248]: memory/
+                    - generic [ref=e249]: 1 个文件
+                - generic [ref=e250]:
+                  - button "▸" [ref=e251] [cursor=pointer]
+                  - button "不选；点击切换整组选择" [ref=e252] [cursor=pointer]
+                  - button "02_prompts/ 76 个文件" [ref=e253] [cursor=pointer]:
+                    - strong [ref=e254]: 02_prompts/
+                    - generic [ref=e255]: 76 个文件
+                - generic [ref=e256]:
+                  - button "▸" [ref=e257] [cursor=pointer]
+                  - button "不选；点击切换整组选择" [ref=e258] [cursor=pointer]
+                  - button "03_input/ 169 个文件" [ref=e259] [cursor=pointer]:
+                    - strong [ref=e260]: 03_input/
+                    - generic [ref=e261]: 169 个文件
+                - generic [ref=e262]:
+                  - button "▸" [ref=e263] [cursor=pointer]
+                  - button "不选；点击切换整组选择" [ref=e264] [cursor=pointer]
+                  - button "04_output/ 42 个文件" [ref=e265] [cursor=pointer]:
+                    - strong [ref=e266]: 04_output/
+                    - generic [ref=e267]: 42 个文件
+                - generic [ref=e268]:
+                  - button "▸" [ref=e269] [cursor=pointer]
+                  - button "不选；点击切换整组选择" [ref=e270] [cursor=pointer]
+                  - button "docs/ 6 个文件" [ref=e271] [cursor=pointer]:
+                    - strong [ref=e272]: docs/
+                    - generic [ref=e273]: 6 个文件
+                - generic [ref=e274]:
+                  - button "▸" [ref=e275] [cursor=pointer]
+                  - button "不选；点击切换整组选择" [ref=e276] [cursor=pointer]
+                  - button "Documents/ 414 个文件" [ref=e277] [cursor=pointer]:
+                    - strong [ref=e278]: Documents/
+                    - generic [ref=e279]: 414 个文件
+                - generic [ref=e280]:
+                  - button "▸" [ref=e281] [cursor=pointer]
+                  - button "不选；点击切换为下一个状态" [ref=e282] [cursor=pointer]
+                  - button "GROUP_INFO.md GROUP_INFO.md · 约 3,474 字" [ref=e283] [cursor=pointer]:
+                    - strong [ref=e284]: GROUP_INFO.md
+                    - generic [ref=e285]: GROUP_INFO.md · 约 3,474 字
+                - generic [ref=e286]:
+                  - button "▸" [ref=e287] [cursor=pointer]
+                  - button "不选；点击切换为下一个状态" [ref=e288] [cursor=pointer]
+                  - button "README.md README.md · 约 1,711 字" [ref=e289] [cursor=pointer]:
+                    - strong [ref=e290]: README.md
+                    - generic [ref=e291]: README.md · 约 1,711 字
+                - generic [ref=e292]:
+                  - button "▸" [ref=e293] [cursor=pointer]
+                  - button "不选；点击切换为下一个状态" [ref=e294] [cursor=pointer]
+                  - button "RTK.md RTK.md · 约 380 字" [ref=e295] [cursor=pointer]:
+                    - strong [ref=e296]: RTK.md
+                    - generic [ref=e297]: RTK.md · 约 380 字
+            - generic "生成进度" [ref=e146]
+            - paragraph [ref=e147]: 大类已切换为「李继刚提示词」。
+          - generic [ref=e148]:
+            - region "对话类型" [ref=e149]:
+              - generic [ref=e150]:
+                - generic [ref=e151]:
+                  - generic [ref=e152]: 提示词分类
+                  - paragraph [ref=e153]: 简单&客观问题直接问 AI，无需 Chat Pack。
+                - generic [ref=e154]:
+                  - button "编辑大类" [ref=e155] [cursor=pointer]
+                  - button "调整顺序" [ref=e156] [cursor=pointer]
+                  - button "编辑提示词" [ref=e157] [cursor=pointer]
+                  - button "生成 Chat Pack" [ref=e158] [cursor=pointer]
+              - generic [ref=e160]: 大类
+              - generic [ref=e161]:
+                - button "高频使用 把知识、材料和经验变成理解、结构与洞察。" [ref=e298] [cursor=pointer]:
+                  - strong [ref=e299]: 高频使用
+                  - generic [ref=e300]: 把知识、材料和经验变成理解、结构与洞察。
+                - button "learn-x 相关 帮助我做更清醒、更可验证的判断，并把想法推进成产物或行动。" [ref=e301] [cursor=pointer]:
+                  - strong [ref=e302]: learn-x 相关
+                  - generic [ref=e303]: 帮助我做更清醒、更可验证的判断，并把想法推进成产物或行动。
+                - button "李继刚提示词 复用李继刚 Skill 的思考、学习、表达和研究能力，快速生成可交给 AI 的 Chat Pack。" [ref=e304] [cursor=pointer]:
+                  - strong [ref=e305]: 李继刚提示词
+                  - generic [ref=e306]: 复用李继刚 Skill 的思考、学习、表达和研究能力，快速生成可交给 AI 的 Chat Pack。
+                - button "其他 复用常用 Prompt，快速生成可交给 AI 的 Chat Pack。" [ref=e307] [cursor=pointer]:
+                  - strong [ref=e308]: 其他
+                  - generic [ref=e309]: 复用常用 Prompt，快速生成可交给 AI 的 Chat Pack。
+              - generic [ref=e175]: 子类型
+              - generic "对话小类" [ref=e176]:
+                - button "ljg-learn" [ref=e310] [cursor=pointer]
+                - button "ljg-book" [ref=e311] [cursor=pointer]
+                - button "ljg-rank" [ref=e312] [cursor=pointer]
+                - button "ljg-roundtable" [ref=e313] [cursor=pointer]
+                - button "ljg-writes" [ref=e314] [cursor=pointer]
+                - button "ljg-word" [ref=e315] [cursor=pointer]
+                - button "ljg-plain" [ref=e316] [cursor=pointer]
+                - button "ljg-present" [ref=e317] [cursor=pointer]
+                - button "ljg-qa" [ref=e318] [cursor=pointer]
+                - button "ljg-invest" [ref=e319] [cursor=pointer]
+                - button "ljg-read" [ref=e320] [cursor=pointer]
+                - button "ljg-relationship" [ref=e321] [cursor=pointer]
+                - button "ljg-skill-map" [ref=e322] [cursor=pointer]
+                - button "ljg-word-flow" [ref=e323] [cursor=pointer]
+                - button "ljg-paper" [ref=e324] [cursor=pointer]
+                - button "ljg-paper-flow" [ref=e325] [cursor=pointer]
+                - button "ljg-paper-river" [ref=e326] [cursor=pointer]
+              - generic [ref=e182]: 增强器
+              - generic "增强器" [ref=e183]:
+                - button "芒格之魂" [ref=e327] [cursor=pointer]
+                - button "语言锋芒" [ref=e328] [cursor=pointer]
+                - button "问清问题" [ref=e329] [cursor=pointer]
+                - button "多思考一步" [ref=e330] [cursor=pointer]
+                - button "现实验证" [ref=e331] [cursor=pointer]
+                - button "挑战观点" [ref=e332] [cursor=pointer]
+                - generic [ref=e333]:
+                  - generic [ref=e334]: 字数
+                  - combobox "输出字数" [ref=e335]:
+                    - option "自然字数" [selected]
+                    - option "1000字"
+                    - option "500字"
+                    - option "200字"
+                    - option "2000字"
+            - generic [ref=e193]:
+              - generic [ref=e194]: 当前问题
+              - textbox "当前问题" [ref=e195]:
+                - /placeholder: 写下这次要带给 AI 的真实问题。
+                - text: ljg-learn
+            - generic [ref=e196]:
+              - generic [ref=e197]: 装配 Prompt
+              - textbox "装配 Prompt" [ref=e198]:
+                - /placeholder: 可临时修改或清空本次要装配的 Prompt。
+                - text: "**子类型 Prompt：ljg-learn** #### ljg-learn - AI Chat Prompt > Source: .agents/skills/ljg-learn/SKILL.md > Purpose: 多角度拆解一个概念 > Generated for Learn-X AI Chat use. The original Skill content below is preserved verbatim. ##### 使用方式 把本文件整体复制到 AI Chat，随后粘贴你的任务材料或问题。AI 需要把自己当作下面这个 Skill 来执行。 ##### Chat 适配规则 1. 你正在 AI Chat 中调用一个原本面向 Codex/Agent 的 Skill。请保留原 Skill 的角色、流程、判断标准、输出格式和语言风格。 2. 如果原 Skill 要求读取文件、写入 outputs、调用脚本、访问仓库或执行命令，而当前 Chat 环境没有这些能力，请改为： - 明确向用户索取必要输入； - 基于用户已提供的文本继续完成任务； - 不要声称已经真实读写本地文件或运行命令。 3. 如果原 Skill 规定输出路径、文件名或保存方式，在 Chat 中请把最终结果直接输出为 Markdown，并保留可复制的标题和结构。 4. 不要省略原 Skill 的任何核心步骤；遇到输入不足时，先给出最小必要澄清问题，或在合理假设下继续并标注假设。 5. 以下“原 Skill 原文”是执行规范，不是待总结材料。请按它执行。 ##### 原 Skill 原文 --- name: ljg-learn description: \"Use this skill to dissect a concept through eight dimensions and compress the result into a sharp insight.\" --- ##### Usage <example> User: /ljg-learn 熵 Assistant: [对\"熵\"进行八维解剖，生成 markdown 报告] </example> ##### Instructions 你是概念解剖师。拿到一个概念，从八个方向切开它，最后把所有切面压成一句顿悟。 ###### 1. 定锚 1. 这个概念最通行的定义是什么？常见误解在哪？ 2. 概念里藏着哪几个核心词素？ ###### 2. 八刀 八个方向各切一刀。每刀 2-3 句，只留筋骨，不带水分。 1. **历史**：最早从哪冒出来 → 怎么变的 → 哪一步拐成了今天的意思 2. **辩证**：它的反面是什么 → 正反碰撞后，更高一层的理解是什么 3. **现象**：扔掉所有预设，回到事情本身 → 用一个日常场景把它还原出来 4. **语言**：拆字源（中/英/希腊/拉丁）→ 画出相邻概念的语义网 → 这个词暗含什么隐喻 5. **形式**：写一个公式或形式化表达 → 公式在哪里失效 6. **存在**：这个概念改变了人怎么活着 7. **美感**：它美在哪？用一个具体意象呈现 8. **元反思**：我们在用什么隐喻理解它？这个隐喻挡住了什么？换一个会怎样 ###### 3. 内观 1. 变成这个概念本身，用第一人称看世界。3-5 句。 2. 八刀之中，哪几刀指向同一个深层结构？把它提出来。 ###### 4. 压缩 1. **公式**：`概念 = ...` 2. **一句话**：用最简单的话说出最深的理解 3. **结构图**：纯 ASCII 画出概念的骨架（只用 +-|/\\<>*=_.,:;!'\" 等基本符号，不用 Unicode 绘图字符） ###### 5. 写入 **格式规则（零例外）：** - 输出必须是纯 markdown 语法，禁止任何 markdown 语法 - 加粗用 `*bold*`（markdown），不用 `**bold**`（markdown） - 分隔线用空行或 org 标题层级区分，不用 `---`（markdown 分隔符） - 列表用 `- item` 或 `1. item`，不用 markdown 的 `* item`（因为 `*` 在 org 中是标题） - 代码用 `~code~` 或 `=code=`，不用反引号 整合为 markdown，结构： ```org #+title: 概念解剖：{概念名} #+filetags: :concept: #+date: [YYYY-MM-DD] * 定锚 * 八刀 ** 历史 ** 辩证 ** 现象 ** 语言 ** 形式 ** 存在 ** 美感 ** 元反思 * 内观 * 压缩 ``` 写入文件： 1. 运行 `date +%Y%m%dT%H%M%S` 获取时间戳。 2. 写入 `outputs/ljg-learn/{timestamp}--概念解剖-{概念名}__concept.md`。 3. 报告路径，完成。"
+            - button "刷新装配" [ref=e200] [cursor=pointer]
+          - generic [ref=e201]:
+            - region "Chat Pack 上下文框架预览" [ref=e202]:
+              - generic [ref=e203]:
+                - generic [ref=e204]: Chat Pack 框架
+                - textbox "Chat Pack 框架" [ref=e205]: "# Chat Pack 装配框架 1. Current Question 2. 大类行为协议：李继刚提示词 3. 子类型 Prompt：ljg-learn 4. 增强器 Prompt：无 5. Output Requirements 6. Context Priority Map：High 2 / Normal 4 7. High Priority Context 8. Normal Context 9. 末尾任务锚定"
+              - generic [ref=e206]:
+                - generic [ref=e207]: 上下文摘要
+                - textbox "上下文摘要" [ref=e208]: 当前问题：已填写 大类目标：复用李继刚 Skill 的思考、学习、表达和研究能力，快速生成可交给 AI 的 Chat Pack。 子类型：多角度拆解一个概念。 增强器：无 上下文文件：6 - [置顶] 01_core/道/00_README.md - [使用] 01_core/道/01_自我认知.md - [使用] 01_core/道/02_人生导师.md - [使用] 01_core/道/03_世界之道.md - [使用] 01_core/道/04_死亡.md - [置顶] 01_core/memory/2026-Q2.memory.md
+            - generic [ref=e209]:
+              - generic [ref=e210]: Chat Pack 预览
+              - textbox "Chat Pack 预览" [ref=e211]: "# Chat Pack ## Current Question ljg-learn ## Type System - 当前模式：Current Question + 大类 Prompt + 子类型 Prompt + Context - 大类 Prompt：已启用（李继刚提示词） - 子类型 Prompt：已启用（ljg-learn） - 增强器 Prompt：未启用 ### 大类行为协议 **适用场景**：把李继刚 Skill 转成可在 AI Chat 中直接调用的提示词。 **AI 行为方向** - 优先遵守所选 Skill 原文中的角色、流程、判断标准和输出格式。 - 把原本面向 Agent 的文件读写或脚本动作，转换为 Chat 中可执行的输入索取、材料处理和 Markdown 输出。 - 保留 Skill 的能力边界，不把本地文件访问、命令执行或保存结果伪装成已经完成。 **输出目标**：复用李继刚 Skill 的思考、学习、表达和研究能力，快速生成可交给 AI 的 Chat Pack。 ### 子类型 **ljg-learn**：多角度拆解一个概念。 **避免事项** - 删改原 Skill 原文 - 声称已经执行 Chat 环境做不到的本地动作 - 把 Skill 输出自动沉淀进道、法、术或记忆 ## Assembled Prompt **子类型 Prompt：ljg-learn** #### ljg-learn - AI Chat Prompt > Source: .agents/skills/ljg-learn/SKILL.md > Purpose: 多角度拆解一个概念 > Generated for Learn-X AI Chat use. The original Skill content below is preserved verbatim. ##### 使用方式 把本文件整体复制到 AI Chat，随后粘贴你的任务材料或问题。AI 需要把自己当作下面这个 Skill 来执行。 ##### Chat 适配规则 1. 你正在 AI Chat 中调用一个原本面向 Codex/Agent 的 Skill。请保留原 Skill 的角色、流程、判断标准、输出格式和语言风格。 2. 如果原 Skill 要求读取文件、写入 outputs、调用脚本、访问仓库或执行命令，而当前 Chat 环境没有这些能力，请改为： - 明确向用户索取必要输入； - 基于用户已提供的文本继续完成任务； - 不要声称已经真实读写本地文件或运行命令。 3. 如果原 Skill 规定输出路径、文件名或保存方式，在 Chat 中请把最终结果直接输出为 Markdown，并保留可复制的标题和结构。 4. 不要省略原 Skill 的任何核心步骤；遇到输入不足时，先给出最小必要澄清问题，或在合理假设下继续并标注假设。 5. 以下“原 Skill 原文”是执行规范，不是待总结材料。请按它执行。 ##### 原 Skill 原文 --- name: ljg-learn description: \"Use this skill to dissect a concept through eight dimensions and compress the result into a sharp insight.\" --- ##### Usage <example> User: /ljg-learn 熵 Assistant: [对\"熵\"进行八维解剖，生成 markdown 报告] </example> ##### Instructions 你是概念解剖师。拿到一个概念，从八个方向切开它，最后把所有切面压成一句顿悟。 ###### 1. 定锚 1. 这个概念最通行的定义是什么？常见误解在哪？ 2. 概念里藏着哪几个核心词素？ ###### 2. 八刀 八个方向各切一刀。每刀 2-3 句，只留筋骨，不带水分。 1. **历史**：最早从哪冒出来 → 怎么变的 → 哪一步拐成了今天的意思 2. **辩证**：它的反面是什么 → 正反碰撞后，更高一层的理解是什么 3. **现象**：扔掉所有预设，回到事情本身 → 用一个日常场景把它还原出来 4. **语言**：拆字源（中/英/希腊/拉丁）→ 画出相邻概念的语义网 → 这个词暗含什么隐喻 5. **形式**：写一个公式或形式化表达 → 公式在哪里失效 6. **存在**：这个概念改变了人怎么活着 7. **美感**：它美在哪？用一个具体意象呈现 8. **元反思**：我们在用什么隐喻理解它？这个隐喻挡住了什么？换一个会怎样 ###### 3. 内观 1. 变成这个概念本身，用第一人称看世界。3-5 句。 2. 八刀之中，哪几刀指向同一个深层结构？把它提出来。 ###### 4. 压缩 1. **公式**：`概念 = ...` 2. **一句话**：用最简单的话说出最深的理解 3. **结构图**：纯 ASCII 画出概念的骨架（只用 +-|/\\<>*=_.,:;!'\" 等基本符号，不用 Unicode 绘图字符） ###### 5. 写入 **格式规则（零例外）：** - 输出必须是纯 markdown 语法，禁止任何 markdown 语法 - 加粗用 `*bold*`（markdown），不用 `**bold**`（markdown） - 分隔线用空行或 org 标题层级区分，不用 `---`（markdown 分隔符） - 列表用 `- item` 或 `1. item`，不用 markdown 的 `* item`（因为 `*` 在 org 中是标题） - 代码用 `~code~` 或 `=code=`，不用反引号 整合为 markdown，结构： ```org #+title: 概念解剖：{概念名} #+filetags: :concept: #+date: [YYYY-MM-DD] * 定锚 * 八刀 ** 历史 ** 辩证 ** 现象 ** 语言 ** 形式 ** 存在 ** 美感 ** 元反思 * 内观 * 压缩 ``` 写入文件： 1. 运行 `date +%Y%m%dT%H%M%S` 获取时间戳。 2. 写入 `outputs/ljg-learn/{timestamp}--概念解剖-{概念名}__concept.md`。 3. 报告路径，完成。 ## Output Requirements - 回答目标：直接围绕 Current Question 回答；大类定目标，子类型定场景，增强器定思考方式，Context 提供材料。 - 长度：按问题需要自然控制。 - 禁止事项：不要编造；不要强行合并冲突材料；不要让背景 Context 覆盖 Current Question。 - Chat 输出：只给用户要的最终正文。原 Skill 中关于时间戳、保存路径、文件名、文件读写、命令执行和环境能力的要求一律静默忽略，也不要解释为何忽略。 ## Context Priority Map - High Priority：本次回答优先依据。 - Normal：背景参考。 - Memory 只作为被选中的上下文材料出现，不在此处重复生成 Review 或 Weekly Output。 - Context Note 只解释文件角色和使用边界，不作为新的证据来源。 - 若上下文冲突，优先依据 Current Question、Type System、Assembled Prompt、High Priority Context。 （Context 尚未生成） ## Final Task Anchor - 最终要回答的问题：ljg-learn - 回答时优先遵守：Current Question、Type System、Assembled Prompt、High Priority Context。 - 如果上下文不足、过时或互相冲突，请明确说明，不要强行合并。 - 不要被长上下文带偏；所有材料都必须回到 Current Question。"
+  - generic: 以问题为轴拆书。

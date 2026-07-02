@@ -30,21 +30,6 @@
           "summary": "书魂捕手、书的结构、X 光阅读。"
         },
         {
-          "id": "learning-insight.domain-research",
-          "name": "领域研究",
-          "summary": "教育、AI、投资、创业等领域地图。",
-          "needsDomain": true,
-          "recommendedSources": [
-            "README.md",
-            "01_core/法/{{domain}}"
-          ]
-        },
-        {
-          "id": "learning-insight.ai-tutor",
-          "name": "AI 私教",
-          "summary": "追问、练习、纠错、输出。"
-        },
-        {
           "id": "learning-insight.ljg-think",
           "name": "ljg-think",
           "summary": "追问问题本质，把观点或现象钻到底。"
@@ -68,7 +53,7 @@
     },
     {
       "id": "reflective-decision",
-      "name": "判断创造",
+      "name": "learn-x 相关",
       "useCases": "审计系统、判断选择、自我省察，并把想法变成作品、行动或可执行任务。",
       "behaviorDirections": [
         "先明确目标、约束、证据、不可逆成本和可交付物。",
@@ -121,14 +106,6 @@
           ]
         },
         {
-          "id": "reflective-decision.weekly-wechat-image",
-          "name": "公众号贴图",
-          "summary": "基于已修改的当周 Weekly Output 生成两张“飞鱼的一周洞察”公众号贴图。",
-          "currentQuestion": "基于已修改的当周 Weekly Output 生成两张“飞鱼的一周洞察”公众号贴图。",
-          "includeBaseRecommendedSources": false,
-          "recommendedSources": []
-        },
-        {
           "id": "reflective-decision.monthly-output",
           "name": "月输出",
           "summary": "基于 Monthly Output 规则和 _dist 材料生成月度报告。",
@@ -149,21 +126,6 @@
             "01_core/memory",
             ".agents/skills/learn-x-process/resources/yearly-output-rules.md"
           ]
-        },
-        {
-          "id": "reflective-decision.codex-build",
-          "name": "Codex 构建",
-          "summary": "生成给 Codex 的高层任务提示词。",
-          "recommendedSources": [
-            "README.md",
-            "app/code/docs",
-            ".agents/skills/learn-x-process"
-          ]
-        },
-        {
-          "id": "reflective-decision.meta-prompt",
-          "name": "提示词重构",
-          "summary": "把原始需求压缩成更清晰、更锋利、更可执行的 Prompt。"
         }
       ],
       "avoid": [

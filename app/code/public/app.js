@@ -12,6 +12,8 @@ const MUNGER_SOUL_PERIOD_QUESTIONS = {
   yearly: "使用芒格之魂的提示词来解析所有上下文。不要输出 Yearly Output，仅洞察。"
 };
 const GRAPH_DATA_URL = window.LEARN_X_GRAPH_URL || "data/graph.json";
+const CONTENT_DATA_URL = window.LEARN_X_CONTENT_URL || "data/content.json";
+const PROMPTS_DATA_URL = window.LEARN_X_PROMPTS_URL || "data/prompts.json";
 let APP_CONFIG = {
   brand: { title: "Learn-X", subtitle: "认知进化系统", mark: "LX" },
   promptDirectory: "01_meta-prompts",
@@ -191,6 +193,10 @@ const els = {
 
 let toastTimer;
 let toastHideTimer;
+let promptTooltip;
+let contentIndexPromise;
+let promptPayloadPromise;
+let promptProtocolsLoaded = false;
 
 async function boot() {
   const graph = await loadGraph();
@@ -243,8 +249,11 @@ async function boot() {
   setMode(state.mode);
   window.addEventListener("hashchange", applyModeFromRoute);
 
-  const first = graph.files.find((file) => file.path === "README.md") || graph.files[0];
-  if (first) await openFile(first.path);
+  if (state.mode === "browse") {
+    const first = graph.files.find((file) => file.path === "README.md") || graph.files[0];
+    if (first) await openFile(first.path);
+  }
+  scheduleWarmup();
 }
 
 async function loadGraph() {
@@ -265,12 +274,13 @@ async function getJson(url) {
       if (!response.ok) throw new Error(`Unable to read Documents context: ${response.status}`);
       return response.json();
     }
+    const indexed = await loadContentEntry(file.path);
     return {
       path: file.path,
       title: file.title,
-      content: file.content || "",
-      html: file.html || "",
-      links: file.links || []
+      content: indexed.content || file.content || "",
+      html: indexed.html || file.html || "",
+      links: indexed.links || file.links || []
     };
   }
 
@@ -290,6 +300,57 @@ async function getJson(url) {
   }
 
   throw new Error(`Static route not found: ${url}`);
+}
+
+async function loadContentEntry(filePath) {
+  const cached = state.contextFileMap.get(filePath) || state.files.find((file) => file.path === filePath);
+  if (cached?.content) return cached;
+  const index = await loadContentIndex();
+  const entry = index.files?.[filePath] || index.customContextFiles?.[filePath] || {};
+  if (cached && entry.content) Object.assign(cached, entry);
+  return entry;
+}
+
+async function loadContentIndex() {
+  if (!contentIndexPromise) {
+    contentIndexPromise = fetch(CONTENT_DATA_URL).then((response) => {
+      if (!response.ok) throw new Error(`Static content missing: ${response.status}`);
+      return response.json();
+    });
+  }
+  return contentIndexPromise;
+}
+
+async function ensurePromptProtocols() {
+  if (promptProtocolsLoaded) return;
+  if (!promptPayloadPromise) {
+    promptPayloadPromise = fetch(PROMPTS_DATA_URL).then((response) => {
+      if (!response.ok) throw new Error(`Static prompts missing: ${response.status}`);
+      return response.json();
+    });
+  }
+  const payload = await promptPayloadPromise;
+  for (const type of DIALOGUE_TYPES) {
+    for (const subtype of type.subtypes || []) {
+      subtype.protocol = payload.subtypes?.[subtype.id] || subtype.protocol || "";
+    }
+  }
+  for (const enhancer of ENHANCERS) {
+    enhancer.protocol = payload.enhancers?.[enhancer.id] || enhancer.protocol || "";
+  }
+  promptProtocolsLoaded = true;
+}
+
+function scheduleWarmup() {
+  const warmup = () => {
+    loadContentIndex().catch((error) => console.warn(`Content preload failed: ${error.message}`));
+    ensurePromptProtocols().catch((error) => console.warn(`Prompt preload failed: ${error.message}`));
+  };
+  if ("requestIdleCallback" in window) {
+    window.requestIdleCallback(warmup, { timeout: 2500 });
+  } else {
+    window.setTimeout(warmup, 1200);
+  }
 }
 
 async function loadDocumentsContextFiles() {
@@ -373,6 +434,57 @@ function bindEvents() {
     renderChatPackPreview();
   });
 
+  window.addEventListener("scroll", hidePromptTooltip, true);
+  window.addEventListener("resize", hidePromptTooltip);
+}
+
+function bindPromptTooltip(button, text) {
+  const tooltip = String(text || "").trim();
+  if (!tooltip) return;
+  button.dataset.tooltip = tooltip;
+  button.addEventListener("mouseenter", () => showPromptTooltip(button));
+  button.addEventListener("focus", () => showPromptTooltip(button));
+  button.addEventListener("mouseleave", hidePromptTooltip);
+  button.addEventListener("blur", hidePromptTooltip);
+}
+
+function showPromptTooltip(anchor) {
+  const text = anchor.dataset.tooltip;
+  if (!text) return;
+  const tooltip = ensurePromptTooltip();
+  tooltip.textContent = text;
+  tooltip.hidden = false;
+
+  const anchorRect = anchor.getBoundingClientRect();
+  const tooltipRect = tooltip.getBoundingClientRect();
+  const gap = 8;
+  const left = Math.min(
+    window.innerWidth - tooltipRect.width - 12,
+    Math.max(12, anchorRect.left + anchorRect.width / 2 - tooltipRect.width / 2)
+  );
+  const top =
+    anchorRect.bottom + tooltipRect.height + gap < window.innerHeight
+      ? anchorRect.bottom + gap
+      : Math.max(12, anchorRect.top - tooltipRect.height - gap);
+
+  tooltip.style.left = `${left}px`;
+  tooltip.style.top = `${top}px`;
+  tooltip.classList.add("visible");
+}
+
+function hidePromptTooltip() {
+  if (!promptTooltip) return;
+  promptTooltip.classList.remove("visible");
+  promptTooltip.hidden = true;
+}
+
+function ensurePromptTooltip() {
+  if (promptTooltip) return promptTooltip;
+  promptTooltip = document.createElement("div");
+  promptTooltip.className = "prompt-tooltip";
+  promptTooltip.hidden = true;
+  document.body.append(promptTooltip);
+  return promptTooltip;
 }
 
 function applyAppConfig() {
@@ -495,7 +607,7 @@ function renderDialogueTypes() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `dialogue-type-btn${type.id === state.activeDialogueTypeId ? " active" : ""}`;
-    button.title = type.useCases || type.name;
+    bindPromptTooltip(button, type.tooltip || type.useCases || type.name);
     button.innerHTML = `
       <strong>${escapeHtml(type.name)}</strong>
       <span>${escapeHtml(type.outputGoal || type.useCases || "")}</span>
@@ -525,7 +637,7 @@ function renderDialogueSubtypes() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `dialogue-subtype-btn${subtype.id === state.activeDialogueSubtypeId ? " active" : ""}`;
-    button.title = subtype.summary || subtype.protocol || subtype.name;
+    bindPromptTooltip(button, subtype.tooltip || subtype.summary || subtype.protocol || subtype.name);
     button.textContent = subtype.name;
     button.addEventListener("click", () => {
       if (subtype.id === state.activeDialogueSubtypeId) {
@@ -550,7 +662,7 @@ function renderEnhancers() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `dialogue-subtype-btn${state.activeEnhancerIds.has(enhancer.id) ? " active" : ""}`;
-    button.title = enhancer.summary || enhancer.protocol || enhancer.name;
+    bindPromptTooltip(button, enhancer.tooltip || enhancer.summary || enhancer.protocol || enhancer.name);
     button.textContent = enhancer.name;
     button.addEventListener("click", () => {
       const enhancerWasActive = state.activeEnhancerIds.has(enhancer.id);
@@ -625,8 +737,9 @@ function renderEditorAvailability() {
   if (!enabled) closePromptEditor();
 }
 
-function openPromptEditor(mode) {
+async function openPromptEditor(mode) {
   if (!state.runtime.canEditChatPack) return;
+  if (mode === "content") await ensurePromptProtocols();
   state.promptEditorMode = mode;
   state.promptEditorDraft = structuredClone({ dialogueTypes: DIALOGUE_TYPES, enhancers: ENHANCERS });
   state.promptEditorEntityId = mode === "content" ? `subtype:${state.activeDialogueSubtypeId}` : "";
@@ -1750,13 +1863,16 @@ function getCurrentPrompt() {
   return els.metaPrompt.value.trim();
 }
 
-function resetPrompt() {
+async function resetPrompt() {
+  await ensurePromptProtocols();
   els.metaPrompt.value = assembledPrompt();
   els.learningStatus.textContent = "装配 Prompt 已刷新。";
   renderChatPackPreview();
 }
 
 async function generateChatPack() {
+  await ensurePromptProtocols();
+  if (!els.metaPrompt.value.trim()) els.metaPrompt.value = assembledPrompt();
   await generateContext();
   if (!state.context) return;
   const chatPack = buildChatPack();
