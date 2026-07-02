@@ -5,7 +5,6 @@ import { spawn } from "node:child_process";
 import { watch } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { prepareChatPackEdits, writePreparedEdits } from "./scripts/chatpack-editor.mjs";
 import { collectDocumentsMarkdown, readDocumentsMarkdown } from "./scripts/documents-context.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -125,6 +124,7 @@ async function handleChatPackSave(req, res) {
   editorSaveInProgress = true;
   try {
     const payload = await readJsonBody(req);
+    const { prepareChatPackEdits, writePreparedEdits } = await loadChatPackEditor();
     const writes = await prepareChatPackEdits({ repoRoot, payload });
     suppressWatchUntil = Date.now() + 2_000;
     await writePreparedEdits(writes);
@@ -135,6 +135,11 @@ async function handleChatPackSave(req, res) {
   } finally {
     editorSaveInProgress = false;
   }
+}
+
+async function loadChatPackEditor() {
+  const editorPath = path.join(__dirname, "scripts/chatpack-editor.mjs");
+  return import(`${pathToFileURL(editorPath).href}?t=${Date.now()}`);
 }
 
 async function handleDocumentsContext(req, res, url) {

@@ -70,6 +70,7 @@ const PUBLIC_PRIVATE_FILES = new Set([
   "02_prompts/chatpack/reflective-decision/monthly-output.md",
   "02_prompts/chatpack/reflective-decision/yearly-output.md"
 ]);
+const TOOLTIP_MAX_CHARS = 200;
 
 export async function readAppConfig() {
   return JSON.parse(await readFile(configPath, "utf8"));
@@ -78,7 +79,7 @@ export async function readAppConfig() {
 export async function readChatPackConfig() {
   const config = JSON.parse(await readFile(chatPackConfigPath, "utf8"));
   validateChatPackConfig(config);
-  return hydrateChatPackPrompts(config);
+  return config;
 }
 
 export async function collectMarkdownFiles(dir = repoRoot) {
@@ -182,7 +183,9 @@ export async function buildGraphPayload({ includeContent = false, target = "publ
   if (!new Set(["local", "public"]).has(target)) throw new Error(`Unknown build target: ${target}`);
   const appConfig = await readAppConfig();
   const sourceChatPackConfig = await readChatPackConfig();
-  const chatPackConfig = target === "public" ? publicChatPackConfig(sourceChatPackConfig) : sourceChatPackConfig;
+  const chatPackConfig = await hydrateChatPackMetadata(
+    target === "public" ? publicChatPackConfig(sourceChatPackConfig) : sourceChatPackConfig
+  );
   const allFiles = await collectMarkdownFiles();
   const files = target === "public" ? allFiles.filter((file) => !isPublicPrivatePath(file.path)) : allFiles;
   const customFiles = await collectCustomContextFiles(repoRoot, { excludePrivate: target === "public" });
@@ -223,6 +226,56 @@ export async function buildGraphPayload({ includeContent = false, target = "publ
     prompts,
     promptDirectory: appConfig.promptDirectory || "01_meta-prompts"
   };
+}
+
+export async function buildContentPayload({ target = "public" } = {}) {
+  if (!new Set(["local", "public"]).has(target)) throw new Error(`Unknown build target: ${target}`);
+  const allFiles = await collectMarkdownFiles();
+  const files = target === "public" ? allFiles.filter((file) => !isPublicPrivatePath(file.path)) : allFiles;
+  const customFiles = await collectCustomContextFiles(repoRoot, { excludePrivate: target === "public" });
+
+  return {
+    files: contentEntries(files),
+    customContextFiles: contentEntries(customFiles)
+  };
+}
+
+export async function buildChatPackPromptPayload({ target = "public" } = {}) {
+  if (!new Set(["local", "public"]).has(target)) throw new Error(`Unknown build target: ${target}`);
+  const sourceChatPackConfig = await readChatPackConfig();
+  const config = target === "public" ? publicChatPackConfig(sourceChatPackConfig) : sourceChatPackConfig;
+  const subtypes = {};
+  const enhancers = {};
+
+  await Promise.all(
+    (config.dialogueTypes || []).flatMap((type) =>
+      (type.subtypes || []).map(async (subtype) => {
+        subtypes[subtype.id] = await readChatPackPrompt(type.id, subtype.id);
+      })
+    )
+  );
+  await Promise.all(
+    (config.enhancers || []).map(async (enhancer) => {
+      enhancers[enhancer.id] = await readEnhancerPrompt(enhancer);
+    })
+  );
+
+  return { subtypes, enhancers };
+}
+
+function contentEntries(files) {
+  return Object.fromEntries(
+    files.map((file) => [
+      file.path,
+      {
+        path: file.path,
+        title: file.title,
+        content: file.content,
+        html: renderMarkdown(file.content),
+        links: file.links
+      }
+    ])
+  );
 }
 
 export function validateChatPackConfig(config) {
@@ -273,27 +326,90 @@ function publicChatPackConfig(config) {
   };
 }
 
-async function hydrateChatPackPrompts(config) {
+async function hydrateChatPackMetadata(config) {
   const dialogueTypes = await Promise.all(
-    (config.dialogueTypes || []).map(async (type) => ({
-      ...type,
-      subtypes: await Promise.all(
-        (type.subtypes || []).map(async (subtype) => ({
-          ...subtype,
-          protocol: await readChatPackPrompt(type.id, subtype.id)
-        }))
-      )
-    }))
+    (config.dialogueTypes || []).map(async (type) => {
+      const subtypes = await Promise.all(
+        (type.subtypes || []).map(async (subtype) => {
+          const protocol = await readChatPackPrompt(type.id, subtype.id);
+          return {
+            ...subtype,
+            tooltip: buildChatPackTooltip(subtype.summary, extractPromptTooltipSource(protocol))
+          };
+        })
+      );
+      return {
+        ...type,
+        tooltip: buildChatPackTooltip(type.useCases, type.outputGoal),
+        subtypes
+      };
+    })
   );
 
   const enhancers = await Promise.all(
-    (config.enhancers || []).map(async (enhancer) => ({
-      ...enhancer,
-      protocol: await readEnhancerPrompt(enhancer)
-    }))
+    (config.enhancers || []).map(async (enhancer) => {
+      const protocol = await readEnhancerPrompt(enhancer);
+      return {
+        ...enhancer,
+        tooltip: buildChatPackTooltip(enhancer.summary, enhancer.applicationNote, extractPromptTooltipSource(protocol))
+      };
+    })
   );
 
   return { ...config, dialogueTypes, enhancers };
+}
+
+export function buildChatPackTooltip(...parts) {
+  const seen = new Set();
+  const tooltip = parts
+    .map(cleanTooltipText)
+    .filter(Boolean)
+    .filter((part) => {
+      if (seen.has(part)) return false;
+      seen.add(part);
+      return true;
+    })
+    .join(" ");
+  return truncateTooltip(tooltip);
+}
+
+export function extractPromptTooltipSource(content) {
+  if (typeof content !== "string") return "";
+  const purpose = content.match(/^\s*>\s*Purpose:\s*(.+)$/im)?.[1];
+  if (purpose) return purpose;
+
+  const frontmatter = content.match(/^---\n([\s\S]*?)\n---/);
+  const description = frontmatter?.[1].match(/^\s*description:\s*(.+)$/im)?.[1];
+  if (description) return description.replace(/^["']|["']$/g, "");
+
+  const withoutFrontmatter = frontmatter ? content.slice(frontmatter[0].length) : content;
+  return (
+    withoutFrontmatter
+      .split(/\n\s*\n/)
+      .filter(isMeaningfulPromptParagraph)
+      .map(cleanTooltipText)
+      .find(Boolean) || ""
+  );
+}
+
+function isMeaningfulPromptParagraph(paragraph) {
+  const trimmed = paragraph.trim();
+  return Boolean(trimmed) && !trimmed.startsWith("#") && !/^>\s*Source:/i.test(trimmed) && !trimmed.startsWith("---");
+}
+
+function cleanTooltipText(value) {
+  return String(value || "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/[`*_~#>-]/g, " ")
+    .replace(/^\s*(?:name|description|user_invocable):\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function truncateTooltip(text) {
+  if (!text || text.length <= TOOLTIP_MAX_CHARS) return text;
+  return `${text.slice(0, TOOLTIP_MAX_CHARS - 3).trimEnd()}...`;
 }
 
 async function readChatPackPrompt(typeId, subtypeId) {

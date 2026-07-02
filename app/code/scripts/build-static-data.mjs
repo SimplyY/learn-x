@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildGraphPayload, isPublicPrivatePath } from "./static-graph.mjs";
+import { buildChatPackPromptPayload, buildContentPayload, buildGraphPayload, isPublicPrivatePath } from "./static-graph.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../..");
@@ -12,7 +12,9 @@ const dataRoot = path.join(distRoot, "data");
 
 const targetArg = process.argv.find((argument) => argument.startsWith("--target="));
 const target = targetArg?.split("=")[1] || "public";
-const graph = await buildGraphPayload({ includeContent: true, target });
+const graph = await buildGraphPayload({ includeContent: false, target });
+const content = await buildContentPayload({ target });
+const prompts = await buildChatPackPromptPayload({ target });
 const assetReferences = new Map();
 
 await rm(distRoot, { recursive: true, force: true });
@@ -23,13 +25,16 @@ await cp(publicRoot, distRoot, {
 await mkdir(dataRoot, { recursive: true });
 const graphJson = JSON.stringify(graph);
 const graphJsonPath = await writeHashedFile(dataRoot, "graph", ".json", graphJson);
+const contentJsonPath = await writeHashedFile(dataRoot, "content", ".json", JSON.stringify(content));
+const promptsJsonPath = await writeHashedFile(dataRoot, "prompts", ".json", JSON.stringify(prompts));
 const graphScriptPath = await writeHashedFile(
   dataRoot,
   "graph",
   ".js",
   [
     `window.LEARN_X_GRAPH_URL=${JSON.stringify(`data/${graphJsonPath}`)};`,
-    `window.LEARN_X_GRAPH=${graphJson};`,
+    `window.LEARN_X_CONTENT_URL=${JSON.stringify(`data/${contentJsonPath}`)};`,
+    `window.LEARN_X_PROMPTS_URL=${JSON.stringify(`data/${promptsJsonPath}`)};`,
     ""
   ].join("\n")
 );

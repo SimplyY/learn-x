@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { mergeEditableConfig, prepareChatPackEdits, writePreparedEdits } from "./chatpack-editor.mjs";
-import { buildGraphPayload, isPublicPrivatePath } from "./static-graph.mjs";
+import { buildChatPackTooltip, buildGraphPayload, extractPromptTooltipSource, isPublicPrivatePath } from "./static-graph.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../..");
@@ -35,6 +35,41 @@ test("public graph excludes private workflow material and local graph retains ca
     ...publicGraph.contextFiles.map((file) => file.path)
   ];
   assert.equal(publicPaths.some((filePath) => isPublicPrivatePath(filePath)), false);
+});
+
+test("chat pack tooltips prefer prompt purpose and clean markdown noise", () => {
+  const purpose = extractPromptTooltipSource(`# ljg-book - AI Chat Prompt
+
+> Source: .agents/skills/ljg-book/SKILL.md
+> Purpose: **以问题为轴拆书**
+
+## 使用方式
+
+把本文件整体复制到 AI Chat。
+`);
+  assert.equal(purpose, "**以问题为轴拆书**");
+  assert.equal(buildChatPackTooltip("拆解一本书", purpose), "拆解一本书 以问题为轴拆书");
+
+  const description = extractPromptTooltipSource(`---
+name: sample
+description: "Use this skill to deconstruct a book into its core question."
+---
+
+# sample
+
+First paragraph.
+`);
+  assert.equal(description, "Use this skill to deconstruct a book into its core question.");
+
+  const fallback = extractPromptTooltipSource(`# sample
+
+## Heading
+
+第一段正文，带 **加粗**、[链接](https://example.com) 和 \`code\`。
+`);
+  assert.equal(fallback, "第一段正文，带 加粗 、链接 和 code 。");
+
+  assert.equal(buildChatPackTooltip("x".repeat(260)).length, 200);
 });
 
 test("editor preserves immutable fields while updating order and editable content", () => {
