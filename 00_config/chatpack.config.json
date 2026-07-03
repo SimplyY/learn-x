@@ -25,6 +25,21 @@
       "outputGoal": "把知识、材料和经验变成理解、结构与洞察。",
       "subtypes": [
         {
+          "id": "learning-insight.ljg-learn",
+          "name": "ljg-learn",
+          "summary": "多角度拆解一个概念。"
+        },
+        {
+          "id": "learning-insight.ljg-read",
+          "name": "ljg-read",
+          "summary": "通过翻译、注释、提问与洞见进行伴读。"
+        },
+        {
+          "id": "learning-insight.ljg-roundtable",
+          "name": "ljg-roundtable",
+          "summary": "多角色圆桌讨论推进复杂议题。"
+        },
+        {
           "id": "learning-insight.book-decode",
           "name": "读书 with ai",
           "summary": "书魂捕手、书的结构、X 光阅读。"
@@ -148,11 +163,6 @@
       "outputGoal": "复用李继刚 Skill 的思考、学习、表达和研究能力，快速生成可交给 AI 的 Chat Pack。",
       "subtypes": [
         {
-          "id": "ljg-skills.ljg-learn",
-          "name": "ljg-learn",
-          "summary": "多角度拆解一个概念。"
-        },
-        {
           "id": "ljg-skills.ljg-book",
           "name": "ljg-book",
           "summary": "以问题为轴拆书。"
@@ -161,11 +171,6 @@
           "id": "ljg-skills.ljg-rank",
           "name": "ljg-rank",
           "summary": "给领域降秩，找最小生成器。"
-        },
-        {
-          "id": "ljg-skills.ljg-roundtable",
-          "name": "ljg-roundtable",
-          "summary": "多角色圆桌讨论推进复杂议题。"
         },
         {
           "id": "ljg-skills.ljg-writes",
@@ -196,11 +201,6 @@
           "id": "ljg-skills.ljg-invest",
           "name": "ljg-invest",
           "summary": "判断一个项目是否在创造新秩序。"
-        },
-        {
-          "id": "ljg-skills.ljg-read",
-          "name": "ljg-read",
-          "summary": "通过翻译、注释、提问与洞见进行伴读。"
         },
         {
           "id": "ljg-skills.ljg-relationship",
