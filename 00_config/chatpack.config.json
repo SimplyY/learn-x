@@ -58,6 +58,11 @@
           "id": "learning-insight.ljg-travel",
           "name": "ljg-travel",
           "summary": "城市文化研究、旅行卡片、深度漫游。"
+        },
+        {
+          "id": "learning-insight.munger-soul",
+          "name": "芒格之魂",
+          "summary": "以芒格之魂作为子类型 Prompt，用多元模型、反过来想和长期理性展开问题。"
         }
       ],
       "avoid": [
@@ -255,11 +260,6 @@
           "name": "空提示词",
           "summary": "不加入大类或子类型约束，只装配问题、上下文和可选增强器。",
           "emptyPrompt": true
-        },
-        {
-          "id": "other-prompts.munger-soul",
-          "name": "芒格之魂",
-          "summary": "以芒格之魂作为子类型 Prompt，用多元模型、反过来想和长期理性展开问题。"
         }
       ],
       "avoid": [
