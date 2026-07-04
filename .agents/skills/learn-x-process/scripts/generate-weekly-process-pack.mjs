@@ -1,13 +1,13 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { currentIsoWeek, writeWeeklyInput } from "./collect-weekly-input.mjs";
+import { defaultWeeklyReviewWeek, writeWeeklyInput } from "./collect-weekly-input.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
 
 export async function generateWeeklyProcessPack(options = {}) {
-  const week = options.week || currentIsoWeek();
+  const week = options.week || defaultWeeklyReviewWeek();
   const { payload } = await writeWeeklyInput({ week });
   const sourceSummaries = buildSourceSummaries(payload);
   const fileSummaries = buildFileSummaries(payload);

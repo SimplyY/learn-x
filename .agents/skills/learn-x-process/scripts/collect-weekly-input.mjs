@@ -10,7 +10,7 @@ const supportedExtensions = new Set([".md", ".txt", ".json", ".html", ".htm"]);
 const ignoredFileNames = new Set(["README.md", ".gitkeep"]);
 
 export async function collectWeeklyInput(options = {}) {
-  const week = options.week || currentIsoWeek();
+  const week = options.week || defaultWeeklyReviewWeek();
   const weekDirectory = distWeekId(week);
   const weekInputRoot = path.join(inputRoot, weekDirectory);
   const weekPrefix = `03_input/weekly/${weekDirectory}/`;
@@ -249,7 +249,7 @@ function categoryFromPathPart(part) {
 
 function categoryFromSourceName(source) {
   if (["daily", "weekly"].includes(source)) return "log";
-  if (["build", "research", "meeting", "chat", "feedback"].includes(source)) return "action";
+  if (["build", "build-bot", "research", "meeting", "chat", "feedback"].includes(source)) return "action";
   if (["ai", "flomo", "weread", "reading", "podcast", "docs", "theme-read"].includes(source)) return "inbox";
   return "input";
 }
@@ -264,12 +264,46 @@ function distWeekId(weekId) {
 }
 
 export function currentIsoWeek(date = new Date()) {
-  const target = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  return isoWeekFromShanghaiDate(shanghaiDateParts(date));
+}
+
+export function defaultWeeklyReviewWeek(date = new Date()) {
+  const shanghai = shanghaiDateParts(date);
+  const target = shanghai.weekday >= 6 ? shanghai : shiftShanghaiDate(shanghai, -7);
+  return isoWeekFromShanghaiDate(target);
+}
+
+function isoWeekFromShanghaiDate(parts) {
+  const target = new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
   const day = target.getUTCDay() || 7;
   target.setUTCDate(target.getUTCDate() + 4 - day);
   const yearStart = new Date(Date.UTC(target.getUTCFullYear(), 0, 1));
   const week = Math.ceil(((target - yearStart) / 86400000 + 1) / 7);
-  return `${target.getUTCFullYear()}-${String(week).padStart(2, "0")}`;
+  return `${target.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+
+function shanghaiDateParts(date) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const year = Number(values.year);
+  const month = Number(values.month);
+  const day = Number(values.day);
+  const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay() || 7;
+  return { year, month, day, weekday };
+}
+
+function shiftShanghaiDate(parts, days) {
+  const date = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + days));
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth() + 1;
+  const day = date.getUTCDate();
+  const weekday = date.getUTCDay() || 7;
+  return { year, month, day, weekday };
 }
 
 export function isoWeekRange(weekId) {

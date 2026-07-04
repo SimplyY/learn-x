@@ -3,7 +3,7 @@ import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { collectWereadWeekly, isoWeekRangeShanghai, normalizeWeek, renderMarkdown, writeWereadWeekly } from "./collect-weread-weekly.mjs";
+import { collectWereadWeekly, defaultWeeklyReviewWeek, isoWeekRangeShanghai, normalizeWeek, renderMarkdown, writeWereadWeekly } from "./collect-weread-weekly.mjs";
 
 test("normalizes week ids and calculates Shanghai boundaries", () => {
   assert.equal(normalizeWeek("2026-24"), "2026-W24");
@@ -11,6 +11,12 @@ test("normalizes week ids and calculates Shanghai boundaries", () => {
     startEpoch: 1780848000,
     endEpoch: 1781452800
   });
+});
+
+test("defaults weekly review to previous week on weekdays and current week on weekends", () => {
+  assert.equal(defaultWeeklyReviewWeek(new Date("2026-07-03T04:00:00Z")), "2026-W26");
+  assert.equal(defaultWeeklyReviewWeek(new Date("2026-07-04T04:00:00Z")), "2026-W27");
+  assert.equal(defaultWeeklyReviewWeek(new Date("2026-07-06T04:00:00Z")), "2026-W27");
 });
 
 test("collects only highlights and thoughts inside the requested week", async () => {

@@ -23,10 +23,12 @@ Sources are ordered by reliability; stop if the first 3 are all empty.
 1. **Bridge logs** — Elapsed-time filter match the last 7 days:
    `$LARK_CHANNEL_HOME/profiles/$LARK_CHANNEL_PROFILE/logs/bridge-*.jsonl`
    Extract `preview`, `sender`, `event` from `phase=intake`.
-   If no logs file exists for the window, note it in appendix.
+   If the env vars are missing or no logs file exists for the window, note it
+   in appendix. Do not guess or scan `.lark-channel` profiles automatically.
 2. **Codex memories** — Read raw_memories.md and memory_summary.md:
    `$CODEX_HOME/memories/raw_memories.md`
    `$CODEX_HOME/memories/memory_summary.md`
+   If `$CODEX_HOME` is unset, default to `~/.codex`.
    Extract task descriptions, outcomes, and reusable knowledge.
 3. **Feishu message search** — Query the current group chat:
    ```bash
@@ -135,7 +137,8 @@ After writing, update `scripts/build-bot-memory.json`:
 1. Resolve target week from `--week` flag or current date
 2. Read bridge logs at `$LARK_CHANNEL_HOME/profiles/$LARK_CHANNEL_PROFILE/logs/`
 3. Read Codex memories at `$CODEX_HOME/memories/`
-4. Search Feishu group messages (this chat: oc_846411e4168e681d7f7b491c837163fd)
+4. Search Feishu group messages (this chat: oc_846411e4168e681d7f7b491c837163fd;
+   this is also the CLI default when `--chat-id` is omitted)
 5. Git diff + status in learn-x working directory
 6. Base workflow list
 7. Read existing build.md for dedup

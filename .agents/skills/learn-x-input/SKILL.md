@@ -43,4 +43,4 @@ Render all seven days from the weekly `readTimes` buckets, including zero-minute
 
 ## Script
 
-Use `scripts/collect-weread-weekly.mjs`. It accepts `--week YYYY-Www`; without it, it uses the current ISO week in `Asia/Shanghai`.
+Use `scripts/collect-weread-weekly.mjs`. It accepts `--week YYYY-Www`; without it, it uses the Learn-X weekly review default in `Asia/Shanghai`: Monday through Friday target the previous ISO week, Saturday and Sunday target the current ISO week. Weekly automation should still pass the resolved target week explicitly.

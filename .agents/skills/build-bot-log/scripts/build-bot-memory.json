@@ -1,26 +1,43 @@
 {
   "version": "1.0.0",
-  "lastRun": "2026-07-02 22:36",
-  "lastCoverage": "2026-06-26..2026-07-02",
+  "lastRun": "2026-07-04 13:00:00",
+  "lastCoverage": "2026-06-28..2026-07-04",
   "lastWeek": "2026-W27",
   "checkedSources": {
-    "bridgeLogs": { "available": true, "reason": "198 intake entries found" },
-    "codexMemories": { "available": true, "reason": "memories available (raw_memories.md empty)" },
-    "feishuMessages": { "available": true, "reason": "14 messages in this chat" },
-    "gitChanges": { "available": false, "reason": "no commits in window" },
-    "baseWorkflows": { "available": false, "reason": "no --base-token provided" }
+    "bridgeLogs": {
+      "available": true,
+      "reason": "7 log files for 2026-06-28..2026-07-04 under LARK_CHANNEL_HOME/profiles/deep/logs/, 28+ intake events in learn-x group"
+    },
+    "codexMemories": {
+      "available": false,
+      "reason": "deep profile memory_stage1 jobs all failed due to missing model alias gpt-5.4-mini in MoonBridge; fixed by adding 5 route aliases to ark-code-latest + reset jobs to pending; memories will generate on next worker run"
+    },
+    "feishuMessages": {
+      "available": true,
+      "reason": "extracted from bridge intake logs for learn-x group (oc_846411e4...)"
+    },
+    "gitChanges": {
+      "available": true,
+      "reason": "6 commits (74126c5..0b4d4a0) in learn-x window"
+    },
+    "baseWorkflows": {
+      "available": false,
+      "reason": "no --base-token provided"
+    }
   },
-  "lastConclusions": [
-    "bot 完成了从单群回复到多入口工程的跃迁，覆盖 6+ 项目入口",
-    "60% 任务可在飞书内闭环，40% 需桌面接力",
-    "最缺：可持久化的 bot 记忆/日志系统"
+  "keyConclusions": [
+    "Chat Pack 分类重组：4 个高频 prompt（ljg-learn/read/roundtable、芒格之魂）移入高频使用，build+push 完成",
+    "group-info skill 增加中文强制逻辑（hasChinese），无 description_zh 时标记需补充",
+    "long-read skill 针对阮一峰周刊格式迭代，合并 read-x 版本为全局唯一",
+    "wisdom-gate skill 迁移至 research-x，群信息同步更新",
+    "MoonBridge deep profile 记忆管道修复：Codex memory_stage1 因模型名 404 全部失败，添加 gpt-5.x 系列路由别名到 ark-code-latest 后恢复"
   ],
-  "lastGaps": [
-    "Codex memories 为空（raw_memories.md, memory_summary.md, ad_hoc_notes 均不可用）",
-    "飞书群消息仅限本群（research-x, invest-log, life-x 等群不可查）",
-    "Git 无提交，Base 工作流不可查（缺 --base-token）"
+  "gapsFound": [
+    "learn-x-input、learn-x-prompt-review、build-bot-log 等 skill 缺 description_zh",
+    "skills 目录自动软链同步只有 AGENTS.md 说明，未落地自动化脚本",
+    "飞书多维表格字段变更保护规则未内化到代码",
+    "MoonBridge 配置持久化在 SQLite（不重读 yml），改配置需同步更新 DB",
+    "Codex memory worker 需要桌面应用活跃才调度，bridge-only 会话无法主动触发记忆提炼"
   ],
-  "nextAvoidRepeat": [
-    "bridge 日志解析不再当作新问题——已修复 timestamp 格式"
-  ]
+  "nextIterationSuggestion": "补 skill 中文描述；skills 软链自动同步脚本落地；多维表格危险操作加二次确认；MoonBridge 配置变更流程文档化；考虑 bridge 空闲时主动触发 memory consolidation"
 }
