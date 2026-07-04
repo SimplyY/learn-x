@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
 const API_URL = "https://i.weread.qq.com/api/agent/gateway";
-const SKILL_VERSION = "1.0.3";
+const SKILL_VERSION = "1.0.4";
 const KEYCHAIN_SERVICE = "learn-x-weread-api-key";
 const SHANGHAI_OFFSET_SECONDS = 8 * 60 * 60;
 const execFileAsync = promisify(execFile);
@@ -18,7 +18,7 @@ export async function collectWereadWeekly(options = {}) {
     throw new Error(`WeRead API Key is not configured. Set WEREAD_API_KEY or store it in macOS Keychain service ${KEYCHAIN_SERVICE}.`);
   }
 
-  const week = normalizeWeek(options.week || currentShanghaiIsoWeek());
+  const week = normalizeWeek(options.week || defaultWeeklyReviewWeek());
   const range = isoWeekRangeShanghai(week);
   const callApi = options.callApi || ((payload) => callWereadApi(payload, apiKey));
   const [notebooks, readingDetail, shelf] = await Promise.all([
@@ -198,7 +198,8 @@ async function callWereadApi(payload, apiKey) {
 
   const data = await response.json();
   if (data.upgrade_info) {
-    throw new Error(data.upgrade_info.message || "The WeRead Skill must be upgraded before retrying.");
+    const suffix = data.upgrade_info.upgrade_url ? ` Upgrade URL: ${data.upgrade_info.upgrade_url}` : "";
+    throw new Error(`${data.upgrade_info.message || "The WeRead Skill must be upgraded before retrying."}${suffix}`);
   }
   if (data.errcode && data.errcode !== 0) {
     throw new Error(`WeRead API error ${data.errcode}: ${data.errmsg || "unknown error"}`);
@@ -371,7 +372,7 @@ export function isoWeekRangeShanghai(week) {
   return { startEpoch, endEpoch: startEpoch + 7 * 24 * 60 * 60 };
 }
 
-function currentShanghaiIsoWeek(date = new Date()) {
+export function currentShanghaiIsoWeek(date = new Date()) {
   const shanghai = new Date(date.getTime() + SHANGHAI_OFFSET_SECONDS * 1000);
   const localDateAsUtc = new Date(Date.UTC(shanghai.getUTCFullYear(), shanghai.getUTCMonth(), shanghai.getUTCDate()));
   const day = localDateAsUtc.getUTCDay() || 7;
@@ -379,6 +380,45 @@ function currentShanghaiIsoWeek(date = new Date()) {
   const yearStart = new Date(Date.UTC(localDateAsUtc.getUTCFullYear(), 0, 1));
   const weekNumber = Math.ceil(((localDateAsUtc - yearStart) / 86400000 + 1) / 7);
   return `${localDateAsUtc.getUTCFullYear()}-W${String(weekNumber).padStart(2, "0")}`;
+}
+
+export function defaultWeeklyReviewWeek(date = new Date()) {
+  const shanghai = shanghaiDateParts(date);
+  const target = shanghai.weekday >= 6 ? shanghai : shiftShanghaiDate(shanghai, -7);
+  return isoWeekFromShanghaiParts(target);
+}
+
+function isoWeekFromShanghaiParts(parts) {
+  const target = new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
+  const day = target.getUTCDay() || 7;
+  target.setUTCDate(target.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(target.getUTCFullYear(), 0, 1));
+  const weekNumber = Math.ceil(((target - yearStart) / 86400000 + 1) / 7);
+  return `${target.getUTCFullYear()}-W${String(weekNumber).padStart(2, "0")}`;
+}
+
+function shanghaiDateParts(date) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const year = Number(values.year);
+  const month = Number(values.month);
+  const day = Number(values.day);
+  const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay() || 7;
+  return { year, month, day, weekday };
+}
+
+function shiftShanghaiDate(parts, days) {
+  const date = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + days));
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth() + 1;
+  const day = date.getUTCDate();
+  const weekday = date.getUTCDay() || 7;
+  return { year, month, day, weekday };
 }
 
 function formatShanghaiDate(timestamp) {

@@ -1,5 +1,6 @@
 import { readFile, writeFile, mkdir, access } from "node:fs/promises";
 import path from "node:path";
+import os from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -10,6 +11,8 @@ const skillRoot = path.resolve(__dirname, "..");
 const repoRoot = path.resolve(skillRoot, "../../../..");
 const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
 const COVERAGE_DAYS = 7;
+const DEFAULT_CODEX_HOME = path.join(os.homedir(), ".codex");
+const DEFAULT_CHAT_ID = "oc_846411e4168e681d7f7b491c837163fd";
 
 // ── helpers ──────────────────────────────────────────────────────────
 
@@ -145,8 +148,7 @@ if (ev.phase === "intake" && tsEpoch !== null && tsEpoch >= range.startEpoch) {
 }
 
 async function collectCodexMemories(range) {
-  const codexHome = process.env.CODEX_HOME;
-  if (!codexHome) return { available: false, reason: "CODEX_HOME not set", rawMemories: null, memorySummary: null };
+  const codexHome = process.env.CODEX_HOME || DEFAULT_CODEX_HOME;
 
   const memoriesDir = path.join(codexHome, "memories");
   const rawPath = path.join(memoriesDir, "raw_memories.md");
@@ -169,7 +171,7 @@ async function collectCodexMemories(range) {
   } catch { /* no ad-hoc notes */ }
 
   const available = rawMemories !== null || memorySummary !== null;
-  return { available, reason: available ? "memories available" : "no memory files found", rawMemories, memorySummary, adHocNotes };
+  return { available, reason: available ? `memories available (${codexHome})` : `no memory files found (${codexHome})`, rawMemories, memorySummary, adHocNotes };
 }
 
 async function collectFeishuMessages(range, chatId) {
@@ -232,7 +234,7 @@ export async function generateBuildBot(options = {}) {
   const week = normalizeWeek(options.week || currentShanghaiIsoWeek());
   const runDate = new Date();
   const range = coverageRange(runDate);
-  const chatId = options.chatId || process.env.LARK_CHANNEL_CHAT_ID || "";
+  const chatId = options.chatId || process.env.LARK_CHANNEL_CHAT_ID || DEFAULT_CHAT_ID;
   const baseToken = options.baseToken || process.env.BUILD_BOT_BASE_TOKEN || "";
   const dryRun = options.dryRun || false;
 

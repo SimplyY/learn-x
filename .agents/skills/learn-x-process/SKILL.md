@@ -47,7 +47,7 @@ Learn-X 的 `Input -> Process Pack -> Output Shell` 工作流。
 ## 标准流程
 
 1. 先理解 `03_input/usage.md` 和 `04_output/usage.md` 的阶段边界：本 Skill 只负责生成 `_dist` 和 Output 最小壳，不代写正文。
-2. 用户把本周重要材料直接放入 `03_input/weekly/YYYY-Www/*.md`。常用文件为 `daily.md`、`weekly.md`、`ai.md`、`flomo.md`、`weread.md`、`build.md`、`research.md`。
+2. 用户把本周重要材料直接放入 `03_input/weekly/YYYY-Www/*.md`。常用文件为 `daily.md`、`weekly.md`、`ai.md`、`flomo.md`、`weread.md`、`build.md`、`build-bot.md`、`research.md`。
 3. 如需新建周目录，复制 `03_input/weekly/00_template/` 的 Markdown 文件。
 4. 用户日常可以直接要求 Codex「调用 learn-x-process，处理本周输入，生成 Weekly Output Dist」。
 5. Skill 内部先调用确定性脚本：
@@ -55,6 +55,8 @@ Learn-X 的 `Input -> Process Pack -> Output Shell` 工作流。
    ```bash
    npm run process:weekly
    ```
+
+   未传 `--week` 时，脚本按 `Asia/Shanghai` 自动选择周报目标：周一至周五默认上一 ISO 周，周六、周日默认当前 ISO 周。用户或自动化已经解析出目标周时，必须显式传 `--week YYYY-Www`，确保阶段 1 / 2 / 3 使用同一周。
 
    如需指定周：
 
@@ -79,6 +81,8 @@ Learn-X 的 `Input -> Process Pack -> Output Shell` 工作流。
    ```bash
    npm run memory:weekly
    ```
+
+   未传 `--week` 时使用同一套周报目标选择规则；自动化阶段 3 应优先传入前序阶段保存的目标周。
 
    Monthly / Yearly 可调用：
 

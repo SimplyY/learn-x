@@ -17,11 +17,16 @@ npm run process:weekly -- --week 2026-W27
 npm run memory:weekly -- --week 2026-W27
 ```
 
-只运行当前阶段需要的命令。线上采集 daily / Flomo / weekly 时，必须加载 `web-access`，并在通过下方 Chrome CDP 前置检查后再操作。
+先按“目标周选择”解析出唯一目标周，再只运行当前阶段需要的命令。线上采集 daily / Flomo / weekly 时，必须加载 `web-access`，并在通过下方 Chrome CDP 前置检查后再操作。
 
 ## 启动规则
 
-1. 除非用户指定周，目标周为 `Asia/Shanghai` 下刚结束的上一 ISO 周，格式使用 `YYYY-Www`。
+1. 目标周选择：
+   - 用户明确指定 `YYYY-Www`、`本周`、`这周`、`上周` 时，按用户指定。
+   - 未指定时，按 `Asia/Shanghai` 当前日期自动判断：周一至周五默认上一 ISO 周；周六、周日默认当前 ISO 周。
+   - 周三至周五自动选上一周时，必须在汇报中提示：现在仍是周中，默认处理上一周；如果要提前写本周，需要明确说“本周”或指定 `YYYY-Www`。
+   - 周六、周日自动选当前周时，视为提前写当周；允许输入只覆盖截至运行时，但必须报告未来日期或缺失日期，不得声称整周已完整结束。
+   - 格式统一使用 `YYYY-Www`。
 2. 执行前读取仓库当前说明：
    - `03_input/usage.md`
    - `03_input/README.md`
@@ -44,6 +49,7 @@ npm run memory:weekly -- --week 2026-W27
 - 用户说 `继续`、`周记和 AI 摘要已完成`、`继续采集周记` 或同义表达：对同一目标周执行阶段 2。
 - 用户说 `继续记忆`、`报告已完成，写入记忆`、`Memorize`，或确认 Output / 芒格洞察 / 图片 / 公众号发布已完成：对同一目标周执行阶段 3。
 - 不猜测人工项已经完成。到阶段门槛就停。
+- 同一轮自动化中，阶段 1 / 2 / 3 必须使用同一个已解析目标周；不要在后续阶段重新按当天日期推断。
 
 ## 阶段 1：输入采集
 
@@ -54,6 +60,8 @@ npm run memory:weekly -- --week 2026-W27
    - 飞书日记：通过 Chrome CDP 使用已登录状态。必须先取得真实完整字段表头和 field id 映射，再获取目标周日记多维表格 records。无法验证表头时停止该来源；不得猜字段名，不得用旧文件补齐。写入 `daily.md`，保留来源、日期范围、采集时间和字段 provenance。
    - Flomo：通过 Chrome CDP 使用已登录线上页面或 API。持续加载到覆盖目标周下界。只把目标周笔记按时间正序写入 `flomo.md`。不得只取首屏，不得用旧本地导出替代。
    - 微信读书：按 `learn-x-input` 执行 `npm run input:weread -- --week YYYY-Www`。验证输出保留目标周、Asia/Shanghai 范围、生成时间、阅读统计、进度快照、个人划线和想法，并包含完整 7 天，包括 0 分钟日期。
+   - 飞书机器人 Build 复盘：按 `build-bot-log` 执行，生成或追加 `build-bot.md`。如果目标周已有有效 `build-bot.md`，核对覆盖期和来源后可复用；不要和桌面 `build.md` 合并。
+   - 如果目标周是周六、周日自动判定的当前周提前稿，以上来源可以只覆盖截至运行时；文件和汇报必须标出缺失日期 / 未来日期。
 3. 阶段 1 不采集飞书周记。
 4. 阶段 1 不生成 `_dist`，不创建或改写最终 Weekly Output。
 5. 不访问 AI Chat 或 ChatGPT 历史。不创建、覆盖或编辑 `ai.md`。
@@ -72,9 +80,11 @@ npm run memory:weekly -- --week 2026-W27
    - `daily.md`
    - `flomo.md`
    - `weread.md`
+   - `build-bot.md`
    - `weekly.md`
    - `ai.md`
-4. `build.md` 属于单独的 `Learn-X 每周「 Codex Build 复盘」` 自动化。本流程不得创建、改写或追加 `build.md`。如果已有有效 `build.md`，`learn-x-process` 可以纳入处理。
+   对周六、周日提前写当周的场景，允许自动来源是截至运行时的部分覆盖，但 `weekly.md` 和 `ai.md` 仍必须是目标周真实回顾内容。
+4. `build.md` 属于单独的 `Learn-X 每周「 Codex Build 复盘」` 自动化。本流程不得创建、改写或追加 `build.md`。如果已有有效 `build.md`，`learn-x-process` 可以纳入处理。`build-bot.md` 由本流程通过 `build-bot-log` 处理。
 5. 运行：
 
    ```bash

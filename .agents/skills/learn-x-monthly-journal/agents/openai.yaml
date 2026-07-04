@@ -1,0 +1,4 @@
+interface:
+  display_name: "Learn-X Monthly Journal"
+  short_description: "从飞书周记生成月记基础草稿并安全写回空白占位内容草案"
+  default_prompt: "从飞书周记生成上个月月记基础版，并只补空白或占位内容。"

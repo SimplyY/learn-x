@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { currentIsoWeek } from "./collect-weekly-input.mjs";
+import { defaultWeeklyReviewWeek } from "./collect-weekly-input.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
@@ -10,7 +10,7 @@ const weeklyRoot = path.join(repoRoot, "04_output/weekly");
 const explicitSignals = ["进入记忆", "继续追踪", "重要", "保留", "确认"];
 
 export async function prepareWeeklyMemory(options = {}) {
-  const week = normalizeWeekId(options.week || currentIsoWeek());
+  const week = normalizeWeekId(options.week || defaultWeeklyReviewWeek());
   const quarter = quarterFromIsoWeek(week);
   const weeklyPath = path.join(weeklyRoot, `${outputWeekFileId(week)}.md`);
   const content = await readFile(weeklyPath, "utf8");
