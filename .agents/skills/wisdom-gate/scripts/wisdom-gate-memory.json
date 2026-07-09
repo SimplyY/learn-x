@@ -1,4 +1,29 @@
 {
   "schema": "wisdom-gate-run-memory",
-  "runs": []
+  "runs": [
+    {
+      "action": "failed",
+      "error": "MoonBridge failed after 3 attempts: MoonBridge status=undefined",
+      "text": "云南，地处中国西南边陲，连接中原、藏区与东南亚、南亚。它的历史，是一部多民族共生、贸易往来、文化交融与王朝治理不断演进的历史。包含历史脉络（先秦-西汉/汉-南北朝/隋-唐/宋-元/元代/明-清/近现代）、多民族共生（汉族白族彝族傣族纳西族哈尼族藏族苗族壮族）、茶马古道（连接世界的古老通道）、文化遗产（大理古城、丽江古城、石林、西双版纳傣族园、建水古城）、云南历史特点等内容。一句话理解云南历史：云南",
+      "timestamp": "2026-07-04T05:40:47.175Z"
+    },
+    {
+      "action": "failed",
+      "error": "MoonBridge failed after 3 attempts: MoonBridge status=undefined: {\"message\":\"upstream error: Post \\\"https://ark.cn-beijing.volces.com/api/coding/v1/messages\\\": http2: timeout awaiting response headers\",\"type\":\"server_error\",\"code\":\"provider_error\"}",
+      "text": "云南，地处中国西南边陲，连接中原、藏区与东南亚、南亚。它的历史，是一部多民族共生、贸易往来、文化交融与王朝治理不断演进的历史。\n\n历史脉络（七个时期）：\n- 先秦—西汉（远古—前206）：滇国兴起，青铜文化发达，滇池区域文明\n- 汉—南北朝（前206—581）：中原王朝进入，西南夷体系，初步设郡管辖\n- 隋—唐（581—907）：南诏崛起，与唐朝互动，多元文化融合\n- 宋—元（960—1368）：",
+      "timestamp": "2026-07-04T05:43:36.432Z"
+    },
+    {
+      "action": "failed",
+      "error": "MoonBridge failed after 3 attempts: MoonBridge status=undefined: {\"message\":\"upstream error: Post \\\"https://ark.cn-beijing.volces.com/api/coding/v1/messages\\\": http2: timeout awaiting response headers\",\"type\":\"server_error\",\"code\":\"provider_error\"}",
+      "text": "云南，地处中国西南边陲，连接中原、藏区与东南亚、南亚。它的历史，是一部多民族共生、贸易往来、文化交融与王朝治理不断演进的历史。\n\n历史脉络（七个时期）：\n- 先秦—西汉（远古—前206）：滇国兴起，青铜文化发达，滇池区域文明\n- 汉—南北朝（前206—581）：中原王朝进入，西南夷体系，初步设郡管辖\n- 隋—唐（581—907）：南诏崛起，与唐朝互动，多元文化融合\n- 宋—元（960—1368）：",
+      "timestamp": "2026-07-04T05:45:32.691Z"
+    },
+    {
+      "action": "failed",
+      "error": "Command failed: lark-cli base +record-upload-attachment --base-token W6NLbDh1YahvZ9sbjIccEirBnae --table-id tblMGGWdVH4Iq9Og --record-id recvoQZiK6BuEF --field-id fld9P7V5uC --file \"/var/folders/d4/gvvccdfx3936rcr8_ddt6f300000gn/T/wg-img-qT4a7H/40a9d2dd0449d6b0f88278e71efb32f446c3bae6011ca9fce49e5d9ba38dea6f.jpg\" --format json 2>/dev/null",
+      "text": "请分析这张图中的认知内容。",
+      "timestamp": "2026-07-09T06:11:11.629Z"
+    }
+  ]
 }

@@ -7,6 +7,7 @@ description: >-
   the weekly Sunday 9pm Base workflow reminder. Collects evidence from bridge
   logs, Codex memories, Feishu message search, Git diff, Base workflows, and
   Skill changes. Not related to desktop build.md.
+description_zh: 飞书机器人 / Code X Bot 每周 Build 复盘报告生成
 ---
 
 # Build Bot Log — 每周飞书机器人 Build 复盘
