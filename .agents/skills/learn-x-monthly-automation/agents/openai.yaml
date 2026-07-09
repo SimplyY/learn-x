@@ -1,0 +1,4 @@
+interface:
+  display_name: "Learn-X 月度自动化"
+  short_description: "执行月度输入、月报与记忆流程"
+  default_prompt: "Use $learn-x-monthly-automation 处理 Learn-X 2026-06 月度输入、月报与记忆流程；阶段 1 只补空字段，不覆盖已有内容。"

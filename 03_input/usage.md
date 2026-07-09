@@ -15,7 +15,7 @@
 | Health-X 健康周报 | `health.md` | Health-X 完成飞书周报同步后自动生成 |
 | AI 对话摘要 | `ai.md` | 用户使用指定提示词手动生成 |
 | Codex / Code X 构建复盘 | `build.md` | 专项自动化或人工补充 |
-| 飞书机器人 Build 复盘 | `build-bot.md` | 每周输入自动采集调用 `build-bot-log` |
+| 飞书机器人 Build 复盘 | `build-bot.md` | 飞书机器人侧生成；本地周自动化只提示自查 |
 | 调研等其他重要输入 | `research.md` 或语义清楚的 `<source>.md` | 按需补充 |
 
 `learn-x-process` 不联网采集，也不判断材料价值；它只读取指定周目录，生成 `04_output/_dist/weekly/YYYY-Www/input.json` 和 `process-pack.md`。
@@ -49,7 +49,7 @@ rm 03_input/weekly/YYYY-Www/README.md
 - `health.md` 只保存周度评分、核心数据和健康提示，不复制截图或原始医疗材料。
 - `ai.md` 由用户维护，自动化不得访问 AI Chat、创建、改写或覆盖。
 - `build.md` 由 Codex Build 专项自动化或人工补充，每周输入自动采集不处理。
-- `build-bot.md` 由 `build-bot-log` 生成或追加，记录飞书机器人 / Code X Bot 侧执行复盘。
+- `build-bot.md` 由飞书机器人侧的 `build-bot-log` 生成或追加。提前写当周时，用户需在飞书上手动执行并自查自动化链接：https://ywhome.feishu.cn/wiki/KcTcwG90OiZh3rksu0ucvwx5nFe?table=wkfVC125gMp3snTX；非提前执行时，周日飞书自动化理论上已执行，本地周自动化只提示自查。
 - 阶段 3 只处理 Output、Memory candidates 和季度 Memory，不重新采集输入，也不修改正式 `道/`、`法/`、`术/`。
 - 其他材料只有足够重要时才新增为 Markdown，不为空分类预建文件。
 

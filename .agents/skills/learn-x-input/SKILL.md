@@ -1,6 +1,7 @@
 ---
 name: learn-x-input
 description: Collect external weekly evidence into Learn-X 03_input with traceable, deterministic files. Use when importing or refreshing weekly sources such as WeRead reading activity, highlights, and personal thoughts before running learn-x-process.
+description_zh: 采集外部每周证据（微信读书等）写入 Learn-X 输入目录
 ---
 
 # Learn-X Input
