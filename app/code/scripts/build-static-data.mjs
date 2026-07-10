@@ -42,13 +42,14 @@ assetReferences.set("data/graph.js", `data/${graphScriptPath}`);
 assetReferences.set("data/graph.json", `data/${graphJsonPath}`);
 assetReferences.set("styles.css", await renameWithHash(distRoot, "styles.css"));
 assetReferences.set("app.js", await renameWithHash(distRoot, "app.js"));
+await rewriteModuleImport(path.join(distRoot, "editor.js"), "./app.js", `./${assetReferences.get("app.js")}`);
 await rewriteIndexReferences(path.join(distRoot, "index.html"), assetReferences);
 await writeFile(path.join(distRoot, ".nojekyll"), "", "utf8");
 
 if (target === "public") assertPublicArtifact(graph);
 
 console.log(
-  `Static site generated: dist/${target} (${graph.files.length} files, ${Object.keys(graph.prompts).length} prompts, ${assetReferences.size} hashed assets)`
+  `Static site generated: dist/${target} (${graph.files.length} files, ${Object.keys(prompts.subtypes).length} Chat Pack prompts, ${Object.keys(prompts.enhancers).length} enhancers, ${assetReferences.size} hashed assets)`
 );
 
 function assertPublicArtifact(graphPayload) {
@@ -87,6 +88,11 @@ async function rewriteIndexReferences(indexPath, references) {
     html = html.replaceAll(original, hashed);
   }
   await writeFile(indexPath, html, "utf8");
+}
+
+async function rewriteModuleImport(modulePath, original, replacement) {
+  const source = await readFile(modulePath, "utf8");
+  await writeFile(modulePath, source.replaceAll(original, replacement), "utf8");
 }
 
 function contentHash(content) {

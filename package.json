@@ -9,6 +9,7 @@
     "build:public": "node app/code/scripts/build-static-data.mjs --target=public",
     "build:local": "node app/code/scripts/build-static-data.mjs --target=local",
     "dev": "npm run build:local && node app/code/server.mjs",
+    "test": "node --test app/code/scripts/*.test.mjs .agents/skills/learn-x-input/scripts/*.test.mjs .agents/skills/learn-x-process/scripts/*.test.mjs",
     "snapshot": "npm run build",
     "security:scan": "node scripts/security-scan.mjs",
     "security:scan:staged": "node scripts/security-scan.mjs --staged",
