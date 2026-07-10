@@ -189,7 +189,6 @@ export async function buildGraphPayload({ includeContent = false, target = "publ
   const allFiles = await collectMarkdownFiles();
   const files = target === "public" ? allFiles.filter((file) => !isPublicPrivatePath(file.path)) : allFiles;
   const customFiles = await collectCustomContextFiles(repoRoot, { excludePrivate: target === "public" });
-  const prompts = await buildPromptMap(appConfig);
   const contextWeights = appConfig.contextWeights || fallbackContextWeights();
 
   return {
@@ -223,7 +222,6 @@ export async function buildGraphPayload({ includeContent = false, target = "publ
     customContextFiles: buildContextFiles(customFiles, contextWeights, appConfig, { includePrompts: true, includeContent }),
     contextWeights,
     domains: buildDomains(files, appConfig),
-    prompts,
     promptDirectory: appConfig.promptDirectory || "01_meta-prompts"
   };
 }
@@ -449,37 +447,6 @@ function assertUniqueId(id, ids, label) {
   if (!id) throw new Error(`Missing ${label} id`);
   if (ids.has(id)) throw new Error(`Duplicate ${label} id: ${id}`);
   ids.add(id);
-}
-
-async function buildPromptMap(appConfig) {
-  const scenarios = appConfig.learningScenarios || [];
-  const entries = await Promise.all(
-    scenarios.map(async (scenario) => {
-      try {
-        return [scenario.id, await readPrompt(scenario.id, appConfig)];
-      } catch (error) {
-        return [scenario.id, `# Prompt 加载失败\n\n${error.message}`];
-      }
-    })
-  );
-
-  return Object.fromEntries(entries);
-}
-
-async function readPrompt(id, appConfig) {
-  if (!PROMPT_ID_PATTERN.test(id)) {
-    throw new Error(`Invalid prompt id: ${id}`);
-  }
-
-  const promptDirectory = appConfig.promptDirectory || "01_meta-prompts";
-  const promptRoot = path.resolve(repoRoot, promptDirectory);
-  const absolutePath = path.resolve(promptRoot, `${id}.md`);
-
-  if (!absolutePath.startsWith(`${promptRoot}${path.sep}`)) {
-    throw new Error(`Invalid prompt path: ${id}`);
-  }
-
-  return readFile(absolutePath, "utf8");
 }
 
 function titleFromMarkdown(content, fallback) {

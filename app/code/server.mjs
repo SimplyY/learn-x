@@ -39,7 +39,7 @@ async function serveStatic(_req, res, url) {
       ".svg": "image/svg+xml",
       ".png": "image/png"
     };
-    res.writeHead(200, { "content-type": contentTypes[ext] || "application/octet-stream" });
+    res.writeHead(200, staticResponseHeaders(ext, contentTypes));
     stream.on("error", () => {
       if (!res.headersSent) res.writeHead(500);
       res.end("Unable to read file");
@@ -49,6 +49,13 @@ async function serveStatic(_req, res, url) {
     res.writeHead(404);
     res.end("Not found");
   }
+}
+
+export function staticResponseHeaders(ext, contentTypes = {}) {
+  const headers = { "content-type": contentTypes[ext] || "application/octet-stream" };
+  // ponytail: local rebuilds replace hashed assets; stale HTML must not point at deleted entries.
+  if (ext === ".html") headers["cache-control"] = "no-store";
+  return headers;
 }
 
 function shouldRebuild(changedPath) {

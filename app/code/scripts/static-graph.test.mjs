@@ -4,7 +4,13 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { mergeEditableConfig, prepareChatPackEdits, writePreparedEdits } from "./chatpack-editor.mjs";
-import { buildChatPackTooltip, buildGraphPayload, extractPromptTooltipSource, isPublicPrivatePath } from "./static-graph.mjs";
+import {
+  buildChatPackPromptPayload,
+  buildChatPackTooltip,
+  buildGraphPayload,
+  extractPromptTooltipSource,
+  isPublicPrivatePath
+} from "./static-graph.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../..");
@@ -35,6 +41,18 @@ test("public graph excludes private workflow material and local graph retains ca
     ...publicGraph.contextFiles.map((file) => file.path)
   ];
   assert.equal(publicPaths.some((filePath) => isPublicPrivatePath(filePath)), false);
+});
+
+test("Chat Pack payload keeps local period prompts out of public builds", async () => {
+  const [publicPayload, localPayload] = await Promise.all([
+    buildChatPackPromptPayload({ target: "public" }),
+    buildChatPackPromptPayload({ target: "local" })
+  ]);
+
+  assert.equal(Boolean(localPayload.subtypes["reflective-decision.weekly-output"]), true);
+  assert.equal(Boolean(publicPayload.subtypes["reflective-decision.weekly-output"]), false);
+  assert.equal(Object.keys(publicPayload.subtypes).length > 0, true);
+  assert.equal(Object.keys(publicPayload.enhancers).length > 0, true);
 });
 
 test("chat pack tooltips prefer prompt purpose and clean markdown noise", () => {
