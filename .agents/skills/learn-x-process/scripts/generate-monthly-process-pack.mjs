@@ -1,407 +1,320 @@
-import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseMonthlyWeeklyInputs } from "../../learn-x-monthly-automation/scripts/collect-monthly-weekly-inputs.mjs";
+import { collectMonthlyProcessInput, normalizeMonthId } from "./monthly-process-input.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
-const supportedExtensions = new Set([".md", ".txt", ".json", ".html", ".htm"]);
-const ignoredFileNames = new Set(["README.md", ".gitkeep"]);
+const maxPackBytes = 100 * 1024;
+const eventLimits = {
+  core: { min: 3000, max: 5000 },
+  supporting: { min: 800, max: 1500 },
+  minor: { min: 300, max: 500 }
+};
 
-async function generateMonthlyProcessPack(options = {}) {
+export async function generateMonthlyProcessPack(options = {}) {
   const months = options.months?.length ? options.months : [currentMonthId()];
   const results = [];
 
-  for (const month of months) {
-    const payload = await collectMonthlyInput(month);
+  for (const monthId of months) {
+    const payload = await collectMonthlyProcessInput(monthId);
     const outputRoot = path.join(repoRoot, "04_output/_dist/monthly", payload.month);
     await mkdir(outputRoot, { recursive: true });
-
+    const requestsPath = path.join(outputRoot, "compression-requests.json");
+    const compressedPath = path.join(outputRoot, "compressed-events.json");
     const inputPath = path.join(outputRoot, "input.json");
     const processPackPath = path.join(outputRoot, "process-pack.md");
+
+    await writeFile(requestsPath, `${JSON.stringify({
+      schemaVersion: 1,
+      month: payload.month,
+      generatedAt: payload.generatedAt,
+      requests: payload.compressionRequests.map(({ rawText: _rawText, ...request }) => request)
+    }, null, 2)}\n`, "utf8");
+
+    const compression = await loadCompression(compressedPath, payload);
+    const items = [...payload.items, ...compression.items];
+    const processPack = renderProcessPack(payload, compression, items);
+    const processPackBytes = Buffer.byteLength(processPack);
+    if (processPackBytes > maxPackBytes) {
+      throw new Error(`Monthly Process Pack is ${processPackBytes} bytes; compress supporting/minor events below ${maxPackBytes} bytes before retrying.`);
+    }
+
+    const manifest = renderManifest(payload, compression, items, processPackBytes);
+    await writeFile(inputPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    await writeFile(processPackPath, processPack, "utf8");
     const shellPath = await ensureMonthlyOutputShell(payload.month);
-
-    await writeFile(inputPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-    await writeFile(processPackPath, renderProcessPack(payload), "utf8");
-
-    results.push({ payload, inputPath, processPackPath, shellPath });
+    results.push({ payload, compression, inputPath, processPackPath, requestsPath, compressedPath, shellPath, processPackBytes });
   }
 
   return results;
 }
 
-async function collectMonthlyInput(monthId) {
-  const month = normalizeMonthId(monthId);
-  const inputDirName = inputMonthDirName(month);
-  const inputRoot = path.join(repoRoot, "03_input/monthly", inputDirName);
-  const files = await collectInputFiles(inputRoot);
-  const activeFiles = [];
-  const rawItems = [];
-
-  for (const file of files) {
-    const info = await stat(file.absolutePath);
-    const content = await readFile(file.absolutePath, "utf8");
-    const bundledSources = path.basename(file.relativePath) === "weekly-inputs.md"
-      ? parseMonthlyWeeklyInputs(content)
-      : [];
-
-    if (path.basename(file.relativePath) === "weekly-inputs.md" && !bundledSources.length) {
-      throw new Error(`月度周输入不是无损原文包，请先运行：npm run input:monthly -- --month ${month}`);
+async function loadCompression(compressedPath, payload) {
+  if (!payload.compressionRequests.length) return { items: [], omissions: [], stats: emptyCompressionStats() };
+  let document;
+  try {
+    document = JSON.parse(await readFile(compressedPath, "utf8"));
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      throw new Error(`Compression required. Fill ${path.relative(repoRoot, compressedPath)} from compression-requests.json, then rerun.`);
     }
+    throw new Error(`Invalid compressed-events.json: ${error.message}`);
+  }
+  if (document.schemaVersion !== 1 || document.month !== payload.month) {
+    throw new Error(`compressed-events.json must use schemaVersion 1 and month ${payload.month}.`);
+  }
 
-    if (bundledSources.length) {
-      for (const source of bundledSources) {
-        activeFiles.push({
-          path: source.path,
-          shortPath: `${source.week}/${source.shortPath}`,
-          bundlePath: file.relativePath,
-          category: source.category,
-          source: source.source,
-          week: source.week,
-          modifiedAt: source.modifiedAt,
-          size: source.bytes,
-          sha256: source.sha256
-        });
-        rawItems.push({
-          id: `${source.path}#1`,
-          category: source.category,
-          source: source.source,
-          week: source.week,
-          path: source.path,
-          shortPath: `${source.week}/${source.shortPath}`,
-          bundlePath: file.relativePath,
-          modifiedAt: source.modifiedAt,
-          title: titleFromContent(source.text, source.path),
-          text: source.text,
-          sha256: source.sha256
-        });
-      }
-      continue;
+  return validateCompressionDocument(document, payload);
+}
+
+export function validateCompressionDocument(document, payload) {
+
+  const requests = new Map(payload.compressionRequests.map((request) => [request.path, request]));
+  const covered = new Set();
+  const events = [];
+  for (const [index, event] of (document.events || []).entries()) {
+    if (!eventLimits[event.importance]) throw new Error(`Compression event ${event.id || index + 1} has invalid importance.`);
+    const text = String(event.text || "").trim();
+    const textBytes = Buffer.byteLength(text);
+    const limit = eventLimits[event.importance];
+    if (!text || textBytes < limit.min || textBytes > limit.max) {
+      throw new Error(`Compression event ${event.id || index + 1} must be ${limit.min}-${limit.max} UTF-8 bytes.`);
     }
-
-    const text = cleanText(parseFileContent(content, file.relativePath));
-    if (text.length < 12) continue;
-
-    activeFiles.push({
-      path: file.relativePath,
-      shortPath: shortMonthlyPath(file.relativePath, inputDirName),
-      category: categoryFromSource(sourceFromPath(file.relativePath, inputDirName)),
-      source: sourceFromPath(file.relativePath, inputDirName),
-      modifiedAt: info.mtime.toISOString(),
-      size: info.size
-    });
-
-    rawItems.push({
-      id: `${file.relativePath}#1`,
-      category: categoryFromSource(sourceFromPath(file.relativePath, inputDirName)),
-      source: sourceFromPath(file.relativePath, inputDirName),
-      path: file.relativePath,
-      shortPath: shortMonthlyPath(file.relativePath, inputDirName),
-      modifiedAt: info.mtime.toISOString(),
-      title: titleFromContent(content, file.relativePath),
-      text
+    if (!Array.isArray(event.sourcePaths) || !event.sourcePaths.length) throw new Error(`Compression event ${event.id || index + 1} has no sources.`);
+    for (const sourcePath of event.sourcePaths) {
+      const request = requests.get(sourcePath);
+      if (!request) throw new Error(`Compression event references an unrequested source: ${sourcePath}`);
+      if (event.sourceHashes?.[sourcePath] !== request.sha256) throw new Error(`Compression source hash mismatch: ${sourcePath}`);
+      covered.add(sourcePath);
+    }
+    if (!dateRangeInsideMonth(event.dateRange, payload.month)) throw new Error(`Compression event ${event.id || index + 1} is outside ${payload.month}.`);
+    events.push({
+      id: event.id || `E${String(index + 1).padStart(3, "0")}`,
+      title: String(event.title || "压缩事件").trim(),
+      category: event.category || "input",
+      source: event.source || "compressed",
+      paths: event.sourcePaths,
+      mode: "compressed",
+      importance: event.importance,
+      dateRange: event.dateRange,
+      text,
+      originalChars: event.sourcePaths.reduce((sum, sourcePath) => sum + requests.get(sourcePath).originalChars, 0),
+      outputChars: text.length
     });
   }
 
-  const items = rawItems.map((item) => ({ ...item, fingerprint: hashText(item.text), duplicateSources: [] }));
-  const uniqueCount = new Set(items.map((item) => item.fingerprint)).size;
+  const passthroughs = [];
+  for (const [index, entry] of (document.passthroughs || []).entries()) {
+    const request = requests.get(entry.sourcePath);
+    if (!request || !request.reason.startsWith("type-total-over-10kb:")) {
+      throw new Error(`Only sources from a reviewed monthly type over 10 KB may pass through: ${entry.sourcePath || index + 1}`);
+    }
+    if (entry.sourceHash !== request.sha256 || String(entry.reason || "").trim().length < 12) {
+      throw new Error(`Invalid pass-through decision: ${entry.sourcePath}`);
+    }
+    if (!dateRangeInsideMonth(entry.dateRange, payload.month)) throw new Error(`Pass-through source is outside ${payload.month}: ${entry.sourcePath}`);
+    covered.add(entry.sourcePath);
+    passthroughs.push({
+      id: entry.id || `P${String(index + 1).padStart(3, "0")}`,
+      title: String(entry.title || path.basename(entry.sourcePath)).trim(),
+      category: request.category,
+      source: request.source,
+      paths: [entry.sourcePath],
+      mode: "full-reviewed",
+      importance: "core",
+      dateRange: entry.dateRange,
+      text: request.rawText.trim(),
+      originalChars: request.originalChars,
+      outputChars: request.rawText.trim().length,
+      decisionReason: entry.reason
+    });
+  }
 
+  const omissions = [];
+  for (const omission of document.omissions || []) {
+    const request = requests.get(omission.sourcePath);
+    if (!request || omission.sourceHash !== request.sha256 || !String(omission.reason || "").trim()) {
+      throw new Error(`Invalid compression omission: ${omission.sourcePath || "unknown"}`);
+    }
+    covered.add(omission.sourcePath);
+    omissions.push(omission);
+  }
+  const missing = [...requests.keys()].filter((sourcePath) => !covered.has(sourcePath));
+  if (missing.length) throw new Error(`Compression sources not covered: ${missing.join(", ")}`);
+
+  const originalChars = payload.compressionRequests.reduce((sum, request) => sum + request.originalChars, 0);
+  const outputChars = [...events, ...passthroughs].reduce((sum, event) => sum + event.outputChars, 0);
   return {
-    month,
-    selection: {
-      mode: "month-directory",
-      path: `03_input/monthly/${inputDirName}`
-    },
-    generatedAt: new Date().toISOString(),
-    files: activeFiles,
-    items,
+    items: [...events, ...passthroughs],
+    omissions,
     stats: {
-      fileCount: activeFiles.length,
-      itemCount: rawItems.length,
-      uniqueItemCount: uniqueCount,
-      duplicateCount: rawItems.length - uniqueCount
+      sourceCount: payload.compressionRequests.length,
+      eventCount: events.length,
+      passThroughCount: passthroughs.length,
+      omissionCount: omissions.length,
+      originalChars,
+      outputChars,
+      ratio: originalChars ? Number((outputChars / originalChars).toFixed(4)) : 0
     }
   };
 }
 
-async function collectInputFiles(dir) {
-  let entries;
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch (error) {
-    if (error.code === "ENOENT") return [];
-    throw error;
-  }
-
-  const files = [];
-  for (const entry of entries) {
-    const absolutePath = path.join(dir, entry.name);
-    const relativePath = toWebPath(path.relative(repoRoot, absolutePath));
-
-    if (entry.isDirectory()) {
-      files.push(...(await collectInputFiles(absolutePath)));
-      continue;
+function renderManifest(payload, compression, items, processPackBytes) {
+  const compressionByPath = allocateCompressionBySource(compression.items, payload.compressionRequests);
+  return {
+    schemaVersion: 2,
+    month: payload.month,
+    generatedAt: payload.generatedAt,
+    selection: payload.selection,
+    typeReviews: payload.typeReviews.map((review) => {
+      const finalItems = items.filter((item) => item.source === review.type);
+      const outputBytes = finalItems.reduce((sum, item) => sum + Buffer.byteLength(item.text), 0);
+      return {
+        ...review,
+        outputBytes,
+        outputEventCount: finalItems.length,
+        ratio: review.bytes ? Number((outputBytes / review.bytes).toFixed(4)) : 0
+      };
+    }),
+    sources: payload.sources.map((source) => ({
+      ...source,
+      ...(compressionByPath.get(source.path) ? { compression: compressionByPath.get(source.path) } : {})
+    })),
+    events: items.map(({ text: _text, ...item }) => item),
+    omissions: compression.omissions,
+    stats: {
+      ...payload.stats,
+      compression: compression.stats,
+      finalEventCount: items.length,
+      finalContextChars: items.reduce((sum, item) => sum + item.outputChars, 0),
+      processPackBytes
     }
-
-    if (!entry.isFile()) continue;
-    if (entry.name.startsWith("_")) continue;
-    if (ignoredFileNames.has(entry.name)) continue;
-    if (!supportedExtensions.has(path.extname(entry.name).toLowerCase())) continue;
-
-    files.push({ absolutePath, relativePath });
-  }
-
-  return files.sort((a, b) => a.relativePath.localeCompare(b.relativePath, "zh-Hans-CN"));
+  };
 }
 
-function renderProcessPack(payload) {
-  return [
+function allocateCompressionBySource(events, requests) {
+  const requestByPath = new Map(requests.map((request) => [request.path, request]));
+  const totals = new Map();
+  for (const event of events) {
+    const eventOriginal = event.paths.reduce((sum, sourcePath) => sum + requestByPath.get(sourcePath).originalChars, 0);
+    for (const sourcePath of event.paths) {
+      const request = requestByPath.get(sourcePath);
+      const current = totals.get(sourcePath) || { eventIds: [], allocatedOutputChars: 0 };
+      current.eventIds.push(event.id);
+      current.allocatedOutputChars += Math.round(event.outputChars * request.originalChars / eventOriginal);
+      totals.set(sourcePath, current);
+    }
+  }
+  for (const [sourcePath, value] of totals) {
+    const originalChars = requestByPath.get(sourcePath).originalChars;
+    value.ratio = originalChars ? Number((value.allocatedOutputChars / originalChars).toFixed(4)) : 0;
+  }
+  return totals;
+}
+
+function renderProcessPack(payload, compression, items) {
+  const rawChars = payload.sources.reduce((sum, source) => sum + source.chars, 0);
+  const finalChars = items.reduce((sum, item) => sum + item.outputChars, 0);
+  const lines = [
     `# Learn-X Monthly Process Pack｜${payload.month}`,
     "",
-    "> 这是给用户在 AI Chat 中生成 Monthly Output 的上下文材料包，不是最终 Monthly Output。",
-    "> 本文件只保留必要来源索引和清洗正文；不要在这里做道 / 法 / 术判断。",
+    "> 这是给 AI Chat 生成 Monthly Output 的自包含上下文，不是原始 Input，也不是最终月报。",
+    "> 已移除越界时间、空占位、重复采集元数据和重复材料；压缩事件保留来源路径，完整原文仍在 `03_input/`。",
     "",
-    "## 0. 使用方式",
+    "## 1. 处理与压缩概览",
     "",
-    "1. 常规只把本文件交给 AI Chat；`input.json` 是脚本中间态，仅在排错或核查来源时使用。",
-    "2. 如需生成 Monthly Output 正文，由用户自己在 AI Chat 中使用本文件。",
-    "3. Codex / 脚本只生成 `_dist` 和 `04_output/monthly/YYYY-MM.md` 最小壳；如果 Output 文件已有内容，不覆盖。",
-    "4. 人再决定是否把正文写入 `04_output/monthly/YYYY-MM.md`，以及是否进入 Memory 或正式长期资产。",
+    `- 目标月：${payload.month}`,
+    `- 周度输入：${payload.selection.weeklyPaths.map((entry) => `\`${entry}\``).join("、")}`,
+    `- 月度独有输入：\`${payload.selection.monthlyPath}\``,
+    `- 原始来源：${payload.stats.sourceCount} 个，${rawChars} 字符`,
+    `- 确定性材料：${payload.items.length} 个，${payload.stats.deterministicOutputChars} 字符`,
+    `- 压缩来源：${compression.stats.sourceCount} 个 → ${compression.stats.eventCount} 个事件，${compression.stats.originalChars} → ${compression.stats.outputChars} 字符`,
+    `- 最终上下文正文：${items.length} 个事件，${finalChars} 字符`,
     "",
-    "## 1. 处理信息",
+    `- 排除来源：${payload.stats.excludedSourceCount} 个；详细原因见同目录 \`input.json\``,
     "",
-    `- 月份：${payload.month}`,
-    `- 月目录：\`${payload.selection.path}\``,
-    `- 选择方式：${payload.selection.mode}`,
-    `- 生成时间：${payload.generatedAt}`,
-    `- 原始文件数：${payload.stats.fileCount}`,
-    `- 有效材料数：${payload.stats.itemCount}`,
-    `- 完整保留材料数：${payload.stats.itemCount}`,
-    `- 内容唯一数（只审计，不删除）：${payload.stats.uniqueItemCount}`,
-    `- 重复内容数（只审计，不删除）：${payload.stats.duplicateCount}`,
-    `- JSON 中间材料：\`04_output/_dist/monthly/${payload.month}/input.json\``,
-    "",
-    "## 2. 来源覆盖",
-    "",
-    renderSourceCoverage(payload),
-    "",
-    "## 3. 来源索引",
-    "",
-    renderSourceIndex(payload.files, payload.items),
-    "",
-    "## 4. 材料正文",
-    "",
-    renderItems(payload.items)
-  ].join("\n");
-}
+    "## 2. 月度材料",
+    ""
+  ];
 
-function renderSourceCoverage(payload) {
-  if (!payload.files.length) return "- 本月没有读取到输入文件。";
-
-  const bySource = new Map();
-  for (const file of payload.files) {
-    const key = `${file.category}:${file.source}`;
-    if (!bySource.has(key)) {
-      bySource.set(key, { category: file.category, source: file.source, fileCount: 0, itemCount: 0, files: [] });
-    }
-    const entry = bySource.get(key);
-    entry.fileCount += 1;
-    entry.files.push(file.shortPath);
-  }
-  for (const item of payload.items) {
-    const key = `${item.category}:${item.source}`;
-    if (!bySource.has(key)) continue;
-    bySource.get(key).itemCount += 1;
-  }
-
-  const rows = [...bySource.values()].map((entry) => {
-    const files = entry.files.slice(0, 4).map((file) => `\`${file}\``).join("、");
-    return `| ${entry.category} | ${entry.source} | ${entry.fileCount} | ${entry.itemCount} | ${files} |`;
-  });
-
-  return [
-    "| 输入类型 | 来源 | 文件数 | 材料数 | 示例文件 |",
-    "| --- | --- | ---: | ---: | --- |",
-    ...rows
-  ].join("\n");
-}
-
-function renderSourceIndex(files, items) {
-  if (!files.length) return "- 本月没有读取到输入文件。";
-
-  const countsByPath = new Map();
-  for (const item of items) {
-    const entry = countsByPath.get(item.path) || { count: 0, chars: 0 };
-    entry.count += 1;
-    entry.chars += item.text.length;
-    countsByPath.set(item.path, entry);
-  }
-
-  const rows = files.map((file, index) => {
-    const entry = countsByPath.get(file.path) || { count: 0, chars: 0 };
-    return `| ${sourceFileId(index)} | ${file.week || "月度"} | ${file.category} | ${file.source} | \`${file.shortPath}\` | ${entry.count} | ${entry.chars} | ${file.sha256 ? file.sha256.slice(0, 12) : "-"} |`;
-  });
-
-  return [
-    "> source id 用于在 AI Chat 中回溯来源；完整机器字段见同目录 `input.json`。",
-    "",
-    "| source id | 周期 | 输入类型 | 来源 | 短路径 | 材料数 | 字符数 | SHA-256 |",
-    "| --- | --- | --- | --- | --- | ---: | ---: | --- |",
-    ...rows
-  ].join("\n");
-}
-
-function renderItems(items) {
-  if (!items.length) return "- 本月没有有效材料。";
-
-  return items.map((item, index) => {
-    return [
-      `### ${sourceFileId(index)}｜${item.week || "月度"}｜${item.category}｜${item.source}｜${item.shortPath}`,
+  for (const [index, item] of items.entries()) {
+    lines.push(
+      `### M${String(index + 1).padStart(3, "0")}｜${item.title}`,
       "",
-      renderTextBlock(item.text)
-    ].join("\n");
-  }).join("\n\n");
+      `- 类型：${item.category} / ${item.source}`,
+      `- 来源：${item.paths.map((entry) => `\`${entry}\``).join("、")}`,
+      ...(item.dateRange ? [`- 日期：${item.dateRange.start} 至 ${item.dateRange.end}`] : []),
+      ...(item.importance ? [`- 重要性：${importanceLabel(item.importance)}`] : []),
+      "",
+      item.text,
+      ""
+    );
+  }
+  return `${lines.join("\n").trim()}\n`;
+}
+
+function importanceLabel(importance) {
+  return ({ core: "核心", supporting: "支撑", minor: "次要" })[importance] || importance;
+}
+
+function dateRangeInsideMonth(dateRange, month) {
+  return dateRange
+    && validIsoDate(dateRange.start)
+    && validIsoDate(dateRange.end)
+    && dateRange.start.startsWith(month)
+    && dateRange.end.startsWith(month)
+    && dateRange.start <= dateRange.end;
+}
+
+function validIsoDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value))) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+function emptyCompressionStats() {
+  return { sourceCount: 0, eventCount: 0, passThroughCount: 0, omissionCount: 0, originalChars: 0, outputChars: 0, ratio: 0 };
 }
 
 async function ensureMonthlyOutputShell(month) {
   const outputPath = path.join(repoRoot, "04_output/monthly", `${month}.md`);
   await mkdir(path.dirname(outputPath), { recursive: true });
-
   let existing = "";
   try {
     existing = await readFile(outputPath, "utf8");
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
-
   if (existing.trim()) return outputPath;
-
-  const content = [
-    `# Learn-X Monthly Output｜${month}`,
-    "",
-    `> 基于 \`04_output/_dist/monthly/${month}/\` 由用户使用 AI Chat 生成正文后填入(chat pack 判断输出 + 芒格之魂)。`,
-    ""
-  ].join("\n");
-
-  await writeFile(outputPath, content, "utf8");
+  await writeFile(outputPath, `# Learn-X Monthly Output｜${month}\n\n> 基于 \`04_output/_dist/monthly/${month}/process-pack.md\` 由用户使用 AI Chat 生成正文后填入。\n`, "utf8");
   return outputPath;
-}
-
-function parseFileContent(content, filePath) {
-  const extension = path.extname(filePath).toLowerCase();
-  if (extension === ".html" || extension === ".htm") return htmlToText(content);
-  if (extension === ".json") {
-    try {
-      return JSON.stringify(JSON.parse(content), null, 2);
-    } catch {
-      return content;
-    }
-  }
-  return content;
-}
-
-function htmlToText(content) {
-  return String(content)
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
-    .replace(/<\/(p|div|section|article|li|h[1-6]|blockquote|tr)>/gi, "\n\n")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, "\"")
-    .replace(/&#39;|&apos;/gi, "'")
-    .replace(/&#(\d+);/g, (_match, code) => String.fromCodePoint(Number(code)))
-    .replace(/&#x([0-9a-f]+);/gi, (_match, code) => String.fromCodePoint(Number.parseInt(code, 16)));
-}
-
-function titleFromContent(content, filePath) {
-  const heading = String(content).match(/^#\s+(.+)$/m);
-  return heading ? heading[1].trim() : path.basename(filePath, path.extname(filePath));
-}
-
-function sourceFromPath(relativePath, inputDirName) {
-  const shortPath = shortMonthlyPath(relativePath, inputDirName);
-  if (shortPath === "monthly.md") return "monthly";
-  if (shortPath.startsWith("weekly/")) return "weekly";
-  return shortPath.split("/")[0] || "monthly";
-}
-
-function shortMonthlyPath(relativePath, inputDirName) {
-  const prefix = `03_input/monthly/${inputDirName}/`;
-  return relativePath.startsWith(prefix) ? relativePath.slice(prefix.length) : relativePath;
-}
-
-function cleanText(text) {
-  return String(text)
-    .replace(/\u0000/g, "")
-    .trim();
-}
-
-function categoryFromSource(source) {
-  const name = String(source).replace(/\.md$/, "");
-  if (["daily", "weekly", "health"].includes(name)) return "log";
-  if (["build", "build-bot", "research", "meeting", "chat", "feedback"].includes(name)) return "action";
-  if (["ai", "flomo", "weread", "reading", "podcast"].includes(name)) return "inbox";
-  return "input";
-}
-
-function hashText(text) {
-  return createHash("sha1").update(text.toLowerCase().replace(/\s+/g, "")).digest("hex").slice(0, 12);
-}
-
-function renderTextBlock(text) {
-  const longestFence = Math.max(2, ...[...text.matchAll(/`+/g)].map((match) => match[0].length));
-  const fence = "`".repeat(longestFence + 1);
-  return [fence, text, fence].join("\n");
-}
-
-function sourceFileId(index) {
-  return `F${String(index + 1).padStart(3, "0")}`;
-}
-
-function normalizeMonthId(monthId) {
-  return String(monthId).replace(/^(\d{4})-(\d{1,2})$/, (_match, year, month) => `${year}-${String(month).padStart(2, "0")}`);
-}
-
-function inputMonthDirName(monthId) {
-  return String(monthId).replace(/^(\d{4})-0?(\d{1,2})$/, "$1-$2");
 }
 
 function currentMonthId(date = new Date()) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
-function toWebPath(filePath) {
-  return filePath.split(path.sep).join("/");
-}
-
 function parseArgs(argv) {
   const options = { months: [] };
   for (let index = 0; index < argv.length; index += 1) {
-    if (argv[index] === "--month") {
-      options.months.push(argv[index + 1]);
-      index += 1;
-      continue;
-    }
-    if (argv[index] === "--months") {
-      options.months.push(...argv[index + 1].split(",").map((month) => month.trim()).filter(Boolean));
-      index += 1;
-    }
+    if (argv[index] === "--month") options.months.push(normalizeMonthId(argv[++index]));
+    if (argv[index] === "--months") options.months.push(...argv[++index].split(",").map(normalizeMonthId));
   }
   return options;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const results = await generateMonthlyProcessPack(parseArgs(process.argv.slice(2)));
-  for (const result of results) {
-    console.log(`Monthly input pack generated: ${path.relative(repoRoot, result.inputPath)}`);
-    console.log(`Monthly process pack generated: ${path.relative(repoRoot, result.processPackPath)}`);
-    console.log(`Monthly output shell ready: ${path.relative(repoRoot, result.shellPath)}`);
-    console.log(`Input files: ${result.payload.stats.fileCount}`);
-    console.log(`Complete items: ${result.payload.stats.itemCount}`);
+  try {
+    const results = await generateMonthlyProcessPack(parseArgs(process.argv.slice(2)));
+    for (const result of results) {
+      console.log(`Monthly process pack generated: ${path.relative(repoRoot, result.processPackPath)}`);
+      console.log(`Monthly audit manifest generated: ${path.relative(repoRoot, result.inputPath)}`);
+      console.log(`Process Pack: ${result.processPackBytes} bytes`);
+      console.log(`Compression: ${result.compression.stats.originalChars} -> ${result.compression.stats.outputChars} characters`);
+    }
+  } catch (error) {
+    console.error(error.message);
+    process.exitCode = 1;
   }
 }

@@ -1,7 +1,6 @@
 ---
 name: learn-x-process
 description: Process Learn-X 03_input into Process Pack and Output shell, then generate Memory candidates from reviewed Output. Use when the user asks for running weekly/monthly process, generating _dist, or preparing memory candidates.
-description_zh: 处理 Learn-X 输入为 Process Pack 和 Output 壳，生成 Memory 候选
 ---
 
 # learn-x-process
@@ -38,10 +37,10 @@ Learn-X 的 `Input -> Process Pack -> Output Shell` 工作流。
 
 - 可以读取 `03_input/weekly/YYYY-Www/` 和 `03_input/monthly/YYYY-M/` 下的手动导入材料，支持 `.md`、`.txt`、`.json`、`.html`、`.htm`。
 - Weekly Process 只读取指定周目录，不读取其它周目录，不按 mtime 推断范围。
-- Monthly Process 只读取指定月目录，不读取其它月目录，不按 mtime 推断范围。
+- Monthly Process 读取目标月相交的周目录和指定月目录；前者提供周度原始证据，后者提供月记等月度独有输入。两者都不按 mtime 推断范围。
 - 可以在 `04_output/weekly/YYYY-WW.md` 不存在或为空时创建最小壳；如果已有内容，不覆盖、不改写。
 - 可以生成中间材料 `04_output/_dist/weekly/YYYY-Www/input.json` 和 `04_output/_dist/weekly/YYYY-Www/process-pack.md`。
-- 可以生成中间材料 `04_output/_dist/monthly/YYYY-MM/input.json` 和 `04_output/_dist/monthly/YYYY-MM/process-pack.md`。
+- 可以生成 metadata-only 的 `04_output/_dist/monthly/YYYY-MM/input.json`、压缩请求和自包含的 `process-pack.md`。
 - 可以读取 `04_output/weekly/YYYY-WW.md`，抽取已勾选或明确标记的内容，生成 `04_output/_dist/weekly/YYYY-Www/memory-candidates.md`，再由 Codex 无损整理写入 `01_core/memory/YYYY-QN.memory.md`。
 - 可以读取 `04_output/monthly/YYYY-MM.md` 或 `04_output/yearly/YYYY.md`，抽取 Memory 候选包，供 Codex 无损整理写入季度或年度 Memory。
 - Weekly Output 默认不固定输出图谱、第一性原理、Prompt、Skill、写作或 Demo 候选；必要时才可在做中学复盘或下周行动中简短提及。
@@ -77,7 +76,7 @@ Learn-X 的 `Input -> Process Pack -> Output Shell` 工作流。
    node .agents/skills/learn-x-process/scripts/generate-monthly-process-pack.mjs --month 2026-01
    ```
 
-   该脚本写入 `04_output/_dist/monthly/YYYY-MM/input.json` 和 `04_output/_dist/monthly/YYYY-MM/process-pack.md`，并在 `04_output/monthly/YYYY-MM.md` 不存在或为空时创建最小壳。
+   该脚本先读取相交周和月度独有输入，执行日期过滤、空值过滤、Daily 元数据合并和去重。`ai`、`research`、`weread` 必须语义压缩；其余材料按目标月内同一类型汇总，类型合计超过 10 KB 时必须由 Codex 整体审查。高价值、高信噪比内容可以说明理由后保留，中低价值、冗余或跨周重复内容必须事件化压缩。脚本写出 `compression-requests.json` 并停止；Codex 按 `learn-x-monthly-automation/references/monthly-compression.md` 生成 `compressed-events.json` 后重跑。最终写入 metadata-only `input.json` 和不超过 100 KB 的 `process-pack.md`。
 6. Codex 报告 `_dist` 路径、Output 最小壳路径和输入缺口，不生成 Weekly Output 正文。
 7. 用户按 `04_output/usage.md`，把 `process-pack.md` 与需要的规则文件交给 AI Chat，自行生成并写入 Weekly Output 正文。
 8. Weekly Output 与“芒格之魂”洞察完成后，提示用户在 Chat Pack「判断创造」中选择“公众号贴图”。界面默认选中该 Prompt、当前周 `04_output/weekly/YYYY-WW.md`、`01_core/道/` 和 `01_core/memory/`，其它上下文不选；不要代替用户上传或发布公众号。
@@ -116,13 +115,14 @@ Weekly Output 默认围绕核心问题、做中学复盘、下周 3 件事、道
 
 Memory 必须遵守 `resources/memory-rules.md`。已勾选内容全部进入，不设数量上限；只做无损整理，不做有损压缩。已勾选道 / 法 / 术候选观察与用户确认的“芒格之魂手动洞察”统一进入季度 Memory 文件顶部对应的候选观察池，并保留来源；未勾选内容默认不写入，只作为候选池。具体用法见 `04_output/usage.md`。
 
-## 三层架构
+## 六阶段架构
 
-1. Deterministic Collector：代码只收集、清洗、去重、编号、保留来源，并写入 `input.json` 中间态。
-2. Process Pack：代码生成给 AI 读的材料包，按来源聚合正文，不做道 / 法 / 术 / Prompt / Skill 判断。
-3. Output Shell：脚本只创建 `04_output/weekly/YYYY-WW.md` 最小壳；已有内容不改。
-4. AI Chat Review：用户基于 Process Pack 和规则文件，在 AI Chat 中生成 Output 正文。
-5. Memory：人工审核后，脚本抽取确认线索，Codex 再按规则无损整理为跨期上下文。
+1. Deterministic Collector：代码收集周度与月度来源，过滤月份、空值和重复元数据，并生成压缩请求与 metadata-only `input.json`。
+2. Compression：Codex 按 Markdown 规则把长来源拆成事件并压缩；脚本校验哈希、日期、来源覆盖和体积，不在代码中调用 AI。
+3. Process Pack：代码组装给 AI 读的自包含材料包，不做道 / 法 / 术 / Prompt / Skill 判断。
+4. Output Shell：脚本只创建对应周期 Output 最小壳；已有内容不改。
+5. AI Chat Review：用户基于 Process Pack 和规则文件，在 AI Chat 中生成 Output 正文。
+6. Memory：人工审核后，脚本抽取确认线索，Codex 再按规则无损整理为跨期上下文。
 
 代码负责把混乱材料变成可信输入；AI Chat 负责辅助生成判断草稿；人负责决定什么值得写入 Output 和进入长期生命系统。
 

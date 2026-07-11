@@ -1,5 +1,11 @@
 # Learn-X
 
+
+## 核心资产
+
+- [研究&学习](https://ywhome.feishu.cn/wiki/KcTcwG90OiZh3rksu0ucvwx5nFe)
+- [learn-x](https://simplyy.github.io/learn-x/index.html#learning)
+
 > Learn-X 是我的个人认知进化系统：以「道」校准方向，以「法」形成判断，以「术」推动行动，以「器」降低成本，让 AI 成为我的剑，而不是我的茧。
 
 ## 核心目标

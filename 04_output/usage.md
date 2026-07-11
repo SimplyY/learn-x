@@ -20,7 +20,7 @@
 04_output/_dist/yearly/YYYY/process-pack.md
 ```
 
-常规只把 `process-pack.md` 交给 AI Chat。`input.json` 只在核查来源、缺口、重复或脚本结果时使用。
+常规只把 `process-pack.md` 交给 AI Chat。`input.json` 不含正文，只在核查来源、日期过滤、缺口、重复、哈希和压缩结果时使用。
 
 ## 2. 生成并写入 Output
 

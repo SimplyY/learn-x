@@ -40,7 +40,7 @@ _dist/yearly/YYYY/process-pack.md
 ## 核心文件
 
 - `process-pack.md`：默认给 AI Chat 读取的材料包，保留来源索引和清洗后的正文。
-- `input.json`：结构化中间态，用于来源审计和排错；常规不放进 AI Chat。
+- `input.json`：metadata-only 审计清单，记录来源路径、哈希、过滤、去重和压缩统计，不保存正文，也不放进 AI Chat。
 - `memory-candidates.md`：从 Output 中抽取的已确认内容候选，供 Memorize 使用。
 
 ## 边界

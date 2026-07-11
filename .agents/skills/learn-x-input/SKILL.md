@@ -1,7 +1,6 @@
 ---
 name: learn-x-input
 description: Collect external weekly evidence into Learn-X 03_input with traceable, deterministic files. Use when importing or refreshing weekly sources such as WeRead reading activity, highlights, and personal thoughts before running learn-x-process.
-description_zh: 采集外部每周证据（微信读书等）写入 Learn-X 输入目录
 ---
 
 # Learn-X Input
@@ -40,6 +39,7 @@ Render all seven days from the weekly `readTimes` buckets, including zero-minute
 - Label the mapped progress chapter as the latest current chapter. Do not claim that it is the complete list of chapters read during the week.
 - Do not collect public reviews, popular highlights, or bookmark positions without content.
 - Do not overwrite existing output unless all API requests and rendering complete successfully.
+- Reject `/readdata/detail` when any returned daily bucket falls outside the requested ISO week. Do not turn a previous-week response into a file labelled as the target week.
 - Stop when the WeRead API returns `upgrade_info`; update the installed WeRead Skill before retrying.
 
 ## Script

@@ -2,7 +2,7 @@
 
 > 本文件描述 Weekly Input 在 `_dist` 生成前的输入管理。
 
-月度输入先运行 `npm run input:monthly -- --month YYYY-MM`，确定性汇集所有与目标月相交的周度原始文件。生成的 `monthly/YYYY-M/weekly-inputs.md` 必须通过数量、类别、字节数和 SHA-256 校验；不得用摘要、引用或 Weekly Output 代替原文。月初/月末边界周作为完整证据单元保留，并在文件中披露跨月范围。
+月度 Process 直接读取相交周的原文件，并叠加 `monthly/YYYY-M/` 下的月记及其他月度独有输入。旧 `weekly-inputs.md` 不再使用。原始文件保持完整；给 AI 的月度 Process Pack 另行执行日期过滤、元数据合并、去重和受约束的事件压缩。
 
 `03_input/weekly/YYYY-Www/` 采用扁平 Markdown 结构。只保留本周确实有内容的输入文件，不预建分类目录或大量空占位。
 
