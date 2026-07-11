@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -101,6 +101,32 @@ test("writes one flat weread.md file", async () => {
     assert.equal(result.notesPath, path.join(outputRoot, "weread.md"));
     assert.deepEqual(await readdir(outputRoot), ["weread.md"]);
     assert.match(await readFile(result.notesPath, "utf8"), /# 微信读书｜2026-W25/);
+  } finally {
+    await rm(outputRoot, { recursive: true, force: true });
+  }
+});
+
+test("rejects a previous-week detail response without overwriting the existing file", async () => {
+  const outputRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-weread-range-"));
+  const notesPath = path.join(outputRoot, "weread.md");
+  await writeFile(notesPath, "keep me\n", "utf8");
+  const responses = new Map([
+    ["/user/notebooks", { hasMore: 0, books: [] }],
+    ["/readdata/detail", { totalReadTime: 60, readDays: 1, readTimes: { 1780848000: 60 } }],
+    ["/shelf/sync", { books: [] }]
+  ]);
+
+  try {
+    await assert.rejects(
+      writeWereadWeekly({
+        week: "2026-W25",
+        apiKey: "test",
+        outputRoot,
+        callApi: async ({ api_name }) => responses.get(api_name)
+      }),
+      /outside the requested week/
+    );
+    assert.equal(await readFile(notesPath, "utf8"), "keep me\n");
   } finally {
     await rm(outputRoot, { recursive: true, force: true });
   }

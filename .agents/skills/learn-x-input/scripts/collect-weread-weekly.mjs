@@ -26,6 +26,7 @@ export async function collectWereadWeekly(options = {}) {
     callApi({ api_name: "/readdata/detail", mode: "weekly", baseTime: range.startEpoch }),
     callApi({ api_name: "/shelf/sync" })
   ]);
+  assertWeeklyReadingDetail(readingDetail, range);
   const reading = await collectReadingActivity(callApi, range, readingDetail, shelf);
   const books = [];
 
@@ -72,6 +73,16 @@ export async function collectWereadWeekly(options = {}) {
     },
     books
   };
+}
+
+function assertWeeklyReadingDetail(readingDetail, range) {
+  const invalidDates = Object.keys(readingDetail.readTimes || {})
+    .map(Number)
+    .filter((timestamp) => !inRange(timestamp, range))
+    .map(formatShanghaiDate);
+  if (invalidDates.length) {
+    throw new Error(`WeRead weekly detail returned dates outside the requested week: ${[...new Set(invalidDates)].join(", ")}.`);
+  }
 }
 
 async function readApiKeyFromKeychain() {

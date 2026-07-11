@@ -12,7 +12,6 @@ description: Learn-X 月度自动化中文工作流。Use when the user asks to 
 ## 快速命令
 
 ```bash
-npm run input:monthly -- --month 2026-06
 npm run process:monthly -- --month 2026-06
 npm run memory:monthly -- 2026-06
 ```
@@ -30,9 +29,9 @@ npm run memory:monthly -- 2026-06
 2. 月度输入目录使用 `03_input/monthly/YYYY-M/`，例如 `03_input/monthly/2026-6/`。不要按文件 mtime 推断范围。
 3. 月度报告流程只生成 `_dist` 和 `04_output/monthly/YYYY-MM.md` 最小壳；不要在自动化中代写 Monthly Output 正文。
 4. 不读取、打印或保存凭据。不修改 `README.md`、`01_core/道/`、`01_core/法/`、`02_prompts/` 或无关长期资产。
-5. 月度输入只依赖 `03_input/monthly/YYYY-M/` 和其下的原始 Markdown；不要把 `04_output/weekly/` 当作月度输入来源或校验前提。
-6. “原始”是硬约束：周度源文件的数量、类别、原路径、字节数和 SHA-256 必须可核对；不得用摘要、引用列表、周报 Output 或模型改写代替原文。重复内容只报告，不删除。
-7. 月度按“与目标月相交的 ISO 周”选择周目录，并把边界周作为完整证据单元保留。不要用不可靠的自然语言切割伪造日历月精度；必须在产物中披露边界周可能含相邻月份内容。
+5. 月度原始输入同时来自 `03_input/weekly/YYYY-Www/` 和 `03_input/monthly/YYYY-M/`；后者保存月记及其他月度独有来源。不要读取 `04_output/weekly/` 代替原始输入。
+6. 原始文件完整留在 `03_input/`，不要复制成月度全文合集。`input.json` 只保存路径、哈希、处理状态和压缩统计；`process-pack.md` 才是给 AI Chat 的自包含上下文。
+7. 月度只保留目标月事件。边界周按正文日期、声明覆盖期和周记标题过滤；无法确认归属时省略并报告，不猜测。
 
 ## 阶段判断
 
@@ -48,18 +47,8 @@ npm run memory:monthly -- 2026-06
 
 1. 调用 `learn-x-monthly-journal` 仅检查并补全目标月飞书月记中的空白或占位字段。它只在存在安全空位时写入带 `【待优化】AI 基础草稿` 的内容；若目标月已存在实质性正文或不存在安全空位，则跳过写回，只报告缺口。
 2. 确保 `03_input/monthly/YYYY-M/` 存在。保留目录中已有人工内容，不覆盖已有非空文件。
-3. 确定性搜集所有与目标月相交的 `03_input/weekly/YYYY-Www/` 原始输入：
-
-   ```bash
-   npm run input:monthly -- --month YYYY-MM
-   ```
-
-   - `weekly-inputs.md`：逐文件、逐字节封装周度原文，保留周、原路径、类别、字节数和 SHA-256；禁止人工概括或让 AI 汇总。
-   - 收集器必须在写入前回读并校验来源数量、字节数和哈希；任一周目录缺失或任一来源校验失败时停止。
-   - 空文件仍作为来源保留，以便数量与类别审计；`README.md`、`.gitkeep`、下划线文件及不受支持格式按 Weekly Process 的输入规则排除。
-   - `weekly-inputs.md` 是生成文件，可重复覆盖；月度目录中的其他人工文件不得覆盖。
-   - `monthly-journal.md`：只在能安全取得飞书月记草稿或用户提供月记内容时写入；否则留待阶段 2 采集。
-4. 月度汇总只搬运和整理来源，不做道 / 法 / 术判断，不写最终月报。
+3. 检查所有与目标月相交的周目录和 `03_input/monthly/YYYY-M/`。不要生成 `weekly-inputs.md`；保留已有月度人工文件，不覆盖。
+4. 只报告来源范围、月记状态和缺口，不提前生成 Monthly Output。
 5. 停止并提示用户在飞书月记中完成目标月月记，然后回复 `继续`。
 
 阶段 1 汇报必须包含：目标月、月记草稿状态、已汇总周范围、`03_input/monthly/YYYY-M/` 路径、缺口、当前位置、下一步、再下一步。
@@ -75,23 +64,25 @@ npm run memory:monthly -- 2026-06
    ```
 
    只采集目标月 section。`monthly-journal.md` 必须保留来源 URL、标题或日期定位依据、采集时间。无法取得目标月正文时停止，不得用旧本地内容替代。
-2. 生成 `_dist` 前，验证这些目标月输入：
-   - `03_input/monthly/YYYY-M/weekly-inputs.md`
-   - `03_input/monthly/YYYY-M/monthly-journal.md`
-   - 重新解析 `weekly-inputs.md`，确认相交周、来源数量、类别、原路径、字节数和 SHA-256 全部守恒；发现旧式摘要文件、缺周、缺来源或哈希失败时停止，不生成 `_dist`。
-3. 运行：
+2. 验证 `03_input/monthly/YYYY-M/monthly-journal.md` 和所有相交周原始目录。旧 `weekly-inputs.md` 不参与处理。
+3. 首次运行：
 
    ```bash
    npm run process:monthly -- --month YYYY-MM
    ```
 
-4. 汇报：
+4. 如果命令生成 `compression-requests.json` 并停止：
+   - 完整读取 [`references/monthly-compression.md`](references/monthly-compression.md)。
+   - 逐份读取请求指向的原始文件，由 Codex 按事件和重要性生成 `compressed-events.json`。
+   - 再次运行同一个 `process:monthly` 命令；不得用脚本截断、关键词摘要或外部 AI API 代替 Codex 判断。
+5. 汇报：
    - `04_output/_dist/monthly/YYYY-MM/input.json`
    - `04_output/_dist/monthly/YYYY-MM/process-pack.md`
    - `04_output/monthly/YYYY-MM.md`
    - 已完成来源、缺口、验证结果
-   - 周度源文件总数、总字节数、类别覆盖、边界周披露，以及 Process Pack 中的材料数是否与源文件数一致
-5. 停止，等待用户进入人工 / Chat Pack 阶段。提醒用户按顺序完成：
+   - 原始、过滤后、压缩后和最终体积；各来源压缩率、事件数量、省略原因、越界与无效来源
+   - 明确说明：语义压缩由 Codex 完成，脚本只检测、校验和组装
+6. 停止，等待用户进入人工 / Chat Pack 阶段。提醒用户按顺序完成：
    - 在 Learn-X Chat Pack 中使用 Monthly Output，并选择 `process-pack.md`。
    - 在 Chat Pack 中启用 `芒格之魂`，只生成独立洞察，不重写 Monthly Output。
    - 在最终月报中补充非空的 `芒格之魂的洞察` 或同义区域。
@@ -126,6 +117,7 @@ npm run memory:monthly -- 2026-06
 ## 边界
 
 - 不自动访问 AI Chat；不在自动化中生成 Monthly Output 正文。
+- 允许 Codex 为 Process Pack 生成 `_dist` 压缩事件；这不是 Monthly Output，也不得写回原始 Input。
 - 不在自动化中生成 `芒格之魂` 洞察。
 - 不上传图片，不发布微信公众号。
 - 不写入正式 `道/`、`法/` 或 `术` 资产。
