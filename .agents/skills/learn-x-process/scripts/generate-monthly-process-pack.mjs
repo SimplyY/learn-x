@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseMonthlyWeeklyInputs } from "../../learn-x-monthly-automation/scripts/collect-monthly-weekly-inputs.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
@@ -41,12 +42,51 @@ async function collectMonthlyInput(monthId) {
   for (const file of files) {
     const info = await stat(file.absolutePath);
     const content = await readFile(file.absolutePath, "utf8");
+    const bundledSources = path.basename(file.relativePath) === "weekly-inputs.md"
+      ? parseMonthlyWeeklyInputs(content)
+      : [];
+
+    if (path.basename(file.relativePath) === "weekly-inputs.md" && !bundledSources.length) {
+      throw new Error(`月度周输入不是无损原文包，请先运行：npm run input:monthly -- --month ${month}`);
+    }
+
+    if (bundledSources.length) {
+      for (const source of bundledSources) {
+        activeFiles.push({
+          path: source.path,
+          shortPath: `${source.week}/${source.shortPath}`,
+          bundlePath: file.relativePath,
+          category: source.category,
+          source: source.source,
+          week: source.week,
+          modifiedAt: source.modifiedAt,
+          size: source.bytes,
+          sha256: source.sha256
+        });
+        rawItems.push({
+          id: `${source.path}#1`,
+          category: source.category,
+          source: source.source,
+          week: source.week,
+          path: source.path,
+          shortPath: `${source.week}/${source.shortPath}`,
+          bundlePath: file.relativePath,
+          modifiedAt: source.modifiedAt,
+          title: titleFromContent(source.text, source.path),
+          text: source.text,
+          sha256: source.sha256
+        });
+      }
+      continue;
+    }
+
     const text = cleanText(parseFileContent(content, file.relativePath));
     if (text.length < 12) continue;
 
     activeFiles.push({
       path: file.relativePath,
       shortPath: shortMonthlyPath(file.relativePath, inputDirName),
+      category: categoryFromSource(sourceFromPath(file.relativePath, inputDirName)),
       source: sourceFromPath(file.relativePath, inputDirName),
       modifiedAt: info.mtime.toISOString(),
       size: info.size
@@ -54,6 +94,7 @@ async function collectMonthlyInput(monthId) {
 
     rawItems.push({
       id: `${file.relativePath}#1`,
+      category: categoryFromSource(sourceFromPath(file.relativePath, inputDirName)),
       source: sourceFromPath(file.relativePath, inputDirName),
       path: file.relativePath,
       shortPath: shortMonthlyPath(file.relativePath, inputDirName),
@@ -63,7 +104,8 @@ async function collectMonthlyInput(monthId) {
     });
   }
 
-  const items = dedupeItems(rawItems);
+  const items = rawItems.map((item) => ({ ...item, fingerprint: hashText(item.text), duplicateSources: [] }));
+  const uniqueCount = new Set(items.map((item) => item.fingerprint)).size;
 
   return {
     month,
@@ -77,8 +119,8 @@ async function collectMonthlyInput(monthId) {
     stats: {
       fileCount: activeFiles.length,
       itemCount: rawItems.length,
-      uniqueItemCount: items.length,
-      duplicateCount: rawItems.length - items.length
+      uniqueItemCount: uniqueCount,
+      duplicateCount: rawItems.length - uniqueCount
     }
   };
 }
@@ -135,8 +177,9 @@ function renderProcessPack(payload) {
     `- 生成时间：${payload.generatedAt}`,
     `- 原始文件数：${payload.stats.fileCount}`,
     `- 有效材料数：${payload.stats.itemCount}`,
-    `- 去重后材料数：${payload.stats.uniqueItemCount}`,
-    `- 去重数量：${payload.stats.duplicateCount}`,
+    `- 完整保留材料数：${payload.stats.itemCount}`,
+    `- 内容唯一数（只审计，不删除）：${payload.stats.uniqueItemCount}`,
+    `- 重复内容数（只审计，不删除）：${payload.stats.duplicateCount}`,
     `- JSON 中间材料：\`04_output/_dist/monthly/${payload.month}/input.json\``,
     "",
     "## 2. 来源覆盖",
@@ -158,26 +201,28 @@ function renderSourceCoverage(payload) {
 
   const bySource = new Map();
   for (const file of payload.files) {
-    if (!bySource.has(file.source)) {
-      bySource.set(file.source, { fileCount: 0, itemCount: 0, files: [] });
+    const key = `${file.category}:${file.source}`;
+    if (!bySource.has(key)) {
+      bySource.set(key, { category: file.category, source: file.source, fileCount: 0, itemCount: 0, files: [] });
     }
-    const entry = bySource.get(file.source);
+    const entry = bySource.get(key);
     entry.fileCount += 1;
     entry.files.push(file.shortPath);
   }
   for (const item of payload.items) {
-    if (!bySource.has(item.source)) continue;
-    bySource.get(item.source).itemCount += 1;
+    const key = `${item.category}:${item.source}`;
+    if (!bySource.has(key)) continue;
+    bySource.get(key).itemCount += 1;
   }
 
-  const rows = [...bySource.entries()].map(([source, entry]) => {
+  const rows = [...bySource.values()].map((entry) => {
     const files = entry.files.slice(0, 4).map((file) => `\`${file}\``).join("、");
-    return `| ${source} | ${entry.fileCount} | ${entry.itemCount} | ${files} |`;
+    return `| ${entry.category} | ${entry.source} | ${entry.fileCount} | ${entry.itemCount} | ${files} |`;
   });
 
   return [
-    "| 来源 | 文件数 | 有效材料数 | 示例文件 |",
-    "| --- | ---: | ---: | --- |",
+    "| 输入类型 | 来源 | 文件数 | 材料数 | 示例文件 |",
+    "| --- | --- | ---: | ---: | --- |",
     ...rows
   ].join("\n");
 }
@@ -195,14 +240,14 @@ function renderSourceIndex(files, items) {
 
   const rows = files.map((file, index) => {
     const entry = countsByPath.get(file.path) || { count: 0, chars: 0 };
-    return `| ${sourceFileId(index)} | ${file.source} | \`${file.shortPath}\` | ${entry.count} | ${entry.chars} |`;
+    return `| ${sourceFileId(index)} | ${file.week || "月度"} | ${file.category} | ${file.source} | \`${file.shortPath}\` | ${entry.count} | ${entry.chars} | ${file.sha256 ? file.sha256.slice(0, 12) : "-"} |`;
   });
 
   return [
     "> source id 用于在 AI Chat 中回溯来源；完整机器字段见同目录 `input.json`。",
     "",
-    "| source id | 来源 | 短路径 | 材料数 | 字符数 |",
-    "| --- | --- | --- | ---: | ---: |",
+    "| source id | 周期 | 输入类型 | 来源 | 短路径 | 材料数 | 字符数 | SHA-256 |",
+    "| --- | --- | --- | --- | --- | ---: | ---: | --- |",
     ...rows
   ].join("\n");
 }
@@ -212,7 +257,7 @@ function renderItems(items) {
 
   return items.map((item, index) => {
     return [
-      `### ${sourceFileId(index)}｜${item.source}｜${item.shortPath}`,
+      `### ${sourceFileId(index)}｜${item.week || "月度"}｜${item.category}｜${item.source}｜${item.shortPath}`,
       "",
       renderTextBlock(item.text)
     ].join("\n");
@@ -273,19 +318,6 @@ function htmlToText(content) {
     .replace(/&#x([0-9a-f]+);/gi, (_match, code) => String.fromCodePoint(Number.parseInt(code, 16)));
 }
 
-function dedupeItems(items) {
-  const seen = new Map();
-  for (const item of items) {
-    const fingerprint = hashText(item.text);
-    if (!seen.has(fingerprint)) {
-      seen.set(fingerprint, { ...item, fingerprint, duplicateSources: [] });
-      continue;
-    }
-    seen.get(fingerprint).duplicateSources.push(item.path);
-  }
-  return [...seen.values()];
-}
-
 function titleFromContent(content, filePath) {
   const heading = String(content).match(/^#\s+(.+)$/m);
   return heading ? heading[1].trim() : path.basename(filePath, path.extname(filePath));
@@ -306,9 +338,15 @@ function shortMonthlyPath(relativePath, inputDirName) {
 function cleanText(text) {
   return String(text)
     .replace(/\u0000/g, "")
-    .replace(/[ \t]+/g, " ")
-    .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function categoryFromSource(source) {
+  const name = String(source).replace(/\.md$/, "");
+  if (["daily", "weekly", "health"].includes(name)) return "log";
+  if (["build", "build-bot", "research", "meeting", "chat", "feedback"].includes(name)) return "action";
+  if (["ai", "flomo", "weread", "reading", "podcast"].includes(name)) return "inbox";
+  return "input";
 }
 
 function hashText(text) {
@@ -364,6 +402,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.log(`Monthly process pack generated: ${path.relative(repoRoot, result.processPackPath)}`);
     console.log(`Monthly output shell ready: ${path.relative(repoRoot, result.shellPath)}`);
     console.log(`Input files: ${result.payload.stats.fileCount}`);
-    console.log(`Unique items: ${result.payload.stats.uniqueItemCount}`);
+    console.log(`Complete items: ${result.payload.stats.itemCount}`);
   }
 }

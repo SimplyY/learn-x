@@ -228,7 +228,7 @@ function titleFromPath(filePath) {
   return path.basename(filePath, path.extname(filePath));
 }
 
-function inputKindFromRelativePath(relativePath) {
+export function inputKindFromRelativePath(relativePath) {
   const parts = toWebPath(relativePath).split("/");
   const pathPart = parts[3] || "input";
   const category = categoryFromPathPart(pathPart);
@@ -248,7 +248,7 @@ function categoryFromPathPart(part) {
 }
 
 function categoryFromSourceName(source) {
-  if (["daily", "weekly"].includes(source)) return "log";
+  if (["daily", "weekly", "health"].includes(source)) return "log";
   if (["build", "build-bot", "research", "meeting", "chat", "feedback"].includes(source)) return "action";
   if (["ai", "flomo", "weread", "reading", "podcast", "docs", "theme-read"].includes(source)) return "inbox";
   return "input";
