@@ -6,7 +6,7 @@ group_name: "learn-x"
 repo_path: "/Users/yuwei/code/learn-x"
 repo_url: null
 group_info_path: "/Users/yuwei/code/learn-x/GROUP_INFO.md"
-updated_at: "2026-07-10T12:15:52.995Z"
+updated_at: "2026-07-11T00:00:44.957Z"
 icon: "🧠"
 name_zh: "learn-x"
 summary: "认知系统。核心功能 chat pack（chat 上下文提示词） + IPO(输入、处理、输出)"
@@ -29,14 +29,14 @@ priority: 1
 ## 可用 Skill
 1. build-bot-log：飞书机器人 / Code X Bot 每周 Build 复盘报告生成
 2. learn-x-input：采集外部每周证据（微信读书等）写入 Learn-X 输入目录
-3. learn-x-monthly-automation：Learn-X 月度输入采集、Output 生成与 Memory 迁移
+3. learn-x-monthly-automation：Learn-X 月度自动化中文工作流
 4. learn-x-monthly-journal：从每日 Base 记录和周刊条目填充月度日志的空字段
 5. learn-x-process：处理 Learn-X 输入为 Process Pack 和 Output 壳，生成 Memory 候选
 6. learn-x-weekly-automation：Learn-X 每周输入采集、报告准备与 Memory 迁移
 7. wisdom-gate：高质量认知内容结构化存入智慧之门 Base
 
 ## 可用 Workflow
-1. learn-x-monthly-automation：Learn-X 月度输入采集、Output 生成与 Memory 迁移
+1. learn-x-monthly-automation：Learn-X 月度自动化中文工作流
 2. learn-x-weekly-automation：Learn-X 每周输入采集、报告准备与 Memory 迁移
 
 ## 数据源
@@ -47,4 +47,4 @@ priority: 1
 ## 状态
 - 工作目录：可访问
 - Skill 扫描：正常
-- 最近更新时间：2026-07-10T12:15:52.995Z
+- 最近更新时间：2026-07-11T00:00:44.957Z
