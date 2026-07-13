@@ -7,13 +7,16 @@ import { buildChatPackPromptPayload, buildContentPayload, buildGraphPayload, isP
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../..");
 const publicRoot = path.join(repoRoot, "app/code/public");
-const distRoot = path.join(repoRoot, "dist");
-const dataRoot = path.join(distRoot, "data");
+const defaultDistRoot = path.join(repoRoot, "dist");
 
 const targetArg = process.argv.find((argument) => argument.startsWith("--target="));
 const target = targetArg?.split("=")[1] || "public";
-const graph = await buildGraphPayload({ includeContent: false, target });
-const content = await buildContentPayload({ target });
+const outDirArg = process.argv.find((argument) => argument.startsWith("--out-dir="));
+const distRoot = resolveDistRoot(outDirArg?.slice("--out-dir=".length));
+const dataRoot = path.join(distRoot, "data");
+const contextEnabled = process.env.LEARN_X_CHATPACK_CONTEXT !== "off";
+const graph = await buildGraphPayload({ includeContent: false, target, contextEnabled });
+const content = await buildContentPayload({ target, contextEnabled });
 const prompts = await buildChatPackPromptPayload({ target });
 const assetReferences = new Map();
 
@@ -49,8 +52,18 @@ await writeFile(path.join(distRoot, ".nojekyll"), "", "utf8");
 if (target === "public") assertPublicArtifact(graph);
 
 console.log(
-  `Static site generated: dist/${target} (${graph.files.length} files, ${Object.keys(prompts.subtypes).length} Chat Pack prompts, ${Object.keys(prompts.enhancers).length} enhancers, ${assetReferences.size} hashed assets)`
+  `Static site generated: ${path.relative(repoRoot, distRoot) || "dist"}/${target} (${graph.files.length} files, ${Object.keys(prompts.subtypes).length} Chat Pack prompts, ${Object.keys(prompts.enhancers).length} enhancers, context ${contextEnabled ? "on" : "off"}, ${assetReferences.size} hashed assets)`
 );
+
+function resolveDistRoot(outDir) {
+  if (!outDir) return defaultDistRoot;
+  const resolved = path.resolve(repoRoot, outDir);
+  const relative = path.relative(defaultDistRoot, resolved);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error("--out-dir must stay inside dist/");
+  }
+  return resolved;
+}
 
 function assertPublicArtifact(graphPayload) {
   const exposedPaths = [

@@ -98,6 +98,7 @@ let promptProtocolsLoaded = false;
 async function boot() {
   const graph = await loadGraph();
   state.runtime = graph.runtime || state.runtime;
+  els.contextControls.hidden = !chatPackContextEnabled();
   APP_CONFIG = graph.appConfig || APP_CONFIG;
   CHATPACK_CONFIG = graph.chatPackConfig || CHATPACK_CONFIG;
   DIALOGUE_TYPES = CHATPACK_CONFIG.dialogueTypes || [];
@@ -667,10 +668,19 @@ export function applyChatPackSelection(message) {
   els.domainField.hidden = !subtype?.needsDomain;
   els.metaPrompt.value = assembledPrompt();
   syncCurrentQuestionDefault(type, subtype);
-  applyRecommendedSources();
-  renderPeriodPicker();
-  renderSourceChecklist();
+  if (chatPackContextEnabled()) {
+    applyRecommendedSources();
+    renderPeriodPicker();
+    renderSourceChecklist();
+  } else {
+    state.contextSelections = new Map();
+    els.periodPicker.hidden = true;
+  }
   resetGeneratedContext(message);
+}
+
+function chatPackContextEnabled() {
+  return state.runtime.contextEnabled !== false;
 }
 
 export function applyPromptOnlySelection(message) {
@@ -1322,8 +1332,10 @@ async function resetPrompt() {
 async function generateChatPack() {
   await ensurePromptProtocols();
   if (!els.metaPrompt.value.trim()) els.metaPrompt.value = assembledPrompt();
-  await generateContext();
-  if (!state.context) return;
+  if (chatPackContextEnabled()) {
+    await generateContext();
+    if (!state.context) return;
+  }
   const chatPack = buildChatPack();
   const copied = await copyText(chatPack, "Chat Pack 已生成并复制。");
   if (copied) showToast("已复制到剪贴板，请去 ai chat");
@@ -1338,23 +1350,39 @@ function buildChatPack() {
   const lengthEnhancer = activeLengthEnhancer(enhancers);
   const prompt = getCurrentPrompt();
   const emptyPrompt = isEmptyPromptSelection(dialogueType, dialogueSubtype);
+  const contextEnabled = chatPackContextEnabled();
   const typeSystem = renderTypeSystem(dialogueType, dialogueSubtype, enhancers, emptyPrompt);
   const promptSection = prompt ? `## Assembled Prompt
 
 ${prompt}
 ` : "";
   const answerGoal = emptyPrompt
-    ? "直接围绕 Current Question 回答；不额外套用场景提示词，只根据 Current Question、已选增强器和 Context 回答。"
-    : "直接围绕 Current Question 回答；大类定目标，子类型定场景，增强器定思考方式，Context 提供材料。";
+    ? `直接围绕 Current Question 回答；不额外套用场景提示词，只根据 Current Question、已选增强器${contextEnabled ? "和 Context" : ""}回答。`
+    : `直接围绕 Current Question 回答；大类定目标，子类型定场景，增强器定思考方式${contextEnabled ? "，Context 提供材料" : ""}。`;
   const lengthRequirement = renderOutputLengthRequirement(lengthEnhancer);
   const chatOnlyRequirement = renderChatOnlyRequirement(dialogueType);
-  const priorityBasis = emptyPrompt
+  const priorityBasis = !contextEnabled
+    ? prompt ? "Current Question、Assembled Prompt" : "Current Question"
+    : emptyPrompt
     ? prompt ? "Current Question、Assembled Prompt、High Priority Context" : "Current Question、High Priority Context"
     : "Current Question、Type System、Assembled Prompt、High Priority Context";
   const context = state.context
     ? contextToText(state.context, { questionReference, dialogueType, dialogueSubtype, enhancers, emptyPrompt })
     : "（Context 尚未生成）";
   const finalTaskAnchor = renderFinalTaskAnchor(questionReference, priorityBasis);
+  const contextSection = contextEnabled
+    ? `## Context Priority Map
+
+- High Priority：本次回答优先依据。
+- Normal：背景参考。
+- Memory 只作为被选中的上下文材料出现，不在此处重复生成 Review 或 Weekly Output。
+- Context Note 只解释文件角色和使用边界，不作为新的证据来源。
+- 若上下文冲突，优先依据 ${priorityBasis}。
+
+${context}
+
+`
+    : "";
 
   state.chatPack = `# Chat Pack
 
@@ -1374,16 +1402,7 @@ ${promptSection}
 - 禁止事项：不要编造；不要强行合并冲突材料；不要让背景 Context 覆盖 Current Question。
 ${chatOnlyRequirement}
 
-## Context Priority Map
-
-- High Priority：本次回答优先依据。
-- Normal：背景参考。
-- Memory 只作为被选中的上下文材料出现，不在此处重复生成 Review 或 Weekly Output。
-- Context Note 只解释文件角色和使用边界，不作为新的证据来源。
-- 若上下文冲突，优先依据 ${priorityBasis}。
-
-${context}
-
+${contextSection}
 ${finalTaskAnchor}
 `;
   return state.chatPack;
@@ -1398,7 +1417,8 @@ function renderTypeSystem(type, subtype, enhancers, emptyPrompt) {
   const categoryEnabled = !emptyPrompt && Boolean(type);
   const subtypeEnabled = !emptyPrompt && Boolean(subtype);
   const enhancerEnabled = enhancers.length > 0;
-  const modeParts = ["Current Question", "Context"];
+  const modeParts = ["Current Question"];
+  if (chatPackContextEnabled()) modeParts.push("Context");
   if (categoryEnabled) modeParts.splice(1, 0, "大类 Prompt");
   if (subtypeEnabled) modeParts.splice(2, 0, "子类型 Prompt");
   if (enhancerEnabled) modeParts.push("增强器 Prompt");
@@ -1410,7 +1430,7 @@ function renderTypeSystem(type, subtype, enhancers, emptyPrompt) {
 
   if (emptyPrompt) {
     return `${promptInventory}
-- 装配说明：不加入大类行为协议或子类型 Prompt；只使用 Current Question、Context 和已选增强器。`;
+- 装配说明：不加入大类行为协议或子类型 Prompt；只使用 Current Question${chatPackContextEnabled() ? "、Context" : ""} 和已选增强器。`;
   }
 
   return `${promptInventory}
@@ -1635,30 +1655,31 @@ function renderFramePreview() {
   const highCount = selectedFiles.filter((file) => file.strategy === "high").length;
   const normalCount = selectedFiles.filter((file) => file.strategy === "normal").length;
   const questionState = els.currentQuestion.value.trim() ? "已填写" : "未填写";
+  const contextEnabled = chatPackContextEnabled();
 
-  els.chatPackFramePreview.value = [
+  const frame = [
     "# Chat Pack 装配框架",
     "1. Current Question",
     `2. 大类行为协议：${emptyPrompt ? "无" : type?.name || "未选择"}`,
     `3. 子类型 Prompt：${emptyPrompt ? "无" : subtype?.name || "未选择"}`,
     `4. 增强器 Prompt：${enhancers.length ? enhancers.map((item) => item.name).join(" + ") : "无"}`,
-    "5. Output Requirements",
-    `6. Context Priority Map：High ${highCount} / Normal ${normalCount}`,
-    "7. High Priority Context",
-    "8. Normal Context",
-    "9. 末尾任务锚定"
-  ].join("\n");
+    "5. Output Requirements"
+  ];
+  if (contextEnabled) frame.push(`6. Context Priority Map：High ${highCount} / Normal ${normalCount}`, "7. High Priority Context", "8. Normal Context");
+  frame.push(`${contextEnabled ? "9" : "6"}. 末尾任务锚定`);
+  els.chatPackFramePreview.value = frame.join("\n");
 
-  els.chatPackContextSummary.value = [
+  const summary = [
     `当前问题：${questionState}`,
-    `大类目标：${emptyPrompt ? "空提示词：只装配问题和上下文" : type?.outputGoal || "-"}`,
+    `大类目标：${emptyPrompt ? `空提示词：只装配问题${contextEnabled ? "和上下文" : ""}` : type?.outputGoal || "-"}`,
     `子类型：${emptyPrompt ? "无" : subtype?.summary || subtype?.name || "-"}`,
-    `增强器：${enhancers.length ? enhancers.map((item) => item.summary || item.name).join("；") : "无"}`,
-    "",
-    `上下文文件：${selectedFiles.length}`,
-    ...selectedFiles.slice(0, 12).map((file) => `- [${strategyLabel(file.strategy)}] ${file.path}`),
-    selectedFiles.length > 12 ? `- ... 另 ${selectedFiles.length - 12} 个文件` : ""
-  ].filter(Boolean).join("\n");
+    `增强器：${enhancers.length ? enhancers.map((item) => item.summary || item.name).join("；") : "无"}`
+  ];
+  if (contextEnabled) {
+    summary.push("", `上下文文件：${selectedFiles.length}`, ...selectedFiles.slice(0, 12).map((file) => `- [${strategyLabel(file.strategy)}] ${file.path}`));
+    if (selectedFiles.length > 12) summary.push(`- ... 另 ${selectedFiles.length - 12} 个文件`);
+  }
+  els.chatPackContextSummary.value = summary.join("\n");
 }
 
 function renderContextBudget(text) {

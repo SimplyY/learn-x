@@ -7,6 +7,7 @@
     "prepare": "git config core.hooksPath .githooks || true",
     "build": "npm run build:public",
     "build:public": "node app/code/scripts/build-static-data.mjs --target=public",
+    "build:public:no-context": "LEARN_X_CHATPACK_CONTEXT=off node app/code/scripts/build-static-data.mjs --target=public --out-dir=dist/no-context",
     "build:local": "node app/code/scripts/build-static-data.mjs --target=local",
     "dev": "npm run build:local && node app/code/server.mjs",
     "test": "node --test app/code/scripts/*.test.mjs .agents/skills/learn-x-input/scripts/*.test.mjs .agents/skills/learn-x-process/scripts/*.test.mjs",
