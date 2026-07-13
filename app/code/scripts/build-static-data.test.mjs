@@ -26,8 +26,10 @@ test("no-context build omits selectable context payloads", async () => {
     stdio: "ignore"
   });
   const dataDirectory = path.join(repoRoot, "dist/no-context/data");
+  const index = await readFile(path.join(repoRoot, "dist/no-context/index.html"), "utf8");
   const graphFile = (await readdir(dataDirectory)).find((file) => /^graph\..+\.json$/.test(file));
   assert.ok(graphFile);
+  assert.match(index, /id="contextControls" class="source-box" hidden/);
   const graph = JSON.parse(await readFile(path.join(dataDirectory, graphFile), "utf8"));
   assert.equal(graph.runtime.contextEnabled, false);
   assert.deepEqual(graph.contextFiles, []);
