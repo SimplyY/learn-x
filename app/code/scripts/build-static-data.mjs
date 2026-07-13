@@ -46,7 +46,7 @@ assetReferences.set("data/graph.json", `data/${graphJsonPath}`);
 assetReferences.set("styles.css", await renameWithHash(distRoot, "styles.css"));
 assetReferences.set("app.js", await renameWithHash(distRoot, "app.js"));
 await rewriteModuleImport(path.join(distRoot, "editor.js"), "./app.js", `./${assetReferences.get("app.js")}`);
-await rewriteIndexReferences(path.join(distRoot, "index.html"), assetReferences);
+await rewriteIndexReferences(path.join(distRoot, "index.html"), assetReferences, contextEnabled);
 await writeFile(path.join(distRoot, ".nojekyll"), "", "utf8");
 
 if (target === "public") assertPublicArtifact(graph);
@@ -95,10 +95,13 @@ async function renameWithHash(root, relativePath) {
   return hashedRelativePath;
 }
 
-async function rewriteIndexReferences(indexPath, references) {
+async function rewriteIndexReferences(indexPath, references, contextEnabled) {
   let html = await readFile(indexPath, "utf8");
   for (const [original, hashed] of references) {
     html = html.replaceAll(original, hashed);
+  }
+  if (!contextEnabled) {
+    html = html.replace('id="contextControls" class="source-box"', 'id="contextControls" class="source-box" hidden');
   }
   await writeFile(indexPath, html, "utf8");
 }
