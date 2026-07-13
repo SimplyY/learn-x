@@ -1,5 +1,5 @@
 export const state = {
-  runtime: { target: "public", canEditChatPack: false, includesPrivateContext: false },
+  runtime: { target: "public", canEditChatPack: false, includesPrivateContext: false, contextEnabled: true },
   mode: "browse",
   files: [],
   sources: [],
@@ -77,6 +77,7 @@ export const els = {
   chatPackMetrics: document.querySelector("#chatPackMetrics"),
   chatPackWarning: document.querySelector("#chatPackWarning"),
   contextBudgetList: document.querySelector("#contextBudgetList"),
+  contextControls: document.querySelector("#contextControls"),
   generateChatPack: document.querySelector("#generateChatPackBtn"),
   resetPrompt: document.querySelector("#resetPromptBtn"),
   editPromptCategories: document.querySelector("#editPromptCategoriesBtn"),
@@ -103,5 +104,3 @@ export const els = {
   applyCustomContext: document.querySelector("#applyCustomContextBtn"),
   toastMessage: document.querySelector("#toastMessage")
 };
-
-

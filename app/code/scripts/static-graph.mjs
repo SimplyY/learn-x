@@ -179,7 +179,7 @@ export function buildContext(files, label = "Learn-X") {
   return `# CONTEXT_MASTER\n\nSource: ${label}\nGenerated from Learn-X at ${generatedAt}.\n\n${body}\n`;
 }
 
-export async function buildGraphPayload({ includeContent = false, target = "public" } = {}) {
+export async function buildGraphPayload({ includeContent = false, target = "public", contextEnabled = true } = {}) {
   if (!new Set(["local", "public"]).has(target)) throw new Error(`Unknown build target: ${target}`);
   const appConfig = await readAppConfig();
   const sourceChatPackConfig = await readChatPackConfig();
@@ -188,14 +188,17 @@ export async function buildGraphPayload({ includeContent = false, target = "publ
   );
   const allFiles = await collectMarkdownFiles();
   const files = target === "public" ? allFiles.filter((file) => !isPublicPrivatePath(file.path)) : allFiles;
-  const customFiles = await collectCustomContextFiles(repoRoot, { excludePrivate: target === "public" });
+  const customFiles = contextEnabled
+    ? await collectCustomContextFiles(repoRoot, { excludePrivate: target === "public" })
+    : [];
   const contextWeights = appConfig.contextWeights || fallbackContextWeights();
 
   return {
     runtime: {
       target,
       canEditChatPack: target === "local",
-      includesPrivateContext: target === "local"
+      includesPrivateContext: target === "local",
+      contextEnabled
     },
     appConfig,
     chatPackConfig,
@@ -218,7 +221,7 @@ export async function buildGraphPayload({ includeContent = false, target = "publ
     }),
     tree: buildTree(files),
     sources: buildSources(files, appConfig),
-    contextFiles: buildContextFiles(files, contextWeights, appConfig),
+    contextFiles: contextEnabled ? buildContextFiles(files, contextWeights, appConfig) : [],
     customContextFiles: buildContextFiles(customFiles, contextWeights, appConfig, { includePrompts: true, includeContent }),
     contextWeights,
     domains: buildDomains(files, appConfig),
@@ -226,11 +229,13 @@ export async function buildGraphPayload({ includeContent = false, target = "publ
   };
 }
 
-export async function buildContentPayload({ target = "public" } = {}) {
+export async function buildContentPayload({ target = "public", contextEnabled = true } = {}) {
   if (!new Set(["local", "public"]).has(target)) throw new Error(`Unknown build target: ${target}`);
   const allFiles = await collectMarkdownFiles();
   const files = target === "public" ? allFiles.filter((file) => !isPublicPrivatePath(file.path)) : allFiles;
-  const customFiles = await collectCustomContextFiles(repoRoot, { excludePrivate: target === "public" });
+  const customFiles = contextEnabled
+    ? await collectCustomContextFiles(repoRoot, { excludePrivate: target === "public" })
+    : [];
 
   return {
     files: contentEntries(files),
