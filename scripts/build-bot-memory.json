@@ -1,0 +1,29 @@
+{
+  "lastRun": "2026-07-12T18:00:00+08:00",
+  "week": "2026-W28",
+  "coverage": {
+    "start": "2026-07-06",
+    "end": "2026-07-12"
+  },
+  "sources": {
+    "bridgeLogs": "partial (7/8-12 available, 7/6-7 missing)",
+    "codexMemories": "available (last updated 7/9)",
+    "feishuMessages": "available (chat-messages-list fallback, @search empty)",
+    "gitChanges": "available (10 commits)",
+    "baseWorkflow": "not checked",
+    "existingBuildMd": "not found (new week)"
+  },
+  "keyConclusions": [
+    "记忆管线全链路诊断完成，根因定位为 app-server 未拉起",
+    "Group Info 体系升级为群信息全生命周期管理",
+    "月度处理流程重构为脚本+语义压缩分离",
+    "Skill 批量重命名（newold→ywnew）和卡片化改造",
+    "bot.md 架构文档创建，lark-channel-bridge 知识资产化"
+  ],
+  "gaps": [
+    "7/6-7 bridge 日志缺失",
+    "记忆管线 stage1_outputs 仍为空",
+    "Base workflow 未检查"
+  ],
+  "nextSuggestion": "确认记忆管线持续产出，群标签同步加入定时触发"
+}
