@@ -24,6 +24,56 @@
       "error": "Command failed: lark-cli base +record-upload-attachment --base-token W6NLbDh1YahvZ9sbjIccEirBnae --table-id tblMGGWdVH4Iq9Og --record-id recvoQZiK6BuEF --field-id fld9P7V5uC --file \"/var/folders/d4/gvvccdfx3936rcr8_ddt6f300000gn/T/wg-img-qT4a7H/40a9d2dd0449d6b0f88278e71efb32f446c3bae6011ca9fce49e5d9ba38dea6f.jpg\" --format json 2>/dev/null",
       "text": "请分析这张图中的认知内容。",
       "timestamp": "2026-07-09T06:11:11.629Z"
+    },
+    {
+      "action": "failed",
+      "error": "MoonBridge failed after 3 attempts: MoonBridge status=undefined: {\"code\":\"InvalidParameter\",\"message\":\"Total tokens of image and text exceed max message tokens. Request id: 0217839237992531773480a8a8832a2fb78799cf0b4273373215d\",\"param\":\"\",\"type\":\"BadRequest\"}",
+      "text": "请分析这张图中的认知内容。",
+      "timestamp": "2026-07-13T06:23:21.468Z"
+    },
+    {
+      "action": "failed",
+      "error": "MoonBridge failed after 3 attempts: Empty response",
+      "text": "请分析这张图中的认知内容。",
+      "timestamp": "2026-07-13T06:26:30.382Z"
+    },
+    {
+      "action": "failed",
+      "error": "MoonBridge failed after 3 attempts: Empty response",
+      "text": "AI Coach总览\n\n我们讨论的，不是学工具，而是如何用AI持续解决人的真实问题\n\n1. 这次讨论到底在讲什么\n   - AI很强，但多数人不会真正用AI解决系统性问题。\n   - 单次聊天只能\"分析\"，真正有价值的是\"分析—行动—复盘—迭代\"的闭环。\n   - AI Coach的目标，不是教人会某个工具，而是帮助对方解决职业、人生、学习、关系等真实痛点。\n   - 真正重要的不是追最新工具，而",
+      "timestamp": "2026-07-13T06:28:27.975Z"
+    },
+    {
+      "action": "failed",
+      "error": "MoonBridge failed after 3 attempts: Empty response",
+      "text": "AI Coach总览\n\n我们讨论的，不是学工具，而是如何用AI持续解决人的真实问题\n\n1. 这次讨论到底在讲什么\n   - AI很强，但多数人不会真正用AI解决系统性问题。\n   - 单次聊天只能\"分析\"，真正有价值的是\"分析—行动—复盘—迭代\"的闭环。\n   - AI Coach的目标，不是教人会某个工具，而是帮助对方解决职业、人生、学习、关系等真实痛点。\n   - 真正重要的不是追最新工具，而",
+      "timestamp": "2026-07-13T06:28:31.864Z"
+    },
+    {
+      "action": "failed",
+      "error": "MoonBridge failed after 3 attempts: Empty response",
+      "text": "飞鱼与皮卡丘在玉溪的投资对谈整理。涵盖投资与自我修炼、哲学与读书、两个投资框架的对照（飞鱼：低温区底部布局/投资服务生活；皮卡丘：趋势确认与止损/产业驱动），以及投资最终通向人生问题的底层思考。",
+      "timestamp": "2026-07-13T13:59:02.925Z"
+    },
+    {
+      "action": "failed",
+      "error": "MoonBridge failed after 3 attempts: Empty response",
+      "text": "与皮卡丘聊天后的共同理解（也是一次温故而知新）\n\n框架可以不同，底层往往相通。真正重要的，不是招式，而是对世界、对自己、对风险的理解。\n\n一、我们更重要的共同点\n\n投资先修自己 — 投资不是只看市场，更是看自己。情绪、纪律、认知边界，往往比选股本身更重要。\n纪律胜过情绪 — 下跌时容易恐惧。好的体系，本质是用规则约束人性。\n方法必须适合自己 — 没有放之四海而皆准的圣杯。时间尺度、风险承受、现金流",
+      "timestamp": "2026-07-13T14:00:08.784Z"
+    },
+    {
+      "action": "created",
+      "recordId": "recvpgyDvdjbJI",
+      "imageCount": 1,
+      "fields": {
+        "topic": "玉溪云似海",
+        "essence": "生活不在远方，就在日常每一刻的风吹云过中。",
+        "level": "道",
+        "core_question": "当人感到迷茫，追问生活的意义与人间烟火何在时，这首诗提供了一种顿悟：生活并非需要刻意寻觅的远方，而是如云似海般自然流淌在日常中的每一个瞬间。适用场景包括：现代人焦虑于存在意义、向往诗意生活却忽略眼前时，通过文字唤醒对当下生活的觉察。",
+        "original_text": "玉溪云似海，岁月风吹过。人烟何处觅？处处是生活。\n——飞鱼，2026.07.13，flomo #写诗 #日+",
+        "timeliness": "永恒"
+      },
+      "timestamp": "2026-07-13T15:08:22.553Z"
     }
   ]
 }

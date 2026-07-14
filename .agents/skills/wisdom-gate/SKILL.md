@@ -56,6 +56,8 @@ npm run wisdom-gate:ingest -- --text "..." --image /path/to/img1.png --image /pa
 
 ### 图片处理注意事项
 
+- **图片 OCR 提取**：参见 [image-ocr](../image-ocr/SKILL.md) Skill。bridge 场景下 image_ocr 块已含 OCR 结果，直接使用；非 bridge 场景手动调用 describe-image
+
 - bridge 下载的图片在 `~/.lark-channel/profiles/deep/media/` 下
 - 脚本会自动处理绝对路径（复制到临时目录后用相对路径上传）
 - 支持多图：重复 `--image` 参数
