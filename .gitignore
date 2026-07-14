@@ -1,14 +1,15 @@
 node_modules/
 app/code/node_modules/
 app/code/public/data/
-app/code/public/.nojekyll
+app/code/.nojekyll
 dist/
 04_output/
 app/code/.test-tmp/
 *.DS_Store
-
-# Period input is local and may contain private material. Keep docs and templates tracked.
-03_input/weekly/*/
-!03_input/weekly/00_template/
-03_input/monthly/*/
-03_input/yearly/*/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+search_auth_qr.png
+AGENTS.md.backup-*
