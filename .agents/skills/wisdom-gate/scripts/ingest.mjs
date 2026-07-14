@@ -1,9 +1,10 @@
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { existsSync, writeFileSync, copyFileSync, mkdtempSync, rmSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, basename, isAbsolute, resolve, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { chdir, cwd } from 'node:process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -14,7 +15,8 @@ const TABLE_ID = 'tblMGGWdVH4Iq9Og';
 const BASE_URL = 'https://bytedance.feishu.cn/base';
 const ATTACHMENT_FIELD_ID = 'fld9P7V5uC';
 const MEMORY_FILE = join(__dirname, 'wisdom-gate-memory.json');
-const MAX_VISION_BYTES = 800 * 1024; // 800KB for MoonBridge vision
+const MAX_VISION_BYTES = 400 * 1024; // 400KB for MoonBridge vision
+const COMPRESS_THRESHOLD = 500 * 1024; // 500KB 以上的图才压缩
 
 const args = process.argv.slice(2);
 const flags = {};
@@ -40,32 +42,94 @@ function execJson(cmd, opts = {}) {
   return JSON.parse(trimmed);
 }
 
-function prepareVisionImage(absPath, tmpDirs) {
+function ocrImage(absPath) {
   if (!existsSync(absPath)) return null;
+  try {
+    const text = execFileSync('describe-image', [absPath], {
+      encoding: 'utf8',
+      timeout: 30000,
+    }).trim();
+    return text || null;
+  } catch {
+    return null;
+  }
+}
+
+function compressImageForUpload(absPath, tmpDirs) {
+  if (!existsSync(absPath)) return absPath;
   const stat = statSync(absPath);
-  let visionPath = absPath;
-  if (stat.size > MAX_VISION_BYTES) {
-    const ext = extname(absPath).toLowerCase();
-    const canResize = ext === '.png' || ext === '.jpg' || ext === '.jpeg' || ext === '.webp';
-    if (canResize) {
-      const outDir = mkdtempSync(join(tmpdir(), 'wg-vis-'));
-      tmpDirs.push(outDir);
-      const outPath = join(outDir, basename(absPath, ext) + '.jpg');
-      try {
-        execSync(`sips -Z 1024 "${absPath}" --out "${outPath}" 2>/dev/null`, { stdio: 'pipe' });
-        const newSize = statSync(outPath).size;
-        if (newSize <= MAX_VISION_BYTES * 2) {
-          visionPath = outPath;
-        } else {
-          execSync(`sips -Z 600 "${absPath}" --out "${outPath}" 2>/dev/null`, { stdio: 'pipe' });
-          visionPath = outPath;
-        }
-      } catch {
-        visionPath = absPath;
+  // 小于 500KB 不压缩，避免小图变糊
+  if (stat.size < COMPRESS_THRESHOLD) {
+    return absPath;
+  }
+
+  const ext = extname(absPath).toLowerCase();
+  const canCompress = ext === '.png' || ext === '.jpg' || ext === '.jpeg' || ext === '.webp';
+  if (!canCompress) return absPath;
+
+  // 目标体积为原图的 60%，可接受范围 40%-75%
+  const targetSize = stat.size * 0.6;
+  const minSize = stat.size * 0.4;
+  const maxSize = stat.size * 0.75;
+
+  // 优先保持原格式；PNG->PNG 通常体积变化较小
+  const isPng = ext === '.png';
+  const candidates = [1400, 1200, 1000, 800, 600];
+  const outDir = mkdtempSync(join(tmpdir(), 'wg-compress-'));
+  tmpDirs.push(outDir);
+  let bestPath = null;
+  let bestDiff = Infinity;
+  const tempFiles = [];
+
+  for (const size of candidates) {
+    const outExt = isPng ? '.png' : '.jpg';
+    const outPath = join(outDir, `compressed-${size}-${basename(absPath, ext)}${outExt}`);
+    try {
+      if (isPng) {
+        execFileSync('sips', ['-Z', String(size), absPath, '--out', outPath], { stdio: 'pipe' });
+      } else {
+        execFileSync('sips', ['-Z', String(size), '-s', 'format', 'jpeg', absPath, '--out', outPath], { stdio: 'pipe' });
       }
+      if (!existsSync(outPath)) continue;
+      const newSize = statSync(outPath).size;
+      tempFiles.push(outPath);
+      const diff = Math.abs(newSize - targetSize);
+      if (diff < bestDiff) {
+        if (bestPath && bestPath !== outPath) {
+          try { rmSync(bestPath); } catch {}
+          const idx = tempFiles.indexOf(bestPath);
+          if (idx >= 0) tempFiles.splice(idx, 1);
+        }
+        bestPath = outPath;
+        bestDiff = diff;
+        // 在可接受范围内就停
+        if (newSize >= minSize && newSize <= maxSize) break;
+      }
+    } catch {
+      // 失败跳过
     }
   }
-  return visionPath;
+
+  // 清理未被选中的临时文件
+  for (const f of tempFiles) {
+    if (f !== bestPath) {
+      try { rmSync(f); } catch {}
+    }
+  }
+
+  if (bestPath && existsSync(bestPath)) {
+    const oldSize = stat.size;
+    const newSize = statSync(bestPath).size;
+    if (newSize >= oldSize) {
+      try { rmSync(bestPath); } catch {}
+      return absPath;
+    }
+    const ratio = ((newSize / oldSize) * 100).toFixed(0);
+    console.log(`  🗜️  压缩: ${(oldSize / 1024).toFixed(0)}KB -> ${(newSize / 1024).toFixed(0)}KB (${ratio}%)`);
+    return bestPath;
+  }
+
+  return absPath;
 }
 
 function cleanup(paths) {
@@ -98,13 +162,11 @@ async function callMoonBridge(prompt, imagePaths = [], titleHint = null) {
     let userContent = '';
     if (titleHint) userContent += `[内容标题：${titleHint}]\n\n`;
     for (const imgPath of imagePaths) {
-      const vp = prepareVisionImage(imgPath, tmpDirs);
-      if (vp && existsSync(vp)) {
-        const data = readFileSync(vp);
-        const ext = vp.toLowerCase().endsWith('.png') ? 'png' : 'jpeg';
-        const mime = `image/${ext}`;
-        const b64 = data.toString('base64');
-        userContent += `[图片：data:${mime};base64,${b64}]\n\n`;
+      const ocrText = ocrImage(imgPath);
+      if (ocrText) {
+        userContent += `[图片OCR内容：\n${ocrText}\n]\n\n`;
+      } else {
+        userContent += `[图片：无法提取文字内容]\n\n`;
       }
     }
     userContent += prompt;
@@ -135,7 +197,21 @@ async function callMoonBridge(prompt, imagePaths = [], titleHint = null) {
           }
           throw new Error(`MoonBridge status=${data.status}: ${JSON.stringify(data.error || data).slice(0, 300)}`);
         }
-        const content = data.output_text;
+        // 兼容两种响应格式：顶层 output_text 和 output 数组嵌套
+        let content = data.output_text;
+        if (!content && Array.isArray(data.output)) {
+          for (const item of data.output) {
+            if (item.type === "message" && item.role === "assistant" && Array.isArray(item.content)) {
+              for (const c of item.content) {
+                if (c.type === "output_text") {
+                  content = c.text;
+                  break;
+                }
+              }
+            }
+            if (content) break;
+          }
+        }
         if (!content) throw new Error('Empty response');
         const cleaned = content.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
         return JSON.parse(cleaned);
@@ -189,27 +265,34 @@ function createRecord(fields) {
 function uploadAttachments(recordId, imagePaths) {
   if (!imagePaths || imagePaths.length === 0) return 0;
 
-  const tmpDirs = [];
-  const fileArgs = [];
+  const originalCwd = cwd();
+  const tmpDir = mkdtempSync(join(tmpdir(), 'wg-upload-'));
+  const compressTmpDirs = [];
+  let uploadedCount = 0;
 
   try {
+    // 压缩并复制图片到临时目录
+    const tmpFiles = [];
     for (const imgPath of imagePaths) {
       if (!existsSync(imgPath)) {
         console.error(`⚠️  文件不存在: ${imgPath}`);
         continue;
       }
-      if (isAbsolute(imgPath)) {
-        const tmpDir = mkdtempSync(join(tmpdir(), 'wg-img-'));
-        tmpDirs.push(tmpDir);
-        const dest = join(tmpDir, basename(imgPath));
-        copyFileSync(imgPath, dest);
-        fileArgs.push(`--file "${dest}"`);
-      } else {
-        fileArgs.push(`--file "${resolve(process.cwd(), imgPath)}"`);
-      }
+      // 先压缩到目标体积
+      const compressed = compressImageForUpload(imgPath, compressTmpDirs);
+      // 复制到上传临时目录
+      const destName = basename(compressed);
+      const dest = join(tmpDir, destName);
+      copyFileSync(compressed, dest);
+      tmpFiles.push(destName);
     }
 
-    if (fileArgs.length === 0) return 0;
+    if (tmpFiles.length === 0) return 0;
+
+    // 切换到临时目录
+    chdir(tmpDir);
+
+    const fileArgs = tmpFiles.map(f => `--file "./${f}"`).join(' ');
 
     const cmd = [
       'lark-cli base +record-upload-attachment',
@@ -217,17 +300,22 @@ function uploadAttachments(recordId, imagePaths) {
       `--table-id ${TABLE_ID}`,
       `--record-id ${recordId}`,
       `--field-id ${ATTACHMENT_FIELD_ID}`,
-      ...fileArgs,
+      fileArgs,
       '--format json',
     ].join(' ');
 
     const result = execJson(cmd + ' 2>/dev/null');
-    if (result.ok) return fileArgs.length;
-    console.error(`⚠️  附件上传失败: ${JSON.stringify(result.error).slice(0, 300)}`);
-    return 0;
+    if (result.ok) {
+      uploadedCount = tmpFiles.length;
+    } else {
+      console.error(`⚠️  附件上传失败: ${JSON.stringify(result.error).slice(0, 300)}`);
+    }
   } finally {
-    cleanup(tmpDirs);
+    chdir(originalCwd);
+    cleanup([tmpDir, ...compressTmpDirs]);
   }
+
+  return uploadedCount;
 }
 
 function updateMemory(entry) {
@@ -277,7 +365,7 @@ try {
 
   let uploaded = 0;
   if (flags.images.length > 0) {
-    console.log(`📎 上传 ${flags.images.length} 张附件（原图）...`);
+    console.log(`📎 上传 ${flags.images.length} 张附件（自动压缩到60%体积）...`);
     uploaded = uploadAttachments(recordId, flags.images);
     if (uploaded > 0) console.log(`✅ ${uploaded} 张附件上传成功`);
     else console.error('⚠️  附件上传失败');
