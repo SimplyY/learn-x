@@ -13,3 +13,4 @@ app/code/.test-tmp/
 *.key
 search_auth_qr.png
 AGENTS.md.backup-*
+.playwright-cli/

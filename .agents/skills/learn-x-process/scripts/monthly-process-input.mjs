@@ -186,7 +186,7 @@ function dirForContext(context) {
 function inputKindFromMonthlyPath(shortPath) {
   const file = path.basename(shortPath, path.extname(shortPath));
   if (["daily", "weekly", "health", "monthly-journal"].includes(file)) return { category: "log", source: file };
-  if (["build", "build-bot", "research", "meeting", "chat", "feedback"].includes(file)) return { category: "action", source: file };
+  if (["build", "build-bot", "research", "meeting", "chat", "feedback", "coach"].includes(file)) return { category: "action", source: file };
   if (["ai", "flomo", "weread", "reading", "podcast"].includes(file)) return { category: "inbox", source: file };
   return { category: "input", source: file };
 }
