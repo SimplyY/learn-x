@@ -20,7 +20,7 @@ test("summarizes busy calendar instances without retaining private event content
       { event_id: "first", summary: "私人标题", description: "私密描述", event_organizer: { display_name: "某人" }, vchat: { meeting_url: "https://secret.example" }, start_time: { datetime: "2026-06-08T09:00:00+08:00" }, end_time: { datetime: "2026-06-08T10:00:00+08:00" } },
       { event_id: "second", summary: "重叠事项", start_time: { datetime: "2026-06-08T09:30:00+08:00" }, end_time: { datetime: "2026-06-08T11:00:00+08:00" } },
       { event_id: "cross-day", start_time: { datetime: "2026-06-09T23:00:00+08:00" }, end_time: { datetime: "2026-06-10T01:00:00+08:00" } },
-      { event_id: "all-day", is_all_day: true, start_time: { datetime: "2026-06-10T00:00:00+08:00" }, end_time: { datetime: "2026-06-11T00:00:00+08:00" } },
+      { event_id: "all-day", is_all_day: true, start_time: { date: "2026-06-10" }, end_time: { date: "2026-06-11" } },
       { event_id: "remote", start_time: { datetime: "2026-06-11T09:00:00+09:00" }, end_time: { datetime: "2026-06-11T10:00:00+09:00" } },
       { event_id: "free", free_busy_status: "free", start_time: { datetime: "2026-06-12T09:00:00+08:00" }, end_time: { datetime: "2026-06-12T10:00:00+08:00" } },
       { event_id: "declined", self_rsvp_status: "decline", start_time: { datetime: "2026-06-12T10:00:00+08:00" }, end_time: { datetime: "2026-06-12T11:00:00+08:00" } },
