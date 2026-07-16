@@ -172,11 +172,16 @@ export function assertCalendarReadAccess(status) {
 }
 
 function eventStart(event) {
-  return Date.parse(event?.start_time?.datetime || event?.start_time?.date || "");
+  return parseCalendarTime(event?.start_time);
 }
 
 function eventEnd(event) {
-  return Date.parse(event?.end_time?.datetime || event?.end_time?.date || "");
+  return parseCalendarTime(event?.end_time);
+}
+
+function parseCalendarTime(value) {
+  if (value?.datetime) return Date.parse(value.datetime);
+  return /^\d{4}-\d{2}-\d{2}$/.test(value?.date || "") ? Date.parse(`${value.date}T00:00:00+08:00`) : NaN;
 }
 
 function isDeclined(event) {
