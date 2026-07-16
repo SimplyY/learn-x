@@ -47,14 +47,14 @@ npm run memory:weekly -- --week 2026-W27
 ## 阶段判断
 
 - 定时触发，或用户没有明确继续指令：只执行阶段 1。
-- 用户说 `继续`、`周记和 AI 摘要已完成`、`继续采集周记` 或同义表达：只有当前轮 Stage 1.5 的非 dry-run 脚本已成功返回 Android、Mac 两条 `outcomes` 后，才对同一目标周执行阶段 2；否则先索取三张截图，不得猜测已写入。
+- 用户说 `继续`、`周记和 AI 摘要已完成`、`继续采集周记` 或同义表达：对同一目标周进入阶段 2，先验证 `ai.md` 并采集 `weekly.md`；三图屏幕时间可与这些人工项并行提交，但在生成 `_dist` 前必须确认 Stage 1.5 的非 dry-run 脚本已成功返回 Android、Mac 两条 `outcomes`，不得猜测已写入。
 - 用户说 `继续记忆`、`报告已完成，写入记忆`、`Memorize`，或确认 Output / 芒格洞察 / 图片 / 公众号发布已完成：对同一目标周执行阶段 3。
 - 不猜测人工项已经完成。到阶段门槛就停。
 - 同一轮自动化中，阶段 1 / 2 / 3 必须使用同一个已解析目标周；不要在后续阶段重新按当天日期推断。
 
 ## 阶段 1：输入采集
 
-目标：采集自动来源，完成 Stage 1.5 屏幕时间后才停止，等待用户完成人工周记和 AI 摘要。
+目标：采集自动来源后，同时开放屏幕时间、周记和 AI 摘要三项准备；三项汇合后才生成 Weekly Output 输入包。
 
 1. 确保 `03_input/weekly/YYYY-Www/` 存在。保留目录中已有的人工内容。若 `weekly.md` 或 `ai.md` 不存在，创建空文件作为人工/阶段 2 写入位置；不得写入模板正文、提示词或缺口说明。
 2. 采集本地自动来源，并提示飞书机器人侧自查：
@@ -73,20 +73,20 @@ npm run memory:weekly -- --week 2026-W27
      - 如果目标周是提前写当周，提示用户去飞书上手动执行，并输出自动化链接：https://ywhome.feishu.cn/wiki/KcTcwG90OiZh3rksu0ucvwx5nFe?table=wkfVC125gMp3snTX
      - 如果不是提前执行，提示用户周日飞书自动化理论上已提前执行，只需自查 `build-bot.md` 是否已由飞书侧写入。
    - 如果目标周是周六、周日自动判定的当前周提前稿，`daily.md` / `flomo.md` / `weread.md` / `coach.md` / `calendar.md` 可以只覆盖截至运行时；文件和汇报必须标出缺失日期 / 未来日期。
-3. 自动来源完成后立刻进入 Stage 1.5；不得先宣告阶段 1 完成、要求周记或 AI 摘要，也不得等待 `继续`。
-4. 阶段 1 不采集飞书周记。Stage 1.5 成功后，再提醒用户先在飞书周记文档中写完目标周周记；用户回复 `继续` 后，阶段 2 自动读取线上飞书周记并写入 `weekly.md`。
+3. 自动来源完成后，在同一电脑端 CodeX 对话同时请求三图屏幕时间，并提示用户可并行完成飞书周记和 AI 摘要；不得把任一项设为另一项的前置门槛。
+4. 阶段 1 不采集飞书周记。用户回复 `继续` 后，阶段 2 自动读取线上飞书周记并写入 `weekly.md`；无论三图是否已提交，均不得阻止该采集。
 5. 阶段 1 不生成 `_dist`，不创建或改写最终 Weekly Output。
 6. 不访问 AI Chat 或 ChatGPT 历史。不写入、改写或补全 `ai.md` 正文；如果用户直接把 AI 摘要贴到当前对话，先原样落盘到 `ai.md` 再继续验证。
 7. 读取并在汇报中用 Markdown 代码块完整输出 `02_prompts/meta/_ai-chat-extract-prompt.md` 的当前正文，明确提示用户可直接用它生成 `03_input/weekly/YYYY-Www/ai.md`。
-8. 仅在 Stage 1.5 成功后，提醒用户完成飞书周记，并把 AI 摘要保存到 `03_input/weekly/YYYY-Www/ai.md`，然后回复 `继续`。不要要求用户手工创建 `weekly.md`；该文件由阶段 2 自动采集写入。
+8. 提示用户可并行完成两件事：发送 `时间` 与三张截图；使用 AI 摘要提示词生成并保存 `03_input/weekly/YYYY-Www/ai.md`，然后回复 `继续`。不要要求用户手工创建 `weekly.md`；该文件由阶段 2 自动采集写入。
 
 ## 阶段 1.5：电脑端屏幕时间
 
-阶段 1 自动来源完成后、阶段 2 前，在当前电脑端 CodeX 对话请求用户发送 `时间` 和三张原生截图：Android 近 7 日柱状图、Android 应用列表、Mac 上一完整自然周。使用 `/Users/yuwei/code/time-x/.agents/skills/time-x-screen-time/SKILL.md` 的流程直接目视读取图片并写入 `每周屏幕时间` Base。
+阶段 1 自动来源完成后，在当前电脑端 CodeX 对话请求用户发送 `时间` 和三张原生截图：Android 近 7 日柱状图、Android 应用列表、Mac 上一完整自然周。它与 AI 摘要、飞书周记准备并行；使用 `/Users/yuwei/code/time-x/.agents/skills/time-x-screen-time/SKILL.md` 的流程直接目视读取图片并写入 `每周屏幕时间` Base。
 
 - Android 总时长只按整小时估算，且截图“今天”必须等于提交日期；Mac 未手动切到上一完整自然周、或页面日期范围不等于目标 ISO 周时拒绝写入。
 - 截图不复制到 Learn-X、`03_input` 或 Base 附件；屏幕时间数据只存在于 Time-X Base。
-- 只有脚本非 dry-run 成功返回 Android、Mac 两条 `outcomes` 后，才继续提示用户完成周记和 AI 摘要；用户回复 `继续` 才进入阶段 2。
+- 只有脚本非 dry-run 成功返回 Android、Mac 两条 `outcomes` 后，才满足生成 `_dist` 的屏幕时间门槛；它不阻止 AI 摘要验证或周记采集。
 
 阶段 1 汇报必须包含：目标周、已完成来源、缺失或部分完成来源、`daily.md` / `flomo.md` / `weread.md` / `coach.md` / `calendar.md` 路径、当前位置、下一步、再下一步。
 
@@ -97,11 +97,12 @@ npm run memory:weekly -- --week 2026-W27
 1. 先验证 `ai.md`。它必须非空、不是模板、不是提取提示词本身、不是自动缺口说明，并且包含目标周真实回顾内容。无效时立即停止，不采集 weekly，不生成 `_dist`，并再次展示 AI 摘要提示词。用户若已在当前对话贴出 AI 摘要，直接写入 `ai.md` 后再验证。
 2. `ai.md` 通过后，通过飞书 CLI 从已登录的线上飞书周记文档采集目标周周记。只截取目标周段落。`weekly.md` 必须保留来源 URL、标题或日期定位依据、采集时间。无法取得线上正文时停止，不得用旧本地内容替代。
    - 采集前如果发现缺少飞书周记所需授权，先一次性列出并请求全部缺失 scopes，再继续，不要一项一项分开打断用户。
-3. 生成 `_dist` 前读取行动反馈表，刷新本周 `feedback.md`：
+3. 在读取行动反馈表或生成 `_dist` 前，确认同一目标周的 Stage 1.5 已成功写入 Android、Mac 两条 `outcomes`。未满足时，保留已采集的 `weekly.md`，报告屏幕时间缺口并索取三图；不得生成 `_dist`。
+4. 生成 `_dist` 前读取行动反馈表，刷新本周 `feedback.md`：
    - 查询所有 `状态` 为 `待尝试` 或 `已尝试` 的记录，再查询 `尝试日期` 落在目标周内的记录；按 `record_id` 去重。
    - 保存四个业务字段和真实 `record_id`，区分“尚未闭环行动（不是本周已发生证据）”与“本周尝试记录”。零记录也写明已检查。
    - `feedback.md` 是 Base 状态快照，只能由本步骤刷新；不得把待尝试记录写成已发生行动。
-4. 生成 `_dist` 前，验证这些当前周输入：
+5. 生成 `_dist` 前，验证这些当前周输入：
    - `daily.md`
    - `flomo.md`
    - `weread.md`
@@ -112,14 +113,14 @@ npm run memory:weekly -- --week 2026-W27
    - `weekly.md`
    - `ai.md`
    对周六、周日提前写当周的场景，允许 `daily.md` / `flomo.md` / `weread.md` 是截至运行时的部分覆盖，但 `weekly.md` 和 `ai.md` 仍必须是目标周真实回顾内容。
-5. `build.md` 属于单独的 `Learn-X 每周「 Codex Build 复盘」` 自动化。本流程不得创建、改写或追加 `build.md`。如果已有有效 `build.md`，`learn-x-process` 可以纳入处理。`build-bot.md` 属于飞书机器人侧流程；本流程只提示自查，不调用 `build-bot-log`。
-6. 运行：
+6. `build.md` 属于单独的 `Learn-X 每周「 Codex Build 复盘」` 自动化。本流程不得创建、改写或追加 `build.md`。如果已有有效 `build.md`，`learn-x-process` 可以纳入处理。`build-bot.md` 属于飞书机器人侧流程；本流程只提示自查，不调用 `build-bot-log`。
+7. 运行：
 
    ```bash
    npm run process:weekly -- --week YYYY-Www
    ```
 
-7. 汇报：
+8. 汇报：
    - `04_output/_dist/weekly/YYYY-Www/input.json`
    - `04_output/_dist/weekly/YYYY-Www/process-pack.md`
    - `04_output/weekly/YYYY-WW.md`
