@@ -13,6 +13,7 @@ description: Learn-X 每周输入自动采集、Weekly Output 报告准备、已
 
 ```bash
 npm run input:weread -- --week 2026-W27
+npm run input:calendar -- --week 2026-W27
 npm run process:weekly -- --week 2026-W27
 npm run memory:weekly -- --week 2026-W27
 ```
@@ -61,6 +62,7 @@ npm run memory:weekly -- --week 2026-W27
    - 飞书周记：通过飞书 CLI 读取线上周记文档，优先从知识库/文档节点树定位目标周文档，再读取正文。只截取目标周段落。`weekly.md` 必须保留来源 URL、标题或日期定位依据、采集时间。无法通过 CLI 取得线上正文时停止，不得用旧本地内容替代。
    - Flomo：优先通过官方 MCP 按 Asia/Shanghai 的目标周起止时间检索并批量读取完整正文；若改用 `playwright-extension`，持续加载已登录页面直到覆盖目标周下界。遍历分页或加载结果，只把目标周笔记去重后按创建时间正序写入 `flomo.md`。文件保留来源、时间范围、采集时间、数量和分页完成状态；不得只取首屏，不得用旧本地导出替代。
    - 微信读书：按 `learn-x-input` 执行 `npm run input:weread -- --week YYYY-Www`。验证输出保留目标周、Asia/Shanghai 范围、生成时间、阅读统计、进度快照、个人划线和想法，并包含完整 7 天，包括 0 分钟日期。
+   - 飞书日历：按 `learn-x-input` 执行 `npm run input:calendar -- --week YYYY-Www`，只用用户身份读取主日历。写入 `calendar.md` 的只能是每日与全周计划忙碌统计；不得保存日程内容、人员、ID 或会议链接。它是计划上下文，不是实际行动证据。授权或查询失败时生成“不可用”状态，不得沿用旧统计。
    - AI Coach：通过飞书 CLI 分别读取四张表中“更新时间”落在目标周内的全部记录，写入独立的 `coach.md`。
      - 目标周筛选使用 `更新时间 > 上一周日 23:59` 且 `更新时间 < 下一周一 00:00`；`updated_at` 不支持 `>=`，不要改写为不受支持的操作符。
      - 每张表先 `+field-list`，再用 `+record-list --filter-json` 在服务端筛选并遍历全部分页；`has_more=true` 时不得以当前页冒充全量。
@@ -70,7 +72,7 @@ npm run memory:weekly -- --week 2026-W27
    - 飞书机器人 Build 复盘：本流程不执行 `build-bot-log`，不生成或追加 `build-bot.md`。必须提示用户：`build-bot-log 需要在飞书机器人上完成，请自查`。
      - 如果目标周是提前写当周，提示用户去飞书上手动执行，并输出自动化链接：https://ywhome.feishu.cn/wiki/KcTcwG90OiZh3rksu0ucvwx5nFe?table=wkfVC125gMp3snTX
      - 如果不是提前执行，提示用户周日飞书自动化理论上已提前执行，只需自查 `build-bot.md` 是否已由飞书侧写入。
-   - 如果目标周是周六、周日自动判定的当前周提前稿，`daily.md` / `flomo.md` / `weread.md` / `coach.md` 可以只覆盖截至运行时；文件和汇报必须标出缺失日期 / 未来日期。
+   - 如果目标周是周六、周日自动判定的当前周提前稿，`daily.md` / `flomo.md` / `weread.md` / `coach.md` / `calendar.md` 可以只覆盖截至运行时；文件和汇报必须标出缺失日期 / 未来日期。
 3. 自动来源完成后立刻进入 Stage 1.5；不得先宣告阶段 1 完成、要求周记或 AI 摘要，也不得等待 `继续`。
 4. 阶段 1 不采集飞书周记。Stage 1.5 成功后，再提醒用户先在飞书周记文档中写完目标周周记；用户回复 `继续` 后，阶段 2 自动读取线上飞书周记并写入 `weekly.md`。
 5. 阶段 1 不生成 `_dist`，不创建或改写最终 Weekly Output。
@@ -86,7 +88,7 @@ npm run memory:weekly -- --week 2026-W27
 - 截图不复制到 Learn-X、`03_input` 或 Base 附件；屏幕时间数据只存在于 Time-X Base。
 - 只有脚本非 dry-run 成功返回 Android、Mac 两条 `outcomes` 后，才继续提示用户完成周记和 AI 摘要；用户回复 `继续` 才进入阶段 2。
 
-阶段 1 汇报必须包含：目标周、已完成来源、缺失或部分完成来源、`daily.md` / `flomo.md` / `weread.md` / `coach.md` 路径、当前位置、下一步、再下一步。
+阶段 1 汇报必须包含：目标周、已完成来源、缺失或部分完成来源、`daily.md` / `flomo.md` / `weread.md` / `coach.md` / `calendar.md` 路径、当前位置、下一步、再下一步。
 
 ## 阶段 2：周记采集与报告准备
 
@@ -103,6 +105,7 @@ npm run memory:weekly -- --week 2026-W27
    - `daily.md`
    - `flomo.md`
    - `weread.md`
+   - `calendar.md`（只作计划上下文，缺失或不可用时报告但不将其当作行动证据）
    - `coach.md`
    - `feedback.md`
    - `build-bot.md`（只验证是否已由飞书侧完成；不存在时报告缺口，但本流程不生成）

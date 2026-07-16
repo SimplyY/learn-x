@@ -42,6 +42,14 @@ Render all seven days from the weekly `readTimes` buckets, including zero-minute
 - Reject `/readdata/detail` when any returned daily bucket falls outside the requested ISO week. Do not turn a previous-week response into a file labelled as the target week.
 - Stop when the WeRead API returns `upgrade_info`; update the installed WeRead Skill before retrying.
 
+## Calendar Weekly Input
+
+Run `npm run input:calendar -- --week YYYY-Www` to collect the target ISO week's primary Feishu Calendar through `lark-cli calendar +agenda --as user`.
+
+- Require the user identity and `calendar:calendar.event:read`; on failure write `calendar.md` as unavailable and do not retain old statistics.
+- Write only daily and weekly planned-busy aggregates. Never write schedule titles, descriptions, people, locations, event IDs, calendar IDs, or meeting links.
+- Treat the result as planned-time context, never as evidence that an event occurred, was attended, or was completed.
+
 ## Script
 
 Use `scripts/collect-weread-weekly.mjs`. It accepts `--week YYYY-Www`; without it, it uses the Learn-X weekly review default in `Asia/Shanghai`: Monday through Friday target the previous ISO week, Saturday and Sunday target the current ISO week. Weekly automation should still pass the resolved target week explicitly.
