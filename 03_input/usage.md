@@ -42,8 +42,8 @@ rm 03_input/weekly/YYYY-Www/README.md
 
 0. 自动判断目标周：未指定时，周一至周五默认处理上一 ISO 周；周六、周日默认处理当前 ISO 周。周三至周五运行时需要提示“现在仍是周中，默认处理上一周”；周六、周日处理当前周时视为提前写当周，只能声明覆盖截至运行时。
 1. 采集 `daily.md`、`flomo.md`、`weread.md`、`calendar.md` 和 `coach.md`，不采集周记，不生成 `_dist`。
-2. Stage 1.5：在电脑端 CodeX 对话提交 `时间` 与三张屏幕时间截图，写入 Time-X Base；不进入 `03_input`。
-3. 用户回复继续后，先检查 `ai.md`，再采集 `weekly.md`。必要输入通过后生成 `_dist`。
+2. 并行准备：在电脑端 CodeX 对话提交 `时间` 与三张屏幕时间截图，写入 Time-X Base；同时可生成 `ai.md` 并完成飞书周记。屏幕时间不进入 `03_input`。
+3. 用户回复继续后，先检查 `ai.md`，再采集 `weekly.md`；只有 AI 摘要、周记和三图屏幕时间均已完成，才生成 `_dist`。
 4. 用户完成 `04_output/weekly/YYYY-WW.md`、审核行动反馈变更并勾选 Memory 候选后再次回复继续。自动化先把已确认变更写入行动反馈 Base，再生成 `memory-candidates.md`，只把已勾选或用户明确确认的内容无损迁移到 `01_core/memory/YYYY-QN.memory.md`；未勾选内容不写入。
 
 要求：
