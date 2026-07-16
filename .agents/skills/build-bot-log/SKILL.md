@@ -96,8 +96,19 @@ Use total-part-total. Keep paragraphs under 100 chars. No chat log dumps.
 2. **Top 3–5 items** — Sorted by impact, not volume. For each: what, user
    intent, bot role, closed-loop or not.
 3. **Per-entry outcomes** — Key deliverables by group / project / automation.
-4. **Light-task offload** — Which tasks completed without the user opening a
-   computer; which needed human接力.
+4. **Entry / Executor / Model / Handoff** - For each major task this week,
+   state four dimensions explicitly. Do NOT collapse them into a single
+   "all done on phone" claim:
+   - **Entry**: where the task was initiated (phone Feishu / desktop).
+   - **Executor**: who actually ran it (bot CLI / Codex desktop / desktop
+     IDE / manual).
+   - **Model**: which model powered execution (bot's ark-code-latest /
+     desktop Codex model).
+   - **Handoff**: whether the user had to take over or switch to desktop.
+   A task initiated on phone but executed by desktop Codex is "phone entry,
+   desktop executor" - not "no desktop Codex involved". This prevents the
+   retrospective from contradicting daily notes that record desktop Codex
+   refactoring work.
 5. **Skill / prompt / workflow changes** — New, updated, deprecated. Why.
 6. **Cross-project capability shifts** — Bot skills reused across projects.
 7. **AI Builder / learner significance** — Brief reflection, no boilerplate.
