@@ -22,7 +22,7 @@ test("summarizes busy calendar instances without retaining private event content
       { event_id: "cross-day", start_time: { datetime: "2026-06-09T23:00:00+08:00" }, end_time: { datetime: "2026-06-10T01:00:00+08:00" } },
       { event_id: "all-day", is_all_day: true, start_time: { date: "2026-06-10" }, end_time: { date: "2026-06-11" } },
       { event_id: "remote", start_time: { datetime: "2026-06-11T09:00:00+09:00" }, end_time: { datetime: "2026-06-11T10:00:00+09:00" } },
-      { event_id: "free", free_busy_status: "free", start_time: { datetime: "2026-06-12T09:00:00+08:00" }, end_time: { datetime: "2026-06-12T10:00:00+08:00" } },
+      { event_id: "free", free_busy_status: "FREE", start_time: { datetime: "2026-06-12T09:00:00+08:00" }, end_time: { datetime: "2026-06-12T10:00:00+08:00" } },
       { event_id: "declined", self_rsvp_status: "decline", start_time: { datetime: "2026-06-12T10:00:00+08:00" }, end_time: { datetime: "2026-06-12T11:00:00+08:00" } },
       { event_id: "boundary", start_time: { datetime: "2026-06-15T00:00:00+08:00" }, end_time: { datetime: "2026-06-15T01:00:00+08:00" } },
       { event_id: "first", start_time: { datetime: "2026-06-08T09:00:00+08:00" }, end_time: { datetime: "2026-06-08T10:00:00+08:00" } }

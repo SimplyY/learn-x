@@ -71,7 +71,7 @@ export function summarizeCalendarEvents({ week, range, events, generatedAt }) {
       if (intervalEnd <= intervalStart) continue;
       if (event.is_all_day) {
         days[index].allDayEventCount += 1;
-      } else if (event.free_busy_status !== "free") {
+      } else if (String(event.free_busy_status || "").toLowerCase() !== "free") {
         days[index].timedEventCount += 1;
         days[index].busyIntervals.push([intervalStart, intervalEnd]);
       }
