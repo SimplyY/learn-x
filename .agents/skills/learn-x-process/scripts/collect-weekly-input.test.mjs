@@ -14,3 +14,10 @@ test("classifies AI Coach weekly input as action evidence", () => {
     source: "coach"
   });
 });
+
+test("keeps calendar plan summaries as ordinary input", () => {
+  assert.deepEqual(inputKindFromRelativePath("03_input/weekly/2026-W29/calendar.md"), {
+    category: "input",
+    source: "calendar"
+  });
+});
