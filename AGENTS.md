@@ -20,6 +20,7 @@
 | Process / Output / Memory | `docs/LEARN_X_PROCESS.md`、`.agents/skills/learn-x-process/` | 处理周/月/年 Output、Process Pack、Memory 候选 |
 | Input 流程 | `03_input/README.md`、`03_input/usage.md`、`.agents/skills/learn-x-input/` | 采集、校验或生成 `03_input/` |
 | 安全与提交 | `docs/SECURITY.md` | 提交、扫描、处理隐私材料或敏感文件 |
+| 防幻觉规则 | `.agents/ANTI_HALLUCINATION.md` | 涉及外部内容抓取、飞书文档创建、跨系统数据搬运 |
 | 命令策略 | `RTK.md` | 运行 git、diff、搜索、测试等可能高噪声命令 |
 
 ## 始终遵守
