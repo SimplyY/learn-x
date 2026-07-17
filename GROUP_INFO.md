@@ -6,7 +6,7 @@ group_name: "learn-x"
 repo_path: "/Users/yuwei/code/learn-x"
 repo_url: null
 group_info_path: "/Users/yuwei/code/learn-x/GROUP_INFO.md"
-updated_at: "2026-07-16T00:01:10.980Z"
+updated_at: "2026-07-17T00:01:06.369Z"
 icon: "🧠"
 name_zh: "learn-x"
 summary: "认知系统。核心功能 chat pack（chat 上下文提示词） + IPO(输入、处理、输出)"
@@ -47,6 +47,7 @@ priority: 1
 - learn-x：https://simplyy.github.io/learn-x/index.html#learning
 - README.md：[研究&学习](https://ywhome.feishu.cn/wiki/KcTcwG90OiZh3rksu0ucvwx5nFe)
 - README.md：| 器 | tool，工具实现层 | flomo、飞书、Codex、脚本、书籍 |
+- 03_input/README.md：`calendar.md`：飞书主日历的每日与全周计划时间统计；不保存日程正文，且只作计划上下文，不代表实际发生。
 - 03_input/README.md：`health.md`：Health-X 周报摘要，由 Health-X 在飞书周报同步成功后生成。
 - 03_input/README.md：`coach.md`：AI Coach Base 中更新时间落在目标周内的服务对象、服务记录、思考与项目数据；链接只保留 URL，不读取链接页面正文。
 - 03_input/README.md：`build-bot.md`：飞书机器人 / Code X Bot 周度执行复盘，由飞书机器人侧 `build-bot-log` 生成；本地周自动化只提示自查。
@@ -55,4 +56,4 @@ priority: 1
 - 工作目录：可访问
 - 链接数：2
 - Skill 扫描：正常
-- 最近更新时间：2026-07-16T00:01:10.980Z
+- 最近更新时间：2026-07-17T00:01:06.369Z
