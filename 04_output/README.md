@@ -35,6 +35,9 @@ _dist/monthly/YYYY-MM/input.json
 _dist/monthly/YYYY-MM/process-pack.md
 
 _dist/yearly/YYYY/process-pack.md
+
+_dist/find-next/evidence/YYYY-Www.md
+_dist/find-next/core-context/{full,weighted,core}.md
 ```
 
 ## 核心文件
@@ -42,6 +45,7 @@ _dist/yearly/YYYY/process-pack.md
 - `process-pack.md`：默认给 AI Chat 读取的材料包，保留来源索引和清洗后的正文。
 - `input.json`：metadata-only 审计清单，记录来源路径、哈希、过滤、去重和压缩统计，不保存正文，也不放进 AI Chat。
 - `memory-candidates.md`：从 Output 中抽取的已确认内容候选，供 Memorize 使用。
+- `find-next/`：每周 Memory 完成后由 AI 汇总的可追溯证据索引。`evidence/YYYY-Www.md` 列出本周每个实际来源的路径、范围、权重判断、全文阅读/允许压缩状态与缺口；`core-context/full.md`、`weighted.md`、`core.md` 是三档独立静态核心上下文。不保存预生成的找事建议，也不生成或读取 `current.md`。运行时由 `find-next` 或已接入的研究、阅读、思考 Skill 结合选定上下文与当前请求推理；找事配置与常做清单仍只从“日常记录” Base 读取。
 
 ## 边界
 

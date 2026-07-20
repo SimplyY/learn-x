@@ -1,43 +1,43 @@
 {
   "version": "1.0.0",
-  "lastRun": "2026-07-04 13:00:00",
-  "lastCoverage": "2026-06-28..2026-07-04",
-  "lastWeek": "2026-W27",
+  "lastRun": "2026-07-19 09:20:00",
+  "lastCoverage": "2026-07-13..2026-07-19",
+  "lastWeek": "2026-W29",
   "checkedSources": {
     "bridgeLogs": {
       "available": true,
-      "reason": "7 log files for 2026-06-28..2026-07-04 under LARK_CHANNEL_HOME/profiles/deep/logs/, 28+ intake events in learn-x group"
+      "reason": "7 daily bridge logs (0713-0719) under LARK_CHANNEL_HOME/profiles/deep/logs/, 587 intake enter events extracted, all from user ou_3b941de65bd"
     },
     "codexMemories": {
-      "available": false,
-      "reason": "deep profile memory_stage1 jobs all failed due to missing model alias gpt-5.4-mini in MoonBridge; fixed by adding 5 route aliases to ark-code-latest + reset jobs to pending; memories will generate on next worker run"
+      "available": "partial",
+      "reason": "memory_summary.md stops at 2026-07-09, raw_memories.md is empty ('No raw memories yet.'), no new memory consolidation this week"
     },
     "feishuMessages": {
-      "available": true,
-      "reason": "extracted from bridge intake logs for learn-x group (oc_846411e4...)"
+      "available": false,
+      "reason": "not invoked; bridge intake logs already covered user instruction surface"
     },
     "gitChanges": {
       "available": true,
-      "reason": "6 commits (74126c5..0b4d4a0) in learn-x window"
+      "reason": "learn-x 19 commits + skills 20 commits in window; learn-x worktree only has untracked W29 directory"
     },
     "baseWorkflows": {
       "available": false,
-      "reason": "no --base-token provided"
+      "reason": "not invoked; quarterly automation confirmed via chat evidence only"
     }
   },
   "keyConclusions": [
-    "Chat Pack 分类重组：4 个高频 prompt（ljg-learn/read/roundtable、芒格之魂）移入高频使用，build+push 完成",
-    "group-info skill 增加中文强制逻辑（hasChinese），无 description_zh 时标记需补充",
-    "long-read skill 针对阮一峰周刊格式迭代，合并 read-x 版本为全局唯一",
-    "wisdom-gate skill 迁移至 research-x，群信息同步更新",
-    "MoonBridge deep profile 记忆管道修复：Codex memory_stage1 因模型名 404 全部失败，添加 gpt-5.x 系列路由别名到 ark-code-latest 后恢复"
+    "invest-x 查询 Skill 上线并多轮收敛：缓存 12h、按月矩阵、现值列、半年/全年分卡片、1 位小数、按现值排序",
+    "Skill 治理升级为可强制硬规则：触发词 hook + global-governance + neat-all 飞书场景完成度门禁，落地 skills 55ea996",
+    "newold 误识别为 new-repo 根因修复（词面冲突），7/19 hook 固化",
+    "bot 慢根因诊断：图片解析 15s 超时为核心瓶颈，7/18 改 1-2 分钟；移除 semble 与冗余联网分层",
+    "SOUL.md / 全局 AGENTS.md 收敛：总结逻辑、回复结构、可读性、安全底线、恶意注入防范全部固化到系统文件"
   ],
   "gapsFound": [
-    "learn-x-input、learn-x-prompt-review、build-bot-log 等 skill 缺 description_zh",
-    "skills 目录自动软链同步只有 AGENTS.md 说明，未落地自动化脚本",
-    "飞书多维表格字段变更保护规则未内化到代码",
-    "MoonBridge 配置持久化在 SQLite（不重读 yml），改配置需同步更新 DB",
-    "Codex memory worker 需要桌面应用活跃才调度，bridge-only 会话无法主动触发记忆提炼"
+    "raw_memories.md 为空，本周新决策未沉淀到记忆系统，需下周补",
+    "未调用 lark-cli messages-search / base workflow-list，bridge logs 已覆盖指令面但 bot 回复详情未全面提取",
+    "lark-channel-bridge 工作区 git log 未读取，bot 慢根因的配置层修改证据需补证",
+    "大佬情报季度自动化首次真实触发尚未发生，需等下季度验收",
+    "memory_summary.md 停在 07-09，与本周实际工作脱节"
   ],
-  "nextIterationSuggestion": "补 skill 中文描述；skills 软链自动同步脚本落地；多维表格危险操作加二次确认；MoonBridge 配置变更流程文档化；考虑 bridge 空闲时主动触发 memory consolidation"
+  "nextIterationSuggestion": "补 raw_memories.md 本周沉淀（bot 慢根因、触发词 hook、SOUL.md 收敛、大佬情报自动化）；下次复盘读取 lark-channel-bridge git log 补 bridge 配置层证据；跑一周后观察 neat-all hook 误报率与 invest-x 查询稳定性"
 }

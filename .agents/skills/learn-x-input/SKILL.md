@@ -42,13 +42,13 @@ Render all seven days from the weekly `readTimes` buckets, including zero-minute
 - Reject `/readdata/detail` when any returned daily bucket falls outside the requested ISO week. Do not turn a previous-week response into a file labelled as the target week.
 - Stop when the WeRead API returns `upgrade_info`; update the installed WeRead Skill before retrying.
 
-## Calendar Weekly Input
+## Time-X Weekly Input
 
-Run `npm run input:calendar -- --week YYYY-Www` to collect the target ISO week's primary Feishu Calendar through `lark-cli calendar +agenda --as user`.
+Run `npm run input:time -- --week YYYY-Www` to collect the target ISO week's Time-X private shared calendar and screen-time Base through `lark-cli --as bot`.
 
-- Require the user identity and `calendar:calendar.event:read`; on failure write `calendar.md` as unavailable and do not retain old statistics.
-- Write only daily and weekly planned-busy aggregates. Never write schedule titles, descriptions, people, locations, event IDs, calendar IDs, or meeting links.
-- Treat the result as planned-time context, never as evidence that an event occurred, was attended, or was completed.
+- Write `time.md`; do not fall back to the user identity or the primary calendar.
+- Preserve category aggregates, the newest Android/Mac totals, and only applications strictly over one hour. Keep Mac `ChatGPT` as `Code X`; never write titles, people, locations, IDs, links, or screenshots.
+- Treat calendar and screen time as separate context, never as completion evidence.
 
 ## Script
 
