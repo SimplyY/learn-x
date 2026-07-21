@@ -25,7 +25,6 @@
     "test:app": "node --test app/code/scripts/*.test.mjs",
     "release": "node app/code/scripts/release.mjs",
     "input:build-bot": "node .agents/skills/build-bot-log/scripts/generate-build-bot.mjs",
-    "wisdom-gate:ingest": "node .agents/skills/wisdom-gate/scripts/ingest.mjs",
     "research:ingest": "node .agents/skills/long-article-research/scripts/research-ingest.mjs"
   },
   "dependencies": {
