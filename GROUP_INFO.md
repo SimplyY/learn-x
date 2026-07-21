@@ -6,7 +6,7 @@ group_name: "learn-x"
 repo_path: "/Users/yuwei/code/learn-x"
 repo_url: null
 group_info_path: "/Users/yuwei/code/learn-x/GROUP_INFO.md"
-updated_at: "2026-07-20T00:00:37.636Z"
+updated_at: "2026-07-21T00:01:03.403Z"
 icon: "🧠"
 name_zh: "learn-x"
 summary: "认知系统。核心功能 chat pack（chat 上下文提示词） + IPO(输入、处理、输出)"
@@ -36,7 +36,6 @@ priority: 1
 5. learn-x-process：Process Learn-X 03_input into Process Pack and Output shell, then generate Memory candidates from reviewed Output. Use when the user asks for running weekly/monthly process, generating _dist, or preparing memory candidates.
 6. learn-x-weekly-automation：Learn-X 每周输入自动采集、Weekly Output 报告准备、已审核 Memory 迁移的中文自然语言工作流
 7. long-article-research：长文系统性深度研究 Skill
-8. wisdom-gate：高质量认知内容结构化存入智慧之门 Base
 
 ## 可用 Workflow
 1. learn-x-monthly-automation：Learn-X 月度自动化中文工作流
@@ -56,4 +55,4 @@ priority: 1
 - 工作目录：可访问
 - 链接数：2
 - Skill 扫描：正常
-- 最近更新时间：2026-07-20T00:00:37.636Z
+- 最近更新时间：2026-07-21T00:01:03.403Z

@@ -159,14 +159,13 @@ npm run memory:weekly -- --week 2026-W27
 8. 将获准条目写入正确的季度 Memory 目标。已勾选的 `法候选` / `术候选` 进入对应候选池。`芒格之魂的洞察 & 全文核心重点纪要` 区域中的内容作为候选观察池的独立候选，不自动升级为正式 `道 / 法 / 术`。
 9. 保持幂等。重复运行不得追加完全重复条目。
 10. 如果没有获准条目，停止并要求用户勾选或明确确认候选，不要编造 Memory。
-11. Memory 写入成功后，在同一阶段执行 `$find-next 更新索引 YYYY-Www`：
-   - 先运行 `node /Users/yuwei/code/skills/find-next/scripts/collect-ticktick-ics.mjs /Users/yuwei/code/learn-x`。它只从 macOS Keychain 的 `learn-x-ticktick-ics-url` 读取收集箱 ICS URL，输出 Git 忽略的 `04_output/_dist/find-next/ticktick.md`；不得打印、复制、提交 URL 或写入飞书。
-   - TickTick 采集失败时标注缺口，但不阻塞已成功的 Memory 或其他找事索引；本轮找事不得显示旧 To Do。
+11. Memory 写入成功后，在同一阶段执行 `$ywnext 更新索引 YYYY-Www`：
    - 读取最近四周已完成的 Weekly Output、Process Pack、`input.json`、周记、日记、阅读和既有 `coach.md`；本周与上周按高时效处理。
    - 用 `lark-cli` 离线读取智慧之门近四周记录，只提取主题、一句话精华、创建时间和复看状态；AI Coach 只复用每周已采集的脱敏普通字段。二者都不读取联系方式、访谈原文、附件或链接正文。
-   - 读取“找事配置” Base 的启用记录，运行 `$find-next` 的配置校验脚本，将原始快照写入 `04_output/_dist/find-next/evidence/YYYY-Www.config.json`；脚本不归一化权重、不提炼证据、不生成建议。
-   - 由 AI 严格依据 `$find-next` 的 Markdown 规则回看最近四周的全部实际来源，生成每周 `evidence/YYYY-Www.md`（来源路径、范围、权重判断、全文阅读/允许压缩状态与缺口）及 `core-context/full.md`、`weighted.md`、`core.md`（三档独立静态核心上下文）。不生成或读取 `current.md`，不得写做 / 学 / 玩 / 思考候选、第一步、优先级或时长。
-   - 运行四周证据索引与核心上下文校验。任何外部来源或配置读取失败时，在证据索引中标注缺口且不生成新的核心上下文；不得用旧外部数据伪装为本周更新，也不得阻塞已成功写入的 Memory。
+   - 读取“找事配置” Base 的启用记录，运行 `$ywnext` 的配置校验脚本，将原始快照写入 `/Users/yuwei/code/skills/ywnext/runtime/evidence/YYYY-Www.config.json`；脚本不归一化权重、不提炼证据、不生成建议。
+   - 由 AI 严格依据 `$ywnext` 的 Markdown 规则回看最近四周的全部实际来源，生成 `/Users/yuwei/code/skills/ywnext/runtime/evidence/YYYY-Www.md`（来源路径、范围、权重判断、全文阅读/允许压缩状态与缺口）及 `runtime/core-context/full.md`、`weighted.md`、`core.md`（三档独立静态核心上下文）。不生成或读取 `current.md`。
+   - 继续生成仅供 YW Next 使用的 `runtime/core-context/full-full.md`：四周输入目录的 `daily.md`、`weekly.md`（周记）整文件保留；Weekly 报告只保留「全文核心重点纪要」与实质性「芒格之魂的洞察」两个章节全文，其余报告章节高压缩。微信读书 `weread.md` 也必须压缩：只留书名、进度/近期状态和至多一个改变判断的个人想法，禁止复制划线原文或逐条笔记。道、Memory 与其他有效权重 `≥0.60` 的材料/指定范围全文保留；仅其他低权重材料可压缩。再由 AI 仅基于该文件生成 `/Users/yuwei/code/skills/ywnext/runtime/candidate-list.md`，做、学、玩、思考各 20 条，含详情、适用条件与候选权重。候选不另存周度快照。
+   - 运行四周证据、三档核心上下文、full-full 原文保留与候选清单校验。任何外部来源或配置读取失败时，在证据索引中标注缺口且不生成新的核心上下文或候选清单；不得用旧外部数据伪装为本周更新，也不得阻塞已成功写入的 Memory。
 
 阶段 3 汇报必须包含候选数量、实际迁移数量、目标文件、去重结果、找事索引路径和状态、验证结果、当前位置、下一步和下次运行。
 
