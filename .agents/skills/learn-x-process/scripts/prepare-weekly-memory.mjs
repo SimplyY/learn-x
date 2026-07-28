@@ -27,6 +27,8 @@ export async function prepareWeeklyMemory(options = {}) {
     quarter,
     outputPath,
     counts: {
+      coreSummary: candidates.coreSummary.length,
+      mungerInsights: candidates.mungerInsights.length,
       checked: candidates.checked.length,
       explicit: candidates.explicit.length,
       core: candidates.core.length
@@ -35,6 +37,7 @@ export async function prepareWeeklyMemory(options = {}) {
 }
 
 export function extractMemoryCandidates(content) {
+  const required = extractRequiredSections(content);
   const checked = [];
   const unchecked = [];
   const explicit = [];
@@ -72,6 +75,8 @@ export function extractMemoryCandidates(content) {
   }
 
   return {
+    coreSummary: required.coreSummary,
+    mungerInsights: required.mungerInsights,
     checked: uniqueCandidates(checked),
     unchecked: uniqueCandidates(unchecked),
     explicit: uniqueCandidates(explicit),
@@ -84,13 +89,21 @@ function renderCandidatePack(week, quarter, weeklyPath, candidates) {
     `# Learn-X Memory Candidates｜${memoryWeekSectionId(week)}`,
     "",
     "> 这是给 Codex 生成 Weekly Memory 的候选材料，不是最终 Memory。",
-    "> 脚本只抽取已勾选和明确标记内容；最终 Memory 需要 Codex 按 `memory-rules.md` 无损整理并写入。",
+    "> 标题 10/11 是系统确认内容；脚本同时抽取已勾选和明确标记内容。最终由 Codex 按 `memory-rules.md` 整理并写入。",
     "",
     "## 处理信息",
     "",
     `- Weekly Output：\`${path.relative(repoRoot, weeklyPath).split(path.sep).join("/")}\``,
     `- 输出目标：\`01_core/memory/${quarter}.memory.md\``,
     `- 建议小节：\`## ${memoryWeekSectionId(week)}\``,
+    "",
+    "## 系统确认：全文核心重点纪要",
+    "",
+    renderBlocks(candidates.coreSummary),
+    "",
+    "## 系统确认：芒格之魂的洞察",
+    "",
+    renderBlocks(candidates.mungerInsights),
     "",
     "## 已勾选内容",
     "",
@@ -106,6 +119,10 @@ function renderCandidatePack(week, quarter, weeklyPath, candidates) {
     "",
     "## 生成要求",
     "",
+    "- 非空的「全文核心重点纪要」必须写入当周 `Memory`。",
+    "- 非空的「芒格之魂的洞察」必须写入季度 Memory 顶部的芒格洞察候选池。",
+    "- 两个系统确认章节无需 checkbox；只过滤空白、`todo` 和占位文本。",
+    "- 可以轻度去重和压缩重复表述，但不得删除独立判断、限定、反转、隐喻或行动边界。",
     "- 已勾选内容必须进入 Memory，不设数量上限。",
     "- 只做无损整理：去掉 checkbox、归类、去除完全重复项。",
     "- 不要改写用户已确认的关键语义。",
@@ -113,6 +130,59 @@ function renderCandidatePack(week, quarter, weeklyPath, candidates) {
     "- 未勾选内容默认不写入。",
     "- 不要替代正式 `道/`、`法/`、`术/`。"
   ].join("\n");
+}
+
+export function extractRequiredSections(content) {
+  const lines = String(content).split(/\r?\n/);
+  const headings = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index].match(/^(#{1,6})\s+(.+?)\s*$/);
+    if (!match) continue;
+    headings.push({ index, level: match[1].length, title: normalizeHeading(match[2]) });
+  }
+
+  const result = { coreSummary: [], mungerInsights: [] };
+  for (let index = 0; index < headings.length; index += 1) {
+    const heading = headings[index];
+    const key = requiredSectionKey(heading.title);
+    if (!key) continue;
+
+    const next = headings.slice(index + 1).find((candidate) => candidate.level <= heading.level);
+    const body = lines
+      .slice(heading.index + 1, next?.index ?? lines.length)
+      .join("\n")
+      .replace(/(?:\n\s*---\s*)+$/g, "")
+      .trim();
+    if (!isSubstantiveSection(body)) continue;
+    result[key].push({ section: heading.title, text: body });
+  }
+
+  result.coreSummary = uniqueCandidates(result.coreSummary);
+  result.mungerInsights = uniqueCandidates(result.mungerInsights);
+  return result;
+}
+
+function normalizeHeading(title) {
+  return String(title)
+    .replace(/[\*_`]/g, "")
+    .replace(/^\d+\s*[.、．]\s*/, "")
+    .trim();
+}
+
+function requiredSectionKey(title) {
+  if (title === "全文核心重点纪要") return "coreSummary";
+  if (title === "芒格之魂的洞察") return "mungerInsights";
+  return "";
+}
+
+function isSubstantiveSection(body) {
+  const plain = String(body)
+    .replace(/^[-*+]\s+/gm, "")
+    .replace(/^\d+[.、．]\s+/gm, "")
+    .replace(/[\s*_`>#。.!！-]/g, "")
+    .toLowerCase();
+  return Boolean(plain) && !["todo", "待补充", "暂无", "无", "占位"].includes(plain);
 }
 
 function quarterFromIsoWeek(weekId) {
@@ -157,6 +227,11 @@ function renderList(items) {
   }).join("\n");
 }
 
+function renderBlocks(items) {
+  if (!items.length) return "- 暂无。";
+  return items.map((item) => `### ${item.section}\n\n${item.text}`).join("\n\n");
+}
+
 function uniqueCandidates(items) {
   const seen = new Set();
   const result = [];
@@ -198,6 +273,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 
   console.log(`Weekly memory candidates generated: ${path.relative(repoRoot, result.outputPath)}`);
   console.log(`Quarterly memory target: 01_core/memory/${result.quarter}.memory.md`);
+  console.log(`Core summary sections: ${result.counts.coreSummary}`);
+  console.log(`Munger insight sections: ${result.counts.mungerInsights}`);
   console.log(`Checked items: ${result.counts.checked}`);
   console.log(`Explicit markers: ${result.counts.explicit}`);
   console.log(`Core clues: ${result.counts.core}`);

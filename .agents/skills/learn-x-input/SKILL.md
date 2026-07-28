@@ -44,12 +44,21 @@ Render all seven days from the weekly `readTimes` buckets, including zero-minute
 
 ## Time-X Weekly Input
 
-Run `npm run input:time -- --week YYYY-Www` to collect the target ISO week's Time-X private shared calendar and screen-time Base through `lark-cli --as bot`.
+Run `npm run input:time -- --week YYYY-Www` once to collect the target ISO week's fixed `Time-X｜随时记` shared calendar and screen-time Base through `lark-cli --as bot`.
 
-- Write `time.md`; do not fall back to the user identity or the primary calendar.
-- Preserve category aggregates, the newest Android/Mac totals, and only applications strictly over one hour. Keep Mac `ChatGPT` as `Code X`; never write titles, people, locations, IDs, links, or screenshots.
+- Write calendar aggregates plus every block's date, start/end, title, and description to `calendar.md`; write screen-time totals and applications strictly over one hour to `time.md`. Do not fall back to the user identity or primary calendar.
+- Keep Mac `ChatGPT` as `Code X`. Never write calendar people, locations, IDs, links, system metadata, or screenshots.
 - Treat calendar and screen time as separate context, never as completion evidence.
+
+## Voice-X Weekly Input
+
+Run `npm run input:voice -- --week YYYY-Www` to read the fixed Voice-X Base with `lark-cli --as bot` and write `voice.md`.
+
+- Select by `录制时间` using the target Asia/Shanghai ISO week and require `核心重点 with AI chat` non-empty.
+- Traverse every Base page, sort by recorded time and a stable business key, then fetch the complete core Markdown document for each row.
+- Never fetch or copy `原始文字稿`; Voice-X Base remains the index and Docx remains the only正文 authority.
+- A successful zero-result query writes an explicit 0-record file. Any Base/schema/document failure must preserve the previous `voice.md` byte-for-byte.
 
 ## Script
 
-Use `scripts/collect-weread-weekly.mjs`. It accepts `--week YYYY-Www`; without it, it uses the Learn-X weekly review default in `Asia/Shanghai`: Monday through Friday target the previous ISO week, Saturday and Sunday target the current ISO week. Weekly automation should still pass the resolved target week explicitly.
+Use `scripts/collect-weread-weekly.mjs`, `scripts/collect-time-weekly.mjs`, and `scripts/collect-voice-weekly.mjs`. They accept `--week YYYY-Www`; without it, they use the Learn-X weekly review default in `Asia/Shanghai`: Monday through Friday target the previous ISO week, Saturday and Sunday target the current ISO week. Weekly automation should still pass the resolved target week explicitly.
