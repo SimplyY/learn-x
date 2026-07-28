@@ -21,6 +21,7 @@ Weekly 输入由周目录决定，不依赖 weekly index 或文件修改时间�
       ai.md
       flomo.md
       weread.md
+      voice.md
       calendar.md
       health.md
       coach.md
@@ -34,6 +35,7 @@ Weekly 输入由周目录决定，不依赖 weekly index 或文件修改时间�
       ai.md
       flomo.md
       weread.md
+      voice.md
       calendar.md
       health.md
       coach.md
@@ -61,7 +63,8 @@ Weekly 输入由周目录决定，不依赖 weekly index 或文件修改时间�
 - `ai.md`：AI 对话摘要，由用户使用 `02_prompts/meta/_ai-chat-extract-prompt.md` 手动生成。
 - `flomo.md`：目标周 Flomo 内容。
 - `weread.md`：微信读书周度阅读活动、进度快照、个人划线和想法，由 `learn-x-input` 采集。
-- `calendar.md`：飞书主日历的每日与全周计划时间统计；不保存日程正文，且只作计划上下文，不代表实际发生。
+- `voice.md`：Voice-X 中按录制周筛选的核心重点 Markdown；不包含原始文字稿，由 `npm run input:voice` 采集。
+- `calendar.md`：固定 `Time-X｜随时记` 共享日历的每日与全周汇总，以及每个日历块的日期、起止、标题和描述；不保存人员、地点、ID、链接或系统元数据。
 - `health.md`：Health-X 周报摘要，由 Health-X 在飞书周报同步成功后生成。
 - `coach.md`：AI Coach Base 中更新时间落在目标周内的服务对象、服务记录、思考与项目数据；链接只保留 URL，不读取链接页面正文。
 - `build.md`：Codex / Code X 构建、调试、上线记录。

@@ -14,6 +14,7 @@ description: Learn-X 每周输入自动采集、Weekly Output 报告准备、已
 ```bash
 npm run input:weread -- --week 2026-W27
 npm run input:time -- --week 2026-W27
+npm run input:voice -- --week 2026-W27
 npm run process:weekly -- --week 2026-W27
 npm run memory:weekly -- --week 2026-W27
 ```
@@ -53,14 +54,14 @@ npm run memory:weekly -- --week 2026-W27
 ## 阶段判断
 
 - 定时触发，或用户没有明确继续指令：只执行阶段 1。
-- 用户说 `继续`、`周记和 AI 摘要已完成`、`继续采集周记` 或同义表达：对同一目标周进入阶段 2，先验证 `ai.md` 并采集 `weekly.md`；三图屏幕时间可与这些人工项并行提交。三图是否合格按图片证据判断；在生成 `_dist` 前另行确认 Stage 1.5 的非 dry-run 写入脚本是否成功返回 Android、Mac 两条 `outcomes`，不得把缺少回执说成截图不合格。
+- 用户说 `继续`、`周记和 AI 摘要已完成`、`继续采集周记` 或同义表达：对同一目标周进入阶段 2，先验证 `ai.md` 并采集 `weekly.md`。
 - 用户说 `继续记忆`、`报告已完成，写入记忆`、`Memorize`，或确认 Output / 芒格洞察 / 图片 / 公众号发布已完成：对同一目标周执行阶段 3。
 - 不猜测人工项已经完成。到阶段门槛就停。
 - 同一轮自动化中，阶段 1 / 2 / 3 必须使用同一个已解析目标周；不要在后续阶段重新按当天日期推断。
 
 ## 阶段 1：输入采集
 
-目标：采集自动来源后，同时开放屏幕时间、周记和 AI 摘要三项准备；三项汇合后才生成 Weekly Output 输入包。
+目标：采集自动来源后，同时开放周记和 AI 摘要两项准备；两项汇合后才生成 Weekly Output 输入包。
 
 1. 确保 `03_input/weekly/YYYY-Www/` 存在。保留目录中已有的人工内容。若 `weekly.md` 或 `ai.md` 不存在，创建空文件作为人工/阶段 2 写入位置；不得写入模板正文、提示词或缺口说明。
 2. 采集本地自动来源，并提示飞书机器人侧自查：
@@ -68,7 +69,8 @@ npm run memory:weekly -- --week 2026-W27
    - 飞书周记：通过飞书 CLI 读取线上周记文档，优先从知识库/文档节点树定位目标周文档，再读取正文。只截取目标周段落。`weekly.md` 必须保留来源 URL、标题或日期定位依据、采集时间。无法通过 CLI 取得线上正文时停止，不得用旧本地内容替代。
    - Flomo：按“启动规则 4”的快速路径自动新开 Chrome 标签页、打开 `https://v.flomoapp.com/mine` 并复用日常登录态，按 Asia/Shanghai 的目标周起止时间检索；仅在尚未覆盖下界时加载下一批，只把目标周笔记去重后按创建时间正序写入 `flomo.md`。文件保留来源、时间范围、采集时间、数量和分页完成状态；不得只取首屏，不得用旧本地导出替代。
    - 微信读书：按 `learn-x-input` 执行 `npm run input:weread -- --week YYYY-Www`。验证输出保留目标周、Asia/Shanghai 范围、生成时间、阅读统计、进度快照、个人划线和想法，并包含完整 7 天，包括 0 分钟日期。
-   - Time-X 时间：按 `learn-x-input` 执行 `npm run input:time -- --week YYYY-Www`，只读取固定 Time-X 私有共享日历与屏幕时间 Base，写入 `time.md`；只保留六类标签聚合、日期/时长和两端最新总时长。
+   - Time-X 时间：按 `learn-x-input` 执行一次 `npm run input:time -- --week YYYY-Www`，只读取固定 `Time-X｜随时记` 共享日历与屏幕时间 Base。将日历汇总及每个日历块的日期、起止、标题、描述写入 `calendar.md`；将屏幕时间写入 `time.md`。不得读取用户主日历，不保存日历人员、地点、ID、链接或系统元数据。
+   - Voice-X：按 `learn-x-input` 执行 `npm run input:voice -- --week YYYY-Www`，按录制时间读取目标 ISO 周且核心重点非空的全部记录，写入 `voice.md`。必须验证分页完成、时间正序和完整核心 Markdown；不得读取或写入原始文字稿。成功查询为 0 条时保留明确的零记录文件，查询或文档失败时保留旧文件并报告。
    - AI Coach：通过飞书 CLI 分别读取四张表中“更新时间”落在目标周内的全部记录，写入独立的 `coach.md`。
      - 目标周筛选使用 `更新时间 > 上一周日 23:59` 且 `更新时间 < 下一周一 00:00`；`updated_at` 不支持 `>=`，不要改写为不受支持的操作符。
      - 每张表先 `+field-list`，再用 `+record-list --filter-json` 在服务端筛选并遍历全部分页；`has_more=true` 时不得以当前页冒充全量。
@@ -79,23 +81,15 @@ npm run memory:weekly -- --week 2026-W27
      - 如果目标周是提前写当周，提示用户去飞书上手动执行，并输出自动化链接：https://ywhome.feishu.cn/wiki/KcTcwG90OiZh3rksu0ucvwx5nFe?table=wkfVC125gMp3snTX
      - 如果不是提前执行，提示用户周日飞书自动化理论上已提前执行，只需自查 `build-bot.md` 是否已由飞书侧写入。
    - 如果目标周是周六、周日自动判定的当前周提前稿，`daily.md` / `flomo.md` / `weread.md` / `coach.md` / `calendar.md` 可以只覆盖截至运行时；文件和汇报必须标出缺失日期 / 未来日期。
-3. 自动来源完成后，在同一电脑端 CodeX 对话同时请求三图屏幕时间，并提示用户可并行完成飞书周记和 AI 摘要；不得把任一项设为另一项的前置门槛。
-4. 阶段 1 不采集飞书周记。用户回复 `继续` 后，阶段 2 自动读取线上飞书周记并写入 `weekly.md`；无论三图是否已提交，均不得阻止该采集。
+3. 自动来源完成后，提示用户可并行完成飞书周记和 AI 摘要。
+4. 阶段 1 不采集飞书周记。用户回复 `继续` 后，阶段 2 自动读取线上飞书周记并写入 `weekly.md`。
 5. 阶段 1 不生成 `_dist`，不创建或改写最终 Weekly Output。
 6. 不访问 AI Chat 或 ChatGPT 历史。不写入、改写或补全 `ai.md` 正文；如果用户直接把 AI 摘要贴到当前对话，先原样落盘到 `ai.md` 再继续验证。
 7. 读取并在汇报中用 Markdown 代码块完整输出 `02_prompts/meta/_ai-chat-extract-prompt.md` 的当前正文，明确提示用户可直接用它生成 `03_input/weekly/YYYY-Www/ai.md`。
-8. 提示用户可并行完成两件事：发送 `时间` 与三张截图；使用 AI 摘要提示词生成并保存 `03_input/weekly/YYYY-Www/ai.md`，然后回复 `继续`。不要要求用户手工创建 `weekly.md`；该文件由阶段 2 自动采集写入。
+8. 提示用户使用 AI 摘要提示词生成并保存 `03_input/weekly/YYYY-Www/ai.md`，然后回复 `继续`。不要要求用户手工创建 `weekly.md`；该文件由阶段 2 自动采集写入。
 9. 提示用户填写线上周记时，固定附上周记入口：https://ywhome.feishu.cn/wiki/EOlbwTVLyiQp7Fkrr9ucdI9hnac
 
-## 阶段 1.5：电脑端屏幕时间
-
-阶段 1 自动来源完成后，在当前电脑端 CodeX 对话请求用户发送 `时间` 和三张原生截图：Android 近 7 日柱状图、Android 应用列表、Mac 最近 7 日使用时间。它与 AI 摘要、飞书周记准备并行；使用 `/Users/yuwei/code/time-x/.agents/skills/time-x-screen-time/SKILL.md` 的流程直接目视读取图片并写入 `每周屏幕时间` Base。
-
-- Android 总时长只按整小时估算，且截图“今天”必须等于提交日期；Mac 截图只要明确显示“今天”，即以截图当天为结束日，按屏幕显示的最近 7 日统计处理，不再要求额外显示 ISO 日期范围或手动切换到上一完整自然周。
-- 截图不复制到 Learn-X、`03_input` 或 Base 附件；屏幕时间数据只存在于 Time-X Base。
-- 三张截图通过图片证据检查后，视为屏幕时间证据已收到；截图不复制到 Learn-X。生成 `_dist` 前仍需确认非 dry-run 写入脚本已返回 Android、Mac 两条 `outcomes`，因为这只是“Time-X Base 写入回执”门槛，不是截图有效性门槛。若脚本、secure 校验或 Base 写入链路未运行，报告为执行链路阻塞，不否定截图，也不重复索取三图。
-
-阶段 1 汇报必须包含：目标周、已完成来源、缺失或部分完成来源、`daily.md` / `flomo.md` / `weread.md` / `coach.md` / `calendar.md` 路径、当前位置、下一步、再下一步。
+阶段 1 汇报必须包含：目标周、已完成来源、缺失或部分完成来源、`daily.md` / `flomo.md` / `weread.md` / `voice.md` / `coach.md` / `calendar.md` 路径、当前位置、下一步、再下一步。
 
 ## 阶段 2：周记采集与报告准备
 
@@ -104,11 +98,11 @@ npm run memory:weekly -- --week 2026-W27
 1. 先验证 `ai.md`。它必须非空、不是模板、不是提取提示词本身、不是自动缺口说明，并且包含目标周真实回顾内容。无效时立即停止，不采集 weekly，不生成 `_dist`，并再次展示 AI 摘要提示词。用户若已在当前对话贴出 AI 摘要，直接写入 `ai.md` 后再验证。
 2. `ai.md` 通过后，通过飞书 CLI 从已登录的线上飞书周记文档采集目标周周记。只截取目标周段落。`weekly.md` 必须保留来源 URL、标题或日期定位依据、采集时间。无法取得线上正文时停止，不得用旧本地内容替代。
    - 采集前如果发现缺少飞书周记所需授权，先一次性列出并请求全部缺失 scopes，再继续，不要一项一项分开打断用户。
-3. 在生成 `_dist` 前，确认同一目标周的 Stage 1.5 写入链路已成功返回 Android、Mac 两条 `outcomes`。未满足时，保留已采集的 `weekly.md`，报告为 Time-X 写入/secure/回执缺口；如果三图已通过图片检查，不得再次索取三图；不得生成 `_dist`。
-4. 生成 `_dist` 前，验证这些当前周输入：
+3. 生成 `_dist` 前，验证这些当前周输入：
    - `daily.md`
    - `flomo.md`
    - `weread.md`
+   - `voice.md`（必须来自本次成功查询；只含目标周核心重点全文，不含原始文字稿）
    - `calendar.md`（只作计划上下文，缺失或不可用时报告但不将其当作行动证据）
    - `coach.md`
    - `build-bot.md`（只验证是否已由飞书侧完成；不存在时报告缺口，但本流程不生成）
@@ -143,7 +137,7 @@ npm run memory:weekly -- --week 2026-W27
 1. 验证 `04_output/weekly/YYYY-WW.md` 是目标周的实质性周报，不是空壳或模板。
 2. 验证同一周报包含非空、实质性的 `芒格之魂的洞察 & 全文核心重点纪要` 区域。缺失时停止，不生成或迁移 Memory。
 3. 用户回复 `继续记忆` 视为确认本周图片和公众号发布已人工处理。不得访问、验证、上传或发布微信公众号。
-   - `芒格之魂的洞察 & 全文核心重点纪要` 区域本身可直接进入候选抽取，不要求先勾选；阶段 3 直接读取该区域并无损整理。
+   - 标题 10「全文核心重点纪要」和标题 11「芒格之魂的洞察」是系统确认内容，不要求 checkbox。前者写入当周 Memory；后者写入季度 Memory 顶部芒格洞察候选池。允许轻度去重压缩，但不得丢失独立判断、限定、反转、隐喻或行动边界。
 4. 生成或刷新候选：
 
    ```bash
@@ -152,13 +146,14 @@ npm run memory:weekly -- --week 2026-W27
 
 5. 读取 `.agents/skills/learn-x-process/resources/memory-rules.md` 和 `04_output/_dist/weekly/YYYY-Www/memory-candidates.md`。
 6. 只迁移：
+   - `memory-candidates.md` 中两个「系统确认」章节；
    - `memory-candidates.md` 中已勾选的 checkbox 条目；
    - 用户在当前线程明确确认写入的条目；
    - 当前 `learn-x-process` Skill 定义的结构化显式确认标记。
 7. 不迁移未勾选条目。普通未勾选正文中的 `重要`、`保留`、`确认`、`继续追踪` 等关键词不构成确认。
-8. 将获准条目写入正确的季度 Memory 目标。已勾选的 `法候选` / `术候选` 进入对应候选池。`芒格之魂的洞察 & 全文核心重点纪要` 区域中的内容作为候选观察池的独立候选，不自动升级为正式 `道 / 法 / 术`。
+8. 将获准条目写入正确的季度 Memory 目标。「全文核心重点纪要」进入对应周的 `Memory`；「芒格之魂的洞察」进入顶部芒格洞察候选池。已勾选的 `法候选` / `术候选` 进入对应候选池；任何内容都不自动升级为正式 `道 / 法 / 术`。
 9. 保持幂等。重复运行不得追加完全重复条目。
-10. 如果没有获准条目，停止并要求用户勾选或明确确认候选，不要编造 Memory。
+10. 如果标题 10/11 均无实质内容，且没有其他获准条目，停止并要求用户补充、勾选或明确确认候选，不要编造 Memory。
 11. Memory 写入成功后，在同一阶段执行 `$ywnext 更新索引 YYYY-Www`：
    - 读取最近四周已完成的 Weekly Output、Process Pack、`input.json`、周记、日记、阅读和既有 `coach.md`；本周与上周按高时效处理。
    - 用 `lark-cli` 离线读取智慧之门近四周记录，只提取主题、一句话精华、创建时间和复看状态；AI Coach 只复用每周已采集的脱敏普通字段。二者都不读取联系方式、访谈原文、附件或链接正文。
@@ -175,7 +170,6 @@ npm run memory:weekly -- --week 2026-W27
 - 不在脚本中生成最终 Weekly Output 正文。
 - 不在自动化中生成 `芒格之魂` 洞察。
 - 不上传图片，不发布微信公众号。
-- 屏幕时间例外：仅用户主动上传到当前电脑端 CodeX 对话的三张截图可供 CodeX 目视解析；不向其他服务转发，也不落盘到 Learn-X。
 - 不读取 `coach.md` 中 URL 指向的页面正文，不下载 AI Coach 附件，不把联系方式或访谈原文写入仓库。
 - 不写入正式 `道/`、`法/` 或 `术` 资产。
 - 不按关键词迁移未勾选 Memory 候选。
