@@ -6,11 +6,7 @@ import { collectMonthlyProcessInput, normalizeMonthId } from "./monthly-process-
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
 const maxPackBytes = 100 * 1024;
-const eventLimits = {
-  core: { min: 3000, max: 5000 },
-  supporting: { min: 800, max: 1500 },
-  minor: { min: 300, max: 500 }
-};
+const importanceLevels = new Set(["core", "supporting", "minor"]);
 
 export async function generateMonthlyProcessPack(options = {}) {
   const months = options.months?.length ? options.months : [currentMonthId()];
@@ -72,22 +68,29 @@ export function validateCompressionDocument(document, payload) {
 
   const requests = new Map(payload.compressionRequests.map((request) => [request.path, request]));
   const covered = new Set();
+  const individuallyCoveredAi = new Set();
   const events = [];
   for (const [index, event] of (document.events || []).entries()) {
-    if (!eventLimits[event.importance]) throw new Error(`Compression event ${event.id || index + 1} has invalid importance.`);
+    if (!importanceLevels.has(event.importance)) throw new Error(`Compression event ${event.id || index + 1} has invalid importance.`);
     const text = String(event.text || "").trim();
-    const textBytes = Buffer.byteLength(text);
-    const limit = eventLimits[event.importance];
-    if (!text || textBytes < limit.min || textBytes > limit.max) {
-      throw new Error(`Compression event ${event.id || index + 1} must be ${limit.min}-${limit.max} UTF-8 bytes.`);
-    }
+    if (!text) throw new Error(`Compression event ${event.id || index + 1} has no content.`);
     if (!Array.isArray(event.sourcePaths) || !event.sourcePaths.length) throw new Error(`Compression event ${event.id || index + 1} has no sources.`);
+    const eventRequests = [];
     for (const sourcePath of event.sourcePaths) {
       const request = requests.get(sourcePath);
       if (!request) throw new Error(`Compression event references an unrequested source: ${sourcePath}`);
       if (event.sourceHashes?.[sourcePath] !== request.sha256) throw new Error(`Compression source hash mismatch: ${sourcePath}`);
+      eventRequests.push(request);
       covered.add(sourcePath);
     }
+    const aiRequests = eventRequests.filter((request) => request.source === "ai");
+    if (aiRequests.length && event.source !== "ai-synthesis") {
+      if (eventRequests.length !== 1 || event.importance !== "core") {
+        throw new Error(`AI review event ${event.id || index + 1} must preserve one weekly source as a core event.`);
+      }
+      individuallyCoveredAi.add(aiRequests[0].path);
+    }
+    validateStructuredCompressionText(text, event.id || index + 1, eventRequests);
     if (!dateRangeInsideMonth(event.dateRange, payload.month)) throw new Error(`Compression event ${event.id || index + 1} is outside ${payload.month}.`);
     events.push({
       id: event.id || `E${String(index + 1).padStart(3, "0")}`,
@@ -142,6 +145,10 @@ export function validateCompressionDocument(document, payload) {
   }
   const missing = [...requests.keys()].filter((sourcePath) => !covered.has(sourcePath));
   if (missing.length) throw new Error(`Compression sources not covered: ${missing.join(", ")}`);
+  const missingAi = [...requests.values()]
+    .filter((request) => request.source === "ai" && !individuallyCoveredAi.has(request.path))
+    .map((request) => request.path);
+  if (missingAi.length) throw new Error(`AI weekly reviews require individual core events: ${missingAi.join(", ")}`);
 
   const originalChars = payload.compressionRequests.reduce((sum, request) => sum + request.originalChars, 0);
   const outputChars = [...events, ...passthroughs].reduce((sum, event) => sum + event.outputChars, 0);
@@ -158,6 +165,20 @@ export function validateCompressionDocument(document, payload) {
       ratio: originalChars ? Number((outputChars / originalChars).toFixed(4)) : 0
     }
   };
+}
+
+export function validateStructuredCompressionText(text, eventId, requests = []) {
+  const lines = String(text).split("\n");
+  const bulletCount = lines.filter((line) => /^\s*(?:[-*]|\d+\.)\s+\S/.test(line)).length;
+  if (bulletCount < 2) throw new Error(`Compression event ${eventId} must use structured bullet points instead of a flat paragraph.`);
+  const longLine = lines.find((line) => !/^\s*(?:#{1,6}|[-*]|\d+\.)\s+/.test(line) && line.trim().length > 180);
+  if (longLine) throw new Error(`Compression event ${eventId} contains an unstructured paragraph over 180 characters.`);
+
+  const aiRequests = requests.filter((request) => request.source === "ai");
+  if (!aiRequests.length) return;
+  if (lines.filter((line) => /^####\s+\S/.test(line)).length < 3) {
+    throw new Error(`AI review event ${eventId} must contain at least three structured subsections.`);
+  }
 }
 
 function renderManifest(payload, compression, items, processPackBytes) {
@@ -213,7 +234,7 @@ function allocateCompressionBySource(events, requests) {
   return totals;
 }
 
-function renderProcessPack(payload, compression, items) {
+export function renderProcessPack(payload, compression, items) {
   const rawChars = payload.sources.reduce((sum, source) => sum + source.chars, 0);
   const finalChars = items.reduce((sum, item) => sum + item.outputChars, 0);
   const lines = [
@@ -222,36 +243,88 @@ function renderProcessPack(payload, compression, items) {
     "> 这是给 AI Chat 生成 Monthly Output 的自包含上下文，不是原始 Input，也不是最终月报。",
     "> 已移除越界时间、空占位、重复采集元数据和重复材料；压缩事件保留来源路径，完整原文仍在 `03_input/`。",
     "",
-    "## 1. 处理与压缩概览",
+    "## 0. 完整性与缺口",
     "",
     `- 目标月：${payload.month}`,
     `- 周度输入：${payload.selection.weeklyPaths.map((entry) => `\`${entry}\``).join("、")}`,
+    `- 未提供相交周：${payload.selection.missingWeeklyPaths?.length ? payload.selection.missingWeeklyPaths.map((entry) => `\`${entry}\``).join("、") : "无"}（仅记录缺口，不阻断生成）`,
     `- 月度独有输入：\`${payload.selection.monthlyPath}\``,
     `- 原始来源：${payload.stats.sourceCount} 个，${rawChars} 字符`,
     `- 确定性材料：${payload.items.length} 个，${payload.stats.deterministicOutputChars} 字符`,
     `- 压缩来源：${compression.stats.sourceCount} 个 → ${compression.stats.eventCount} 个事件，${compression.stats.originalChars} → ${compression.stats.outputChars} 字符`,
     `- 最终上下文正文：${items.length} 个事件，${finalChars} 字符`,
     "",
-    `- 排除来源：${payload.stats.excludedSourceCount} 个；详细原因见同目录 \`input.json\``,
-    "",
-    "## 2. 月度材料",
+    `- 缺口与排除：${payload.stats.excludedSourceCount} 个来源；逐项原因见同目录 \`input.json\``,
     ""
   ];
 
-  for (const [index, item] of items.entries()) {
-    lines.push(
-      `### M${String(index + 1).padStart(3, "0")}｜${item.title}`,
-      "",
-      `- 类型：${item.category} / ${item.source}`,
-      `- 来源：${item.paths.map((entry) => `\`${entry}\``).join("、")}`,
-      ...(item.dateRange ? [`- 日期：${item.dateRange.start} 至 ${item.dateRange.end}`] : []),
-      ...(item.importance ? [`- 重要性：${importanceLabel(item.importance)}`] : []),
-      "",
-      item.text,
-      ""
-    );
+  let itemIndex = 0;
+  for (const group of processPackGroups) {
+    const groupItems = items.filter((item) => group.matches(item)).sort(comparePackItems);
+    lines.push(group.heading, "");
+    if (!groupItems.length) {
+      lines.push("- 本月无有效来源。", "");
+      continue;
+    }
+    for (const item of groupItems) {
+      itemIndex += 1;
+      lines.push(
+        `### M${String(itemIndex).padStart(3, "0")}｜${item.title}`,
+        "",
+        `- 类型：${item.category} / ${item.source}`,
+        `- 来源：${item.paths.map((entry) => `\`${entry}\``).join("、")}`,
+        ...(item.dateRange ? [`- 日期：${item.dateRange.start} 至 ${item.dateRange.end}`] : []),
+        ...(item.importance ? [`- 重要性：${importanceLabel(item.importance)}`] : []),
+        "",
+        demoteEmbeddedHeadings(item.text),
+        ""
+      );
+    }
   }
+  lines.push(
+    "## 5. 来源与处理审计",
+    "",
+    `- 原始来源：${payload.stats.sourceCount} 个；最终事件：${items.length} 个。`,
+    `- 语义压缩：${compression.stats.sourceCount} 个来源，${compression.stats.originalChars} → ${compression.stats.outputChars} 字符。`,
+    "- 原始文件、哈希、压缩率、排除和省略原因：见同目录 `input.json`。",
+    ""
+  );
   return `${lines.join("\n").trim()}\n`;
+}
+
+const coreSources = new Set(["monthly-journal", "ai", "ai-synthesis", "weekly-core", "weekly-munger"]);
+const selfSources = new Set(["weekly", "daily", "flomo", "health", "voice"]);
+const actionSources = new Set(["coach", "build", "build-bot", "feedback", "meeting", "chat"]);
+const supportSources = new Set(["weread", "calendar", "time", "research", "podcast"]);
+const processPackGroups = [
+  { heading: "## 1. 月度核心判断", matches: (item) => coreSources.has(item.source) },
+  { heading: "## 2. 自我反馈与生命状态", matches: (item) => selfSources.has(item.source) },
+  { heading: "## 3. 行动与现实反馈", matches: (item) => actionSources.has(item.source) },
+  { heading: "## 4. 支撑性输入", matches: (item) => supportSources.has(item.source) || !coreSources.has(item.source) && !selfSources.has(item.source) && !actionSources.has(item.source) }
+];
+
+const sourcePriority = new Map([
+  ["monthly-journal", 0], ["ai", 1], ["ai-synthesis", 2], ["weekly-core", 3], ["weekly-munger", 4],
+  ["weekly", 10], ["daily", 11], ["flomo", 12], ["health", 13], ["voice", 14],
+  ["coach", 20], ["build", 21], ["build-bot", 22],
+  ["weread", 30], ["calendar", 31], ["time", 32], ["research", 33], ["podcast", 34]
+]);
+
+function comparePackItems(left, right) {
+  return (sourcePriority.get(left.source) ?? 99) - (sourcePriority.get(right.source) ?? 99)
+    || left.paths[0].localeCompare(right.paths[0], "zh-Hans-CN")
+    || left.title.localeCompare(right.title, "zh-Hans-CN");
+}
+
+export function demoteEmbeddedHeadings(text) {
+  let inFence = false;
+  return String(text).split("\n").map((line) => {
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence;
+      return line;
+    }
+    return inFence ? line : line.replace(/^#{1,6}\s+/, "#### ");
+  }).join("\n");
 }
 
 function importanceLabel(importance) {

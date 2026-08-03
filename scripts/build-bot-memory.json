@@ -1,30 +1,30 @@
 {
-  "lastRun": "2026-07-26T21:10:00+08:00",
-  "week": "2026-W30",
+  "lastRun": "2026-08-02T21:05:00+08:00",
+  "week": "2026-W31",
   "coverage": {
-    "start": "2026-07-20",
-    "end": "2026-07-26"
+    "start": "2026-07-27",
+    "end": "2026-08-02"
   },
   "sources": {
-    "bridgeLogs": "available (7/20-26 all 7 days, 507 intake events, 16 chats)",
-    "codexMemories": "partial (memory_summary stuck at 07-09, raw_memories.md 37B empty, 2nd week stalled)",
+    "bridgeLogs": "available (7/27-8/2 all 7 days, 200+ user intake events, 10+ chats/p2p)",
+    "codexMemories": "partial (memory_summary stuck at 07-09, raw_memories.md empty, 3rd week stalled)",
     "feishuMessages": "not checked (bridge logs covered user instructions)",
-    "gitChanges": "available (learn-x 6, read-x 9, skills 11, lark-channel-bridge 6)",
-    "baseWorkflow": "not checked",
-    "existingBuildMd": "available (W30/build.md covers 07-16-22, dedup reference)"
+    "gitChanges": "available (learn-x 5, read-x 5, skills 5, lark-channel-bridge 5 all GROUP_INFO sync)",
+    "baseWorkflow": "not checked (timer cards stable at 8/9/21/22 daily)",
+    "existingBuildMd": "unavailable (W31 dir new, build.md not yet generated)"
   },
   "keyConclusions": [
-    "read-x content-scoring v3 重构（四维质量+独立相关性+确定性路由+六维度），9 commit",
-    "global-governance 重构为分布式多阶段编排器，加热点/依赖图/趋势审计",
-    "ywnew 分批并行+80%硬阈值+对抗性自测5-8；ywnext 环境推断+软素材",
-    "problem-audit 统一迁移+Deep 门禁桥接适配，4 条 W30 PA 记录",
-    "卡片路由改私聊触发者（read-x 评分卡+投资查询），解决机器人身份发文问题"
+    "read-x content-scoring v3 重构+anchor/view渲染脚本；兴趣分引入（相关+兴趣合1.2分各0.6）；门槛改质量+相关双门槛；阮一峰特殊路由；评分卡重复发送bugfix",
+    "授权机制反复踩坑（7/30批量授权->8/2又失效），bridge层串行方案设计完成但未落地",
+    "ywnew只读决策脚本check.js根除全发脚枪+ywnext清理+problem-ledger W31",
+    "道法术器定义澄清并内化到skill；沉思引导引导词表+共鸣日记来源",
+    "Voice-X文档引用模式重构（保存原稿和理解内容分开）+leader skill执行"
   ],
   "gaps": [
-    "raw_memories.md 空，连续两周记忆系统停滞，根因待查",
-    "read-x content-scoring v3 真实评分效果需下周接真实文章验证",
-    "global-governance 趋势图首次真实运行尚未发生",
-    "评分系统主/次领域专家动态生成无外部 ground truth 校验"
+    "raw_memories.md空，连续三周记忆系统停滞，根因待查",
+    "授权bridge层串行方案仅设计未落地（bridge仓库本周无实质commit），需下周落地+验收",
+    "评分系统兴趣分真实效果（精读命中率）需下周压测数据复盘",
+    "道法术器内化后判断一致性需后续Skill归类验证"
   ],
-  "nextSuggestion": "read-x 评分 v3 跑一周真实文章验证；problem-audit 门禁真实拦截验收；补 raw_memories.md 并查连续两周停滞根因"
+  "nextSuggestion": "授权bridge层串行方案落地+对抗性审查+验收矩阵；评分压测效果复盘；raw_memories+memory_summary推进到08-02并查三周停滞根因"
 }
