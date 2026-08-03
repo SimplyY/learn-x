@@ -7,8 +7,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
 const weeklyRoot = path.join(repoRoot, "04_output/weekly");
 
-const explicitSignals = ["进入记忆", "继续追踪", "重要", "保留", "确认"];
-
 export async function prepareWeeklyMemory(options = {}) {
   const week = normalizeWeekId(options.week || defaultWeeklyReviewWeek());
   const quarter = quarterFromIsoWeek(week);
@@ -30,6 +28,7 @@ export async function prepareWeeklyMemory(options = {}) {
       coreSummary: candidates.coreSummary.length,
       mungerInsights: candidates.mungerInsights.length,
       checked: candidates.checked.length,
+      observations: candidates.observations.length,
       explicit: candidates.explicit.length,
       core: candidates.core.length
     }
@@ -39,22 +38,29 @@ export async function prepareWeeklyMemory(options = {}) {
 export function extractMemoryCandidates(content) {
   const required = extractRequiredSections(content);
   const checked = [];
+  const observations = [];
   const unchecked = [];
-  const explicit = [];
   const core = [];
   let section = "";
+  let candidateLevel = 0;
 
   for (const rawLine of content.split(/\r?\n/)) {
     const line = rawLine.trim();
     const heading = line.match(/^#{1,6}\s+(.+)$/);
     if (heading) {
+      const level = heading[0].match(/^#+/)[0].length;
       section = heading[1].trim();
+      if (candidateLevel && level <= candidateLevel && !isCandidateHeading(section)) candidateLevel = 0;
+      if (isCandidateHeading(section)) candidateLevel = level;
       continue;
     }
 
+    if (!candidateLevel) continue;
+
     const checkedMatch = line.match(/^[-*]\s+\[[xX]\]\s+(.+)$/);
     if (checkedMatch) {
-      checked.push({ section, text: cleanLine(checkedMatch[1]) });
+      const item = { section, text: cleanLine(checkedMatch[1]) };
+      (isObservationSection(section) ? observations : checked).push(item);
       continue;
     }
 
@@ -64,24 +70,26 @@ export function extractMemoryCandidates(content) {
       continue;
     }
 
-    if (matchesExplicitSignal(line)) {
-      explicit.push({ section, text: cleanLine(line) });
-      continue;
-    }
-
-    if (/^(本周主线|关键不是|真正学习|缺口：)/.test(line)) {
-      core.push({ section, text: cleanLine(line) });
-    }
+    if (/^(本周主线|关键不是|真正学习|缺口：)/.test(line)) core.push({ section, text: cleanLine(line) });
   }
 
   return {
     coreSummary: required.coreSummary,
     mungerInsights: required.mungerInsights,
     checked: uniqueCandidates(checked),
+    observations: uniqueCandidates(observations),
     unchecked: uniqueCandidates(unchecked),
-    explicit: uniqueCandidates(explicit),
+    explicit: [],
     core: uniqueCandidates(core)
   };
+}
+
+function isCandidateHeading(title) {
+  return /人工确认清单|Memory 候选|值得进入 Memory|继续追踪|候选观察|道\s*\/\s*法\s*\/\s*术|器/.test(title);
+}
+
+function isObservationSection(title) {
+  return /道\s*\/\s*法\s*\/\s*术|道候选|法候选|术候选|器候选|候选观察/.test(title);
 }
 
 function renderCandidatePack(week, quarter, weeklyPath, candidates) {
@@ -89,7 +97,7 @@ function renderCandidatePack(week, quarter, weeklyPath, candidates) {
     `# Learn-X Memory Candidates｜${memoryWeekSectionId(week)}`,
     "",
     "> 这是给 Codex 生成 Weekly Memory 的候选材料，不是最终 Memory。",
-    "> 标题 10/11 是系统确认内容；脚本同时抽取已勾选和明确标记内容。最终由 Codex 按 `memory-rules.md` 整理并写入。",
+    "> 标题 10/11 是系统确认内容；脚本只抽取候选区内已勾选内容。最终由 Codex 按 `memory-rules.md` 整理并写入。",
     "",
     "## 处理信息",
     "",
@@ -109,9 +117,13 @@ function renderCandidatePack(week, quarter, weeklyPath, candidates) {
     "",
     renderList(candidates.checked),
     "",
+    "## 候选观察（只进入季度候选池，不进入普通 Memory）",
+    "",
+    renderList(candidates.observations),
+    "",
     "## 明确标记内容",
     "",
-    renderList(candidates.explicit),
+    "- 本工具不从普通正文中的“重要 / 保留 / 确认 / 继续追踪”等词语推断记忆。",
     "",
     "## 核心线索",
     "",
@@ -123,10 +135,11 @@ function renderCandidatePack(week, quarter, weeklyPath, candidates) {
     "- 非空的「芒格之魂的洞察」必须写入季度 Memory 顶部的芒格洞察候选池。",
     "- 两个系统确认章节无需 checkbox；只过滤空白、`todo` 和占位文本。",
     "- 可以轻度去重和压缩重复表述，但不得删除独立判断、限定、反转、隐喻或行动边界。",
-    "- 已勾选内容必须进入 Memory，不设数量上限。",
+    "- 仅候选区内已勾选内容进入 Memory，不设数量上限。",
+    "- 道 / 法 / 术 / 器候选观察即使已勾选，也只进入季度候选池，不进入普通 Memory。",
     "- 只做无损整理：去掉 checkbox、归类、去除完全重复项。",
     "- 不要改写用户已确认的关键语义。",
-    "- 道 / 法 / 术候选观察写入目标 Memory 文件顶部的 `候选观察池`，并保留来源周。",
+    "- 道 / 法 / 术 / 器候选观察写入目标 Memory 文件顶部的 `候选观察池`，并保留来源周。",
     "- 未勾选内容默认不写入。",
     "- 不要替代正式 `道/`、`法/`、`术/`。"
   ].join("\n");
@@ -242,11 +255,6 @@ function uniqueCandidates(items) {
     result.push(item);
   }
   return result;
-}
-
-function matchesExplicitSignal(line) {
-  const normalized = line.replace(/^[-*]\s*/, "");
-  return explicitSignals.some((signal) => new RegExp(`^(?:明确)?${signal}[：:]`).test(normalized));
 }
 
 function cleanLine(line) {

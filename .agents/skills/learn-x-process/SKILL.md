@@ -41,7 +41,7 @@ Learn-X 的 `Input -> Process Pack -> Output Shell` 工作流。
 - 可以在 `04_output/weekly/YYYY-WW.md` 不存在或为空时创建最小壳；如果已有内容，不覆盖、不改写。
 - 可以生成中间材料 `04_output/_dist/weekly/YYYY-Www/input.json` 和 `04_output/_dist/weekly/YYYY-Www/process-pack.md`。
 - 可以生成 metadata-only 的 `04_output/_dist/monthly/YYYY-MM/input.json`、压缩请求和自包含的 `process-pack.md`。
-- 可以读取 `04_output/weekly/YYYY-WW.md`，抽取已勾选或明确标记的内容，生成 `04_output/_dist/weekly/YYYY-Www/memory-candidates.md`，再由 Codex 无损整理写入 `01_core/memory/YYYY-QN.memory.md`。
+- 可以读取 `04_output/weekly/YYYY-WW.md`，抽取候选区内已勾选内容及两个精确系统确认章节，生成 `04_output/_dist/weekly/YYYY-Www/memory-candidates.md`，再由 Codex 无损整理写入 `01_core/memory/YYYY-QN.memory.md`。
 - 可以读取 `04_output/monthly/YYYY-MM.md` 或 `04_output/yearly/YYYY.md`，抽取 Memory 候选包，供 Codex 无损整理写入季度或年度 Memory。
 - Weekly Output 默认不固定输出图谱、第一性原理、Prompt、Skill、写作或 Demo 候选；必要时才可在做中学复盘或下周行动中简短提及。
 - 可以维护 `03_input/README.md`、`04_output/README.md` 和 `03_input/weekly/00_template/` 下划线模板。
@@ -76,7 +76,7 @@ Learn-X 的 `Input -> Process Pack -> Output Shell` 工作流。
    node .agents/skills/learn-x-process/scripts/generate-monthly-process-pack.mjs --month 2026-01
    ```
 
-   该脚本先读取相交周和月度独有输入，执行日期过滤、空值过滤、Daily 元数据合并和去重。`ai`、`research`、`weread` 必须语义压缩；其余材料按目标月内同一类型汇总，类型合计超过 10 KB 时必须由 Codex 整体审查。高价值、高信噪比内容可以说明理由后保留，中低价值、冗余或跨周重复内容必须事件化压缩。脚本写出 `compression-requests.json` 并停止；Codex 按 `learn-x-monthly-automation/references/monthly-compression.md` 生成 `compressed-events.json` 后重跑。最终写入 metadata-only `input.json` 和不超过 100 KB 的 `process-pack.md`。
+   该脚本先读取相交周、月度独有输入，以及各周 Weekly Output 中系统确认的标题 10「全文核心重点纪要」和标题 11「芒格之魂的洞察」，执行日期过滤、空值过滤、Daily 元数据合并和去重；不读取 Weekly Output 的其它正文代替原始 Input。`ai`、`research`、`weread`、`build`、`build-bot`、`coach` 必须按价值策略语义整理；AI 必须先排除提示词/模板，再逐周保留核心事件，不能跨周压成一个段落。月记、周记、Daily、Flomo、Health、Voice、Calendar 和 Time 默认只做确定性清洗。脚本写出 `compression-requests.json` 并停止；Codex 按 `learn-x-monthly-automation/references/monthly-compression.md` 生成结构化 `compressed-events.json` 后重跑。最终写入 metadata-only `input.json` 和不超过 100 KB 的固定分层 `process-pack.md`。
 6. Codex 报告 `_dist` 路径、Output 最小壳路径和输入缺口，不生成 Weekly Output 正文。
 7. 用户按 `04_output/usage.md`，把 `process-pack.md` 与需要的规则文件交给 AI Chat，自行生成并写入 Weekly Output 正文。
 8. Weekly Output 与“芒格之魂”洞察完成后，提示用户在 Chat Pack「判断创造」中选择“公众号贴图”。界面默认选中该 Prompt、当前周 `04_output/weekly/YYYY-WW.md`、`01_core/道/` 和 `01_core/memory/`，其它上下文不选；不要代替用户上传或发布公众号。
@@ -97,7 +97,7 @@ Learn-X 的 `Input -> Process Pack -> Output Shell` 工作流。
    ```
 
    然后读取 `resources/memory-rules.md` 和对应 `memory-candidates.md`，把已确认内容无损迁移到 Memory，并按来源周期排序；候选不足时报告不建议写入。
-   Weekly 自动化将此作为阶段 3：标题 10「全文核心重点纪要」和标题 11「芒格之魂的洞察」是系统确认内容，无需 checkbox；前者进入当周 Memory，后者进入季度芒格洞察候选池。其余内容只接受已勾选 checkbox、用户当场确认或行首结构化明确标记；普通未勾选内容即使包含‘继续追踪’‘重要’‘保留’等关键词也不得迁移。重复执行时不得重复追加同一条目。
+   Weekly 自动化将此作为阶段 3：精确标题「全文核心重点纪要」和「芒格之魂的洞察」是系统确认内容，无需 checkbox；前者进入当周 Memory，后者进入季度芒格洞察候选池。其余内容只接受候选区内已勾选 checkbox 或用户当场明确确认；禁止扫描普通正文，禁止把“继续追踪”“重要”“保留”“确认”等词语当作确认。道 / 法 / 术候选即使已勾选，也只进入季度顶部对应候选观察池，不进入普通 Memory。重复执行时不得重复追加同一条目。
 
 ## 输出要求
 
@@ -113,13 +113,13 @@ Weekly Output 要综合三类输入：
 
 Weekly Output 默认围绕核心问题、做中学复盘、下周 3 件事、道 / 法 / 术和处理信息；行动闭环检查并入做中学复盘，不单独成节。
 
-Memory 必须遵守 `resources/memory-rules.md`。标题 10/11 自动进入 Memory，不要求二次勾选；允许轻度去重压缩，但不得丢失独立判断。其余已勾选内容全部进入且不设数量上限，只做无损整理。已勾选道 / 法 / 术候选观察进入季度 Memory 文件顶部对应候选池，并保留来源；普通未勾选内容默认不写入。具体用法见 `04_output/usage.md`。
+Memory 必须遵守 `resources/memory-rules.md`。只有精确标题「全文核心重点纪要」和「芒格之魂的洞察」可作为系统确认章节；允许轻度去重压缩，但不得丢失独立判断。其余只处理候选区内已勾选内容或用户当场明确确认内容。已勾选道 / 法 / 术候选观察进入季度 Memory 文件顶部对应候选池，并保留来源，不进入普通 Memory；普通正文和未勾选内容默认不写入。具体用法见 `04_output/usage.md`。
 
 ## 六阶段架构
 
 1. Deterministic Collector：代码收集周度与月度来源，过滤月份、空值和重复元数据，并生成压缩请求与 metadata-only `input.json`。
-2. Compression：Codex 按 Markdown 规则把长来源拆成事件并压缩；脚本校验哈希、日期、来源覆盖和体积，不在代码中调用 AI。
-3. Process Pack：代码组装给 AI 读的自包含材料包，不做道 / 法 / 术 / Prompt / Skill 判断。
+2. Compression：Codex 按信息价值把长来源拆成结构化事件；脚本校验哈希、日期、来源覆盖、AI 逐周核心事件、正文结构和总体积，不在代码中调用 AI。
+3. Process Pack：代码按「核心判断 / 自我反馈 / 行动反馈 / 支撑输入 / 审计」固定层级组装自包含材料包，并把来源内部标题统一降级；不做道 / 法 / 术 / Prompt / Skill 判断。
 4. Output Shell：脚本只创建对应周期 Output 最小壳；已有内容不改。
 5. AI Chat Review：用户基于 Process Pack 和规则文件，在 AI Chat 中生成 Output 正文。
 6. Memory：人工审核后，脚本抽取确认线索，Codex 再按规则无损整理为跨期上下文。

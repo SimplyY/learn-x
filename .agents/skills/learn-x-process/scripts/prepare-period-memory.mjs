@@ -4,8 +4,6 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
-const explicitSignals = ["进入记忆", "继续追踪", "重要", "保留", "确认"];
-
 export async function preparePeriodMemory(options = {}) {
   const period = normalizePeriod(options);
   const outputPath = sourceOutputPath(period);
@@ -26,50 +24,91 @@ export async function preparePeriodMemory(options = {}) {
     target,
     counts: {
       checked: candidates.checked.length,
+      observations: candidates.observations.length,
       unchecked: candidates.unchecked.length,
       explicit: candidates.explicit.length
     }
   };
 }
 
-function extractMemoryCandidates(content) {
+export function extractMemoryCandidates(content) {
+  const required = extractRequiredSections(content);
   const checked = [];
+  const observations = [];
   const unchecked = [];
-  const explicit = [];
   let section = "";
-  let inCandidateSection = false;
+  let candidateLevel = 0;
 
   for (const rawLine of content.split(/\r?\n/)) {
     const line = rawLine.trim();
     const heading = line.match(/^(#{1,6})\s+(.+)$/);
     if (heading) {
+      const level = heading[1].length;
       section = heading[2].trim();
-      inCandidateSection = /Memory|记忆|人工确认|候选|继续追踪/.test(section);
+      if (candidateLevel && level <= candidateLevel && !isCandidateHeading(section)) candidateLevel = 0;
+      if (isCandidateHeading(section)) candidateLevel = level;
       continue;
     }
 
+    if (!candidateLevel) continue;
+
     const checkedMatch = line.match(/^[-*]\s+\[[xX]\]\s+(.+)$/);
     if (checkedMatch) {
-      checked.push({ section, text: cleanLine(checkedMatch[1]) });
+      const item = { section, text: cleanLine(checkedMatch[1]) };
+      (isObservationSection(section) ? observations : checked).push(item);
       continue;
     }
 
     const uncheckedMatch = line.match(/^[-*]\s+\[\s\]\s+(.+)$/);
-    if (uncheckedMatch && inCandidateSection) {
+    if (uncheckedMatch && candidateLevel) {
       unchecked.push({ section, text: cleanLine(uncheckedMatch[1]) });
       continue;
-    }
-
-    if (explicitSignals.some((signal) => line.includes(signal))) {
-      explicit.push({ section, text: cleanLine(line) });
     }
   }
 
   return {
+    coreSummary: required.coreSummary,
+    mungerInsights: required.mungerInsights,
     checked: uniqueCandidates(checked),
+    observations: uniqueCandidates(observations),
     unchecked: uniqueCandidates(unchecked),
-    explicit: uniqueCandidates(explicit)
+    explicit: []
   };
+}
+
+function isCandidateHeading(title) {
+  return /人工确认清单|Memory 候选|值得进入 Memory|继续追踪|候选观察|道\s*\/\s*法\s*\/\s*术|器/.test(title);
+}
+
+function isObservationSection(title) {
+  return /道\s*\/\s*法\s*\/\s*术|道候选|法候选|术候选|器候选|候选观察/.test(title);
+}
+
+export function extractRequiredSections(content) {
+  const lines = String(content).split(/\r?\n/);
+  const headings = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index].match(/^(#{1,6})\s+(.+?)\s*$/);
+    if (match) headings.push({ index, level: match[1].length, title: normalizeHeading(match[2]) });
+  }
+
+  const result = { coreSummary: [], mungerInsights: [] };
+  for (let index = 0; index < headings.length; index += 1) {
+    const heading = headings[index];
+    const key = heading.title === "全文核心重点纪要" ? "coreSummary" : heading.title === "芒格之魂的洞察" ? "mungerInsights" : "";
+    if (!key) continue;
+    const next = headings.slice(index + 1).find((candidate) => candidate.level <= heading.level);
+    const body = lines.slice(heading.index + 1, next?.index ?? lines.length).join("\n").trim();
+    if (body && !/^(todo|待补充|暂无|无|占位)$/i.test(body)) result[key].push({ section: heading.title, text: body });
+  }
+  result.coreSummary = uniqueCandidates(result.coreSummary);
+  result.mungerInsights = uniqueCandidates(result.mungerInsights);
+  return result;
+}
+
+function normalizeHeading(title) {
+  return String(title).replace(/[\*_`]/g, "").replace(/^\d+\s*[.、．]\s*/, "").trim();
 }
 
 function renderCandidatePack(period, outputPath, target, candidates) {
@@ -89,9 +128,21 @@ function renderCandidatePack(period, outputPath, target, candidates) {
     "",
     renderList(candidates.checked),
     "",
+    "## 系统确认：全文核心重点纪要",
+    "",
+    renderBlocks(candidates.coreSummary),
+    "",
+    "## 系统确认：芒格之魂的洞察",
+    "",
+    renderBlocks(candidates.mungerInsights),
+    "",
+    "## 候选观察（只进入季度候选池，不进入普通 Memory）",
+    "",
+    renderList(candidates.observations),
+    "",
     "## 明确标记内容",
     "",
-    renderList(candidates.explicit),
+    "- 本工具不从普通正文中的“重要 / 保留 / 确认 / 继续追踪”等词语推断记忆。",
     "",
     "## 未勾选候选",
     "",
@@ -101,10 +152,11 @@ function renderCandidatePack(period, outputPath, target, candidates) {
     "",
     "## 生成要求",
     "",
-    "- 已勾选内容必须进入 Memory，不设数量上限。",
+    "- 仅候选区内已勾选内容进入 Memory，不设数量上限。",
+    "- 系统确认章节仅限精确标题“全文核心重点纪要”和“芒格之魂的洞察”。",
     "- 只做无损整理：去掉 checkbox、归类、去除完全重复项。",
     "- 不要改写用户已确认的关键语义。",
-    "- 道 / 法 / 术候选观察写入目标 Memory 文件顶部的 `候选观察池`，并保留来源周期。",
+    "- 道 / 法 / 术 / 器候选观察写入目标 Memory 文件顶部的 `候选观察池`，并保留来源周期。",
     "- 如果没有确认内容，先报告候选不足，不要强行写入。",
     "- 未勾选内容默认不写入。",
     "- 不替代正式 `道/`、`法/`、`术/`。"
@@ -155,6 +207,11 @@ function renderList(items) {
     const section = item.section ? `（${item.section}）` : "";
     return `- ${section}${item.text}`;
   }).join("\n");
+}
+
+function renderBlocks(items) {
+  if (!items.length) return "- 暂无。";
+  return items.map((item) => `### ${item.section}\n\n${item.text}`).join("\n\n");
 }
 
 function uniqueCandidates(items) {

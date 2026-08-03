@@ -48,3 +48,30 @@ todo
   assert.equal(result.coreSummary.length, 1);
   assert.equal(result.coreSummary[0].text, "- 保留这条。");
 });
+
+test("does not infer memory from ordinary prose or checks outside candidate sections", async () => {
+  const { extractMemoryCandidates } = await import("./prepare-weekly-memory.mjs");
+  const result = extractMemoryCandidates(`# Weekly
+
+## 1. 正文
+
+重要：普通正文。
+- [x] 正文 checkbox。
+
+## 8. 人工确认清单
+
+### Memory 候选
+
+- [x] 候选 checkbox。
+- [ ] 未确认 checkbox。
+
+### 道 / 法 / 术候选观察
+
+- [x] 只进季度候选池。
+`);
+
+  assert.deepEqual(result.checked.map((item) => item.text), ["候选 checkbox。"]);
+  assert.deepEqual(result.observations.map((item) => item.text), ["只进季度候选池。"]);
+  assert.deepEqual(result.unchecked.map((item) => item.text), ["未确认 checkbox。"]);
+  assert.deepEqual(result.explicit, []);
+});

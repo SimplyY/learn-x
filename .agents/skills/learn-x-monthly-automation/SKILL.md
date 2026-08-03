@@ -29,9 +29,20 @@ npm run memory:monthly -- 2026-06
 2. 月度输入目录使用 `03_input/monthly/YYYY-M/`，例如 `03_input/monthly/2026-6/`。不要按文件 mtime 推断范围。
 3. 月度报告流程只生成 `_dist` 和 `04_output/monthly/YYYY-MM.md` 最小壳；不要在自动化中代写 Monthly Output 正文。
 4. 不读取、打印或保存凭据。不修改 `README.md`、`01_core/道/`、`01_core/法/`、`02_prompts/` 或无关长期资产。
-5. 月度原始输入同时来自 `03_input/weekly/YYYY-Www/` 和 `03_input/monthly/YYYY-M/`；后者保存月记及其他月度独有来源。不要读取 `04_output/weekly/` 代替原始输入。
+5. 月度原始输入同时来自 `03_input/weekly/YYYY-Www/` 和 `03_input/monthly/YYYY-M/`；后者保存月记及其他月度独有来源。另读取各周 `04_output/weekly/YYYY-WW.md` 中系统确认的标题 10「全文核心重点纪要」和标题 11「芒格之魂的洞察」，空项或 `todo` 跳过；不得读取其它周报正文代替原始输入。
 6. 原始文件完整留在 `03_input/`，不要复制成月度全文合集。`input.json` 只保存路径、哈希、处理状态和压缩统计；`process-pack.md` 才是给 AI Chat 的自包含上下文。
 7. 月度只保留目标月事件。边界周按正文日期、声明覆盖期和周记标题过滤；无法确认归属时省略并报告，不猜测。
+8. 月度 Process Pack 使用固定层级：完整性与缺口、月度核心判断、自我反馈与生命状态、行动与现实反馈、支撑性输入、来源与处理审计。来源内部标题必须降为四级标题，不能破坏目录树。
+
+## 输出链接规则
+
+- 每次运行的最终汇报必须提供可点击 Markdown 链接，不只输出裸路径。
+- 阶段 1 若写回飞书月记：提供目标月份 section 的飞书链接，格式为 `https://ywhome.feishu.cn/wiki/EOlbwTVLyiQp7Fkrr9ucdI9hnac#<target-month-block-id>`；写回后重新 fetch outline/section，使用最新 block id。
+- 阶段 1 同时提供月度输入目录的本地绝对路径链接；目录为空也要明确说明。
+- 阶段 2 提供 `monthly-journal.md`、`input.json`、`process-pack.md` 和 Output 壳的本地绝对路径链接。
+- 阶段 2 的“下一步”必须提供 [Learn-X Chat Pack](http://127.0.0.1:4173/#learning) 链接；不要只写“去 Chat Pack”。
+- 阶段 3 提供候选文件和实际写入的 Memory 文件链接。
+- 链接必须放在“已完成来源或产物”附近；如果产物不存在，不生成假链接，直接写明缺口。
 
 ## 阶段判断
 
@@ -48,10 +59,11 @@ npm run memory:monthly -- 2026-06
 1. 调用 `learn-x-monthly-journal` 仅检查并补全目标月飞书月记中的空白或占位字段。它只在存在安全空位时写入带 `【待优化】AI 基础草稿` 的内容；若目标月已存在实质性正文或不存在安全空位，则跳过写回，只报告缺口。
 2. 确保 `03_input/monthly/YYYY-M/` 存在。保留目录中已有人工内容，不覆盖已有非空文件。
 3. 检查所有与目标月相交的周目录和 `03_input/monthly/YYYY-M/`。不要生成 `weekly-inputs.md`；保留已有月度人工文件，不覆盖。
-4. 只报告来源范围、月记状态和缺口，不提前生成 Monthly Output。
-5. 停止并提示用户在飞书月记中完成目标月月记，然后回复 `继续`。
+4. 相交周目录和周文件都不是月度硬门禁。只汇总实际存在且属于目标月的材料；缺少最后一个相交周（例如 `W31`）或某类周输入时记录为缺口，不创建空周目录、不猜测内容，也不阻断阶段 2。
+5. 只报告来源范围、月记状态和缺口，不提前生成 Monthly Output。
+6. 停止并提示用户在飞书月记中完成目标月月记，然后回复 `继续`。
 
-阶段 1 汇报必须包含：目标月、月记草稿状态、已汇总周范围、`03_input/monthly/YYYY-M/` 路径、缺口、当前位置、下一步、再下一步。
+阶段 1 汇报必须包含：目标月、月记草稿状态（含可点击飞书草稿链接）、已汇总周范围、可点击的 `03_input/monthly/YYYY-M/` 路径、缺口、当前位置、下一步、再下一步。
 
 ## 阶段 2：月记采集与月报准备
 
@@ -64,7 +76,7 @@ npm run memory:monthly -- 2026-06
    ```
 
    只采集目标月 section。`monthly-journal.md` 必须保留来源 URL、标题或日期定位依据、采集时间。无法取得目标月正文时停止，不得用旧本地内容替代。
-2. 验证 `03_input/monthly/YYYY-M/monthly-journal.md` 和所有相交周原始目录。旧 `weekly-inputs.md` 不参与处理。
+2. 验证 `03_input/monthly/YYYY-M/monthly-journal.md` 和实际存在的相交周原始目录。旧 `weekly-inputs.md` 不参与处理。缺失周目录、周记或自动来源只进入 Process Pack 与汇报的缺口审计，不阻断生成。
 3. 首次运行：
 
    ```bash
@@ -89,7 +101,15 @@ npm run memory:monthly -- 2026-06
    - 审核并勾选 Memory 候选。
    - 回复 `继续记忆`。
 
-阶段 2 汇报必须包含完整全局流程，并标记：当前位置 = 阶段 2 完成；下一步 = 人工 Monthly Output / 芒格洞察 / 候选审核；再下一步 = 阶段 3 Memory。
+阶段 2 汇报必须包含完整全局流程，并使用醒目的大标题：
+
+## 下一步：打开 Learn-X Chat Pack，手动生成并审核月报
+
+提供 [Learn-X Chat Pack](http://127.0.0.1:4173/#learning) 链接，并说明用户需要选择 Monthly Output、载入 `process-pack.md`、生成并审核月报，再生成独立“芒格之魂”洞察。
+
+## 再下一步：补充洞察并回复“继续记忆”
+
+说明用户需要把洞察补入月报、审核 Memory 候选，完成后再回复“继续记忆”。阶段 2 的结束语必须明确宣布：`阶段 2 已完成，等待用户手动完成；用户完成后再通知 Codex。`
 
 ## 阶段 3：已审核记忆
 
@@ -105,10 +125,10 @@ npm run memory:monthly -- 2026-06
 
 4. 读取 `.agents/skills/learn-x-process/resources/memory-rules.md` 和 `04_output/_dist/monthly/YYYY-MM/memory-candidates.md`。
 5. 只迁移：
-   - `memory-candidates.md` 中已勾选的 checkbox 条目；
-   - 用户在当前线程明确确认写入的条目；
-   - 当前 `learn-x-process` Skill 定义的结构化显式确认标记。
-6. 不迁移未勾选条目。普通未勾选正文中的 `重要`、`保留`、`确认`、`继续追踪` 等关键词不构成确认。
+   - `memory-candidates.md` 中候选区内已勾选的 checkbox 条目；
+   - 精确标题为「全文核心重点纪要」和「芒格之魂的洞察」的非空最终章节；
+   - 用户在当前线程明确确认写入的条目。
+6. 不迁移未勾选条目。普通正文、主题标题、行动计划、评分，以及 `重要`、`保留`、`确认`、`继续追踪` 等关键词都不构成确认；道 / 法 / 术 / 器候选即使勾选，也只进入季度候选观察池，不进入普通 Memory。
 7. 将获准条目写入正确的季度或年度 Memory 目标。保持幂等，重复运行不得追加完全重复条目。
 8. 如果没有获准条目，停止并要求用户勾选或明确确认候选，不要编造 Memory。
 

@@ -6,7 +6,7 @@ group_name: "learn-x"
 repo_path: "/Users/yuwei/code/learn-x"
 repo_url: null
 group_info_path: "/Users/yuwei/code/learn-x/GROUP_INFO.md"
-updated_at: "2026-08-01T00:01:07.156Z"
+updated_at: "2026-08-03T00:00:26.431Z"
 icon: "🧠"
 name_zh: "learn-x"
 summary: "认知系统。核心功能 chat pack（chat 上下文提示词） + IPO(输入、处理、输出)"
@@ -54,4 +54,4 @@ priority: 1
 - 工作目录：可访问
 - 链接数：2
 - Skill 扫描：正常
-- 最近更新时间：2026-08-01T00:01:07.156Z
+- 最近更新时间：2026-08-03T00:00:26.431Z

@@ -8,17 +8,23 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
 const supportedExtensions = new Set([".md", ".txt", ".json", ".html", ".htm"]);
 const ignoredNames = new Set(["README.md", ".gitkeep", "weekly-inputs.md"]);
-const compressedSources = new Set(["ai", "research", "weread"]);
-const highSignalTypes = new Set(["daily", "flomo"]);
+const compressedSources = new Set(["ai", "research", "weread", "build", "build-bot", "coach", "podcast"]);
+const preservedTypes = new Set(["monthly-journal", "weekly", "daily", "flomo", "health", "voice", "calendar", "time", "weekly-core", "weekly-munger"]);
 const typeReviewThresholdBytes = 10 * 1024;
 
 export async function collectMonthlyProcessInput(monthId) {
   const month = normalizeMonthId(monthId);
   const monthDir = inputMonthDirName(month);
   const files = [];
+  const weeklyPaths = [];
+  const missingWeeklyPaths = [];
 
   for (const week of weeksIntersectingMonth(month)) {
-    files.push(...await collectFiles(path.join(repoRoot, "03_input/weekly", week), { origin: "weekly", week }));
+    const weekDir = path.join(repoRoot, "03_input/weekly", week);
+    const weekFiles = await collectFiles(weekDir, { origin: "weekly", week });
+    const relativeWeekPath = `03_input/weekly/${week}`;
+    (weekFiles.length ? weeklyPaths : missingWeeklyPaths).push(relativeWeekPath);
+    files.push(...weekFiles);
   }
   files.push(...await collectFiles(path.join(repoRoot, "03_input/monthly", monthDir), { origin: "monthly" }));
 
@@ -61,6 +67,11 @@ export async function collectMonthlyProcessInput(monthId) {
     if (sourceName === "weread" && !wereadMatchesDeclaredWeek(content, file.week)) {
       source.status = "excluded";
       source.reason = "invalid-week-range";
+      continue;
+    }
+    if (sourceName === "ai" && !isValidAiReview(content)) {
+      source.status = "excluded";
+      source.reason = "invalid-ai-review-template";
       continue;
     }
     if (isOutsideMonth(content, month, file.week)) {
@@ -115,6 +126,7 @@ export async function collectMonthlyProcessInput(monthId) {
   const deterministicItems = [
     renderDailyTimeline(month, dailySections, sources),
     renderFlomoTimeline(month, flomoSections, sources),
+    ...await collectWeeklyConfirmedOutput(month, sources),
     ...dedupeFullItems(fullItems, sources)
   ].filter(Boolean);
   const typeReview = reviewMonthlyTypes(deterministicItems);
@@ -140,7 +152,8 @@ export async function collectMonthlyProcessInput(monthId) {
     generatedAt: new Date().toISOString(),
     selection: {
       mode: "weekly-plus-monthly",
-      weeklyPaths: weeksIntersectingMonth(month).map((week) => `03_input/weekly/${week}`),
+      weeklyPaths,
+      missingWeeklyPaths,
       monthlyPath: `03_input/monthly/${monthDir}`
     },
     sources,
@@ -149,6 +162,74 @@ export async function collectMonthlyProcessInput(monthId) {
     typeReviews: typeReview,
     stats: buildStats(sources, items)
   };
+}
+
+async function collectWeeklyConfirmedOutput(month, sources) {
+  const items = [];
+  for (const week of weeksIntersectingMonth(month)) {
+    const outputPath = path.join(repoRoot, "04_output/weekly", `${week.replace("-W", "-")}.md`);
+    let buffer;
+    let info;
+    try {
+      [buffer, info] = await Promise.all([readFile(outputPath), stat(outputPath)]);
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      throw error;
+    }
+    const sections = extractWeeklyConfirmedSections(buffer.toString("utf8"));
+    if (!sections.length) continue;
+    const relativePath = toWebPath(path.relative(repoRoot, outputPath));
+    const source = {
+      id: `S${String(sources.length + 1).padStart(3, "0")}`,
+      path: relativePath,
+      shortPath: path.basename(outputPath),
+      origin: "weekly-output",
+      week,
+      category: "log",
+      source: "weekly-confirmed",
+      modifiedAt: info.mtime.toISOString(),
+      bytes: sections.reduce((sum, section) => sum + Buffer.byteLength(section.text), 0),
+      chars: sections.reduce((sum, section) => sum + section.text.length, 0),
+      sha256: createHash("sha256").update(buffer).digest("hex"),
+      status: "included-confirmed-output",
+      reason: "system-confirmed-sections-10-and-11"
+    };
+    sources.push(source);
+    for (const section of sections) {
+      items.push({
+        id: `I-${section.source.toUpperCase()}-${week}`,
+        title: `${section.title}｜${week}`,
+        category: section.source === "weekly-core" ? "log" : "inbox",
+        source: section.source,
+        paths: [relativePath],
+        mode: "confirmed-weekly-output",
+        text: section.text,
+        originalChars: section.text.length,
+        outputChars: section.text.length
+      });
+    }
+  }
+  return items;
+}
+
+export function extractWeeklyConfirmedSections(content) {
+  const headings = [...String(content).matchAll(/^##\s+(10|11)\.\s+([^\n]+)$/gm)];
+  return headings.flatMap((heading) => {
+    const nextHeading = String(content).slice(heading.index + heading[0].length).match(/^##\s+/m);
+    const end = nextHeading ? heading.index + heading[0].length + nextHeading.index : String(content).length;
+    const text = String(content)
+      .slice(heading.index + heading[0].length, end)
+      .replace(/^\s*\d+\.\s*$/gm, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    const normalized = text.replace(/[#>*_`|\s-]/g, "").trim();
+    if (!normalized || /^(x+|待补充|暂无|无|todo|placeholder)$/i.test(normalized)) return [];
+    return [{
+      title: heading[1] === "10" ? "全文核心重点纪要" : "芒格之魂的洞察",
+      source: heading[1] === "10" ? "weekly-core" : "weekly-munger",
+      text
+    }];
+  });
 }
 
 async function collectFiles(dir, context) {
@@ -354,6 +435,14 @@ export function wereadMatchesDeclaredWeek(content, week) {
   });
 }
 
+export function isValidAiReview(content) {
+  const text = String(content);
+  const sectionCount = [...text.matchAll(/^##\s+.+$/gm)].length;
+  const hasReviewContent = /(本周反复思考的核心问题|核心洞察|精华问题摘要|最值得沉淀)/.test(text);
+  const looksLikePrompt = /(请基于本次回顾周期|请输出\s*500|按当前日期生成一下文件名)/.test(text) && sectionCount < 2;
+  return !isPlaceholder(text) && sectionCount >= 2 && hasReviewContent && !looksLikePrompt;
+}
+
 function stripSourceMetadata(text) {
   return String(text)
     .replace(/^(?:- )?(?:来源|采集时间|生成时间|采集方式|定位依据|覆盖期|覆盖范围|时间范围|采集范围|时区|接口[^：]*|表|Base)[：：][^\n]*\n/gim, "")
@@ -380,10 +469,10 @@ export function reviewMonthlyTypes(items) {
     thresholdBytes: typeReviewThresholdBytes,
     decision: bytes <= typeReviewThresholdBytes
       ? "below-threshold"
-      : highSignalTypes.has(type) ? "keep-full" : "compression-required",
+      : preservedTypes.has(type) ? "keep-full" : "compression-required",
     reason: bytes <= typeReviewThresholdBytes
       ? "monthly-type-total-at-or-below-10kb"
-      : highSignalTypes.has(type)
+      : preservedTypes.has(type)
         ? "high-signal-original-records-with-deterministic-deduplication"
         : "monthly-type-total-over-10kb-requires-codex-value-review"
   }));
