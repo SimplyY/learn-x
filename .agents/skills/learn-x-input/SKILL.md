@@ -59,6 +59,13 @@ Run `npm run input:voice -- --week YYYY-Www` to read the fixed Voice-X Base with
 - Never fetch or copy `原始文字稿`; Voice-X Base remains the index and Docx remains the only正文 authority.
 - A successful zero-result query writes an explicit 0-record file. Any Base/schema/document failure must preserve the previous `voice.md` byte-for-byte.
 
+## Daily and AI Coach Weekly Input
+
+Run `npm run input:daily-coach -- --week YYYY-Www` to collect the 日常记录 Base and four AI Coach tables with `lark-cli --as bot`.
+
+- Verify live tables and fields, filter the target Asia/Shanghai week server-side, and traverse every page before writing `daily.md` and `coach.md`.
+- Preserve ordinary fields and URLs, record attachment names/counts, and exclude contact details, interview text, linked-page正文, and technical record IDs.
+
 ## Script
 
-Use `scripts/collect-weread-weekly.mjs`, `scripts/collect-time-weekly.mjs`, and `scripts/collect-voice-weekly.mjs`. They accept `--week YYYY-Www`; without it, they use the Learn-X weekly review default in `Asia/Shanghai`: Monday through Friday target the previous ISO week, Saturday and Sunday target the current ISO week. Weekly automation should still pass the resolved target week explicitly.
+Use `scripts/collect-weread-weekly.mjs`, `scripts/collect-time-weekly.mjs`, `scripts/collect-voice-weekly.mjs`, and `scripts/collect-daily-coach-weekly.mjs`. They accept `--week YYYY-Www`; without it, they use the Learn-X weekly review default in `Asia/Shanghai`: Monday through Friday target the previous ISO week, Saturday and Sunday target the current ISO week. Weekly automation should still pass the resolved target week explicitly.

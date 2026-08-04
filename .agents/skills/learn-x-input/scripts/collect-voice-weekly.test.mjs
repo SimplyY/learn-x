@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { buildVoiceFilter, collectVoiceWeekly, renderVoiceMarkdown, writeVoiceWeekly } from "./collect-voice-weekly.mjs";
+import { buildVoiceFilter, collectVoiceWeekly, extractUrl, renderVoiceMarkdown, writeVoiceWeekly } from "./collect-voice-weekly.mjs";
 
 class FakeCollectorTransport {
   constructor(pages, documents = {}) { this.pages = pages; this.documents = documents; this.prepared = 0; this.fetched = []; this.failPrepare = false; this.failUrl = ""; }
@@ -15,6 +15,10 @@ class FakeCollectorTransport {
 function record(id, title, recordedAt, coreUrl, rawUrl = "https://raw.invalid/RAW_SENTINEL") {
   return { id, fields: { 标题: title, 录制时间: recordedAt, 原始文字稿: rawUrl, "核心重点 with AI chat": coreUrl, 内容指纹: `hash-${id}` } };
 }
+
+test("extracts the actual target from a Markdown link", () => {
+  assert.equal(extractUrl("[https://example.invalid/label](https://example.invalid/target)"), "https://example.invalid/target");
+});
 
 test("builds an inclusive weekly lower bound with supported datetime operators", () => {
   assert.deepEqual(buildVoiceFilter(1780848000, 1781452800), { logic: "and", conditions: [
