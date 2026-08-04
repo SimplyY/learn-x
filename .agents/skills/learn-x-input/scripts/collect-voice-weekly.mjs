@@ -142,7 +142,7 @@ async function runLarkJson(args) {
 }
 
 function scalar(value) { return String(Array.isArray(value) ? value[0] ?? "" : value ?? ""); }
-function extractUrl(value) { return scalar(value).match(/https?:\/\/[^)\s]+/)?.[0] || ""; }
+export function extractUrl(value) { return scalar(value).match(/https?:\/\/[^)\s\]]+/g)?.at(-1) || ""; }
 function formatShanghai(epochSeconds) { const parts = formatParts(epochSeconds); return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`; }
 function formatShanghaiIso(epochSeconds) { return `${formatShanghai(epochSeconds).replace(" ", "T")}+08:00`; }
 function formatParts(epochSeconds) { const parts = new Intl.DateTimeFormat("en-CA", { timeZone: TIMEZONE, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(new Date(epochSeconds * 1000)); return Object.fromEntries(parts.map((part) => [part.type, part.value])); }

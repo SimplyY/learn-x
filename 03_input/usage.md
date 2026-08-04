@@ -10,14 +10,14 @@
 
 | 来源 | 文件 | 方式 |
 | --- | --- | --- |
-| 飞书日记 | `daily.md` | 每周输入自动采集 |
+| 飞书日记 | `daily.md` | `npm run input:daily-coach -- --week YYYY-Www` |
 | 飞书周记 / 周复盘 | `weekly.md` | 用户完成后由阶段 2 采集 |
 | Flomo | `flomo.md` | 每周输入自动采集 |
 | 微信读书 | `weread.md` | `npm run input:weread -- --week YYYY-Www` |
 | Voice-X 核心重点 | `voice.md` | `npm run input:voice -- --week YYYY-Www` |
 | Time-X 随时记日历 | `calendar.md` | `npm run input:time -- --week YYYY-Www` |
 | Health-X 健康周报 | `health.md` | Health-X 完成飞书周报同步后自动生成 |
-| AI Coach | `coach.md` | 阶段 1 通过飞书 CLI 采集 Base 中本周更新的记录 |
+| AI Coach | `coach.md` | `npm run input:daily-coach -- --week YYYY-Www` |
 | AI 对话摘要 | `ai.md` | 用户使用指定提示词手动生成 |
 | Codex / Code X 构建复盘 | `build.md` | 专项自动化或人工补充 |
 | 飞书机器人 Build 复盘 | `build-bot.md` | 飞书机器人侧生成；本地周自动化只提示自查 |
