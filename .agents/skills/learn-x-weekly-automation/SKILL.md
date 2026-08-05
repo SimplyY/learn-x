@@ -20,7 +20,7 @@ npm run process:weekly -- --week 2026-W27
 npm run memory:weekly -- --week 2026-W27
 ```
 
-先按“目标周选择”解析出唯一目标周，再只运行当前阶段需要的命令。飞书 CLI 默认读取使用应用身份（`--as bot`）；涉及多维表格 Base 的新增、更新、修改、删除等写操作使用用户身份（`--as user`）。读取失败时不要自动切换身份，写入失败时报告用户授权问题，不把写操作改回 bot。Flomo 使用已授权的浏览器插件在日常 Chrome 中自动新开标签页并复用登录态。
+先按“目标周选择”解析出唯一目标周，再只运行当前阶段需要的命令。飞书 CLI 默认读取使用应用身份（`--as bot`）；涉及多维表格 Base 的新增、更新、修改、删除等写操作使用用户身份（`--as user`）。读取失败时不要自动切换身份，写入失败时报告用户授权问题，不把写操作改回 bot。Flomo 默认使用 `ego-browser`（Ego Lite）独立任务空间，并复用用户登录态。
 
 ### 飞书 CLI 身份路由
 
@@ -44,11 +44,11 @@ npm run memory:weekly -- --week 2026-W27
    - `.agents/skills/learn-x-process/SKILL.md`
    - 如果当前阶段会采集 `weekly.md`，先一次性核对并提示缺失授权，避免逐项打断用户；本 Skill 默认把相关授权合并为一轮确认。
 3. 保持当前扁平周目录：`03_input/weekly/YYYY-Www/*.md`。不要恢复旧版 `00_log/`、`01_inbox/`、`02_action/` 嵌套结构。
-4. Flomo 只使用已授权的浏览器插件，在日常 Chrome 自动新开独立标签页并打开 `https://v.flomoapp.com/mine`，复用已有登录态。通过页面无障碍树读取笔记创建时间和正文，持续加载直到最早笔记早于目标周下界，遍历全部分页或加载结果；按 Asia/Shanghai 筛选、去重并按创建时间正序输出。
+4. Flomo 默认只使用 `ego-browser`（Ego Lite）：复用同一目标周任务空间，打开或复用 `https://v.flomoapp.com/mine`，复用已有登录态。优先通过 `snapshotText()` 读取笔记创建时间和正文，持续加载直到最早笔记早于目标周下界，遍历全部分页或加载结果；按 Asia/Shanghai 筛选、去重并按创建时间正序输出。任务空间被用户接管、页面需要登录或页面读取失败时停止并报告，不自动切换到 Chrome 插件、CDP 或旧导出。
    - 快速路径：直接新建标签页、写入 Flomo URL 并回车；不要做普通 HTTPS 预检、截图或重复读取完整页面树。
    - 首次读取完整无障碍树后，在内存中扫描时间链接；若最早笔记已早于目标周下界，立即停止。仅当未覆盖下界时滚动加载，并读取增量树后复查。
    - 以 `(创建时间, 正文)` 去重；采集完成后只关闭本次新建标签页，不影响用户原有标签页。
-   - 若浏览器插件连接、自动导航或页面读取失败，停止 Flomo 来源并报告浏览器插件异常；不得降级到 Chrome 远程调试、CDP Proxy、读取浏览器凭据或旧本地导出。
+   - 若 Ego Lite 任务空间、自动导航或页面读取失败，停止 Flomo 来源并报告 Ego Lite 异常；不得降级到 Chrome 远程调试、CDP Proxy、其他浏览器插件、读取浏览器凭据或旧本地导出。
 5. AI Coach 使用 `https://ywhome.feishu.cn/wiki/UeHNwP3ebihXPJkU2Lfc2mIsncb`；每次先用 `lark-cli base +url-resolve --as bot` 取得真实 `base_token`，再核对这四张表：`服务对象`、`服务记录`、`ai coach thinking`、`项目`。表或字段变化时停止该来源，不猜旧结构。
 7. 不读取、打印或保存凭据。不修改 `README.md`、`01_core/道/`、`01_core/法/`、`02_prompts/` 或无关长期资产。
 
@@ -68,7 +68,7 @@ npm run memory:weekly -- --week 2026-W27
 2. 采集本地自动来源，并提示飞书机器人侧自查：
    - 飞书日记：通过飞书 CLI 读取多维表格，不通过网页抓取。必须先取得真实完整字段表头和 field id 映射，再获取目标周日记多维表格 records。无法验证表头时停止该来源；不得猜字段名，不得用旧文件补齐。写入 `daily.md`，保留来源、日期范围、采集时间、CLI 命令来源和字段 provenance。
    - 飞书周记：通过飞书 CLI 读取线上周记文档，优先从知识库/文档节点树定位目标周文档，再读取正文。只截取目标周段落。`weekly.md` 必须保留来源 URL、标题或日期定位依据、采集时间。无法通过 CLI 取得线上正文时停止，不得用旧本地内容替代。
-   - Flomo：按“启动规则 4”的快速路径通过浏览器插件自动新开 Chrome 标签页、打开 `https://v.flomoapp.com/mine` 并复用日常登录态，按 Asia/Shanghai 的目标周起止时间检索；仅在尚未覆盖下界时加载下一批，只把目标周笔记去重后按创建时间正序写入 `flomo.md`。文件保留来源、时间范围、采集时间、数量和分页完成状态；不得只取首屏，不得用旧本地导出替代。
+   - Flomo：按“启动规则 4”通过 Ego Lite 任务空间打开或复用 `https://v.flomoapp.com/mine`，按 Asia/Shanghai 的目标周起止时间检索；仅在尚未覆盖下界时加载下一批，只把目标周笔记去重后按创建时间正序写入 `flomo.md`。文件保留来源、时间范围、采集时间、数量和分页完成状态；不得只取首屏，不得用旧本地导出替代。
    - 微信读书：按 `learn-x-input` 执行 `npm run input:weread -- --week YYYY-Www`。验证输出保留目标周、Asia/Shanghai 范围、生成时间、阅读统计、进度快照、个人划线和想法，并包含完整 7 天，包括 0 分钟日期。
    - Time-X 时间：按 `learn-x-input` 执行一次 `npm run input:time -- --week YYYY-Www`，只读取固定 `Time-X｜随时记` 共享日历与屏幕时间 Base。将日历汇总及每个日历块的日期、起止、标题、描述写入 `calendar.md`；将屏幕时间写入 `time.md`。不得读取用户主日历，不保存日历人员、地点、ID、链接或系统元数据。
    - Voice-X：按 `learn-x-input` 执行 `npm run input:voice -- --week YYYY-Www`，按录制时间读取目标 ISO 周且核心重点非空的全部记录，写入 `voice.md`。必须验证分页完成、时间正序和完整核心 Markdown；不得读取或写入原始文字稿。成功查询为 0 条时保留明确的零记录文件，查询或文档失败时保留旧文件并报告。
