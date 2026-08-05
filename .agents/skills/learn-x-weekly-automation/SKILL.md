@@ -16,6 +16,7 @@ npm run input:weread -- --week 2026-W27
 npm run input:time -- --week 2026-W27
 npm run input:voice -- --week 2026-W27
 npm run input:daily-coach -- --week 2026-W27
+npm run input:wisdom -- --week 2026-W27
 npm run process:weekly -- --week 2026-W27
 npm run memory:weekly -- --week 2026-W27
 ```
@@ -79,10 +80,11 @@ npm run memory:weekly -- --week 2026-W27
      - 保留普通字段、选项、日期、公式结果和 URL。`服务资料`、`超链接`、`产出链接` 只保留原链接，不读取链接页面正文；附件只记录文件名和数量，不下载。
      - 不把 `联系方式`、`访谈文字`原文或技术性的关联 record id 写入仓库。需要展示关联对象时，用真实关联记录回查用户可读名称。
      - `coach.md` 必须写明 Base URL、目标周时间范围、采集时间、四张表各自记录数和分页完成状态；零记录也保留“已检查，本周无更新”，不得沿用旧文件。
+   - 智慧之门：执行 `npm run input:wisdom -- --week YYYY-Www`。通过 `collect-base-weekly.mjs`（配置驱动，复用通用核心 `lib/base-collector.mjs`）按最后更新时间服务端筛目标周并遍历全部分页，写入 `wisdom.md`。只保留脱敏普通字段和 URL，不写联系方式、技术 record id 或链接页面正文。
    - 飞书机器人 Build 复盘：本流程不执行 `build-bot-log`，不生成或追加 `build-bot.md`。必须提示用户：`build-bot-log 需要在飞书机器人上完成，请自查`。
      - 如果目标周是提前写当周，提示用户去飞书上手动执行，并输出自动化链接：https://ywhome.feishu.cn/wiki/KcTcwG90OiZh3rksu0ucvwx5nFe?table=wkfVC125gMp3snTX
      - 如果不是提前执行，提示用户周日飞书自动化理论上已提前执行，只需自查 `build-bot.md` 是否已由飞书侧写入。
-   - 如果目标周是周六、周日自动判定的当前周提前稿，`daily.md` / `flomo.md` / `weread.md` / `coach.md` / `calendar.md` 可以只覆盖截至运行时；文件和汇报必须标出缺失日期 / 未来日期。
+   - 如果目标周是周六、周日自动判定的当前周提前稿，`daily.md` / `flomo.md` / `weread.md` / `coach.md` / `wisdom.md` / `calendar.md` 可以只覆盖截至运行时；文件和汇报必须标出缺失日期 / 未来日期。
 3. 自动来源完成后，提示用户可并行完成飞书周记和 AI 摘要。
 4. 阶段 1 不采集飞书周记。用户回复 `继续` 后，阶段 2 自动读取线上飞书周记并写入 `weekly.md`。
 5. 阶段 1 不生成 `_dist`，不创建或改写最终 Weekly Output。
@@ -91,7 +93,7 @@ npm run memory:weekly -- --week 2026-W27
 8. 提示用户使用 AI 摘要提示词生成并保存 `03_input/weekly/YYYY-Www/ai.md`，然后回复 `继续`。不要要求用户手工创建 `weekly.md`；该文件由阶段 2 自动采集写入。
 9. 提示用户填写线上周记时，固定附上周记入口：https://ywhome.feishu.cn/wiki/EOlbwTVLyiQp7Fkrr9ucdI9hnac
 
-阶段 1 汇报必须包含：目标周、已完成来源、缺失或部分完成来源、`daily.md` / `flomo.md` / `weread.md` / `voice.md` / `coach.md` / `calendar.md` 路径、当前位置、下一步、再下一步。
+阶段 1 汇报必须包含：目标周、已完成来源、缺失或部分完成来源、`daily.md` / `flomo.md` / `weread.md` / `voice.md` / `coach.md` / `calendar.md` / `wisdom.md` 路径、当前位置、下一步、再下一步。
 
 ## 阶段 2：周记采集与报告准备
 
@@ -107,6 +109,7 @@ npm run memory:weekly -- --week 2026-W27
    - `voice.md`（必须来自本次成功查询；只含目标周核心重点全文，不含原始文字稿）
    - `calendar.md`（只作计划上下文，缺失或不可用时报告但不将其当作行动证据）
    - `coach.md`
+   - `wisdom.md`
    - `build-bot.md`（只验证是否已由飞书侧完成；不存在时报告缺口，但本流程不生成）
    - `weekly.md`
    - `ai.md`
