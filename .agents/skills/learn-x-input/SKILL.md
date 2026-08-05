@@ -66,6 +66,14 @@ Run `npm run input:daily-coach -- --week YYYY-Www` to collect the 日常记录 B
 - Verify live tables and fields, filter the target Asia/Shanghai week server-side, and traverse every page before writing `daily.md` and `coach.md`.
 - Preserve ordinary fields and URLs, record attachment names/counts, and exclude contact details, interview text, linked-page正文, and technical record IDs.
 
+## Wisdom Gate Weekly Input
+
+Run `npm run input:wisdom -- --week YYYY-Www` to collect the 智慧之门 table (研究&学习 Base) with `lark-cli --as bot`.
+
+- Verify the table and fields, filter the target Asia/Shanghai week server-side by 最后更新时间, traverse every page, then write `wisdom.md`.
+- Preserve ordinary fields and URLs; exclude contact details, technical record IDs, and linked-page正文.
+- Config-driven via `collect-base-weekly.mjs` and the shared `lib/base-collector.mjs`; adding a new Base source only needs a new entry in the `COLLECTORS` array.
+
 ## Script
 
-Use `scripts/collect-weread-weekly.mjs`, `scripts/collect-time-weekly.mjs`, `scripts/collect-voice-weekly.mjs`, and `scripts/collect-daily-coach-weekly.mjs`. They accept `--week YYYY-Www`; without it, they use the Learn-X weekly review default in `Asia/Shanghai`: Monday through Friday target the previous ISO week, Saturday and Sunday target the current ISO week. Weekly automation should still pass the resolved target week explicitly.
+Use `scripts/collect-weread-weekly.mjs`, `scripts/collect-time-weekly.mjs`, `scripts/collect-voice-weekly.mjs`, and `scripts/collect-daily-coach-weekly.mjs`, plus the config-driven `scripts/collect-base-weekly.mjs` (currently 智慧之门). They accept `--week YYYY-Www`; without it, they use the Learn-X weekly review default in `Asia/Shanghai`: Monday through Friday target the previous ISO week, Saturday and Sunday target the current ISO week. Weekly automation should still pass the resolved target week explicitly.
