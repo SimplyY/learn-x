@@ -49,7 +49,7 @@ Output 正文应服务于审稿：哪些输入改变了理解，哪些判断值�
 - 推荐上下文保留周期 `process-pack.md`、`01_core/道/` 和 `01_core/memory/`，移除 Output 生成规则与说明文件；
 - 洞察由用户人工确认后写入 Output 的“芒格之魂手动洞察”区，Memorize 时作为独立候选进入 Memory 顶部候选观察池，不自动升级为正式道 / 法 / 术。
 
-在 Learn-X 每周自动化中，阶段 2 完成后必须按顺序人工处理：
+在 Learn-X 每周自动化中，以下 1—5 项属于同一个人工 Chat Pack 完成门槛；自动化汇报不得把 Weekly Output 与芒格之魂拆成两个“下一步”。阶段 2 完成后按顺序处理：
 
 1. 使用 Learn-X Chat Pack 的 Weekly Output 功能生成并审核周报正文。
 2. 继续在 Chat Pack 启用“芒格之魂”，生成独立洞察。
