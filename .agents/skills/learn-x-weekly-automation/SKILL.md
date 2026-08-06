@@ -37,6 +37,7 @@ npm run memory:weekly -- --week 2026-W27
    - 周三至周五自动选上一周时，必须在汇报中提示：现在仍是周中，默认处理上一周；如果要提前写本周，需要明确说“本周”或指定 `YYYY-Www`。
    - 周六、周日自动选当前周时，视为提前写当周；允许输入只覆盖截至运行时，但必须报告未来日期或缺失日期，不得声称整周已完整结束。
    - 格式统一使用 `YYYY-Www`。
+   - 周记日期映射：线上周记标题日期是写作日，不是内容覆盖日。目标 ISO 周的覆盖范围为周一至周日；对应周记标题通常是目标周结束日的下一天（下一周周一），其正文回顾写作日前完整的 7 天。例如 `2026-W31` 覆盖 `2026-07-27`—`2026-08-02`，必须定位 `## 8.3`，不能定位 `## 7.27`。匹配时先由目标周计算“下一日”的 `M.D` 标题，再验证正文覆盖范围；不得用标题所在周、相邻旧条目或本地旧文件替代。
 2. 执行前读取仓库当前说明：
    - `03_input/usage.md`
    - `03_input/README.md`
@@ -57,7 +58,7 @@ npm run memory:weekly -- --week 2026-W27
 
 - 定时触发，或用户没有明确继续指令：只执行阶段 1。
 - 用户说 `继续`、`周记和 AI 摘要已完成`、`继续采集周记` 或同义表达：对同一目标周进入阶段 2，先验证 `ai.md` 并采集 `weekly.md`。
-- 用户说 `继续记忆`、`报告已完成，写入记忆`、`Memorize`，或确认 Output / 芒格洞察 / 图片 / 公众号发布已完成：对同一目标周执行阶段 3。
+- 阶段 2 完成后，用户说 `继续下一步`、`继续记忆`、`报告已完成，写入记忆`、`Memorize`，或确认完整人工步骤已完成：对同一目标周执行阶段 3。完整人工步骤是一次 Chat Pack 会话内完成并审核 Weekly Output、芒格之魂洞察、全文核心重点纪要、配图 / 发布和 Memory 候选；不要把其中的界面操作拆成多个自动化阶段。
 - 不猜测人工项已经完成。到阶段门槛就停。
 - 同一轮自动化中，阶段 1 / 2 / 3 必须使用同一个已解析目标周；不要在后续阶段重新按当天日期推断。
 
@@ -68,7 +69,7 @@ npm run memory:weekly -- --week 2026-W27
 1. 确保 `03_input/weekly/YYYY-Www/` 存在。保留目录中已有的人工内容。若 `weekly.md` 或 `ai.md` 不存在，创建空文件作为人工/阶段 2 写入位置；不得写入模板正文、提示词或缺口说明。
 2. 采集本地自动来源，并提示飞书机器人侧自查：
    - 飞书日记：通过飞书 CLI 读取多维表格，不通过网页抓取。必须先取得真实完整字段表头和 field id 映射，再获取目标周日记多维表格 records。无法验证表头时停止该来源；不得猜字段名，不得用旧文件补齐。写入 `daily.md`，保留来源、日期范围、采集时间、CLI 命令来源和字段 provenance。
-   - 飞书周记：通过飞书 CLI 读取线上周记文档，优先从知识库/文档节点树定位目标周文档，再读取正文。只截取目标周段落。`weekly.md` 必须保留来源 URL、标题或日期定位依据、采集时间。无法通过 CLI 取得线上正文时停止，不得用旧本地内容替代。
+   - 飞书周记：通过飞书 CLI 读取线上周记文档，按“周记日期映射”由目标覆盖周反推出写作日，优先从知识库/文档节点树定位该 `M.D` 标题，再读取正文。只截取该写作日对应、覆盖目标周的段落。`weekly.md` 必须同时保留来源 URL、写作日标题、目标覆盖范围、定位依据和采集时间。无法取得对应写作日正文或无法验证覆盖范围时停止，不得用旧本地内容替代。
    - Flomo：按“启动规则 4”通过 Ego Lite 任务空间打开或复用 `https://v.flomoapp.com/mine`，按 Asia/Shanghai 的目标周起止时间检索；仅在尚未覆盖下界时加载下一批，只把目标周笔记去重后按创建时间正序写入 `flomo.md`。文件保留来源、时间范围、采集时间、数量和分页完成状态；不得只取首屏，不得用旧本地导出替代。
    - 微信读书：按 `learn-x-input` 执行 `npm run input:weread -- --week YYYY-Www`。验证输出保留目标周、Asia/Shanghai 范围、生成时间、阅读统计、进度快照、个人划线和想法，并包含完整 7 天，包括 0 分钟日期。
    - Time-X 时间：按 `learn-x-input` 执行一次 `npm run input:time -- --week YYYY-Www`，只读取固定 `Time-X｜随时记` 共享日历与屏幕时间 Base。将日历汇总及每个日历块的日期、起止、标题、描述写入 `calendar.md`；将屏幕时间写入 `time.md`。不得读取用户主日历，不保存日历人员、地点、ID、链接或系统元数据。
@@ -84,23 +85,24 @@ npm run memory:weekly -- --week 2026-W27
    - 飞书机器人 Build 复盘：本流程不执行 `build-bot-log`，不生成或追加 `build-bot.md`。必须提示用户：`build-bot-log 需要在飞书机器人上完成，请自查`。
      - 如果目标周是提前写当周，提示用户去飞书上手动执行，并输出自动化链接：https://ywhome.feishu.cn/wiki/KcTcwG90OiZh3rksu0ucvwx5nFe?table=wkfVC125gMp3snTX
      - 如果不是提前执行，提示用户周日飞书自动化理论上已提前执行，只需自查 `build-bot.md` 是否已由飞书侧写入。
+   - Health-X：检查 `03_input/weekly/YYYY-Www/health.md` 是否存在且有实质内容；不存在、空文件或模板/占位内容都视为缺失。它不是本流程生成的自动来源；缺失不阻断 `_dist`，但汇报必须以一级大标题开头提示：`# ⚠️ 缺失输入：health.md`，写明目标周和报告结束日，并给出生成方法：在 `/Users/yuwei/code/health-x` 运行 `npm run validate -- input/YYYY-MM-DD.json`，通过后运行 `npm run sync -- input/YYYY-MM-DD.json`。其中 `YYYY-MM-DD` 是目标 ISO 周的周日，例如 `2026-W31` 使用 `input/2026-08-02.json`。不得用旧文件或手工占位内容补齐；`sync` 成功后应重新检查 Learn-X 的 `health.md`。
    - 如果目标周是周六、周日自动判定的当前周提前稿，`daily.md` / `flomo.md` / `weread.md` / `coach.md` / `wisdom.md` / `calendar.md` 可以只覆盖截至运行时；文件和汇报必须标出缺失日期 / 未来日期。
 3. 自动来源完成后，提示用户可并行完成飞书周记和 AI 摘要。
 4. 阶段 1 不采集飞书周记。用户回复 `继续` 后，阶段 2 自动读取线上飞书周记并写入 `weekly.md`。
 5. 阶段 1 不生成 `_dist`，不创建或改写最终 Weekly Output。
 6. 不访问 AI Chat 或 ChatGPT 历史。不写入、改写或补全 `ai.md` 正文；如果用户直接把 AI 摘要贴到当前对话，先原样落盘到 `ai.md` 再继续验证。
-7. 读取并在汇报中用 Markdown 代码块完整输出 `02_prompts/meta/_ai-chat-extract-prompt.md` 的当前正文，明确提示用户可直接用它生成 `03_input/weekly/YYYY-Www/ai.md`。
-8. 提示用户使用 AI 摘要提示词生成并保存 `03_input/weekly/YYYY-Www/ai.md`，然后回复 `继续`。不要要求用户手工创建 `weekly.md`；该文件由阶段 2 自动采集写入。
+7. 读取 `02_prompts/meta/_ai-chat-extract-prompt.md` 的当前正文，并把它原样放进本轮最终用户可见回复的 Markdown 代码块中。不能只放在工具输出、内部思考、折叠评论或文件链接里；不能摘要、改写、截断或用省略号替代。该代码块是阶段 1 汇报的硬性交付物。
+8. 在同一最终回复中明确提示用户：复制上方完整提示词到 AI Chat，生成并保存 `03_input/weekly/YYYY-Www/ai.md`，然后回复 `继续`。不要要求用户手工创建 `weekly.md`；该文件由阶段 2 自动采集写入。若最终回复未包含完整提示词，不得声称阶段 1 汇报完成。
 9. 提示用户填写线上周记时，固定附上周记入口：https://ywhome.feishu.cn/wiki/EOlbwTVLyiQp7Fkrr9ucdI9hnac
 
-阶段 1 汇报必须包含：目标周、已完成来源、缺失或部分完成来源、`daily.md` / `flomo.md` / `weread.md` / `voice.md` / `coach.md` / `calendar.md` / `wisdom.md` 路径、当前位置、下一步、再下一步。
+阶段 1 汇报必须包含：目标周、已完成来源、缺失或部分完成来源、`daily.md` / `flomo.md` / `weread.md` / `voice.md` / `coach.md` / `calendar.md` / `wisdom.md` / `health.md` 状态、完整 AI 摘要提示词代码块、当前位置、下一步、再下一步。提示词必须出现在最终用户可见回复中；这是阶段 1 的最后一道汇报门槛。
 
 ## 阶段 2：周记采集与报告准备
 
 目标：采集周记，验证必要输入，然后生成 `_dist` 和 Output 最小壳。
 
 1. 先验证 `ai.md`。它必须非空、不是模板、不是提取提示词本身、不是自动缺口说明，并且包含目标周真实回顾内容。无效时立即停止，不采集 weekly，不生成 `_dist`，并再次展示 AI 摘要提示词。用户若已在当前对话贴出 AI 摘要，直接写入 `ai.md` 后再验证。
-2. `ai.md` 通过后，通过飞书 CLI 从已登录的线上飞书周记文档采集目标周周记。只截取目标周段落。`weekly.md` 必须保留来源 URL、标题或日期定位依据、采集时间。无法取得线上正文时停止，不得用旧本地内容替代。
+2. `ai.md` 通过后，按“周记日期映射”计算写作日，通过飞书 CLI 从已登录的线上飞书周记文档采集该写作日对应的目标周周记。不能把写作日当天所在的 ISO 周当作覆盖周。只截取目标覆盖范围的段落；`weekly.md` 必须同时保留来源 URL、写作日标题、目标覆盖范围、定位依据和采集时间。无法取得对应线上正文或无法验证覆盖范围时停止，不得用旧本地内容替代。
    - 采集前如果发现缺少飞书周记所需授权，先一次性列出并请求全部缺失 scopes，再继续，不要一项一项分开打断用户。
 3. 生成 `_dist` 前，验证这些当前周输入：
    - `daily.md`
@@ -110,6 +112,7 @@ npm run memory:weekly -- --week 2026-W27
    - `calendar.md`（只作计划上下文，缺失或不可用时报告但不将其当作行动证据）
    - `coach.md`
    - `wisdom.md`
+   - `health.md`（可选；缺失不阻断，但汇报必须先用一级大标题显著提示，并附 Health-X 生成命令）
    - `build-bot.md`（只验证是否已由飞书侧完成；不存在时报告缺口，但本流程不生成）
    - `weekly.md`
    - `ai.md`
@@ -126,14 +129,10 @@ npm run memory:weekly -- --week 2026-W27
    - `04_output/_dist/weekly/YYYY-Www/process-pack.md`
    - `04_output/weekly/YYYY-WW.md`
    - 已完成来源、缺口、验证结果
-8. 停止，等待用户进入人工 / Chat Pack 阶段。提醒用户按顺序完成：
-   - 下一步先去 Learn-X Chat Pack，使用 Weekly Output 功能，结合 `process-pack.md` 生成并审核周报正文；按需读取 `.agents/skills/learn-x-process/resources/weekly-output-rules.md` 和 `layer-rules.md`。
-   - 第二步继续在 Chat Pack 中启用 `芒格之魂`，基于同一份 Weekly Output 生成独立洞察，不重写 Weekly Output。
-   - 把 `芒格之魂的洞察 & 全文核心重点纪要` 补进最终周报；这一区域可直接作为候选来源，不要求先勾选。
-   - 审核并勾选 Memory 候选。
-   - 第三步再回复 `继续记忆`，进入 Memory 阶段。
+8. 停止，等待用户完成一个人工 / Chat Pack 步骤：结合 `process-pack.md` 生成并审核 Weekly Output；在同一次操作中启用 `芒格之魂` 生成独立洞察，补全 `芒格之魂的洞察 & 全文核心重点纪要`，完成配图 / 发布并审核 Memory 候选。按需读取 `.agents/skills/learn-x-process/resources/weekly-output-rules.md` 和 `layer-rules.md`。全部完成后回复 `继续下一步` 或 `继续记忆`，进入阶段 3。
 
-阶段 2 汇报必须包含完整全局流程，并标记：当前位置 = 阶段 2 完成；下一步 = 去 Chat Pack 生成 Weekly Output；再下一步 = 芒格之魂；第三步 = Memory。
+阶段 2 汇报必须包含完整全局流程，并标记：当前位置 = 阶段 2 完成；下一步 = 在 Chat Pack 一次完成并审核 Weekly Output、芒格之魂及发布准备；再下一步 = 阶段 3 Memory。不得把 Weekly Output 与芒格之魂分别写成“下一步”和“再下一步”。
+若 `health.md` 缺失，阶段 1 / 阶段 2 汇报的第一段必须是一级大标题 `# ⚠️ 缺失输入：health.md`，并同时给出目标周、报告结束日和 Health-X 的 `validate` / `sync` 命令；不能把缺失藏在普通缺口列表中。
 
 ## 阶段 3：已审核记忆
 
