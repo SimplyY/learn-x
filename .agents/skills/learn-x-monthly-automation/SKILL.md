@@ -139,7 +139,6 @@ npm run memory:monthly -- 2026-06
 - 不自动访问 AI Chat；不在自动化中生成 Monthly Output 正文。
 - 允许 Codex 为 Process Pack 生成 `_dist` 压缩事件；这不是 Monthly Output，也不得写回原始 Input。
 - 不在自动化中生成 `芒格之魂` 洞察。
-- 不上传图片，不发布微信公众号。
 - 不写入正式 `道/`、`法/` 或 `术` 资产。
 - 不按关键词迁移未勾选 Memory 候选。
 - 未经用户明确给出路径并确认范围，不读取项目外私人导出。

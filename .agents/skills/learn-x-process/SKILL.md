@@ -79,9 +79,8 @@ Learn-X 的 `Input -> Process Pack -> Output Shell` 工作流。
    该脚本先读取相交周、月度独有输入，以及各周 Weekly Output 中系统确认的标题 10「全文核心重点纪要」和标题 11「芒格之魂的洞察」，执行日期过滤、空值过滤、Daily 元数据合并和去重；不读取 Weekly Output 的其它正文代替原始 Input。`ai`、`research`、`weread`、`build`、`build-bot`、`coach` 必须按价值策略语义整理；AI 必须先排除提示词/模板，再逐周保留核心事件，不能跨周压成一个段落。月记、周记、Daily、Flomo、Health、Voice、Calendar 和 Time 默认只做确定性清洗。脚本写出 `compression-requests.json` 并停止；Codex 按 `learn-x-monthly-automation/references/monthly-compression.md` 生成结构化 `compressed-events.json` 后重跑。最终写入 metadata-only `input.json` 和不超过 100 KB 的固定分层 `process-pack.md`。
 6. Codex 报告 `_dist` 路径、Output 最小壳路径和输入缺口，不生成 Weekly Output 正文。
 7. 用户按 `04_output/usage.md`，把 `process-pack.md` 与需要的规则文件交给 AI Chat，自行生成并写入 Weekly Output 正文。
-8. Weekly Output 与“芒格之魂”洞察完成后，提示用户在 Chat Pack「判断创造」中选择“公众号贴图”。界面默认选中该 Prompt、当前周 `04_output/weekly/YYYY-WW.md`、`01_core/道/` 和 `01_core/memory/`，其它上下文不选；不要代替用户上传或发布公众号。
-9. 人工审核候选，不要直接写入正式 core 文件。
-10. 如果用户要求 Memorize，由 Codex 判断周期并内部调用候选抽取脚本；用户不需要手动执行命令。Weekly 可调用：
+8. 人工审核候选，不要直接写入正式 core 文件。
+9. 如果用户要求 Memorize，由 Codex 判断周期并内部调用候选抽取脚本；用户不需要手动执行命令。Weekly 可调用：
 
    ```bash
    npm run memory:weekly
@@ -145,6 +144,5 @@ Memory 必须遵守 `resources/memory-rules.md`。只有精确标题「全文核
 - `04_output/README.md` 是报告阅读和人工审核说明，报告结构或审核流程改变时要同步更新。
 - `03_input/weekly/00_template/` 是每周输入文件模板，只保留 Markdown 文件。
 - `resources/weekly-output-rules.md` 是用户生成 Weekly Output 正文时的质量规则；`resources/layer-rules.md` 是判断规则。
-- `02_prompts/chatpack/reflective-decision/weekly-wechat-image.md` 是 Weekly Output 完成后生成两张公众号贴图的可编辑 Prompt。
 - `resources/memory-rules.md` 是 Memory 的质量规则。
 - 脚本只能做确定性整理、来源覆盖、Process Pack 生成和 Output 最小壳创建，不要把最终判断写死进代码。

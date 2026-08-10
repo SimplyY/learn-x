@@ -50,6 +50,7 @@ test("Chat Pack payload keeps local period prompts out of public builds", async 
   ]);
 
   assert.equal(Boolean(localPayload.subtypes["reflective-decision.weekly-output"]), true);
+  assert.equal(Object.keys(localPayload.subtypes).some((id) => id.includes("wechat")), false);
   assert.equal(Boolean(publicPayload.subtypes["reflective-decision.weekly-output"]), false);
   assert.equal(Object.keys(publicPayload.subtypes).length > 0, true);
   assert.equal(Object.keys(publicPayload.enhancers).length > 0, true);

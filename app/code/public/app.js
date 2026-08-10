@@ -8,7 +8,6 @@ const STORAGE_PREFIX = "learn-x";
 const MUNGER_SOUL_ENHANCER_ID = "munger-soul";
 const MUNGER_SOUL_SUBTYPE_ID = "other-prompts.munger-soul";
 const MUNGER_SOUL_QUESTION = "使用芒格之魂的提示词来解析所有上下文。";
-const WEEKLY_WECHAT_LONG_IMAGE_SUBTYPE_ID = "reflective-decision.weekly-wechat-image";
 const MUNGER_SOUL_PERIOD_QUESTIONS = {
   weekly: "不要输出 Weekly Output，使用芒格之魂的提示词来解析所有上下文。",
   monthly: "不要输出 Monthly Output，使用芒格之魂的提示词来解析所有上下文。",
@@ -41,7 +40,7 @@ export let DIALOGUE_TYPES = CHATPACK_CONFIG.dialogueTypes;
 export let ENHANCERS = CHATPACK_CONFIG.enhancers;
 const PERIOD_OUTPUTS = {
   weekly: {
-    subtypeIds: ["reflective-decision.weekly-output", WEEKLY_WECHAT_LONG_IMAGE_SUBTYPE_ID],
+    subtypeIds: ["reflective-decision.weekly-output"],
     label: "第几周",
     emptyLabel: "暂无周输出包",
     pattern: /^04_output\/_dist\/weekly\/(\d{4})-W(\d{2})\//,
@@ -768,11 +767,6 @@ function applyPeriodContextSelection(mode, value) {
 
 function periodContextStrategy(mode, value, filePath) {
   if (mode === "weekly") {
-    if (activeDialogueSubtype()?.id === WEEKLY_WECHAT_LONG_IMAGE_SUBTYPE_ID) {
-      return filePath === `04_output/weekly/${value.replace("-W", "-")}.md`
-        ? normalizeStrategy(state.contextFileMap.get(filePath)?.defaultStrategy || "normal")
-        : "";
-    }
     return filePath === `${PERIOD_OUTPUTS.weekly.prefixFromValue(value)}process-pack.md`
       ? normalizeStrategy(state.contextFileMap.get(filePath)?.defaultStrategy || "normal")
       : "";

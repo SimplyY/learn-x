@@ -58,7 +58,7 @@ npm run memory:weekly -- --week 2026-W27
 
 - 定时触发，或用户没有明确继续指令：只执行阶段 1。
 - 用户说 `继续`、`周记和 AI 摘要已完成`、`继续采集周记` 或同义表达：对同一目标周进入阶段 2，先验证 `ai.md` 并采集 `weekly.md`。
-- 阶段 2 完成后，用户说 `继续下一步`、`继续记忆`、`报告已完成，写入记忆`、`Memorize`，或确认完整人工步骤已完成：对同一目标周执行阶段 3。完整人工步骤是一次 Chat Pack 会话内完成并审核 Weekly Output、芒格之魂洞察、全文核心重点纪要、配图 / 发布和 Memory 候选；不要把其中的界面操作拆成多个自动化阶段。
+- 阶段 2 完成后，用户说 `继续下一步`、`继续记忆`、`报告已完成，写入记忆`、`Memorize`，或确认完整人工步骤已完成：对同一目标周执行阶段 3。完整人工步骤是一次 Chat Pack 会话内完成并审核 Weekly Output、芒格之魂洞察、全文核心重点纪要和 Memory 候选；不要把其中的界面操作拆成多个自动化阶段。
 - 不猜测人工项已经完成。到阶段门槛就停。
 - 同一轮自动化中，阶段 1 / 2 / 3 必须使用同一个已解析目标周；不要在后续阶段重新按当天日期推断。
 
@@ -124,14 +124,14 @@ npm run memory:weekly -- --week 2026-W27
    npm run process:weekly -- --week YYYY-Www
    ```
 
-8. 汇报：
+9. 汇报：
    - `04_output/_dist/weekly/YYYY-Www/input.json`
    - `04_output/_dist/weekly/YYYY-Www/process-pack.md`
    - `04_output/weekly/YYYY-WW.md`
    - 已完成来源、缺口、验证结果
-8. 停止，等待用户完成一个人工 / Chat Pack 步骤：结合 `process-pack.md` 生成并审核 Weekly Output；在同一次操作中启用 `芒格之魂` 生成独立洞察，补全 `芒格之魂的洞察 & 全文核心重点纪要`，完成配图 / 发布并审核 Memory 候选。按需读取 `.agents/skills/learn-x-process/resources/weekly-output-rules.md` 和 `layer-rules.md`。全部完成后回复 `继续下一步` 或 `继续记忆`，进入阶段 3。
+10. 停止，等待用户完成一个人工 / Chat Pack 步骤：结合 `process-pack.md` 生成并审核 Weekly Output；在同一次操作中启用 `芒格之魂` 生成独立洞察，补全 `芒格之魂的洞察 & 全文核心重点纪要`，并审核 Memory 候选。按需读取 `.agents/skills/learn-x-process/resources/weekly-output-rules.md` 和 `layer-rules.md`。全部完成后回复 `继续下一步` 或 `继续记忆`，进入阶段 3。
 
-阶段 2 汇报必须包含完整全局流程，并标记：当前位置 = 阶段 2 完成；下一步 = 在 Chat Pack 一次完成并审核 Weekly Output、芒格之魂及发布准备；再下一步 = 阶段 3 Memory。不得把 Weekly Output 与芒格之魂分别写成“下一步”和“再下一步”。
+阶段 2 汇报必须包含完整全局流程，并标记：当前位置 = 阶段 2 完成；下一步 = 在 Chat Pack 一次完成并审核 Weekly Output、芒格之魂、核心纪要和 Memory 候选；再下一步 = 阶段 3 Memory。不得把这些人工审核项拆成多个阶段。
 若 `health.md` 缺失，阶段 1 / 阶段 2 汇报的第一段必须是一级大标题 `# ⚠️ 缺失输入：health.md`，并同时给出目标周、报告结束日和 Health-X 的 `validate` / `sync` 命令；不能把缺失藏在普通缺口列表中。
 
 ## 阶段 3：已审核记忆
@@ -140,7 +140,7 @@ npm run memory:weekly -- --week 2026-W27
 
 1. 验证 `04_output/weekly/YYYY-WW.md` 是目标周的实质性周报，不是空壳或模板。
 2. 验证同一周报包含非空、实质性的 `芒格之魂的洞察 & 全文核心重点纪要` 区域。缺失时停止，不生成或迁移 Memory。
-3. 用户回复 `继续记忆` 视为确认本周图片和公众号发布已人工处理。不得访问、验证、上传或发布微信公众号。
+3. 用户回复 `继续记忆` 视为确认本周 Weekly Output、芒格之魂、核心纪要和 Memory 候选已人工审核。不得访问、验证或发布任何外部内容。
    - 标题 10「全文核心重点纪要」和标题 11「芒格之魂的洞察」是系统确认内容，不要求 checkbox。前者写入当周 Memory；后者写入季度 Memory 顶部芒格洞察候选池。允许轻度去重压缩，但不得丢失独立判断、限定、反转、隐喻或行动边界。
 4. 生成或刷新候选：
 
@@ -173,7 +173,6 @@ npm run memory:weekly -- --week 2026-W27
 - 不自动访问 AI Chat；但允许把用户在当前对话直接提供的 AI 摘要原样写入 `ai.md`。不主动去拉取、覆盖或改写 AI Chat 历史正文。
 - 不在脚本中生成最终 Weekly Output 正文。
 - 不在自动化中生成 `芒格之魂` 洞察。
-- 不上传图片，不发布微信公众号。
 - 不读取 `coach.md` 中 URL 指向的页面正文，不下载 AI Coach 附件，不把联系方式或访谈原文写入仓库。
 - 不写入正式 `道/`、`法/` 或 `术` 资产。
 - 不按关键词迁移未勾选 Memory 候选。

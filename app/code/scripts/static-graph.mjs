@@ -60,13 +60,11 @@ const CHATPACK_PROMPT_ROOT = "02_prompts/chatpack";
 const PUBLIC_PRIVATE_PREFIXES = ["03_input/", ".agents/skills/learn-x-process/", "04_output/_dist/"];
 const PERIOD_OUTPUT_SUBTYPE_IDS = new Set([
   "reflective-decision.weekly-output",
-  "reflective-decision.weekly-wechat-image",
   "reflective-decision.monthly-output",
   "reflective-decision.yearly-output"
 ]);
 const PUBLIC_PRIVATE_FILES = new Set([
   "02_prompts/chatpack/reflective-decision/weekly-output.md",
-  "02_prompts/chatpack/reflective-decision/weekly-wechat-image.md",
   "02_prompts/chatpack/reflective-decision/monthly-output.md",
   "02_prompts/chatpack/reflective-decision/yearly-output.md"
 ]);
