@@ -54,23 +54,25 @@ Run `npm run input:time -- --week YYYY-Www` once to collect the target ISO week'
 
 Run `npm run input:voice -- --week YYYY-Www` to read the fixed Voice-X Base with `lark-cli --as bot` and write `voice.md`.
 
-- Select by `录制时间` using the target Asia/Shanghai ISO week and require `核心重点 with AI chat` non-empty.
-- Traverse every Base page, sort by recorded time and a stable business key, then fetch the complete core Markdown document for each row.
+- Select by `录制时间` using the target Asia/Shanghai ISO week and require `处理后原文` non-empty.
+- Traverse every Base page, sort by recorded time and a stable business key, then fetch the core Markdown document for each row. New-format AI 洞察文档中的精确标题 `## 3. 对我的建议（仅留档，不采集到 Learn-X）` 及其后内容不采集；旧文档保持原样兼容。
 - Never fetch or copy `原始文字稿`; Voice-X Base remains the index and Docx remains the only正文 authority.
 - A successful zero-result query writes an explicit 0-record file. Any Base/schema/document failure must preserve the previous `voice.md` byte-for-byte.
 
-## Daily and AI Coach Weekly Input
+## Daily Weekly Input
 
-Run `npm run input:daily-coach -- --week YYYY-Www` to collect the 日常记录 Base and four AI Coach tables with `lark-cli --as bot`.
+Run `npm run input:daily-coach -- --week YYYY-Www` to collect the 日常记录 Base and AI Coach Base with `lark-cli --as bot`.
 
 - Verify live tables and fields, filter the target Asia/Shanghai week server-side, and traverse every page before writing `daily.md` and `coach.md`.
+- Coach filtering is table-specific: `服务对象` and `项目` use `创建时间`; `服务记录` uses its service `日期`; `ai coach thinking` uses `更新时间` only to find candidates and removes records with the `已推送轮次` + `回顾状态` + `上次推送时间` review signature. New records remain in `coach.md`; review updates are marked and excluded by this collector.
 - Preserve ordinary fields and URLs, record attachment names/counts, and exclude contact details, interview text, linked-page正文, and technical record IDs.
 
 ## Wisdom Gate Weekly Input
 
 Run `npm run input:wisdom -- --week YYYY-Www` to collect the 智慧之门 table (研究&学习 Base) with `lark-cli --as bot`.
 
-- Verify the table and fields, filter the target Asia/Shanghai week server-side by 最后更新时间, traverse every page, then write `wisdom.md`.
+- Verify the table and fields, filter the target Asia/Shanghai week server-side by 创建时间, traverse every page, then write `wisdom.md`.
+- `wisdom.md` uses `创建时间` as the weekly boundary: collect only records created in the target week; do not collect updates to existing records caused by review/revisit/status changes.
 - Preserve ordinary fields and URLs; exclude contact details, technical record IDs, and linked-page正文.
 - Config-driven via `collect-base-weekly.mjs` and the shared `lib/base-collector.mjs`; adding a new Base source only needs a new entry in the `COLLECTORS` array.
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Learn-X Weekly Journal"
+  short_description: "从已落盘周度证据安全生成可编辑飞书周记模板草稿内容"
+  default_prompt: "Use $learn-x-weekly-journal 从已落盘的 Learn-X 周输入生成飞书周记草稿，不覆盖人工内容。"

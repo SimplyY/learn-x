@@ -9,7 +9,8 @@ export const VOICE_X_BASE_URL = "https://ywhome.feishu.cn/base/OBapbpVNIaw7kfsM1
 const TABLE_ID = "tbljFGhqPgKaMD5l";
 const TABLE_NAME = "内容索引";
 const TIMEZONE = "Asia/Shanghai";
-const REQUIRED_FIELDS = ["标题", "录制时间", "原始文字稿", "核心重点 with AI chat", "内容指纹"];
+const REQUIRED_FIELDS = ["标题", "录制时间", "原始文字稿", "处理后原文", "内容指纹"];
+const ADVICE_HEADING = "## 3. 对我的建议（仅留档，不采集到 Learn-X）";
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
@@ -39,7 +40,7 @@ export async function collectVoiceWeekly(options = {}) {
   });
   normalized.sort((a, b) => Date.parse(a.recordedAt) - Date.parse(b.recordedAt) || a.key.localeCompare(b.key, "zh-Hans-CN"));
 
-  for (const record of normalized) record.markdown = await transport.fetchMarkdown(record.coreUrl);
+  for (const record of normalized) record.markdown = stripAdviceFromVoiceMarkdown(await transport.fetchMarkdown(record.coreUrl));
   return {
     week,
     timezone: TIMEZONE,
@@ -82,6 +83,14 @@ export function renderVoiceMarkdown(payload) {
   return `${lines.join("\n").trimEnd()}\n`;
 }
 
+// 新格式 AI 洞察的建议基于当时个人上下文生成，只留档，不是新的周度事实。
+// 仅识别完整且独占的固定标题，旧文档保持向后兼容。
+export function stripAdviceFromVoiceMarkdown(markdown) {
+  const lines = String(markdown).replace(/\r\n/g, "\n").split("\n");
+  const index = lines.findIndex((line) => line === ADVICE_HEADING);
+  return index === -1 ? String(markdown) : lines.slice(0, index).join("\n").trimEnd();
+}
+
 export function createLarkTransport() {
   let baseToken = "";
   return {
@@ -121,14 +130,14 @@ export function buildVoiceFilter(startEpoch, endEpoch) {
   return { logic: "and", conditions: [
     ["录制时间", ">", `ExactDate(${formatShanghaiIso(startEpoch - 1)})`],
     ["录制时间", "<", `ExactDate(${formatShanghaiIso(endEpoch)})`],
-    ["核心重点 with AI chat", "non_empty", null]
+    ["处理后原文", "non_empty", null]
   ] };
 }
 
 function normalizeRecord(record) {
   const title = scalar(record.fields?.["标题"]) || "未命名语音记录";
   const recordedAt = scalar(record.fields?.["录制时间"]);
-  const coreUrl = extractUrl(record.fields?.["核心重点 with AI chat"]);
+  const coreUrl = extractUrl(record.fields?.["处理后原文"]);
   const fingerprint = scalar(record.fields?.["内容指纹"]);
   if (!recordedAt) throw new Error(`Voice-X 记录 ${record.id || title} 缺少录制时间。`);
   return { id: record.id, key: fingerprint || record.id || title, title, recordedAt, coreUrl };

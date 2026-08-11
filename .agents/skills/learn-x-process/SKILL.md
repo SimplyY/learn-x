@@ -51,7 +51,7 @@ Learn-X 的 `Input -> Process Pack -> Output Shell` 工作流。
 
 ## 标准流程
 
-1. 先理解 `03_input/usage.md` 和 `04_output/usage.md` 的阶段边界：本 Skill 只负责生成 `_dist` 和 Output 最小壳，不代写正文。
+1. 先理解 `03_input/usage.md` 和 `04_output/usage.md` 的阶段边界：本 Skill 只在飞书周记/月记已人工确认并采回后生成 `_dist` 和 Output 最小壳，不生成日记草稿，也不代写 Output 正文。
 2. 用户把本周重要材料直接放入 `03_input/weekly/YYYY-Www/*.md`。常用文件为 `daily.md`、`weekly.md`、`ai.md`、`flomo.md`、`weread.md`、`build.md`、`build-bot.md`、`research.md`。
 3. 如需新建周目录，复制 `03_input/weekly/00_template/` 的 Markdown 文件。
 4. 用户日常可以直接要求 Codex「调用 learn-x-process，处理本周输入，生成 Weekly Output Dist」。
@@ -76,7 +76,7 @@ Learn-X 的 `Input -> Process Pack -> Output Shell` 工作流。
    node .agents/skills/learn-x-process/scripts/generate-monthly-process-pack.mjs --month 2026-01
    ```
 
-   该脚本先读取相交周、月度独有输入，以及各周 Weekly Output 中系统确认的标题 10「全文核心重点纪要」和标题 11「芒格之魂的洞察」，执行日期过滤、空值过滤、Daily 元数据合并和去重；不读取 Weekly Output 的其它正文代替原始 Input。`ai`、`research`、`weread`、`build`、`build-bot`、`coach` 必须按价值策略语义整理；AI 必须先排除提示词/模板，再逐周保留核心事件，不能跨周压成一个段落。月记、周记、Daily、Flomo、Health、Voice、Calendar 和 Time 默认只做确定性清洗。脚本写出 `compression-requests.json` 并停止；Codex 按 `learn-x-monthly-automation/references/monthly-compression.md` 生成结构化 `compressed-events.json` 后重跑。最终写入 metadata-only `input.json` 和不超过 100 KB 的固定分层 `process-pack.md`。
+   该脚本先读取相交周、月度独有输入，以及各周 Weekly Output 中系统确认的标题 10「全文核心重点纪要」和标题 11「芒格之魂的洞察」，执行日期过滤、空值过滤、Daily 元数据合并和去重；不读取 Weekly Output 的其它正文代替原始 Input。输入文件是否存在、是否覆盖、是否为空由对应采集器负责，Process 只读取采集器已经落盘的文件，不按来源内容再次排除。`ai`、`research`、`weread`、`build`、`build-bot` 必须按价值策略语义整理；AI 必须先排除提示词/模板，再逐周保留核心事件，不能跨周压成一个段落。月记、周记、Daily、Flomo、Health、Voice、Calendar 和 Time 默认只做确定性清洗。脚本写出 `compression-requests.json` 并停止；Codex 按 `learn-x-monthly-automation/references/monthly-compression.md` 生成结构化 `compressed-events.json` 后重跑。最终写入 metadata-only `input.json` 和不超过 100 KB 的固定分层 `process-pack.md`。
 6. Codex 报告 `_dist` 路径、Output 最小壳路径和输入缺口，不生成 Weekly Output 正文。
 7. 用户按 `04_output/usage.md`，把 `process-pack.md` 与需要的规则文件交给 AI Chat，自行生成并写入 Weekly Output 正文。
 8. 人工审核候选，不要直接写入正式 core 文件。

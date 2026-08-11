@@ -1,6 +1,6 @@
 ---
 name: learn-x-monthly-automation
-description: Learn-X 月度自动化中文工作流。Use when the user asks to prepare monthly input, collect original monthly Markdown only, generate Monthly Output `_dist` / Process Pack / Output shell, run month journal fill-empty-fields only, or migrate reviewed monthly Memory candidates.
+description: Learn-X 月度自动化中文工作流。Use when the user asks to generate a monthly journal draft from local weekly input, prepare monthly input, generate Monthly Output `_dist` / Process Pack / Output shell, or migrate reviewed monthly Memory candidates.
 ---
 
 # Learn-X 月度自动化
@@ -47,23 +47,23 @@ npm run memory:monthly -- 2026-06
 ## 阶段判断
 
 - 定时触发，或用户没有明确继续指令：只执行阶段 1。
-- 用户说 `继续`、`月记已完成`、`继续生成月报材料` 或同义表达：对同一目标月执行阶段 2。
+- 用户说 `继续`、`月记已完成`、`继续生成月报材料` 或同义表达：对同一目标月执行阶段 2。`继续` 不得绕过阶段 1 的“全部相交周记已确认”门槛。
 - 用户说 `继续记忆`、`月报已完成，写入记忆`、`Memorize`，或确认 Monthly Output / 芒格洞察 / 候选审核已完成：对同一目标月执行阶段 3。
 - 不猜测人工项已经完成。到阶段门槛就停。
 - 同一轮自动化中，阶段 1 / 2 / 3 必须使用同一个已解析目标月；不要在后续阶段重新按当天日期推断。
 
 ## 阶段 1：月度输入准备
 
-目标：只在月记存在明确空白或占位符时补全可安全写入的字段，汇总本月周输入到月度输入目录，然后停止，等待用户人工完成月记。
+目标：只在所有相交周记均已人工确认时，从已落盘的周输入生成可安全写入的飞书月记草稿，然后停止，等待用户人工完成月记。
 
-1. 调用 `learn-x-monthly-journal` 仅检查并补全目标月飞书月记中的空白或占位字段。它只在存在安全空位时写入带 `【待优化】AI 基础草稿` 的内容；若目标月已存在实质性正文或不存在安全空位，则跳过写回，只报告缺口。
-2. 确保 `03_input/monthly/YYYY-M/` 存在。保留目录中已有人工内容，不覆盖已有非空文件。
-3. 检查所有与目标月相交的周目录和 `03_input/monthly/YYYY-M/`。不要生成 `weekly-inputs.md`；保留已有月度人工文件，不覆盖。
-4. 相交周目录和周文件都不是月度硬门禁。只汇总实际存在且属于目标月的材料；缺少最后一个相交周（例如 `W31`）或某类周输入时记录为缺口，不创建空周目录、不猜测内容，也不阻断阶段 2。
-5. 只报告来源范围、月记状态和缺口，不提前生成 Monthly Output。
-6. 停止并提示用户在飞书月记中完成目标月月记，然后回复 `继续`。
+1. 确保 `03_input/monthly/YYYY-M/` 存在。保留目录中已有人工内容，不覆盖已有非空文件。
+2. 检查所有与目标月相交的周目录；每一周都必须有实质性、已确认的 `weekly.md`。文件缺失、为空、模板化或仍含 `【待优化】AI 基础草稿` 时立即停止，列出缺周/未确认周；不创建空周目录、不猜测内容、不写飞书。
+3. 所有周通过后，调用 `learn-x-monthly-journal`。它只从相交周与月度目录的本地文件读取事实，按现有月度聚合的日期过滤、去重与边界规则生成草稿；不得重新读取 Daily Base 或线上周记作为事实源。
+4. `learn-x-monthly-journal` 只在目标月不存在或有明确安全空位时写入主标题带 `【待优化】AI 基础草稿` 的内容；若目标月已存在实质性正文、草稿或不存在安全空位，则跳过写回，只报告链接与原因。
+5. 只报告本地来源范围、已确认周范围、月记状态和缺口，不提前生成 Monthly Output。
+6. 停止并提示用户在飞书月记中编辑确认、移除所有草稿标记，然后回复 `继续`。
 
-阶段 1 汇报必须包含：目标月、月记草稿状态（含可点击飞书草稿链接）、已汇总周范围、可点击的 `03_input/monthly/YYYY-M/` 路径、缺口、当前位置、下一步、再下一步。
+阶段 1 汇报必须包含：目标月、月记草稿状态（含可点击飞书草稿链接）、已确认周范围、使用的本地来源、可点击的 `03_input/monthly/YYYY-M/` 路径、缺口、当前位置、下一步、再下一步。
 
 ## 阶段 2：月记采集与月报准备
 
@@ -76,7 +76,7 @@ npm run memory:monthly -- 2026-06
    ```
 
    只采集目标月 section。`monthly-journal.md` 必须保留来源 URL、标题或日期定位依据、采集时间。无法取得目标月正文时停止，不得用旧本地内容替代。
-2. 验证 `03_input/monthly/YYYY-M/monthly-journal.md` 和实际存在的相交周原始目录。旧 `weekly-inputs.md` 不参与处理。缺失周目录、周记或自动来源只进入 Process Pack 与汇报的缺口审计，不阻断生成。
+2. 验证 `03_input/monthly/YYYY-M/monthly-journal.md` 是已确认定稿，不含 `【待优化】AI 基础草稿`；并再次验证所有相交周的 `weekly.md` 均已确认。旧 `weekly-inputs.md` 不参与处理。任一周或月记未确认时停止，不生成 `_dist`。
 3. 首次运行：
 
    ```bash

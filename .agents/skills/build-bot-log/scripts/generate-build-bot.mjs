@@ -1,61 +1,25 @@
-import { readFile, writeFile, mkdir, access } from "node:fs/promises";
+import { readFile, writeFile, mkdir, access, readdir } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import {
+  aggregateUsage,
+  rangeForWeek,
+  normalizeWeek,
+  resolveTargetWeek,
+  timestampEpoch,
+} from "./usage-aggregation.mjs";
 
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const skillRoot = path.resolve(__dirname, "..");
 const repoRoot = path.resolve(skillRoot, "../../../..");
-const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
-const COVERAGE_DAYS = 7;
 const DEFAULT_CODEX_HOME = path.join(os.homedir(), ".codex");
 const DEFAULT_CHAT_ID = "oc_846411e4168e681d7f7b491c837163fd";
 
 // ── helpers ──────────────────────────────────────────────────────────
-
-function currentShanghaiIsoWeek(date = new Date()) {
-  const shanghai = new Date(date.getTime() + SHANGHAI_OFFSET_MS);
-  const localAsUtc = new Date(Date.UTC(shanghai.getUTCFullYear(), shanghai.getUTCMonth(), shanghai.getUTCDate()));
-  const day = localAsUtc.getUTCDay() || 7;
-  localAsUtc.setUTCDate(localAsUtc.getUTCDate() + 4 - day);
-  const yearStart = new Date(Date.UTC(localAsUtc.getUTCFullYear(), 0, 1));
-  const weekNumber = Math.ceil(((localAsUtc - yearStart) / 86400000 + 1) / 7);
-  return `${localAsUtc.getUTCFullYear()}-W${String(weekNumber).padStart(2, "0")}`;
-}
-
-function normalizeWeek(week) {
-  const m = String(week).match(/^(\d{4})-W?(\d{1,2})$/);
-  if (!m) throw new Error(`Invalid week: ${week}. Use YYYY-Www`);
-  return `${m[1]}-W${String(Number(m[2])).padStart(2, "0")}`;
-}
-
-function shanghaiDate(date) {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" })
-    .format(date);
-}
-
-function shanghaiIsoToday() {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit",
-  }).formatToParts(new Date());
-  const v = Object.fromEntries(parts.map(p => [p.type, p.value]));
-  return `${v.year}-${v.month}-${v.day}`;
-}
-
-/** Returns { startDate, endDate } ISO strings (Asia/Shanghai, inclusive range). */
-function coverageRange(runDate = new Date()) {
-  const end = new Date(runDate.getTime() + SHANGHAI_OFFSET_MS);
-  const start = new Date(end.getTime() - (COVERAGE_DAYS - 1) * 86400000);
-  return {
-    startDate: shanghaiDate(start),
-    endDate: shanghaiDate(end),
-    startEpoch: Math.floor(start.getTime() / 1000),
-    endEpoch: Math.floor((end.getTime() + 86400000) / 1000),
-  };
-}
 
 function shanghaiNow() {
   const p = new Intl.DateTimeFormat("en-CA", {
@@ -94,19 +58,18 @@ async function collectBridgeLogs(range) {
   if (!larkHome || !profile) return { available: false, reason: "LARK_CHANNEL_HOME/PROFILE not set", entries: [] };
 
   const logsDir = path.join(larkHome, "profiles", profile, "logs");
-  try { await access(logsDir); } catch { return { available: false, reason: `logs dir not found: ${logsDir}`, entries: [] }; }
+  try { await access(logsDir); } catch { return { available: false, reason: "logs directory not found", entries: [] }; }
 
-  const { execFile } = await import("node:child_process");
-  const { promisify } = await import("node:util");
-  const execAsync = promisify(execFile);
   let files;
-  try {
-    const { stdout } = await execAsync("ls", ["-1t", logsDir]);
-    files = stdout.trim().split("\n").filter(f => f.startsWith("bridge-") && f.endsWith(".jsonl")).slice(0, 14);
-  } catch {
-    return { available: false, reason: "cannot list bridge logs", entries: [] };
+  try { files = await readdir(logsDir); } catch { return { available: false, reason: "cannot list bridge logs", entries: [] }; }
+  const wanted = new Set();
+  const calendarStart = new Date(`${range.startDate}T00:00:00Z`);
+  for (let offset = 0; offset < 7; offset += 1) {
+    const day = new Date(calendarStart.getTime() + offset * 86_400_000).toISOString().slice(0, 10).replaceAll("-", "");
+    wanted.add(`bridge-${day}.jsonl`);
   }
-  if (!files.length) return { available: false, reason: "no bridge log files", entries: [] };
+  files = files.filter((file) => wanted.has(file));
+  if (!files.length) return { available: false, reason: "no bridge log files for coverage week", entries: [] };
 
   const entries = [];
   for (const f of files) {
@@ -115,36 +78,22 @@ async function collectBridgeLogs(range) {
       for (const line of content.split("\n").filter(Boolean)) {
         try {
           const ev = JSON.parse(line);
-          // bridge logs use "ts" (ISO 8601) or "timestamp" (epoch)
-const tsStr = ev.ts || ev.timestamp;
-let tsEpoch = null;
-if (typeof tsStr === 'number') {
-  tsEpoch = tsStr;
-} else if (typeof tsStr === 'string') {
-  const m = tsStr.match(/^(.+?)([+-]\d{2}:\d{2})$/);
-  if (m) {
-    try {
-      const dt = new Date(m[1] + (m[2] || '+08:00'));
-      tsEpoch = Math.floor(dt.getTime() / 1000);
-    } catch {}
-  }
-}
-if (ev.phase === "intake" && tsEpoch !== null && tsEpoch >= range.startEpoch) {
-            entries.push({
-              time: ev.timestamp,
-              sender: ev.sender || ev.event?.sender?.sender_id?.open_id || "unknown",
-              preview: ev.preview || ev.event?.message?.content || "",
-              chatId: ev.event?.message?.chat_id || ev.chatId || "",
-            });
+          const tsEpoch = timestampEpoch(ev);
+          if (tsEpoch !== null && tsEpoch >= range.startEpoch && tsEpoch < range.endEpoch) {
+            entries.push(ev);
           }
         } catch { /* skip malformed lines */ }
       }
     } catch { /* skip unreadable files */ }
   }
 
-  entries.sort((a, b) => a.time - b.time);
+  entries.sort((a, b) => timestampEpoch(a) - timestampEpoch(b));
   const available = entries.length > 0;
-  return { available, reason: available ? `${entries.length} intake entries found` : "no intake entries in window", entries: entries.slice(-200) };
+  return {
+    available,
+    reason: available ? `${entries.length} bridge events found` : "no bridge events in coverage week",
+    entries,
+  };
 }
 
 async function collectCodexMemories(range) {
@@ -171,7 +120,7 @@ async function collectCodexMemories(range) {
   } catch { /* no ad-hoc notes */ }
 
   const available = rawMemories !== null || memorySummary !== null;
-  return { available, reason: available ? `memories available (${codexHome})` : `no memory files found (${codexHome})`, rawMemories, memorySummary, adHocNotes };
+  return { available, reason: available ? "memories available" : "no memory files found", rawMemories, memorySummary, adHocNotes };
 }
 
 async function collectFeishuMessages(range, chatId) {
@@ -201,11 +150,13 @@ async function collectFeishuMessages(range, chatId) {
 }
 
 async function collectGitChanges(range) {
-  const since = new Date(range.startEpoch * 1000).toISOString().split("T")[0];
-  const until = new Date(range.endEpoch * 1000).toISOString().split("T")[0];
+  const since = `${range.startDate}T00:00:00+08:00`;
+  const nextDate = new Date(new Date(`${range.endDate}T00:00:00Z`).getTime() + 86_400_000)
+    .toISOString().split("T")[0];
+  const untilDate = `${nextDate}T00:00:00+08:00`;
 
-  const log = await tryExec("git", ["log", `--since=${since}`, `--until=${until}`, "--oneline"], { cwd: repoRoot });
-  const skillsDiff = await tryExec("git", ["diff", "--stat", `--since=${since}`, `--until=${until}`, "--", ".agents/skills/"], { cwd: repoRoot });
+  const log = await tryExec("git", ["log", `--since=${since}`, `--until=${untilDate}`, "--oneline"], { cwd: repoRoot });
+  const skillsDiff = await tryExec("git", ["diff", "--stat", `--since=${since}`, `--until=${untilDate}`, "--", ".agents/skills/"], { cwd: repoRoot });
   const status = await tryExec("git", ["status", "--short"], { cwd: repoRoot });
 
   const available = (log.ok && log.stdout.length > 0);
@@ -231,9 +182,8 @@ async function collectBaseWorkflows(baseToken) {
 // ── main ─────────────────────────────────────────────────────────────
 
 export async function generateBuildBot(options = {}) {
-  const week = normalizeWeek(options.week || currentShanghaiIsoWeek());
-  const runDate = new Date();
-  const range = coverageRange(runDate);
+  const week = normalizeWeek(options.week || resolveTargetWeek());
+  const range = rangeForWeek(week);
   const chatId = options.chatId || process.env.LARK_CHANNEL_CHAT_ID || DEFAULT_CHAT_ID;
   const baseToken = options.baseToken || process.env.BUILD_BOT_BASE_TOKEN || "";
   const dryRun = options.dryRun || false;
@@ -277,6 +227,9 @@ export async function generateBuildBot(options = {}) {
     status: gitChanges.status,
   };
   ctx.evidence.baseWorkflows = baseWorkflows.workflows;
+  ctx.evidence.usageSummary = aggregateUsage(ctx.evidence.bridgeLogs, range);
+  ctx.evidence.usageCoverage = ctx.evidence.usageSummary.coverage;
+  ctx.evidence.usageWarnings = ctx.evidence.usageSummary.warnings;
 
   // Pre-flight gate: first 3 sources must have at least one available
   const first3 = [bridgeLogs.available, memories.available, feishuMsgs.available];
@@ -286,13 +239,44 @@ export async function generateBuildBot(options = {}) {
     ctx.abortReason = `All 3 primary sources empty: bridgeLogs(${bridgeLogs.reason}), codexMemories(${memories.reason}), feishuMessages(${feishuMsgs.reason})`;
   }
 
-  // Memory update
-  const memoryPath = path.join(skillRoot, "scripts", "build-bot-memory.json");
-  const memory = { version: "1.0.0", lastRun: shanghaiNow(), lastCoverage: `${range.startDate}..${range.endDate}`, lastWeek: week, checkedSources: ctx.sources };
-  await writeFile(memoryPath, JSON.stringify(memory, null, 2) + "\n");
+  if (!dryRun && ctx.gatePassed) {
+    const memoryPath = path.join(skillRoot, "scripts", "build-bot-memory.json");
+    const memory = {
+      version: "1.0.0",
+      lastRun: shanghaiNow(),
+      lastCoverage: `${range.startDate}..${range.endDate}`,
+      lastWeek: week,
+      checkedSources: ctx.sources,
+      usage: ctx.evidence.usageSummary,
+    };
+    await writeFile(memoryPath, JSON.stringify(memory, null, 2) + "\n");
+  }
 
   // Output result
   return ctx;
+}
+
+function compactContext(ctx, memoryUpdated = false) {
+  return {
+    generatedAt: ctx.generatedAt,
+    week: ctx.week,
+    coverageStart: ctx.coverageStart,
+    coverageEnd: ctx.coverageEnd,
+    sources: ctx.sources,
+    gatePassed: ctx.gatePassed,
+    evidence: {
+      bridgeLogEntryCount: ctx.evidence.bridgeLogs.length,
+      usageSummary: ctx.evidence.usageSummary,
+      usageCoverage: ctx.evidence.usageCoverage,
+      usageWarnings: ctx.evidence.usageWarnings,
+      codexMemoriesAvailable: !!ctx.evidence.codexMemories.rawMemories || !!ctx.evidence.codexMemories.memorySummary,
+      feishuMessagesAvailable: !!ctx.evidence.feishuMessages,
+      gitAvailable: ctx.sources.gitChanges.available,
+      workflowsAvailable: !!ctx.evidence.baseWorkflows,
+    },
+    abortReason: ctx.abortReason,
+    memoryUpdated,
+  };
 }
 
 // ── CLI entry ────────────────────────────────────────────────────────
@@ -302,7 +286,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const ctx = await generateBuildBot(opts);
 
   if (opts.dryRun || !ctx.gatePassed) {
-    console.log(JSON.stringify(ctx, null, 2));
+    console.log(JSON.stringify(compactContext(ctx, !opts.dryRun && ctx.gatePassed), null, 2));
     if (!ctx.gatePassed) {
       console.error("\n--- GATE BLOCKED ---");
       console.error(ctx.abortReason);
@@ -312,27 +296,5 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     process.exit(0);
   }
 
-  // Produce context JSON to stdout for the agent to consume
-  // Strip out large raw text to save tokens
-  const compact = {
-    generatedAt: ctx.generatedAt,
-    week: ctx.week,
-    coverageStart: ctx.coverageStart,
-    coverageEnd: ctx.coverageEnd,
-    sources: ctx.sources,
-    gatePassed: ctx.gatePassed,
-    evidence: {
-      bridgeLogEntryCount: ctx.evidence.bridgeLogs.length,
-      codexMemoriesAvailable: !!ctx.evidence.codexMemories.rawMemories || !!ctx.evidence.codexMemories.memorySummary,
-      feishuMessagesAvailable: !!ctx.evidence.feishuMessages,
-      feishuMessagesPreview: ctx.evidence.feishuMessages ? ctx.evidence.feishuMessages.slice(0, 5000) : null,
-      gitLog: ctx.evidence.gitChanges.log,
-      gitSkillsDiff: ctx.evidence.gitChanges.skillsDiff,
-      gitStatus: ctx.evidence.gitChanges.status,
-      workflowsAvailable: !!ctx.evidence.baseWorkflows,
-    },
-    abortReason: ctx.abortReason,
-    memoryUpdated: true,
-  };
-  console.log(JSON.stringify(compact, null, 2));
+  console.log(JSON.stringify(compactContext(ctx, true), null, 2));
 }

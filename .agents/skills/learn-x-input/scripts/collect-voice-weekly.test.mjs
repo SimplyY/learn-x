@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { buildVoiceFilter, collectVoiceWeekly, extractUrl, renderVoiceMarkdown, writeVoiceWeekly } from "./collect-voice-weekly.mjs";
+import { buildVoiceFilter, collectVoiceWeekly, extractUrl, renderVoiceMarkdown, stripAdviceFromVoiceMarkdown, writeVoiceWeekly } from "./collect-voice-weekly.mjs";
 
 class FakeCollectorTransport {
   constructor(pages, documents = {}) { this.pages = pages; this.documents = documents; this.prepared = 0; this.fetched = []; this.failPrepare = false; this.failUrl = ""; }
@@ -13,18 +13,26 @@ class FakeCollectorTransport {
 }
 
 function record(id, title, recordedAt, coreUrl, rawUrl = "https://raw.invalid/RAW_SENTINEL") {
-  return { id, fields: { 标题: title, 录制时间: recordedAt, 原始文字稿: rawUrl, "核心重点 with AI chat": coreUrl, 内容指纹: `hash-${id}` } };
+  return { id, fields: { 标题: title, 录制时间: recordedAt, 原始文字稿: rawUrl, "处理后原文": coreUrl, 内容指纹: `hash-${id}` } };
 }
 
 test("extracts the actual target from a Markdown link", () => {
   assert.equal(extractUrl("[https://example.invalid/label](https://example.invalid/target)"), "https://example.invalid/target");
 });
 
+test("collects only the summary and insight from a new-format AI insight document", () => {
+  const document = "# AI 洞察\n\n## 1. 核心总结\n保留总结。\n\n## 2. 洞察与思考\n保留洞察。\n\n## 3. 对我的建议（仅留档，不采集到 Learn-X）\n不得采集。";
+  const collected = stripAdviceFromVoiceMarkdown(document);
+  assert.match(collected, /保留总结|保留洞察/);
+  assert.doesNotMatch(collected, /不得采集/);
+  assert.equal(stripAdviceFromVoiceMarkdown("# 历史核心重点\n保留全部内容。"), "# 历史核心重点\n保留全部内容。");
+});
+
 test("builds an inclusive weekly lower bound with supported datetime operators", () => {
   assert.deepEqual(buildVoiceFilter(1780848000, 1781452800), { logic: "and", conditions: [
     ["录制时间", ">", "ExactDate(2026-06-07T23:59:59+08:00)"],
     ["录制时间", "<", "ExactDate(2026-06-15T00:00:00+08:00)"],
-    ["核心重点 with AI chat", "non_empty", null]
+    ["处理后原文", "non_empty", null]
   ] });
 });
 

@@ -8,10 +8,14 @@ test("defaults weekly review to previous week on weekdays and current week on we
   assert.equal(defaultWeeklyReviewWeek(new Date("2026-07-06T04:00:00Z")), "2026-W27");
 });
 
-test("classifies AI Coach weekly input as action evidence", () => {
+test("keeps source classification for weekly input files", () => {
   assert.deepEqual(inputKindFromRelativePath("03_input/weekly/2026-W29/coach.md"), {
     category: "action",
     source: "coach"
+  });
+  assert.deepEqual(inputKindFromRelativePath("03_input/weekly/2026-W29/wisdom.md"), {
+    category: "input",
+    source: "wisdom"
   });
 });
 

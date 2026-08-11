@@ -11,12 +11,12 @@ const DAILY_URL = "https://ywhome.feishu.cn/base/WPZRbLRrGarf8bsfYoJcZ8Kwnqc";
 const COACH_URL = "https://ywhome.feishu.cn/wiki/UeHNwP3ebihXPJkU2Lfc2mIsncb";
 const DAILY_TABLE = "日记";
 const DAILY_FIELDS = ["日期", "核心事项（语音输入）", "明日规划", "最喜悦的事", "思考&收获&洞察&幽默"];
-const COACH_TABLES = {
-  "服务对象": ["姓名", "优先级", "更新时间"],
-  "服务记录": ["日期", "姓名", "服务内容", "服务资料", "更新时间", "核心图"],
-  "ai coach thinking": ["主题", "核心思考", "已推送轮次", "回顾状态", "超链接", "附件", "更新时间"],
-  "项目": ["项目名", "状态", "项目类型", "更新时间", "备注", "产出链接", "阻塞与风险", "当前阶段", "优先级", "下一步", "当前方案"]
-};
+const COACH_TABLES = [
+  { name: "服务对象", fields: ["姓名", "优先级", "创建时间", "更新时间"], filterField: "创建时间" },
+  { name: "服务记录", fields: ["日期", "姓名", "服务内容", "服务资料", "核心图"], filterField: "日期" },
+  { name: "ai coach thinking", fields: ["主题", "核心思考", "已推送轮次", "回顾状态", "上次推送时间", "超链接", "附件", "更新时间"], filterField: "更新时间", reviewFilter: true },
+  { name: "项目", fields: ["项目名", "状态", "项目类型", "创建时间", "更新时间", "备注", "产出链接", "阻塞与风险", "当前阶段", "优先级", "下一步", "当前方案"], filterField: "创建时间" },
+];
 
 export async function collectDailyCoachWeekly({ week, outputRoot = path.join(repoRoot, "03_input/weekly", week) }) {
   const range = weekRange(week);
@@ -45,16 +45,30 @@ async function collectCoach(range) {
   const blocks = await run(["base", "+base-block-list", "--base-token", base, "--as", "bot", "--format", "json"]);
   const tables = blocks.data?.blocks || [];
   const output = {};
-  for (const [name, fields] of Object.entries(COACH_TABLES)) {
-    const table = tables.find((item) => item.name === name);
-    if (!table) throw new Error(`AI Coach Base 未找到「${name}」表。`);
-    await verifyFields(base, table.table_id || table.id, fields);
-    const result = await listRecords(base, table.table_id || table.id, fields, [
-      ["更新时间", ">", `ExactDate(${range.startExclusive})`], ["更新时间", "<", `ExactDate(${range.end})`]
+  for (const config of COACH_TABLES) {
+    const table = tables.find((item) => item.name === config.name);
+    if (!table) throw new Error(`AI Coach Base 未找到「${config.name}」表。`);
+    const tableId = table.table_id || table.id;
+    await verifyFields(base, tableId, config.fields);
+    const result = await listRecords(base, tableId, config.fields, [
+      [config.filterField, ">", `ExactDate(${range.startExclusive})`], [config.filterField, "<", `ExactDate(${range.end})`]
     ]);
-    output[name] = { fields, ...result, records: inRange(result.records, "更新时间", range) };
+    const inRangeRecords = inRange(result.records, config.filterField, range);
+    const records = config.reviewFilter ? inRangeRecords.filter((record) => !isCoachReviewRecord(record.values)) : inRangeRecords;
+    output[config.name] = {
+      fields: config.fields,
+      filterField: config.filterField,
+      ...result,
+      records,
+      excludedReviewCount: inRangeRecords.length - records.length,
+    };
   }
   return { baseUrl: COACH_URL, tables: output };
+}
+
+export function isCoachReviewRecord(values) {
+  const pushRound = Number(values["已推送轮次"]);
+  return Number.isFinite(pushRound) && pushRound > 0 && Boolean(values["回顾状态"]) && Boolean(values["上次推送时间"]);
 }
 
 async function resolve(url) { return (await run(["base", "+url-resolve", "--url", url, "--as", "bot", "--format", "json"])).data?.base_token; }
@@ -97,8 +111,24 @@ function renderDaily(week, range, data) {
 }
 
 function renderCoach(week, range, data) {
-  const lines = [`# AI Coach 周度采集｜${week}`, "", `- Base URL：${data.baseUrl}`, `- 目标范围：${range.start} 至 ${range.end}（${TZ}）`, `- 采集时间：${new Date().toISOString()}`, "- CLI 来源：`lark-cli base +url-resolve --as bot`、`+base-block-list`、`+field-list`、`+record-list --filter-json`", "- 结构核验：四张表与字段已现场核验。", ""];
-  for (const [name, table] of Object.entries(data.tables)) { lines.push(`## ${name}（目标周更新：${table.records.length} 条；分页：${table.complete ? `已完成（${table.pages} 页）` : "未完成"}）`, ""); for (const record of table.records) { const values = Object.entries(record.values).filter(([, value]) => value).map(([key, value]) => `${key}：${value}`); if (values.length) lines.push(`- ${values.join("；")}`); } if (!table.records.length) lines.push("- 已检查，本周无更新"); lines.push(""); }
+  const lines = [
+    `# AI Coach 周度采集｜${week}`, "",
+    `- Base URL：${data.baseUrl}`,
+    `- 目标范围：${range.start} 至 ${range.end}（${TZ}）`,
+    `- 采集时间：${new Date().toISOString()}`,
+    "- 输入边界：保留新增记录；在采集器内排除回顾、复看和推送状态更新，不由通用 Input 二次排除。",
+    "- CLI 来源：`lark-cli base +url-resolve --as bot`、`+base-block-list`、`+field-list`、`+record-list --filter-json`",
+    "- 结构核验：四张表与字段已现场核验。", "",
+  ];
+  for (const [name, table] of Object.entries(data.tables)) {
+    lines.push(`## ${name}（本周新增：${table.records.length} 条；回顾更新排除：${table.excludedReviewCount} 条；筛选字段：${table.filterField}；分页：${table.complete ? `已完成（${table.pages} 页）` : "未完成"}）`, "");
+    for (const record of table.records) {
+      const values = Object.entries(record.values).filter(([, value]) => value).map(([key, value]) => `${key}：${value}`);
+      if (values.length) lines.push(`- ${values.join("；")}`);
+    }
+    if (!table.records.length) lines.push("- 本周无新增记录");
+    lines.push("");
+  }
   return lines.join("\n");
 }
 
@@ -106,4 +136,4 @@ function weekRange(week) { const match = /^(\d{4})-W(\d{2})$/.exec(week); if (!m
 async function atomicWrite(file, content) { const temp = `${file}.${process.pid}.tmp`; await writeFile(temp, content, "utf8"); await rename(temp, file); }
 async function run(args) { const { stdout } = await execFileAsync("lark-cli", args, { env: { ...process.env, LARKSUITE_CLI_NO_UPDATE_NOTIFIER: "1", LARKSUITE_CLI_NO_SKILLS_NOTIFIER: "1" }, maxBuffer: 16 * 1024 * 1024 }); const result = JSON.parse(stdout); if (result.ok !== true) throw new Error(result.error?.message || "lark-cli 返回失败"); return result; }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) { const week = process.argv[process.argv.indexOf("--week") + 1]; const result = await collectDailyCoachWeekly({ week }); console.log(`Daily/Coach weekly inputs written for ${week}: ${result.daily.records.length}/${Object.values(result.coach.tables).reduce((sum, table) => sum + table.records.length, 0)}`); }
+if (process.argv[1] === fileURLToPath(import.meta.url)) { const week = process.argv[process.argv.indexOf("--week") + 1]; const result = await collectDailyCoachWeekly({ week }); const excluded = Object.values(result.coach.tables).reduce((sum, table) => sum + table.excludedReviewCount, 0); const retained = Object.values(result.coach.tables).reduce((sum, table) => sum + table.records.length, 0); console.log(`Daily/Coach weekly inputs written for ${week}: ${result.daily.records.length}/${retained}; review records excluded in collector: ${excluded}.`); }
