@@ -1,0 +1,4 @@
+interface:
+  display_name: "微信手动截图周度输入"
+  short_description: "用手动截图生成可审计的微信周度 WeChat.md"
+  default_prompt: "使用 $wechat-weekly-input 处理我上传的微信截图，去重并生成本周 WeChat.md。"
