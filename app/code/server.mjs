@@ -17,7 +17,8 @@ let suppressWatchUntil = 0;
 let editorSaveInProgress = false;
 
 async function serveStatic(_req, res, url) {
-  const requested = url.pathname === "/" ? "/index.html" : decodeURIComponent(url.pathname);
+  const pathname = decodeURIComponent(url.pathname);
+  const requested = pathname === "/" ? "/index.html" : pathname.endsWith("/") ? `${pathname}index.html` : pathname;
   const absolutePath = path.resolve(distRoot, `.${requested}`);
 
   if (!absolutePath.startsWith(distRoot)) {

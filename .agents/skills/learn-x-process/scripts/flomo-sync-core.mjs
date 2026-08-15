@@ -44,11 +44,21 @@ export function isSubstantive(text) {
   return Boolean(plain) && !["todo", "待补充", "暂无", "无", "占位"].includes(plain);
 }
 
+export function sanitizeFlomoSource(source) {
+  return String(source)
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*(?:来源|source)\s*[:：]\s*(?:file:\/\/)?(?:\/Users\/|\/private\/|[A-Za-z]:[\\/])/.test(line))
+    .join("\n")
+    .trim();
+}
+
 export function memoSpec(kind, id, source) {
-  const title = kind === "weekly" ? `Learn-X 周记｜${id}` : `Learn-X 记忆｜${id}`;
-  const tag = kind === "weekly" ? `#learn-x/weekly/${id}` : `#learn-x/memory/${id}`;
-  const verification = `Learn-X 同步校验：${digest(String(source).trim()).slice(0, 16)}`;
-  const content = `${title}\n\n${String(source).trim()}\n\n${verification}\n#learn-x/sync ${tag}`;
+  const labels = { weekly: "周记", monthly: "月记", memory: "记忆" };
+  const title = `Learn-X ${labels[kind] ?? kind}｜${id}`;
+  const tag = `#learn-x/${kind}/${id}`;
+  const safeSource = sanitizeFlomoSource(source);
+  const verification = `Learn-X 同步校验：${digest(safeSource).slice(0, 16)}`;
+  const content = `${title}\n\n${safeSource}\n\n${verification}\n#learn-x/sync ${tag}`;
   return { key: `${kind}:${id}`, kind, id, title, tag, verification, content, hash: digest(content) };
 }
 
@@ -72,6 +82,37 @@ export async function loadSpecs(repoRoot, weekId) {
     }
   }
   return { week, quarter, specs, skipped };
+}
+
+export async function loadManifestSpecs(repoRoot, manifestPath) {
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  const entries = [];
+  for (const week of manifest.weeks ?? []) {
+    if (["existing_verified", "generated"].includes(week.status) && week.syncSource) {
+      entries.push(["weekly", week.id, path.join(repoRoot, week.syncSource)]);
+    }
+  }
+  for (const month of manifest.monthly ?? []) {
+    if (month.status === "verified" && month.candidates?.[0]?.relativePath) {
+      entries.push(["monthly", month.id, path.join(repoRoot, month.candidates[0].relativePath)]);
+    }
+  }
+  for (const item of manifest.memory ?? []) {
+    if (item.status === "verified" && item.relativePath) entries.push(["memory", item.id, path.join(repoRoot, item.relativePath)]);
+  }
+  const specs = [];
+  const skipped = [];
+  for (const [kind, id, filePath] of entries) {
+    try {
+      const source = await readFile(filePath, "utf8");
+      if (!isSubstantive(source)) skipped.push({ kind, id, reason: "source-not-substantive", filePath });
+      else specs.push({ ...memoSpec(kind, id, source), filePath, source });
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      skipped.push({ kind, id, reason: "source-missing", filePath });
+    }
+  }
+  return { manifestPath, specs, skipped, manifest };
 }
 
 export function changeMagnitude(base, remote) {

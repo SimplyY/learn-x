@@ -35,3 +35,35 @@ test("no-context build omits selectable context payloads", async () => {
   assert.deepEqual(graph.contextFiles, []);
   assert.deepEqual(graph.customContextFiles, []);
 });
+
+test("no-context build has a route entry page", async () => {
+  const index = await readFile(path.join(repoRoot, "dist/no-context/index.html"), "utf8");
+  assert.match(index, /id="chatPackPreview"/);
+  assert.match(index, /id="contextControls" class="source-box" hidden/);
+});
+
+test("local-only external links are hidden by default and use the published URLs", async () => {
+  const index = await readFile(path.join(repoRoot, "app/code/public/index.html"), "utf8");
+  const app = await readFile(path.join(repoRoot, "app/code/public/app.js"), "utf8");
+
+  assert.match(index, /id="localExternalLinks" class="local-external-links"[^>]* hidden/);
+  assert.match(index, /href="https:\/\/simplyy\.github\.io\/learn-x\/"[^>]*target="_blank"[^>]*rel="noopener noreferrer"/);
+  assert.match(index, /href="https:\/\/simplyy\.github\.io\/learn-x\/no-context\/#learning"[^>]*target="_blank"[^>]*rel="noopener noreferrer"/);
+  assert.match(app, /els\.localExternalLinks\.hidden = state\.runtime\.target !== "local";/);
+});
+
+test("intermediate Header keeps local links on the right instead of stacking them under the brand", async () => {
+  const css = await readFile(path.join(repoRoot, "app/code/public/styles.css"), "utf8");
+  const headerBlock = css.match(/@media \(max-width: 1080px\)[\s\S]*?\.app-header \{([\s\S]*?)\n\s*\}/)?.[1] || "";
+  const navBlock = css.match(/@media \(max-width: 1080px\)[\s\S]*?\.top-nav \{([\s\S]*?)\n\s*\}/)?.[1] || "";
+  const linkBlocks = [...css.matchAll(/\.local-external-links \{([\s\S]*?)\n\s*\}/g)].map((match) => match[1]);
+
+  assert.match(headerBlock, /align-items:\s*center/);
+  assert.match(headerBlock, /flex-wrap:\s*wrap/);
+  assert.doesNotMatch(headerBlock, /flex-direction:\s*column/);
+  assert.match(navBlock, /order:\s*3/);
+  assert.match(linkBlocks[1], /width:\s*auto/);
+  assert.match(linkBlocks[1], /margin-left:\s*auto/);
+  assert.match(linkBlocks[1], /justify-content:\s*flex-end/);
+  assert.match(linkBlocks[2], /flex:\s*1 0 100%/);
+});

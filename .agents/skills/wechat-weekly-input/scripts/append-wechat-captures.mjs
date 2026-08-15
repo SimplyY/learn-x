@@ -33,12 +33,20 @@ export function shanghaiWeekRange(week) {
 }
 
 function parseTime(value, label) {
-  if (typeof value !== "string" || !/(?:Z|[+-]\d{2}:\d{2})$/.test(value)) {
-    throw new Error(`${label} 必须是带时区的 ISO 时间。`);
+  if (typeof value !== "string") throw new Error(`${label} 必须是 ISO 日期或带时区的时间。`);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const milliseconds = Date.parse(`${value}T12:00:00+08:00`);
+    if (!Number.isFinite(milliseconds) || formatDateOnly(new Date(milliseconds)) !== value) {
+      throw new Error(`${label} 不可解析。`);
+    }
+    return { milliseconds, precision: "date" };
+  }
+  if (!/(?:Z|[+-]\d{2}:\d{2})$/.test(value)) {
+    throw new Error(`${label} 必须是 ISO 日期或带时区的时间。`);
   }
   const milliseconds = Date.parse(value);
   if (!Number.isFinite(milliseconds)) throw new Error(`${label} 不可解析。`);
-  return milliseconds;
+  return { milliseconds, precision: "minute" };
 }
 
 function parseCaptureDate(value) {
@@ -71,7 +79,7 @@ function normalizeIssues(rawIssues) {
 
 function normalizeMessage(raw, index) {
   if (!raw || typeof raw !== "object") throw new Error(`第 ${index + 1} 条消息不是对象。`);
-  const timeMs = parseTime(raw.time ?? raw.time_iso, `第 ${index + 1} 条消息时间`);
+  const parsedTime = parseTime(raw.time ?? raw.time_iso, `第 ${index + 1} 条消息时间`);
   if (typeof raw.sender !== "string" || !raw.sender.trim() || /^(未知|unknown|对方)$/i.test(raw.sender.trim())) {
     throw new Error(`第 ${index + 1} 条消息缺少可确认的发送者。`);
   }
@@ -81,7 +89,7 @@ function normalizeMessage(raw, index) {
   const rawText = raw.text == null ? "" : String(raw.text).trim();
   if (kind === "text" && !rawText) throw new Error(`第 ${index + 1} 条消息缺少可确认正文。`);
   const text = rawText || `[${kind}]`;
-  return { timeMs, sender: raw.sender.trim(), isFromMe: raw.is_from_me, kind, text, order: index };
+  return { timeMs: parsedTime.milliseconds, timePrecision: parsedTime.precision, sender: raw.sender.trim(), isFromMe: raw.is_from_me, kind, text, order: index };
 }
 
 function normalizeCapture(rawCapture, captureDate, weekRange, index) {
@@ -119,8 +127,8 @@ function normalizeCapture(rawCapture, captureDate, weekRange, index) {
         }
       }
       selected = [...selectedIndexes].sort((a, b) => a - b).map((messageIndex) => messages[messageIndex]);
-      const normalizedMessages = selected.map(({ timeMs, sender, isFromMe, kind, text }) => ({
-        timeMs, sender: isFromMe ? "我" : sender, isFromMe, kind, text
+      const normalizedMessages = selected.map(({ timeMs, timePrecision, sender, isFromMe, kind, text }) => ({
+        timeMs, timePrecision, sender: isFromMe ? "我" : sender, isFromMe, kind, text
       }));
       const key = createHash("sha256")
         .update(stableJson({ captureDate, chatName, chatType, messages: normalizedMessages }))
@@ -137,8 +145,8 @@ function normalizeCapture(rawCapture, captureDate, weekRange, index) {
     }
   }
   if (!selected.length) return { skipped: "no_target_week_messages" };
-  const normalizedMessages = selected.map(({ timeMs, sender, isFromMe, kind, text }) => ({
-    timeMs, sender: isFromMe ? "我" : sender, isFromMe, kind, text
+  const normalizedMessages = selected.map(({ timeMs, timePrecision, sender, isFromMe, kind, text }) => ({
+    timeMs, timePrecision, sender: isFromMe ? "我" : sender, isFromMe, kind, text
   }));
   const key = createHash("sha256")
     .update(stableJson({ captureDate, chatName, chatType, messages: normalizedMessages }))
@@ -233,10 +241,14 @@ function captureMarkdown(capture, weekRange) {
   for (const message of capture.messages) {
     const outsideWeek = message.timeMs < weekRange.start.getTime() || message.timeMs >= weekRange.end.getTime();
     const boundary = outsideWeek ? "（跨周上下文）" : "";
-    lines.push(`  - ${formatDateTime(new Date(message.timeMs))}${boundary}${message.isFromMe ? "｜我" : `｜${escapeInline(message.sender)}`}：${escapeInline(message.text)}`);
+    lines.push(`  - ${formatMessageTime(message)}${boundary}${message.isFromMe ? "｜我" : `｜${escapeInline(message.sender)}`}：${escapeInline(message.text)}`);
   }
   lines.push("");
   return lines;
+}
+
+function formatMessageTime(message) {
+  return message.timePrecision === "date" ? formatDateOnly(new Date(message.timeMs)) : formatDateTime(new Date(message.timeMs));
 }
 
 function formatDateOnly(value) {

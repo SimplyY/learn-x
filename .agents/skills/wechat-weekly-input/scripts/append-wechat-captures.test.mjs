@@ -86,6 +86,23 @@ test("dedupes repeated screenshots and tracks one-versus-two daily status", () =
   assert.equal(duplicate.output, second.output);
 });
 
+test("accepts date-only manual screenshot timestamps and same-chat captures", () => {
+  const dateOnlyMessage = { ...message("当天可见消息", 1), time: "2026-08-03" };
+  const result = prepareWechatAppend({
+    week,
+    input: {
+      capture_date: "2026-08-03",
+      captures: [
+        { chat_name: "同一聊天", chat_type: "private", messages: [dateOnlyMessage] },
+        { chat_name: "同一聊天", chat_type: "private", messages: [{ ...dateOnlyMessage, text: "另一段可见消息" }] }
+      ]
+    }
+  });
+  assert.equal(result.acceptedCount, 2);
+  assert.match(result.output, /2026-08-03｜联系人：当天可见消息/);
+  assert.doesNotMatch(result.output, /2026-08-03 12:00/);
+});
+
 test("upgrades the legacy group rule in an existing manual output", () => {
   const first = prepareWechatAppend({ week, input: { capture_date: "2026-08-03", captures: [privateCapture("旧格式", 1)] } });
   const legacy = first.output.replace(

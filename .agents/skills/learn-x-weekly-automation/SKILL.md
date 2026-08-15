@@ -1,6 +1,6 @@
 ---
 name: learn-x-weekly-automation
-description: Learn-X 每周输入自动采集、Weekly Output 报告准备、已审核 Memory 迁移的中文自然语言工作流。Use when the user asks for "Learn-X 每周输入自动采集 & 报告 & 记忆", weekly report automation, W27/Wxx weekly processing, generating weekly `_dist` / Process Pack / Output shell, or preparing weekly memory candidates from reviewed Weekly Output.
+description: Learn-X 每周输入自动采集、Weekly Output 报告准备、已审核 Memory 迁移，以及明确请求的历史日记补全周记与 Flomo 存量同步中文工作流。Use when the user asks for "Learn-X 每周输入自动采集 & 报告 & 记忆", weekly report automation, W27/Wxx weekly processing, historical weekly backfill, generating weekly `_dist` / Process Pack / Output shell, or preparing weekly memory candidates from reviewed Weekly Output.
 ---
 
 # Learn-X 每周自动化
@@ -20,6 +20,8 @@ npm run input:wisdom -- --week 2026-W27
 npm run process:weekly -- --week 2026-W27
 npm run memory:weekly -- --week 2026-W27
 ```
+
+明确请求“存量周记补全”“用日记补缺周记”或“历史周记同步 Flomo”时，读取 [references/historical-backfill.md](references/historical-backfill.md)，进入独立的历史回填模式；它不改变下面的正常周流程。
 
 先按“目标周选择”解析出唯一目标周，再只运行当前阶段需要的命令。飞书 CLI 默认读取使用应用身份（`--as bot`）；涉及多维表格 Base 的新增、更新、修改、删除等写操作使用用户身份（`--as user`）。读取失败时不要自动切换身份，写入失败时报告用户授权问题，不把写操作改回 bot。Flomo 的 Ego Lite 路径仅用于用户在场的桌面恢复，不能作为 Linux 定时任务的执行通道。
 

@@ -143,6 +143,42 @@ button:disabled {
   box-shadow: 0 1px 4px rgba(31, 35, 41, 0.06);
 }
 
+.local-external-links {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.local-external-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  min-width: 0;
+  padding: 0 12px;
+  border: 1px solid var(--faint);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 13px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.local-external-link:hover,
+.local-external-link:focus-visible {
+  border-color: var(--accent);
+  background: var(--panel-muted);
+  color: var(--accent-dark);
+}
+
+.local-external-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .search-box {
   display: grid;
   gap: 8px;
@@ -447,13 +483,6 @@ button:disabled {
   line-height: 1.55;
 }
 
-.field-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: end;
-}
-
 .field {
   display: grid;
   gap: 6px;
@@ -461,7 +490,6 @@ button:disabled {
 
 .field span,
 .section-title span,
-.stats-strip span,
 .prompt-editor span {
   color: var(--muted);
   font-size: 12px;
@@ -475,25 +503,6 @@ button:disabled {
   background: var(--panel);
   color: var(--ink);
   padding: 0 10px;
-}
-
-.stats-strip {
-  display: grid;
-  grid-template-columns: 80px 110px;
-  gap: 8px;
-}
-
-.stats-strip div {
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 6px 9px;
-  background: #fbfcff;
-}
-
-.stats-strip strong {
-  display: block;
-  margin-top: 3px;
-  font-size: 15px;
 }
 
 .source-box {
@@ -1493,12 +1502,24 @@ button:disabled {
   }
 
   .app-header {
-    align-items: flex-start;
-    flex-direction: column;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .brand {
+    flex: 1 1 auto;
+    min-width: 0;
   }
 
   .top-nav {
     width: 100%;
+    order: 3;
+  }
+
+  .local-external-links {
+    width: auto;
+    margin-left: auto;
+    justify-content: flex-end;
   }
 
   .top-nav-btn {
@@ -1544,6 +1565,17 @@ button:disabled {
     min-height: auto;
   }
 
+  .local-external-links {
+    flex: 1 0 100%;
+    width: 100%;
+    margin-left: 0;
+    justify-content: flex-end;
+  }
+
+  .local-external-link {
+    flex: 1 1 160px;
+  }
+
   .reader {
     padding: 24px 18px;
     font-size: 16px;
@@ -1555,11 +1587,6 @@ button:disabled {
 
   .actions button {
     flex: 1 1 150px;
-  }
-
-  .field-row,
-  .stats-strip {
-    grid-template-columns: 1fr;
   }
 
   .budget-summary-head {

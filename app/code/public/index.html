@@ -17,6 +17,20 @@
           </div>
         </header>
         <nav id="topNav" class="top-nav" aria-label="顶级模块" hidden></nav>
+        <nav id="localExternalLinks" class="local-external-links" aria-label="线上版本" hidden>
+          <a
+            class="local-external-link"
+            href="https://simplyy.github.io/learn-x/"
+            target="_blank"
+            rel="noopener noreferrer"
+          >线上版</a>
+          <a
+            class="local-external-link"
+            href="https://simplyy.github.io/learn-x/no-context/#learning"
+            target="_blank"
+            rel="noopener noreferrer"
+          >线上版（无上下文）</a>
+        </nav>
       </header>
 
       <main>
@@ -68,22 +82,10 @@
 
             <div class="learning-grid">
               <section class="control-section">
-                <div class="field-row">
-                  <label class="field" id="domainField">
-                    <span>研究领域</span>
-                    <select id="domainSelect"></select>
-                  </label>
-                  <div class="stats-strip">
-                    <div>
-                      <span>文件数</span>
-                      <strong id="contextFileCount">0</strong>
-                    </div>
-                    <div>
-                      <span>字数</span>
-                      <strong id="contextSize">未生成</strong>
-                    </div>
-                  </div>
-                </div>
+                <label class="field" id="domainField">
+                  <span>研究领域</span>
+                  <select id="domainSelect"></select>
+                </label>
 
                 <section class="budget-summary" aria-label="Chat Pack 长度预算">
                   <div class="budget-summary-head">

@@ -443,7 +443,7 @@ export function isValidAiReview(content) {
   return !isPlaceholder(text) && sectionCount >= 2 && hasReviewContent && !looksLikePrompt;
 }
 
-function stripSourceMetadata(text) {
+export function stripSourceMetadata(text) {
   return String(text)
     .replace(/^(?:- )?(?:来源|采集时间|生成时间|采集方式|定位依据|覆盖期|覆盖范围|时间范围|采集范围|时区|接口[^：]*|表|Base)[：：][^\n]*\n/gim, "")
     .replace(/^## 字段表头[\s\S]*?(?=^## \d{4}-\d{2}-\d{2}|(?![\s\S]))/m, "")
@@ -515,7 +515,7 @@ export function weeksIntersectingMonth(monthId) {
   return weeks;
 }
 
-function isoWeekId(date) {
+export function isoWeekId(date) {
   const target = new Date(date);
   const day = target.getUTCDay() || 7;
   target.setUTCDate(target.getUTCDate() + 4 - day);

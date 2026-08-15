@@ -96,6 +96,7 @@ let promptProtocolsLoaded = false;
 async function boot() {
   const graph = await loadGraph();
   state.runtime = graph.runtime || state.runtime;
+  els.localExternalLinks.hidden = state.runtime.target !== "local";
   els.contextControls.hidden = !chatPackContextEnabled();
   APP_CONFIG = graph.appConfig || APP_CONFIG;
   CHATPACK_CONFIG = graph.chatPackConfig || CHATPACK_CONFIG;
@@ -1290,8 +1291,6 @@ function refreshSelectedContextStats(files = selectedContextFiles()) {
   const warning = fileCount > 20 ? " · 过多，建议强烈收缩" : fileCount > 10 ? " · 建议 10 个以内" : "";
   const summary = `已选 ${formatNumber(fileCount)} 个文件 · 约 ${formatNumber(totalChars)} 字${warning}`;
 
-  els.contextFileCount.textContent = String(fileCount);
-  els.contextSize.textContent = fileCount ? `约 ${formatNumber(totalChars)} 字` : "未生成";
   if (els.selectedContextSummary) {
     els.selectedContextSummary.textContent = summary;
     els.selectedContextSummary.className = fileCount > 20 ? "danger" : fileCount > 10 ? "warn" : "";

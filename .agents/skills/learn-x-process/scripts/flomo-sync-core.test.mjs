@@ -1,11 +1,41 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { changeMagnitude, isSubstantive, memoSpec, normalizeMemoText, reconcile } from "./flomo-sync-core.mjs";
+import { changeMagnitude, isSubstantive, loadManifestSpecs, memoSpec, normalizeMemoText, reconcile, sanitizeFlomoSource } from "./flomo-sync-core.mjs";
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 test("renders stable weekly and quarterly Flomo identifiers", () => {
   assert.match(memoSpec("weekly", "2026-W32", "正文").content, /^Learn-X 周记｜2026-W32[\s\S]*#learn-x\/weekly\/2026-W32/);
   assert.match(memoSpec("memory", "2026-Q3", "记忆").content, /^Learn-X 记忆｜2026-Q3[\s\S]*#learn-x\/memory\/2026-Q3/);
   assert.match(memoSpec("weekly", "2026-W32", "正文").content, /Learn-X 同步校验：[a-f0-9]{16}/);
+  assert.match(memoSpec("monthly", "2026-06", "月记").content, /^Learn-X 月记｜2026-06[\s\S]*#learn-x\/monthly\/2026-06/);
+});
+
+test("removes local source metadata before preparing a Flomo memo", () => {
+  const source = "标题\n\n来源：/Users/yuwei/Downloads/2024 月记.md\n\n正文";
+  assert.equal(sanitizeFlomoSource(source), "标题\n\n\n正文");
+  const memo = memoSpec("monthly", "2024-01", source);
+  assert.doesNotMatch(memo.content, /\/Users\/|Downloads|file:\/\//);
+  assert.match(memo.content, /Learn-X 同步校验：[a-f0-9]{16}/);
+});
+
+test("loads history weekly, monthly, and memory targets from one manifest", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "learn-x-flomo-manifest-"));
+  await mkdir(path.join(root, "03_input/weekly-history/2025-W01"), { recursive: true });
+  await mkdir(path.join(root, "03_input/monthly/2025-1"), { recursive: true });
+  await mkdir(path.join(root, "01_core/memory"), { recursive: true });
+  await writeFile(path.join(root, "03_input/weekly-history/2025-W01/weekly.md"), "历史周记");
+  await writeFile(path.join(root, "03_input/monthly/2025-1/monthly.md"), "历史月记");
+  await writeFile(path.join(root, "01_core/memory/2025-Q1.memory.md"), "历史记忆");
+  const manifestPath = path.join(root, "manifest.json");
+  await writeFile(manifestPath, JSON.stringify({
+    weeks: [{ id: "2025-W01", status: "generated", syncSource: "03_input/weekly-history/2025-W01/weekly.md" }],
+    monthly: [{ id: "2025-01", status: "verified", candidates: [{ relativePath: "03_input/monthly/2025-1/monthly.md" }] }],
+    memory: [{ id: "2025-Q1", status: "verified", relativePath: "01_core/memory/2025-Q1.memory.md" }]
+  }));
+  const result = await loadManifestSpecs(root, manifestPath);
+  assert.deepEqual(result.specs.map((spec) => spec.key), ["weekly:2025-W01", "monthly:2025-01", "memory:2025-Q1"]);
 });
 
 test("keeps local additions while applying a small remote edit", () => {
