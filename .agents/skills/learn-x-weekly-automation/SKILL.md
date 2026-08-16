@@ -13,7 +13,7 @@ description: Learn-X 每周输入自动采集、Weekly Output 报告准备、已
 
 ```bash
 npm run input:weread -- --week 2026-W27
-npm run input:time -- --week 2026-W27
+npm run input:calendar -- --week 2026-W27
 npm run input:voice -- --week 2026-W27
 npm run input:daily-coach -- --week 2026-W27
 npm run input:wisdom -- --week 2026-W27
@@ -76,7 +76,7 @@ npm run memory:weekly -- --week 2026-W27
 2. 采集本地自动来源，并提示飞书机器人侧自查：
    - Flomo：按“启动规则 4”通过 Ego Lite 任务空间打开或复用 `https://v.flomoapp.com/mine`，按 Asia/Shanghai 的目标周起止时间检索；仅在尚未覆盖下界时加载下一批，只把当前页面实际读到、属于目标周的笔记去重后按创建时间正序写入 `flomo.md`。同一次页面读取中，另外同步当前唯一置顶笔记到 `01_core/道/flomo-top.md`：文件包含来源链接、原始创建时间、同步周和正文；每周覆盖更新，不保留旧版本。若置顶数量为 0 或多于 1，保留旧镜像并提示，不阻断其他来源。`flomo.md` 仍只包含目标周数据；旧 `flomo.md` 只作为差异报告依据，不得用来补全当前 Flomo，也不得只取首屏或使用旧本地导出替代。
    - 微信读书：按 `learn-x-input` 执行 `npm run input:weread -- --week YYYY-Www`。验证输出保留目标周、Asia/Shanghai 范围、生成时间、阅读统计、进度快照、个人划线和想法，并包含完整 7 天，包括 0 分钟日期。
-   - Time-X 时间：按 `learn-x-input` 执行一次 `npm run input:time -- --week YYYY-Www`，只读取固定 `Time-X｜随时记` 共享日历与屏幕时间 Base。将日历汇总及每个日历块的日期、起止、标题、描述写入 `calendar.md`；将屏幕时间写入 `time.md`。不得读取用户主日历，不保存日历人员、地点、ID、链接或系统元数据。
+   - Time-X 日历：按 `learn-x-input` 执行一次 `npm run input:calendar -- --week YYYY-Www`，只读取固定 `Time-X｜随时记` 共享日历，将日历汇总及每个日历块的日期、起止、标题、描述写入 `calendar.md`。不得读取用户主日历，不保存日历人员、地点、ID、链接或系统元数据。
    - Voice-X：按 `learn-x-input` 执行 `npm run input:voice -- --week YYYY-Www`，按录制时间读取目标 ISO 周且核心重点非空的全部记录，写入 `voice.md`。必须验证分页完成、时间正序和完整核心 Markdown；不得读取或写入原始文字稿。成功查询为 0 条时保留明确的零记录文件，查询或文档失败时保留旧文件并报告。
    - 飞书日记与 AI Coach：执行 `npm run input:daily-coach -- --week YYYY-Www`。采集器先用 `--as bot` 现场核验 Base、表和字段，再按各表边界筛选并遍历全部分页，写入 `daily.md` 与 `coach.md`；只在采集器内排除 Coach 回顾更新，保留同一批次中的新增记录。
    - 智慧之门：执行 `npm run input:wisdom -- --week YYYY-Www`。通过 `collect-base-weekly.mjs`（配置驱动，复用通用核心 `lib/base-collector.mjs`）按创建时间服务端筛目标周并遍历全部分页，写入 `wisdom.md`。既有记录因回顾、复看或状态变化而更新时不采集；只保留脱敏普通字段和 URL，不写联系方式、技术 record id 或链接页面正文。

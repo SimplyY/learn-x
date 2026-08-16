@@ -14,7 +14,7 @@
     "snapshot": "npm run build",
     "security:scan": "node scripts/security-scan.mjs",
     "security:scan:staged": "node scripts/security-scan.mjs --staged",
-    "input:time": "node .agents/skills/learn-x-input/scripts/collect-time-weekly.mjs",
+    "input:calendar": "node .agents/skills/learn-x-input/scripts/collect-calendar-weekly.mjs",
     "input:voice": "node .agents/skills/learn-x-input/scripts/collect-voice-weekly.mjs",
     "input:daily-coach": "node .agents/skills/learn-x-input/scripts/collect-daily-coach-weekly.mjs",
     "input:weread": "node .agents/skills/learn-x-input/scripts/collect-weread-weekly.mjs",
