@@ -10,7 +10,7 @@ const TZ = "Asia/Shanghai";
 const DAILY_URL = "https://ywhome.feishu.cn/base/WPZRbLRrGarf8bsfYoJcZ8Kwnqc";
 const COACH_URL = "https://ywhome.feishu.cn/wiki/UeHNwP3ebihXPJkU2Lfc2mIsncb";
 const DAILY_TABLE = "日记";
-const DAILY_FIELDS = ["日期", "核心事项（语音输入）", "明日规划", "最喜悦的事", "思考&收获&洞察&幽默"];
+const DAILY_FIELDS = ["日期", "核心事项（语音输入，写清楚时间、地点、人）", "明日规划", "最喜悦的事", "思考&收获&洞察&幽默"];
 const COACH_TABLES = [
   { name: "服务对象", fields: ["姓名", "优先级", "创建时间", "更新时间"], filterField: "创建时间" },
   { name: "服务记录", fields: ["日期", "姓名", "服务内容", "服务资料", "核心图"], filterField: "日期" },
