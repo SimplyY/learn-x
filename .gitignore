@@ -8,10 +8,13 @@ output/
 !04_output/README.md
 !04_output/usage.md
 !04_output/monthly/
+04_output/monthly/*
 !04_output/monthly/.gitkeep
 !04_output/weekly/
+04_output/weekly/*
 !04_output/weekly/.gitkeep
 !04_output/yearly/
+04_output/yearly/*
 !04_output/yearly/.gitkeep
 app/code/.test-tmp/
 *.DS_Store
