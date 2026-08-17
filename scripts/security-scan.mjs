@@ -12,13 +12,14 @@ const sensitivePathPatterns = [
   { name: "private key file", pattern: /(^|\/)(id_rsa|id_dsa|id_ecdsa|id_ed25519)(\.pub)?$/i },
   { name: "key or cert file", pattern: /\.(pem|p12|pfx|key|crt|cer)$/i },
   { name: "credential-bearing filename", pattern: /(token|secret|credential|password|cookie|session|wallet)/i },
-  { name: "private weekly input", pattern: /^03_input\/weekly\/(?!00_template\/)/ },
-  { name: "private periodic input", pattern: /^03_input\/(monthly|yearly|weekly-history)\/(?!\.gitkeep$)/ },
+  { name: "private learning input", pattern: /^03_input\/(?!README\.md$|usage\.md$|weekly\/00_template\/|monthly\/\.gitkeep$|yearly\/\.gitkeep$|weekly-history\/\.gitkeep$)/ },
   { name: "private core memory", pattern: /^01_core\/memory\/(?!\.gitkeep$)/ },
   { name: "private flomo digest", pattern: /^01_core\/\u9053\/flomo-top\.md$/ },
   { name: "private personal image", pattern: /^01_core\/good-images\/me\// },
   { name: "private generated output", pattern: /^04_output\/(?!README\.md$|usage\.md$|(monthly|weekly|yearly)\/\.gitkeep$)/ },
+  { name: "private legacy output", pattern: /^output\// },
   { name: "private bot memory", pattern: /^\.agents\/skills\/(build-bot-log\/scripts\/build-bot-memory|long-article-research\/scripts\/research-memory)\.json$/ },
+  { name: "private build-bot state", pattern: /^scripts\/build-bot-memory\.json$/ },
 ];
 
 const contentPatterns = [

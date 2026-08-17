@@ -3,7 +3,8 @@ app/code/node_modules/
 app/code/public/data/
 app/code/.nojekyll
 dist/
-04_output/**
+output/
+04_output/*
 !04_output/README.md
 !04_output/usage.md
 !04_output/monthly/
@@ -23,14 +24,21 @@ search_auth_qr.png
 AGENTS.md.backup-*
 .playwright-cli/
 
-# Personal learning inputs stay local. Keep only public docs and templates.
+# Personal learning inputs stay local. Only public docs and templates are shared.
+03_input/*
+!03_input/README.md
+!03_input/usage.md
+!03_input/weekly/
 03_input/weekly/*
 !03_input/weekly/00_template/
 !03_input/weekly/00_template/**
+!03_input/monthly/
 03_input/monthly/*
 !03_input/monthly/.gitkeep
+!03_input/yearly/
 03_input/yearly/*
 !03_input/yearly/.gitkeep
+!03_input/weekly-history/
 03_input/weekly-history/*
 !03_input/weekly-history/.gitkeep
 
@@ -41,3 +49,4 @@ AGENTS.md.backup-*
 01_core/good-images/me/*
 .agents/skills/build-bot-log/scripts/build-bot-memory.json
 .agents/skills/long-article-research/scripts/research-memory.json
+scripts/build-bot-memory.json
