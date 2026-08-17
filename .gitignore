@@ -3,7 +3,15 @@ app/code/node_modules/
 app/code/public/data/
 app/code/.nojekyll
 dist/
-04_output/
+04_output/**
+!04_output/README.md
+!04_output/usage.md
+!04_output/monthly/
+!04_output/monthly/.gitkeep
+!04_output/weekly/
+!04_output/weekly/.gitkeep
+!04_output/yearly/
+!04_output/yearly/.gitkeep
 app/code/.test-tmp/
 *.DS_Store
 .env
@@ -14,4 +22,22 @@ app/code/.test-tmp/
 search_auth_qr.png
 AGENTS.md.backup-*
 .playwright-cli/
-03_input/weekly/**/WeChat.md
+
+# Personal learning inputs stay local. Keep only public docs and templates.
+03_input/weekly/*
+!03_input/weekly/00_template/
+!03_input/weekly/00_template/**
+03_input/monthly/*
+!03_input/monthly/.gitkeep
+03_input/yearly/*
+!03_input/yearly/.gitkeep
+03_input/weekly-history/*
+!03_input/weekly-history/.gitkeep
+
+# Personal memory, portraits, and generated bot state.
+01_core/memory/*
+!01_core/memory/.gitkeep
+01_core/道/flomo-top.md
+01_core/good-images/me/*
+.agents/skills/build-bot-log/scripts/build-bot-memory.json
+.agents/skills/long-article-research/scripts/research-memory.json
