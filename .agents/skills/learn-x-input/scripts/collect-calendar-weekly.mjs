@@ -4,6 +4,8 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { defaultWeeklyReviewWeek, isoWeekRangeShanghai, normalizeWeek } from "./collect-weread-weekly.mjs";
+import { assertWeeklyInputSize } from "./lib/input-limits.mjs";
+import { fileExists, updateWeeklySourceStatus } from "./lib/source-status.mjs";
 
 const TIMEZONE = "Asia/Shanghai";
 const TIME_X_CALENDAR_ID = "feishu.cn_xdVu3PUCuNclTJezzT7tse@group.calendar.feishu.cn";
@@ -32,14 +34,26 @@ export async function collectCalendarWeekly(options = {}) {
 
 export async function writeCalendarWeekly(options = {}) {
   const week = normalizeWeek(options.week || defaultWeeklyReviewWeek());
-  const payload = await collectCalendarWeekly({ ...options, week });
   const outputRoot = options.outputRoot || path.join(repoRoot, "03_input/weekly", week);
   const calendarPath = path.join(outputRoot, "calendar.md");
-  const tempPath = `${calendarPath}.${process.pid}-${Date.now()}.tmp`;
-  await mkdir(outputRoot, { recursive: true });
-  await writeFile(tempPath, renderCalendarMarkdown(payload), "utf8");
-  await rename(tempPath, calendarPath);
-  return { payload, calendarPath };
+  try {
+    const payload = await collectCalendarWeekly({ ...options, week });
+    const count = payload.calendar.status === "available" ? payload.calendar.details.length : 0;
+    const written = payload.calendar.status === "available" && count > 0;
+    if (written) {
+      const tempPath = `${calendarPath}.${process.pid}-${Date.now()}.tmp`;
+      const content = renderCalendarMarkdown(payload);
+      assertWeeklyInputSize(content, calendarPath);
+      await mkdir(outputRoot, { recursive: true });
+      await writeFile(tempPath, content, "utf8");
+      await rename(tempPath, calendarPath);
+    }
+    await updateWeeklySourceStatus({ weekRoot: outputRoot, week, source: "calendar", status: written ? "ready" : payload.calendar.status === "available" ? "empty" : "unavailable", file: "calendar.md", count, summary: written ? "本周有有效日历块" : payload.calendar.status === "available" ? "本周 0 条记录，文件未生成" : "Time-X 日历查询不可用，未使用旧文件", preservedStaleFile: !written && await fileExists(calendarPath) });
+    return { payload, calendarPath: written ? calendarPath : null };
+  } catch (error) {
+    await updateWeeklySourceStatus({ weekRoot: outputRoot, week, source: "calendar", status: "failed", file: "calendar.md", count: 0, summary: `采集失败：${error.message}`, preservedStaleFile: await fileExists(calendarPath) });
+    throw error;
+  }
 }
 
 export function summarizeCalendar(range, events) {
@@ -170,5 +184,5 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const options = {};
   for (let index = 0; index < process.argv.length; index += 1) if (process.argv[index] === "--week") options.week = process.argv[++index];
   const result = await writeCalendarWeekly(options);
-  console.log(`Calendar weekly input written: ${path.relative(repoRoot, result.calendarPath)}`);
+  console.log(`Calendar weekly input: ${result.calendarPath ? path.relative(repoRoot, result.calendarPath) : "文件未生成（空缺或不可用）"}`);
 }

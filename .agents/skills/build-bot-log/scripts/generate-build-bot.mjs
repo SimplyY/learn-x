@@ -18,6 +18,7 @@ const skillRoot = path.resolve(__dirname, "..");
 const repoRoot = path.resolve(skillRoot, "../../../..");
 const DEFAULT_CODEX_HOME = path.join(os.homedir(), ".codex");
 const DEFAULT_CHAT_ID = "oc_846411e4168e681d7f7b491c837163fd";
+const MAX_REPORT_CHARS = 3000;
 
 // ── helpers ──────────────────────────────────────────────────────────
 
@@ -263,6 +264,7 @@ function compactContext(ctx, memoryUpdated = false) {
     coverageStart: ctx.coverageStart,
     coverageEnd: ctx.coverageEnd,
     sources: ctx.sources,
+    reportLimit: { maxChars: MAX_REPORT_CHARS, count: "full file, including headings and appendix" },
     gatePassed: ctx.gatePassed,
     evidence: {
       bridgeLogEntryCount: ctx.evidence.bridgeLogs.length,

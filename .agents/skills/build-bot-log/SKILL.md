@@ -63,6 +63,12 @@ Sources are ordered by reliability; stop if the first 3 are all empty.
    Only note overlap; do not re-summarize its content.
 
 **If the first 3 sources are all empty**, abort. Do not write build-bot.md.
+
+Regardless of whether a report is written, update Learn-X's weekly source status from the owning automation. Use `status=ready` with the evidence count when a substantive build/bot report exists; use `status=empty` with count `0` when the weekly run completed and found no valid evidence; use `failed` or `unavailable` for execution, authorization, or source failures. An old `build-bot.md` may remain on disk, but a non-ready status makes it stale and downstream Process must ignore it:
+
+```bash
+npm run input:source-status -- --week YYYY-Www --source build-bot --status empty --file build-bot.md --count 0 --summary "本周 0 条有效构建记录"
+```
 Reply: missing bridge logs, Codex memories, and Feishu message history.
 Ask the user to restart bridge or enable logging.
 
@@ -88,67 +94,39 @@ in the appendix.
 
 - If the week directory does not exist, create it from
   `03_input/weekly/00_template/`.
-- If `build-bot.md` already exists, append with a `## <date> 飞书机器人 Build 复盘`
-  heading. Do not overwrite.
+- The complete `build-bot.md` file has a hard limit of **3000 characters**;
+  count headings, tables, appendix, whitespace and punctuation before writing.
+  If it exceeds the limit, compress and rewrite before writing; never write an
+  over-limit report.
+- If `build-bot.md` already exists for the same week, rewrite the current
+  report instead of appending a duplicate. Keep one compact report per week.
 - Timezone: `Asia/Shanghai`. Coverage: complete Monday-Sunday ISO week.
 
 ## Report structure
 
 Use total-part-total. Keep paragraphs under 100 chars. No chat log dumps.
+Use these compact blocks; do not expand them into separate long sections:
 
-### Body (11 required sections)
+1. **Overview + usage evidence** — State week/coverage first, then the
+   generator's `usageSummary`, `usageCoverage`, and `usageWarnings`. Include
+   only the key demand, service, delivery, latency and follow-up-proxy values.
+   `sent` means API acceptance, not user viewing or endorsement; missing
+   evidence is unknown, never zero.
+2. **Top 3 items + outcomes** — Sort by impact. For each give what changed,
+   user intent, bot role and whether the loop closed.
+3. **Execution boundary** — For major items compactly state
+   `Entry / Executor / Model / Handoff`; never collapse phone entry and desktop
+   execution into “all done on phone”.
+4. **Capability changes + significance** — Combine Skill/prompt/workflow
+   changes, cross-project reuse and one non-boilerplate learning implication.
+5. **Bottleneck + next-week lens** — Combine Must do / Worth doing / Skip,
+   biggest bottleneck and concrete priorities.
+6. **Evidence appendix** — One compact line each for source coverage, key
+   evidence, overlap with `build.md`, and unavailable sources/manual gaps.
 
-1. **Weekly bot overview** — One line describing the week's bot work rhythm.
-2. **Core usage evidence** — Write the quantitative usage block before
-   interpreting tasks. Include:
-   - demand: inbound, active users/chats/scopes/days, rejected/no-mention/
-     unauthorized/command messages;
-   - service: started/completed/failed/interrupted/resumed runs, completion and
-     failure rates, queue/first-event/first-visible/e2e P50/P95, model and
-     source distributions;
-   - delivery: final sends by card/Markdown/text, stream fallback, delivery
-     errors, empty replies, correlated runs and degraded correlation;
-   - behavior proxy: follow-up within 24 hours, explicitly labeled as a proxy;
-   - coverage: missing log dates and `partial`/`insufficient` status.
-   `sent` means the API accepted a send, not that the user viewed or endorsed
-   it. Missing evidence is unknown, never zero. Do not write raw IDs,
-   previews, paths, credentials, or full chat transcripts.
-   Use the generator's `usageSummary`, `usageCoverage`, and `usageWarnings`
-   fields as the only source for this block.
-3. **Top 3-5 items** — Sorted by impact, not volume. For each: what, user
-   intent, bot role, closed-loop or not.
-4. **Per-entry outcomes** — Key deliverables by group / project / automation.
-5. **Entry / Executor / Model / Handoff** - For each major task this week,
-   state four dimensions explicitly. Do NOT collapse them into a single
-   "all done on phone" claim:
-   - **Entry**: where the task was initiated (phone Feishu / desktop).
-   - **Executor**: who actually ran it (bot CLI / Codex desktop / desktop
-     IDE / manual).
-   - **Model**: which model powered execution (bot's ark-code-latest /
-     desktop Codex model).
-   - **Handoff**: whether the user had to take over or switch to desktop.
-   A task initiated on phone but executed by desktop Codex is "phone entry,
-   desktop executor" - not "no desktop Codex involved". This prevents the
-   retrospective from contradicting daily notes that record desktop Codex
-   refactoring work.
-6. **Skill / prompt / workflow changes** — New, updated, deprecated. Why.
-7. **Cross-project capability shifts** — Bot skills reused across projects.
-8. **AI Builder / learner significance** — Brief reflection, no boilerplate.
-9. **Must do / Worth doing / Skip** — Next-week lens.
-10. **Biggest bottleneck** — Single most limiting factor for bot efficiency.
-11. **Next week bot priorities** — Concrete, actionable.
-
-### Appendix (6 required sections)
-
-1. Source coverage table (which sources checked, which actually available)
-2. Available memory / log summary (≤200 chars)
-3. Key bot execution evidence (time, instruction, result triplets)
-4. Automation / Skill / prompt changes this week
-5. Dedup from build.md (explicit overlap notes)
-6. Unavailable sources + manual supplement needed
-
-The appendix must also state whether usage coverage is complete, partial, or
-insufficient. Do not turn missing log days into zero activity.
+The complete file must stay within 3000 characters. Remove duplicate project
+lists, long explanations and low-value evidence before removing the week,
+coverage status, usage caveat, key conclusion, bottleneck or next action.
 
 ## Memory update
 

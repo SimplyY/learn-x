@@ -10,14 +10,14 @@ description: 从 Learn-X 本地周输入和已确认周记生成安全的飞书�
 ## 前置条件
 
 1. 解析目标月：默认 `Asia/Shanghai` 上个月，用户指定 `YYYY-MM`、本月或上月时按用户指定。月度目录始终使用 `03_input/monthly/YYYY-M/`。
-2. 找出所有与目标月相交的 ISO 周。每一周都必须存在实质性、已确认的 `weekly.md`：
+2. 找出所有与目标月相交的 ISO 周。读取每周 `_source-status.json`（若存在，格式非法即停止）；被标记为 `empty/failed/unavailable` 的自动来源旧文件不得读取。每一周都必须存在实质性、已确认的 `weekly.md`：
    - 必须有目标覆盖范围、来源和正文，且不是空文件、模板或缺口说明。
    - 不得含 `【待优化】AI 基础草稿`；该标记存在时表示尚未人工确认。
    - 任一周目录或 `weekly.md` 缺失/未确认时停止，列出缺周；不得生成不完整月记。
 3. 只读取这些本地来源，并按目标月日期过滤边界周内容：
    - 已确认 `weekly.md` 是最高权重的人工作业压缩层。
    - `daily.md` 提供事实/状态时间线，`flomo.md` 提供语义主线，`ai.md` 提供人工反思补证。
-   - `health.md`、`voice.md`、`weread.md`、`calendar.md`、`time.md`、`build.md`、`build-bot.md` 仅在字段相关且有明确证据时补充。
+   - `health.md`、`voice.md`、`weread.md`、`calendar.md`、`time.md`、`build.md`、`build-bot.md` 仅在字段相关且有明确证据、且状态为 `ready`（或历史周没有侧车）时补充。
 4. 复用 `monthly-process-input.mjs` 的选择语义：按正文日期、声明覆盖期和周记标题过滤月外内容，合并日记元数据、按日期去重 Flomo；不按文件 mtime 推断范围，不创建空周目录，不猜测缺失内容。
 5. 不读取 Daily Base、线上周记或其他飞书材料作为事实源；它们的后续编辑不应改变已落盘月度证据。
 

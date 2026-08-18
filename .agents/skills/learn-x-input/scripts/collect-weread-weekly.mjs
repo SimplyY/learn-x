@@ -3,6 +3,8 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { assertWeeklyInputSize } from "./lib/input-limits.mjs";
+import { fileExists, updateWeeklySourceStatus } from "./lib/source-status.mjs";
 
 const API_URL = "https://i.weread.qq.com/api/agent/gateway";
 const SKILL_VERSION = "1.0.4";
@@ -147,17 +149,34 @@ async function collectReadingActivity(callApi, range, readingDetail, shelf) {
 }
 
 export async function writeWereadWeekly(options = {}) {
-  const payload = await collectWereadWeekly(options);
-  const outputRoot = options.outputRoot || path.join(repoRoot, "03_input/weekly", payload.week);
+  const week = normalizeWeek(options.week || defaultWeeklyReviewWeek());
+  const outputRoot = options.outputRoot || path.join(repoRoot, "03_input/weekly", week);
   const notesPath = path.join(outputRoot, "weread.md");
-  const suffix = `${process.pid}-${Date.now()}`;
-  const notesTempPath = `${notesPath}.${suffix}.tmp`;
+  try {
+    const payload = await collectWereadWeekly({ ...options, week });
+    const written = hasSubstantiveWereadContent(payload);
+    if (written) {
+      const suffix = `${process.pid}-${Date.now()}`;
+      const notesTempPath = `${notesPath}.${suffix}.tmp`;
+      const content = renderMarkdown(payload);
+      assertWeeklyInputSize(content, notesPath);
+      await mkdir(outputRoot, { recursive: true });
+      await writeFile(notesTempPath, content, "utf8");
+      await rename(notesTempPath, notesPath);
+    }
+    const count = payload.stats.highlightCount + payload.stats.thoughtCount + payload.stats.readBookCount;
+    await updateWeeklySourceStatus({ weekRoot: outputRoot, week, source: "weread", status: written ? "ready" : "empty", file: "weread.md", count, summary: written ? "本周有阅读活动" : "本周 0 条记录，文件未生成", preservedStaleFile: !written && await fileExists(notesPath) });
+    return { payload, notesPath: written ? notesPath : null };
+  } catch (error) {
+    await updateWeeklySourceStatus({ weekRoot: outputRoot, week, source: "weread", status: "failed", file: "weread.md", count: 0, summary: `采集失败：${error.message}`, preservedStaleFile: await fileExists(notesPath) });
+    throw error;
+  }
+}
 
-  await mkdir(outputRoot, { recursive: true });
-  await writeFile(notesTempPath, renderMarkdown(payload), "utf8");
-  await rename(notesTempPath, notesPath);
-
-  return { payload, notesPath };
+export function hasSubstantiveWereadContent(payload) {
+  const { stats, reading } = payload;
+  return Number(stats.readBookCount) > 0 || Number(stats.highlightCount) > 0 || Number(stats.thoughtCount) > 0
+    || Number(reading.totalReadTime) > 0 || Number(reading.wrReadTime) > 0 || Number(reading.wrListenTime) > 0;
 }
 
 async function collectCandidateBooks(callApi, startEpoch) {
@@ -464,7 +483,7 @@ function parseArgs(argv) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const result = await writeWereadWeekly(parseArgs(process.argv.slice(2)));
-  console.log(`WeRead weekly input written: ${path.relative(repoRoot, result.notesPath)}`);
+  console.log(`WeRead weekly input: ${result.notesPath ? path.relative(repoRoot, result.notesPath) : "文件未生成（0 条记录）"}`);
   console.log(`Books: ${result.payload.stats.bookCount}`);
   console.log(`Highlights: ${result.payload.stats.highlightCount}`);
   console.log(`Thoughts: ${result.payload.stats.thoughtCount}`);

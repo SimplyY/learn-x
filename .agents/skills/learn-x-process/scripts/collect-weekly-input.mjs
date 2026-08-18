@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { readFile, readdir, stat, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { MAX_WEEKLY_INPUT_CHARS, countInputChars } from "../../learn-x-input/scripts/lib/input-limits.mjs";
+import { readWeeklySourceStatus } from "../../learn-x-input/scripts/lib/source-status.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
@@ -15,13 +17,22 @@ export async function collectWeeklyInput(options = {}) {
   const weekInputRoot = path.join(inputRoot, weekDirectory);
   const weekPrefix = `03_input/weekly/${weekDirectory}/`;
   const range = isoWeekRange(week);
-  const files = await collectInputFiles(weekInputRoot);
+  const allFiles = await collectInputFiles(weekInputRoot);
+  const sourceStatus = await readWeeklySourceStatus(weekInputRoot, week);
+  const statusEntries = Object.entries(sourceStatus.sources);
+  const files = filterFilesBySourceStatus(allFiles, sourceStatus.sources);
+  const excludedFiles = statusEntries
+    .filter(([, entry]) => entry.status !== "ready")
+    .map(([source, entry]) => ({ source, file: entry.file, status: entry.status, count: entry.count, summary: entry.summary, preservedStaleFile: entry.preservedStaleFile, present: allFiles.some((file) => path.basename(file.relativePath) === entry.file) }));
   const activeFiles = [];
   const rawItems = [];
+  const oversized = [];
 
   for (const file of files) {
     const info = await stat(file.absolutePath);
     const content = await readFile(file.absolutePath, "utf8");
+    const chars = countInputChars(content);
+    if (chars > MAX_WEEKLY_INPUT_CHARS) oversized.push({ path: file.relativePath, chars });
     const parsedItems = parseInputFile(content, file);
     const fileItems = parsedItems
       .map((item, index) => ({
@@ -44,6 +55,15 @@ export async function collectWeeklyInput(options = {}) {
     rawItems.push(...fileItems);
   }
 
+  if (oversized.length) {
+    const details = oversized.map(({ path: filePath, chars }) => `- ${filePath}: ${chars} 字符`).join("\n");
+    throw new Error([
+      `周输入超过单文件上限 ${MAX_WEEKLY_INPUT_CHARS} 字符，已停止生成 input.json / Process Pack。`,
+      details,
+      "请先运行 input:compress 生成候选，人工确认数据无误后再应用。"
+    ].join("\n"));
+  }
+
   const uniqueItems = dedupeItems(rawItems);
 
   return {
@@ -63,13 +83,27 @@ export async function collectWeeklyInput(options = {}) {
       ...file
     })),
     items: uniqueItems,
+    sourceStatuses: sourceStatus.sources,
+    excludedFiles,
     stats: {
       fileCount: activeFiles.length,
       itemCount: rawItems.length,
       uniqueItemCount: uniqueItems.length,
-      duplicateCount: rawItems.length - uniqueItems.length
+      duplicateCount: rawItems.length - uniqueItems.length,
+      excludedFileCount: excludedFiles.length
     }
   };
+}
+
+export function filterFilesBySourceStatus(files, sources) {
+  const entries = Object.values(sources || {});
+  return files.filter((file) => entries.every((entry) => entry.file !== path.basename(file.relativePath) || entry.status === "ready"));
+}
+
+export function findOversizedWeeklyInputs(files, maxChars = MAX_WEEKLY_INPUT_CHARS) {
+  return files
+    .map(({ path: filePath, content }) => ({ path: filePath, chars: countInputChars(content) }))
+    .filter(({ chars }) => chars > maxChars);
 }
 
 export async function writeWeeklyInput(options = {}) {

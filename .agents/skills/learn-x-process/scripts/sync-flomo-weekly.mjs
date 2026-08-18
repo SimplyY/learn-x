@@ -29,7 +29,8 @@ export async function syncFlomoWeekly({ week, manifestPath, dryRun = false, only
   const results = [];
   const plans = [];
   const preflightErrors = [];
-  const useBatch = Boolean(manifestPath && !dryRun && !browser);
+  // ponytail: reuse the deterministic editor path for every real sync; keep the legacy client only for injected tests.
+  const useBatch = Boolean(!dryRun && !browser);
   const batchPreflight = useBatch
     ? new Map((await runEgoBatch("preflight", { allowLegacy: overwriteConflicts, compactResult: overwriteConflicts, specs: specs.map(({ key, title, tag }) => ({ key, title, tag })) })).completed.map((item) => [item.key, item]))
     : null;
@@ -54,7 +55,11 @@ export async function syncFlomoWeekly({ week, manifestPath, dryRun = false, only
         plans.push({ spec, previous, found, content, remoteReadBack, needsRemoteWrite: !remoteMatches, overwrite: true });
         continue;
       }
-      if (useBatch && !remoteContent.includes(spec.verification)) {
+      if (previous && previous.memoId !== found.matches[0].memoId) {
+        preflightErrors.push(`${spec.key}: tagged Flomo memo identity differs from local sync state.`);
+        continue;
+      }
+      if (useBatch && !previous && !remoteContent.includes(spec.verification)) {
         preflightErrors.push(`${spec.key}: tagged Flomo memo has no matching verification marker or local sync state.`);
         continue;
       }

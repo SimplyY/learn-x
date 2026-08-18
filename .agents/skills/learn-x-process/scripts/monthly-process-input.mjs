@@ -3,6 +3,7 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { inputKindFromRelativePath, isoWeekRange } from "./collect-weekly-input.mjs";
+import { readWeeklySourceStatus } from "../../learn-x-input/scripts/lib/source-status.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
@@ -18,10 +19,14 @@ export async function collectMonthlyProcessInput(monthId) {
   const files = [];
   const weeklyPaths = [];
   const missingWeeklyPaths = [];
+  const weeklySourceStatuses = {};
 
   for (const week of weeksIntersectingMonth(month)) {
     const weekDir = path.join(repoRoot, "03_input/weekly", week);
-    const weekFiles = await collectFiles(weekDir, { origin: "weekly", week });
+    const status = await readWeeklySourceStatus(weekDir, week);
+    weeklySourceStatuses[week] = status.sources;
+    const allWeekFiles = await collectFiles(weekDir, { origin: "weekly", week });
+    const weekFiles = allWeekFiles.filter((file) => Object.values(status.sources).every((entry) => entry.file !== path.basename(file.relativePath) || entry.status === "ready"));
     const relativeWeekPath = `03_input/weekly/${week}`;
     (weekFiles.length ? weeklyPaths : missingWeeklyPaths).push(relativeWeekPath);
     files.push(...weekFiles);
@@ -154,6 +159,7 @@ export async function collectMonthlyProcessInput(monthId) {
       mode: "weekly-plus-monthly",
       weeklyPaths,
       missingWeeklyPaths,
+      weeklySourceStatuses,
       monthlyPath: `03_input/monthly/${monthDir}`
     },
     sources,

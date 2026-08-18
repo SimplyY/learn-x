@@ -82,7 +82,7 @@ test("collects only highlights and thoughts inside the requested week", async ()
   assert.doesNotMatch(markdown, /ID：|位置：|weread:\/\//);
 });
 
-test("writes one flat weread.md file", async () => {
+test("records an empty weread source without creating a file", async () => {
   const outputRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-weread-"));
   const emptyResponses = new Map([
     ["/user/notebooks", { hasMore: 0, books: [] }],
@@ -91,6 +91,7 @@ test("writes one flat weread.md file", async () => {
   ]);
 
   try {
+    await writeFile(path.join(outputRoot, "weread.md"), "old weread\n", "utf8");
     const result = await writeWereadWeekly({
       week: "2026-W25",
       apiKey: "test",
@@ -98,9 +99,10 @@ test("writes one flat weread.md file", async () => {
       callApi: async ({ api_name }) => emptyResponses.get(api_name)
     });
 
-    assert.equal(result.notesPath, path.join(outputRoot, "weread.md"));
-    assert.deepEqual(await readdir(outputRoot), ["weread.md"]);
-    assert.match(await readFile(result.notesPath, "utf8"), /# 微信读书｜2026-W25/);
+    assert.equal(result.notesPath, null);
+    assert.deepEqual((await readdir(outputRoot)).sort(), ["_source-status.json", "weread.md"]);
+    assert.equal(await readFile(path.join(outputRoot, "weread.md"), "utf8"), "old weread\n");
+    assert.match(await readFile(path.join(outputRoot, "_source-status.json"), "utf8"), /"status": "empty"/);
   } finally {
     await rm(outputRoot, { recursive: true, force: true });
   }
@@ -127,7 +129,26 @@ test("rejects a previous-week detail response without overwriting the existing f
       /outside the requested week/
     );
     assert.equal(await readFile(notesPath, "utf8"), "keep me\n");
+    assert.match(await readFile(path.join(outputRoot, "_source-status.json"), "utf8"), /"status": "failed"/);
   } finally {
     await rm(outputRoot, { recursive: true, force: true });
   }
+});
+
+test("writes reading activity even when there are no notes", async (t) => {
+  const outputRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-weread-activity-"));
+  t.after(() => rm(outputRoot, { recursive: true, force: true }));
+  const result = await writeWereadWeekly({
+    week: "2026-W25",
+    apiKey: "test",
+    outputRoot,
+    callApi: async ({ api_name }) => ({
+      "/user/notebooks": { hasMore: 0, books: [] },
+      "/readdata/detail": { totalReadTime: 60, readDays: 1, dayAverageReadTime: 60, readTimes: {} },
+      "/shelf/sync": { books: [] }
+    }[api_name])
+  });
+  assert.ok(result.notesPath);
+  assert.match(await readFile(result.notesPath, "utf8"), /本周阅读书籍：0 本/);
+  assert.match(await readFile(path.join(outputRoot, "_source-status.json"), "utf8"), /"status": "ready"/);
 });

@@ -14,4 +14,4 @@
 - `build.md`：Codex / Code X 构建复盘。
 - `research.md`：重要调研。
 
-周目录采用扁平结构，不创建 `log / inbox / action` 或来源子目录。没有有效内容的文件应删除；需要新来源时按需新增 `<source>.md`。
+周目录采用扁平结构，不创建 `log / inbox / action` 或来源子目录。模板空文件仍可删除；自动来源成功空结果不生成新文件，旧文件若保留由 `_source-status.json` 标记为过期；需要新来源时按需新增 `<source>.md`。

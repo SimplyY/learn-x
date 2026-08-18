@@ -52,19 +52,38 @@ function renderProcessPack(payload, sourceSummaries, fileSummaries) {
     `- 有效材料数：${payload.stats.itemCount}`,
     `- 去重后材料数：${payload.stats.uniqueItemCount}`,
     `- 去重数量：${payload.stats.duplicateCount}`,
+    `- 被状态侧车排除的旧文件：${payload.stats.excludedFileCount}`,
     `- JSON 中间材料：\`04_output/_dist/weekly/${distWeekId(payload.week)}/input.json\``,
     "",
-    "## 2. 来源覆盖",
+    "## 2. 来源状态",
+    "",
+    renderSourceStatuses(payload),
+    "",
+    "## 3. 来源覆盖",
     "",
     renderSourceCoverage(sourceSummaries),
     "",
-    "## 3. 来源索引",
+    "## 4. 来源索引",
     "",
     renderSourceIndex(fileSummaries),
     "",
-    "## 4. 材料正文",
+    "## 5. 材料正文",
     "",
     renderFileMaterials(payload.items, fileSummaries)
+  ].join("\n");
+}
+
+function renderSourceStatuses(payload) {
+  const rows = Object.entries(payload.sourceStatuses || {}).map(([source, entry]) => {
+    const usable = entry.status === "ready" ? "计入" : "排除";
+    const stale = entry.preservedStaleFile ? "旧文件已保留但过期" : "无旧文件";
+    return `| ${source} | ${entry.status} | ${entry.count} | ${entry.file} | ${usable} | ${stale}；${entry.summary} |`;
+  });
+  if (!rows.length) return "- 未发现状态侧车；按历史周兼容规则读取现有文件。";
+  return [
+    "| 来源 | 状态 | 记录数 | 文件 | 本轮处理 | 说明 |",
+    "| --- | --- | ---: | --- | --- | --- |",
+    ...rows
   ].join("\n");
 }
 

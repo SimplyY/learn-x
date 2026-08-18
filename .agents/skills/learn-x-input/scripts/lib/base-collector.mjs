@@ -6,6 +6,7 @@ import { execFile } from "node:child_process";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { assertWeeklyInputSize } from "./input-limits.mjs";
 
 const execFileAsync = promisify(execFile);
 export const TZ = "Asia/Shanghai";
@@ -124,6 +125,7 @@ export function safeValue(value) {
 
 /** 原子写文件（先写 tmp 再 rename）。 */
 export async function atomicWrite(file, content) {
+  assertWeeklyInputSize(content, file);
   await mkdir(path.dirname(file), { recursive: true });
   const temp = `${file}.${process.pid}.tmp`;
   await writeFile(temp, content, "utf8");

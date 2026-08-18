@@ -4,13 +4,19 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { defaultWeeklyReviewWeek, isoWeekRangeShanghai, normalizeWeek } from "./collect-weread-weekly.mjs";
+import { assertWeeklyInputSize } from "./lib/input-limits.mjs";
+import { fileExists, updateWeeklySourceStatus } from "./lib/source-status.mjs";
 
 export const VOICE_X_BASE_URL = "https://ywhome.feishu.cn/base/OBapbpVNIaw7kfsM1Q9cftlmnbe?table=tbljFGhqPgKaMD5l&view=vew4IAgkv3";
 const TABLE_ID = "tbljFGhqPgKaMD5l";
 const TABLE_NAME = "内容索引";
 const TIMEZONE = "Asia/Shanghai";
 const REQUIRED_FIELDS = ["标题", "录制时间", "原始文字稿", "处理后原文", "内容指纹"];
-const ADVICE_HEADING = "## 3. 对我的建议（仅留档，不采集到 Learn-X）";
+const EXCLUDED_HEADING_PATTERNS = [
+  /^#{1,6}\s+对我的建议(?:（仅留档，不采集到 Learn-X）)?\s*$/,
+  /^#{1,6}\s+\d+\.\s*对我的建议(?:（仅留档，不采集到 Learn-X）)?\s*$/,
+  /^#{1,6}\s+压缩原文\s*$/
+];
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
@@ -53,14 +59,26 @@ export async function collectVoiceWeekly(options = {}) {
 }
 
 export async function writeVoiceWeekly(options = {}) {
-  const payload = await collectVoiceWeekly(options);
-  const outputRoot = options.outputRoot || path.join(repoRoot, "03_input/weekly", payload.week);
+  const week = normalizeWeek(options.week || defaultWeeklyReviewWeek());
+  const outputRoot = options.outputRoot || path.join(repoRoot, "03_input/weekly", week);
   const notesPath = path.join(outputRoot, "voice.md");
-  const tempPath = `${notesPath}.${process.pid}-${Date.now()}.tmp`;
-  await mkdir(outputRoot, { recursive: true });
-  await writeFile(tempPath, renderVoiceMarkdown(payload), "utf8");
-  await rename(tempPath, notesPath);
-  return { payload, notesPath };
+  try {
+    const payload = await collectVoiceWeekly({ ...options, week });
+    const written = payload.records.length > 0;
+    if (written) {
+      const tempPath = `${notesPath}.${process.pid}-${Date.now()}.tmp`;
+      const content = renderVoiceMarkdown(payload);
+      assertWeeklyInputSize(content, notesPath);
+      await mkdir(outputRoot, { recursive: true });
+      await writeFile(tempPath, content, "utf8");
+      await rename(tempPath, notesPath);
+    }
+    await updateWeeklySourceStatus({ weekRoot: outputRoot, week, source: "voice", status: written ? "ready" : "empty", file: "voice.md", count: payload.records.length, summary: written ? "本周有核心记录" : "本周 0 条记录，文件未生成", preservedStaleFile: !written && await fileExists(notesPath) });
+    return { payload, notesPath: written ? notesPath : null };
+  } catch (error) {
+    await updateWeeklySourceStatus({ weekRoot: outputRoot, week, source: "voice", status: "failed", file: "voice.md", count: 0, summary: `采集失败：${error.message}`, preservedStaleFile: await fileExists(notesPath) });
+    throw error;
+  }
 }
 
 export function renderVoiceMarkdown(payload) {
@@ -87,7 +105,7 @@ export function renderVoiceMarkdown(payload) {
 // 仅识别完整且独占的固定标题，旧文档保持向后兼容。
 export function stripAdviceFromVoiceMarkdown(markdown) {
   const lines = String(markdown).replace(/\r\n/g, "\n").split("\n");
-  const index = lines.findIndex((line) => line === ADVICE_HEADING);
+  const index = lines.findIndex((line) => EXCLUDED_HEADING_PATTERNS.some((pattern) => pattern.test(line)));
   return index === -1 ? String(markdown) : lines.slice(0, index).join("\n").trimEnd();
 }
 
@@ -159,6 +177,6 @@ function parseArgs(argv) { const options = {}; for (let index = 0; index < argv.
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const result = await writeVoiceWeekly(parseArgs(process.argv.slice(2)));
-  console.log(`Voice-X weekly input written: ${path.relative(repoRoot, result.notesPath)}`);
+  console.log(`Voice-X weekly input: ${result.notesPath ? path.relative(repoRoot, result.notesPath) : "文件未生成（0 条记录）"}`);
   console.log(`Records: ${result.payload.records.length}`);
 }

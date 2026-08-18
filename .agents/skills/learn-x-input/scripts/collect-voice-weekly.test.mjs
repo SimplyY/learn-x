@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -26,6 +26,13 @@ test("collects only the summary and insight from a new-format AI insight documen
   assert.match(collected, /保留总结|保留洞察/);
   assert.doesNotMatch(collected, /不得采集/);
   assert.equal(stripAdviceFromVoiceMarkdown("# 历史核心重点\n保留全部内容。"), "# 历史核心重点\n保留全部内容。");
+});
+
+test("recognizes the live Voice-X headings and excludes full detail text", () => {
+  const document = "# 核心总结\n保留核心。\n\n# 对我的建议\n排除建议。\n\n# 压缩原文\n排除全文。";
+  const collected = stripAdviceFromVoiceMarkdown(document);
+  assert.equal(collected, "# 核心总结\n保留核心。");
+  assert.doesNotMatch(collected, /排除建议|排除全文/);
 });
 
 test("builds an inclusive weekly lower bound with supported datetime operators", () => {
@@ -66,13 +73,16 @@ test("uses the stable business key when recorded times are equal", async () => {
   assert.deepEqual(payload.records.map((item) => item.id), ["a", "b"]);
 });
 
-test("writes an explicit zero-record result", async (t) => {
+test("records an empty source without creating a zero-record file", async (t) => {
   const outputRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-voice-zero-"));
   t.after(() => rm(outputRoot, { recursive: true, force: true }));
+  const notesPath = path.join(outputRoot, "voice.md");
+  await writeFile(notesPath, "old voice\n", "utf8");
   const result = await writeVoiceWeekly({ week: "2026-W24", outputRoot, transport: new FakeCollectorTransport(new Map([[0, { records: [], hasMore: false }]])) });
-  const markdown = await readFile(result.notesPath, "utf8");
-  assert.match(markdown, /记录数：0/);
-  assert.match(markdown, /已查询 Voice-X，本周核心重点记录为 0 条/);
+  assert.equal(result.notesPath, null);
+  assert.deepEqual((await readdir(outputRoot)).sort(), ["_source-status.json", "voice.md"]);
+  assert.equal(await readFile(notesPath, "utf8"), "old voice\n");
+  assert.match(await readFile(path.join(outputRoot, "_source-status.json"), "utf8"), /"status": "empty"/);
 });
 
 test("query and second-page document failures preserve the old voice.md", async (t) => {
@@ -85,6 +95,7 @@ test("query and second-page document failures preserve the old voice.md", async 
   queryFailure.failPrepare = true;
   await assert.rejects(writeVoiceWeekly({ week: "2026-W24", outputRoot, transport: queryFailure }), /query failed/);
   assert.equal(await readFile(notesPath, "utf8"), "keep old voice\n");
+  assert.match(await readFile(path.join(outputRoot, "_source-status.json"), "utf8"), /"status": "failed"/);
 
   const pages = new Map([
     [0, { hasMore: true, records: [record("first", "第一页记录标题", "2026-06-08T09:00:00+08:00", "https://core/first")] }],
@@ -94,9 +105,22 @@ test("query and second-page document failures preserve the old voice.md", async 
   documentFailure.failUrl = "https://core/second";
   await assert.rejects(writeVoiceWeekly({ week: "2026-W24", outputRoot, transport: documentFailure }), /document read failed/);
   assert.equal(await readFile(notesPath, "utf8"), "keep old voice\n");
+  assert.match(await readFile(path.join(outputRoot, "_source-status.json"), "utf8"), /"status": "failed"/);
 });
 
 test("fails closed when pagination claims more without advancing", async () => {
   const transport = new FakeCollectorTransport(new Map([[0, { records: [], hasMore: true }]]));
   await assert.rejects(collectVoiceWeekly({ week: "2026-W24", transport }), /没有新增记录/);
+});
+
+test("preserves the previous voice file when the compressed output exceeds 15000 characters", async (t) => {
+  const outputRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-voice-limit-"));
+  t.after(() => rm(outputRoot, { recursive: true, force: true }));
+  const notesPath = path.join(outputRoot, "voice.md");
+  await writeFile(notesPath, "keep old voice\n", "utf8");
+  const transport = new FakeCollectorTransport(new Map([[0, { hasMore: false, records: [record("large", "超长记录", "2026-06-08T09:00:00+08:00", "https://core/large")] }]]), {
+    "https://core/large": `# 核心总结\n${"保留核心。".repeat(4000)}\n\n# 对我的建议\n建议\n\n# 压缩原文\n全文`
+  });
+  await assert.rejects(writeVoiceWeekly({ week: "2026-W24", outputRoot, transport }), /超过周输入上限/);
+  assert.equal(await readFile(notesPath, "utf8"), "keep old voice\n");
 });

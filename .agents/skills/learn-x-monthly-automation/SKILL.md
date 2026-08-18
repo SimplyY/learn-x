@@ -29,7 +29,7 @@ npm run memory:monthly -- 2026-06
 2. 月度输入目录使用 `03_input/monthly/YYYY-M/`，例如 `03_input/monthly/2026-6/`。不要按文件 mtime 推断范围。
 3. 月度报告流程只生成 `_dist` 和 `04_output/monthly/YYYY-MM.md` 最小壳；不要在自动化中代写 Monthly Output 正文。
 4. 不读取、打印或保存凭据。不修改 `README.md`、`01_core/道/`、`01_core/法/`、`02_prompts/` 或无关长期资产。
-5. 月度原始输入同时来自 `03_input/weekly/YYYY-Www/` 和 `03_input/monthly/YYYY-M/`；后者保存月记及其他月度独有来源。另读取各周 `04_output/weekly/YYYY-WW.md` 中系统确认的标题 10「全文核心重点纪要」和标题 11「芒格之魂的洞察」，空项或 `todo` 跳过；不得读取其它周报正文代替原始输入。
+5. 月度原始输入同时来自 `03_input/weekly/YYYY-Www/` 和 `03_input/monthly/YYYY-M/`；后者保存月记及其他月度独有来源。读取周目录时复用 `_source-status.json`：只有 `ready` 自动来源进入月度输入，`empty/failed/unavailable` 的旧文件保留但排除；缺失侧车兼容历史周，非法侧车失败关闭。另读取各周 `04_output/weekly/YYYY-WW.md` 中系统确认的标题 10「全文核心重点纪要」和标题 11「芒格之魂的洞察」，空项或 `todo` 跳过；不得读取其它周报正文代替原始输入。
 6. 原始文件完整留在 `03_input/`，不要复制成月度全文合集。`input.json` 只保存路径、哈希、处理状态和压缩统计；`process-pack.md` 才是给 AI Chat 的自包含上下文。
 7. 月度只保留目标月事件。边界周按正文日期、声明覆盖期和周记标题过滤；无法确认归属时省略并报告，不猜测。
 8. 月度 Process Pack 使用固定层级：完整性与缺口、月度核心判断、自我反馈与生命状态、行动与现实反馈、支撑性输入、来源与处理审计。来源内部标题必须降为四级标题，不能破坏目录树。

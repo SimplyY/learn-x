@@ -29,6 +29,7 @@ Weekly 输入由周目录决定，不依赖 weekly index 或文件修改时间�
       build.md
       build-bot.md
       research.md
+      _source-status.json
       README.md
     2026-W24/
       daily.md
@@ -47,7 +48,7 @@ Weekly 输入由周目录决定，不依赖 weekly index 或文件修改时间�
   yearly/
 ```
 
-模板文件只是常用来源，不要求每周全部保留。创建周目录后，可删除没有有效内容的空文件；未来出现稳定的新来源时，再新增语义清楚的 `<source>.md`。
+模板文件只是常用来源，不要求每周全部保留。自动来源成功但没有实质内容时不生成新文件；若旧文件仍在，则由 `_source-status.json` 标记为过期，Process 和月度流程不会读取它。未来出现稳定的新来源时，再新增语义清楚的 `<source>.md`。
 
 ## 周目录规则
 
@@ -64,11 +65,11 @@ Weekly 输入由周目录决定，不依赖 weekly index 或文件修改时间�
 - `ai.md`：AI 对话摘要，由用户使用 `02_prompts/meta/_ai-chat-extract-prompt.md` 手动生成。
 - `flomo.md`：目标周 Flomo 内容。
 - `weread.md`：微信读书周度阅读活动、进度快照、个人划线和想法，由 `learn-x-input` 采集。
-- `voice.md`：Voice-X 中按录制周筛选的核心重点 Markdown；不包含原始文字稿，由 `npm run input:voice` 采集。
+- `voice.md`：Voice-X 中按录制周筛选的压缩核心总结 Markdown；不包含建议段落、完整细节或原始文字稿，由 `npm run input:voice` 采集；每个周输入文件最多 15,000 个 Unicode 字符。
 - `calendar.md`：固定 `Time-X｜随时记` 共享日历的每日与全周汇总，以及每个日历块的日期、起止、标题和描述；不保存人员、地点、ID、链接或系统元数据。
 - `health.md`：Health-X 周报摘要，由 Health-X 在飞书周报同步成功后生成。
-- `coach.md`：每次周度采集都会覆盖。按表字段保留新增记录，在采集器内排除回顾、复看和推送状态更新；不得把回顾状态更新当作新增输入。
-- `wisdom.md`：智慧之门创建时间落在目标周内的新记录；既有记录的回顾、复看或状态更新不采集。
+- `coach.md`：按表字段保留新增记录，在采集器内排除回顾、复看和推送状态更新；本周 0 条新增记录时不生成文件，但每周自动化必须报告 0 条记录。
+- `wisdom.md`：智慧之门创建时间落在目标周内的新记录；既有记录的回顾、复看或状态更新不采集；本周 0 条时不生成文件，但每周自动化必须报告 0 条记录。
 - `build.md`：Codex / Code X 构建、调试、上线记录。
 - `build-bot.md`：飞书机器人 / Code X Bot 周度执行复盘，由飞书机器人侧 `build-bot-log` 生成；本地周自动化只提示自查。
 - `research.md`：调研过程和结果。
@@ -85,7 +86,7 @@ Weekly Process 会根据已知文件名在 `_dist` 中标记来源类型，但�
 - `build.md`、`build-bot.md`、`research.md`、`meeting.md`、`chat.md`、`feedback.md` 标记为行动证据；`wisdom.md` 为普通输入；`coach.md` 为采集器筛选后的 Coach 输入。
 - 未知文件名仍会作为普通 input 处理，不阻断未来扩展。
 
-支持 `.md`、`.txt`、`.json`、`.html` / `.htm` 的历史输入解析，但新周目录默认只使用 Markdown。以下划线开头的文件和 `README.md` 会被处理器忽略。
+支持 `.md`、`.txt`、`.json`、`.html` / `.htm` 的历史输入解析，但新周目录默认只使用 Markdown。以下划线开头的文件和 `README.md` 会被处理器忽略。`_source-status.json` 是自动来源状态侧车：`ready` 才允许对应文件进入处理；`empty` 表示“0 条记录，文件未生成”；`failed/unavailable` 表示本轮未完成，不能把旧文件当作本轮输入。侧车缺失时按历史兼容规则读取，格式非法时失败关闭。
 
 具体 SOP 见 [`usage.md`](./usage.md)。
 

@@ -69,6 +69,8 @@ Learn-X 的 `Input -> Process Pack -> Output Shell` 工作流。
    node .agents/skills/learn-x-process/scripts/generate-weekly-process-pack.mjs --week 2026-22
    ```
 
+   Weekly Process 在读取周目录时先执行单文件 15,000 Unicode 字符门禁。超限时汇总所有文件、保留原文件并停止，不生成或更新 `input.json`、`process-pack.md` 或 Output 壳。用户确认数据无误后，可运行 `npm run input:compress -- --week YYYY-Www` 生成批量压缩审核包；只有显式 `--apply --confirm` 才能把已审核候选写回原输入。
+
    该脚本写入 `04_output/_dist/weekly/YYYY-Www/input.json` 和 `04_output/_dist/weekly/YYYY-Www/process-pack.md`，并在 `04_output/weekly/YYYY-WW.md` 不存在或为空时创建最小壳。
    如需指定月：
 
@@ -76,7 +78,7 @@ Learn-X 的 `Input -> Process Pack -> Output Shell` 工作流。
    node .agents/skills/learn-x-process/scripts/generate-monthly-process-pack.mjs --month 2026-01
    ```
 
-   该脚本先读取相交周、月度独有输入，以及各周 Weekly Output 中系统确认的标题 10「全文核心重点纪要」和标题 11「芒格之魂的洞察」，执行日期过滤、空值过滤、Daily 元数据合并和去重；不读取 Weekly Output 的其它正文代替原始 Input。输入文件是否存在、是否覆盖、是否为空由对应采集器负责，Process 只读取采集器已经落盘的文件，不按来源内容再次排除。`ai`、`research`、`weread`、`build`、`build-bot` 必须按价值策略语义整理；AI 必须先排除提示词/模板，再逐周保留核心事件，不能跨周压成一个段落。月记、周记、Daily、Flomo、Health、Voice、Calendar 和 Time 默认只做确定性清洗。脚本写出 `compression-requests.json` 并停止；Codex 按 `learn-x-monthly-automation/references/monthly-compression.md` 生成结构化 `compressed-events.json` 后重跑。最终写入 metadata-only `input.json` 和不超过 100 KB 的固定分层 `process-pack.md`。
+   该脚本先读取相交周、月度独有输入，以及各周 Weekly Output 中系统确认的标题 10「全文核心重点纪要」和标题 11「芒格之魂的洞察」，执行日期过滤、空值过滤、Daily 元数据合并和去重；不读取 Weekly Output 的其它正文代替原始 Input。周目录存在 `_source-status.json` 时，只有 `ready` 文件进入 `input.json`、Process Pack 和月度输入；`empty/failed/unavailable` 的旧文件保留但被排除，状态表仍展示 0 条或失败原因。侧车缺失保持历史周兼容，格式非法则失败关闭。`ai`、`research`、`weread`、`build`、`build-bot` 必须按价值策略语义整理；AI 必须先排除提示词/模板，再逐周保留核心事件，不能跨周压成一个段落。月记、周记、Daily、Flomo、Health、Voice、Calendar 和 Time 默认只做确定性清洗。脚本写出 `compression-requests.json` 并停止；Codex 按 `learn-x-monthly-automation/references/monthly-compression.md` 生成结构化 `compressed-events.json` 后重跑。最终写入 metadata-only `input.json` 和不超过 100 KB 的固定分层 `process-pack.md`。
 6. Codex 报告 `_dist` 路径、Output 最小壳路径和输入缺口，不生成 Weekly Output 正文。
 7. 用户按 `04_output/usage.md`，把 `process-pack.md` 与需要的规则文件交给 AI Chat，自行生成并写入 Weekly Output 正文。
 8. 人工审核候选，不要直接写入正式 core 文件。

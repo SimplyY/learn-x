@@ -7,6 +7,7 @@ import {
   weekRange, resolveBase, listTables, findTable, verifyFields,
   listRecords, filterByRange, atomicWrite, TZ,
 } from "./lib/base-collector.mjs";
+import { fileExists, updateWeeklySourceStatus } from "./lib/source-status.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 
@@ -26,26 +27,39 @@ const COLLECTORS = [
   },
 ];
 
-async function collectOne(config, week) {
-  const range = weekRange(week);
-  const base = await resolveBase(config.sourceUrl);
-  const tables = await listTables(base);
-  const table = findTable(tables, { tableId: config.tableId });
-  if (!table) throw new Error(`${config.name}：未找到表 ${config.tableId}`);
-  const tableId = table.table_id || table.id;
-  await verifyFields(base, tableId, config.fields);
-  const { records, pages, complete } = await listRecords(base, tableId, {
-    fields: config.fields,
-    conditions: [
-      [config.filterField, ">", `ExactDate(${range.startExclusive})`],
-      [config.filterField, "<", `ExactDate(${range.end})`],
-    ],
-  });
-  const inRange = filterByRange(records, config.filterField, range);
-  const content = render(config, week, range, { records: inRange, pages, complete });
-  const out = path.join(repoRoot, "03_input/weekly", week, config.outputFile);
-  await atomicWrite(out, content);
-  return { file: config.outputFile, count: inRange.length, pages, complete };
+export async function collectOne(config, week, dependencies = {}) {
+  const outputRoot = dependencies.outputRoot || path.join(repoRoot, "03_input/weekly", week);
+  const resolve = dependencies.resolveBase || resolveBase;
+  const list = dependencies.listTables || listTables;
+  const verify = dependencies.verifyFields || verifyFields;
+  const recordsFor = dependencies.listRecords || listRecords;
+  const filter = dependencies.filterByRange || filterByRange;
+  const out = path.join(outputRoot, config.outputFile);
+  try {
+    const range = weekRange(week);
+    const base = await resolve(config.sourceUrl);
+    const tables = await list(base);
+    const table = findTable(tables, { tableId: config.tableId });
+    if (!table) throw new Error(`${config.name}：未找到表 ${config.tableId}`);
+    const tableId = table.table_id || table.id;
+    await verify(base, tableId, config.fields);
+    const { records, pages, complete } = await recordsFor(base, tableId, {
+      fields: config.fields,
+      conditions: [
+        [config.filterField, ">", `ExactDate(${range.startExclusive})`],
+        [config.filterField, "<", `ExactDate(${range.end})`],
+      ],
+    });
+    const inRange = filter(records, config.filterField, range);
+    const content = render(config, week, range, { records: inRange, pages, complete });
+    const written = inRange.length > 0;
+    if (written) await atomicWrite(out, content);
+    await updateWeeklySourceStatus({ weekRoot: path.dirname(out), week, source: "wisdom", status: written ? "ready" : "empty", file: config.outputFile, count: inRange.length, summary: written ? "本周有新增记录" : "本周 0 条记录，文件未生成", preservedStaleFile: !written && await fileExists(out) });
+    return { file: written ? config.outputFile : null, count: inRange.length, pages, complete, written };
+  } catch (error) {
+    await updateWeeklySourceStatus({ weekRoot: path.dirname(out), week, source: "wisdom", status: "failed", file: config.outputFile, count: 0, summary: `采集失败：${error.message}`, preservedStaleFile: await fileExists(out) });
+    throw error;
+  }
 }
 
 function render(config, week, range, data) {
@@ -83,7 +97,10 @@ async function main() {
   const config = COLLECTORS.find((c) => c.name === target || c.outputFile === target);
   if (!config) throw new Error(`未知采集器：${target}（可用：${COLLECTORS.map((c) => c.name).join("、")}）`);
   const result = await collectOne(config, week);
-  console.log(`${config.name} 周度采集完成（${week}）：${result.count} 条 -> ${result.file}（${result.pages} 页，${result.complete ? "已完成" : "未完成"}）`);
+  const output = result.written ? `-> ${result.file}` : "未生成文件（0 条实质记录）";
+  console.log(`${config.name} 周度采集完成（${week}）：${result.count} 条 ${output}（${result.pages} 页，${result.complete ? "已完成" : "未完成"}）`);
 }
 
-main().catch((err) => { console.error(err.message); process.exit(1); });
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((err) => { console.error(err.message); process.exit(1); });
+}

@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isoWeekRange } from "../../learn-x-process/scripts/collect-weekly-input.mjs";
+import { assertWeeklyInputSize } from "../../learn-x-input/scripts/lib/input-limits.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
@@ -391,6 +392,7 @@ export async function appendWechatCaptures({ week, inputPath, outputPath = path.
   }
   const result = prepareWechatAppend({ week, existingMarkdown, input });
   if (!result.changed || (!existingMarkdown && result.addedCount === 0)) return { ...result, outputPath, written: false };
+  assertWeeklyInputSize(result.output, outputPath);
   await mkdir(path.dirname(outputPath), { recursive: true });
   const temporaryPath = `${outputPath}.tmp-${process.pid}`;
   try {
