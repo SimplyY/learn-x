@@ -19,7 +19,9 @@ export async function collectCalendarWeekly(options = {}) {
   const week = normalizeWeek(options.week || defaultWeeklyReviewWeek());
   const range = isoWeekRangeShanghai(week);
   const generatedAt = options.generatedAt || new Date().toISOString();
-  const getAgenda = options.getAgenda || readTimeXAgenda;
+  const injected = Boolean(options.getAgenda);
+  const userCalendars = injected ? [] : await listUserPersonalCalendars();
+  const getAgenda = options.getAgenda || (({ start, endExclusive }) => readAllAgenda(userCalendars, { start, endExclusive }));
   const calendar = await getAgenda({ start: range.startEpoch, endExclusive: range.endEpoch })
     .then((events) => summarizeCalendar(range, events))
     .catch(() => ({ status: "unavailable" }));
@@ -28,7 +30,11 @@ export async function collectCalendarWeekly(options = {}) {
     timezone: TIMEZONE,
     range: { start: formatShanghaiDateTime(range.startEpoch), endExclusive: formatShanghaiDateTime(range.endEpoch) },
     generatedAt,
-    calendar
+    calendar,
+    sources: [
+      { name: "Time-X｜随时记", identity: "bot" },
+      ...userCalendars.map((calendar) => ({ name: calendar.summary, identity: "user" }))
+    ]
   };
 }
 
@@ -123,14 +129,17 @@ export function summarizeCalendar(range, events) {
 }
 
 export function renderCalendarMarkdown(payload) {
+  const sources = payload.sources?.length
+    ? payload.sources.map((source) => `${source.name}（${source.identity === "user" ? "用户身份" : "应用身份"}，只读）`).join("、")
+    : "`Time-X｜随时记` 共享日历（应用身份，只读）";
   const lines = [
     `# Time-X 日历｜${payload.week}`, "",
-    "- 来源：`Time-X｜随时记` 共享日历（应用身份，只读）",
+    `- 来源：${sources}`,
     `- 时间范围：${payload.range.start} 至 ${payload.range.endExclusive}（不含结束时刻）`,
     `- 时区：${payload.timezone}`,
     `- 生成时间：${payload.generatedAt}`,
     "",
-    "> 日历来自 Time-X 随时记编译结果，只保留日期、时间、标题和描述；人员、地点、ID、链接与系统元数据不保存。它是计划/记录上下文，不单独证明实际完成。",
+    "> 日历来自 Time-X 随时记与用户个人日历合并结果，只保留日期、时间、标题和描述；人员、地点、ID、链接与系统元数据不保存。它是计划/记录上下文，不单独证明实际完成。",
     "",
     "## 时间投入"
   ];
@@ -152,6 +161,50 @@ async function readTimeXAgenda({ start, endExclusive }) {
   const data = await runLarkJson(["calendar", "+agenda", "--as", "bot", "--calendar-id", TIME_X_CALENDAR_ID, "--start", formatCliDateTime(start), "--end", formatCliDateTime(endExclusive)]);
   if (!data?.ok || !Array.isArray(data.data)) throw new Error("Time-X calendar query failed.");
   return data.data;
+}
+
+// 用户自己创建/维护的日历（主日历 + 自有共享日历），与 Time-X 共享日历合并采集。
+async function listUserPersonalCalendars() {
+  try {
+    const data = await runLarkJson(["calendar", "calendars", "list", "--as", "user", "--page-all"]);
+    if (!data?.ok || !Array.isArray(data.data?.calendar_list)) return [];
+    return data.data.calendar_list.filter((calendar) =>
+      calendar.calendar_id !== TIME_X_CALENDAR_ID &&
+      ["owner", "writer"].includes(calendar.role) &&
+      ["primary", "shared"].includes(calendar.type)
+    );
+  } catch {
+    return [];
+  }
+}
+
+async function readUserAgenda(calendarId, { start, endExclusive }) {
+  const data = await runLarkJson(["calendar", "+agenda", "--as", "user", "--calendar-id", calendarId, "--start", formatCliDateTime(start), "--end", formatCliDateTime(endExclusive)]);
+  if (!data?.ok || !Array.isArray(data.data)) throw new Error(`User calendar query failed (${calendarId}).`);
+  return data.data;
+}
+
+async function readAllAgenda(userCalendars, range) {
+  const all = [...(await readTimeXAgenda(range))];
+  for (const calendar of userCalendars) {
+    try {
+      all.push(...(await readUserAgenda(calendar.calendar_id, range)));
+    } catch {
+      // 单个个人日历不可读时跳过，不因此拖垮整个来源。
+    }
+  }
+  return dedupeEvents(all);
+}
+
+// 同一活动可能同时出现在共享日历和主日历，按（开始、结束、标题）去重避免重复统计。
+export function dedupeEvents(events) {
+  const seen = new Set();
+  return (events || []).filter((event) => {
+    const key = `${parseCalendarTime(event?.start_time)}:${parseCalendarTime(event?.end_time)}:${String(event?.summary || "")}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 async function runLarkJson(args) {

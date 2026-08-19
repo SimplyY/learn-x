@@ -19,7 +19,7 @@
 | Health-X 健康周报 | `health.md` | Health-X 完成飞书周报同步后自动生成 |
 | AI Coach | `coach.md`（有记录时） | 保留新增记录；0 条时不生成文件并写入状态侧车 |
 | 智慧之门新增记录 | `wisdom.md`（有记录时） | `npm run input:wisdom -- --week YYYY-Www`；只按创建时间采集新增记录，0 条时不生成文件并写入状态侧车 |
-| AI 对话摘要 | `ai.md` | 用户使用指定提示词手动生成 |
+| AI 对话摘要 | `ai.generated.md` → `ai.md` | 阶段 1 自动生成，用户确认后转正；失败时使用 fallback prompt 手动生成 |
 | Codex / Code X 构建复盘 | `build.md` | 专项自动化或人工补充 |
 | 飞书机器人 Build 复盘 | `build-bot.md` | 飞书机器人侧生成；本地周自动化只提示自查 |
 | 调研等其他重要输入 | `research.md` 或语义清楚的 `<source>.md` | 按需补充 |
@@ -44,8 +44,8 @@ rm 03_input/weekly/YYYY-Www/README.md
 
 0. 自动判断目标周：未指定时，周一至周五默认处理上一 ISO 周；周六、周日默认处理当前 ISO 周。周三至周五运行时需要提示“现在仍是周中，默认处理上一周”；周六、周日处理当前周时视为提前写当周，只能声明覆盖截至运行时。
 1. 采集所有自动来源并更新 `_source-status.json`；成功空结果统一报告“0 条记录，文件未生成”，失败/不可用单独报告；不采集周记，不生成 `_dist`。
-2. 用户手动生成并保存 `ai.md`。
-3. 用户回复“继续”后，自动验证 `daily.md`、`flomo.md`、`ai.md`，并从本地输入生成飞书周记草稿；不采集 `weekly.md`，不生成 `_dist`。
+2. 自动化读取 `03_input/weekly/00_template/ai.md`，通过全局 ChatGPT Web Bridge 在已登录 ChatGPT 新聊天中生成 `ai.generated.md`；不发送本地周输入材料。失败时报告可手动复制的 fallback prompt。
+3. AI 草稿生成后立即生成飞书周记草稿；用户回复“AI 周回顾已确认”后，自动把 `ai.generated.md` 转为正式 `ai.md`。用户再确认周记，回复“周记已确认”后，自动采集 `weekly.md` 并生成 `_dist`。
 4. 用户在飞书编辑确认周记、移除主标题中的 `【待优化】AI 基础草稿` 标记后，回复“周记已确认”或“继续生成周报材料”。自动化采集 `weekly.md` 定稿，并生成 `_dist`。
 5. 用户完成 `04_output/weekly/YYYY-WW.md`、审核行动反馈变更并勾选 Memory 候选后再次回复继续。自动化先把已确认变更写入行动反馈 Base，再生成 `memory-candidates.md`，只把已勾选或用户明确确认的内容无损迁移到 `01_core/memory/YYYY-QN.memory.md`；未勾选内容不写入。
 
@@ -55,12 +55,12 @@ rm 03_input/weekly/YYYY-Www/README.md
 - `flomo.md` 必须覆盖完整目标周；若只能部分获取，在文件中说明缺口。
 - `weread.md` 保留采集范围、时区、生成时间、统计、进度快照、个人划线和想法；不保存 ID、位置链接或额外 `_raw.json`。
 - `voice.md` 只保留目标录制周内非空的压缩核心总结，按录制时间正序；识别建议段落和 `压缩原文` 边界，不读取或复制完整细节与原始文字稿。每个周输入文件最多 15,000 个 Unicode 字符；查询、文档或长度校验失败不得覆盖旧文件。
-- `calendar.md` 来自固定 `Time-X｜随时记` 共享日历，保留目标周汇总及每个日历块的日期、起止、标题和描述；不保存人员、地点、ID、链接或系统元数据，且不单独作为实际完成证据。读取失败时必须写明不可用，不能沿用旧统计。
+- `calendar.md` 来自 `Time-X｜随时记` 共享日历与用户个人日历（主日历及自有共享日历，覆盖用户手动建日程）的合并，保留目标周汇总及每个日历块的日期、起止、标题和描述；不保存人员、地点、ID、链接或系统元数据，且不单独作为实际完成证据。读取失败时必须写明不可用，不能沿用旧统计。
 - `health.md` 只保存周度评分、核心数据和健康提示，不复制截图或原始医疗材料。
 - `coach.md` 采集器按表字段保留新增记录，并排除回顾或状态更新；0 条新增记录时不生成文件并记录 `empty`，旧文件若存在也不进入本轮。
 - `wisdom.md` 只收录 Base 中“创建时间”落在目标周内的新记录；既有记录因回顾、复看或状态变化而更新时不采集；0 条时记录 `empty`，失败与不可用不得伪装成 0 条。
 - 所有自动来源都遵循同一状态侧车规则：`ready` 才能被 Process / 月度流程读取，`empty/failed/unavailable` 的旧文件只保留不计入本轮；缺失侧车兼容历史周，非法侧车失败关闭。
-- `ai.md` 由用户维护，自动化不得访问 AI Chat、创建、改写或覆盖。它与有效的 `daily.md`、`flomo.md` 是生成周记草稿的必要前置条件。
+- `ai.md` 是确认后的 AI 对话摘要。阶段 1 默认生成暂存的 `ai.generated.md`；确认前不进入 Process，确认后才转为 `ai.md`。AI 输入只使用原有提示词和目标周范围，不发送本地周输入材料。
 - `build.md` 由 Codex Build 专项自动化或人工补充，每周输入自动采集不处理。
 - `build-bot.md` 由飞书机器人侧的 `build-bot-log` 生成或追加。提前写当周时，用户需在飞书上手动执行并自查自动化链接：https://ywhome.feishu.cn/wiki/KcTcwG90OiZh3rksu0ucvwx5nFe?table=wkfVC125gMp3snTX；非提前执行时，周日飞书自动化理论上已执行，本地周自动化只提示自查。
 - 阶段 3 只处理已确认的行动反馈变更、Output、Memory candidates 和季度 Memory，不重新采集输入，也不修改正式 `道/`、`法/`、`术/`。
@@ -89,7 +89,7 @@ npm run process:weekly -- --week YYYY-Www
 - [ ] 本周目录存在，根部没有来源分类子目录。
 - [ ] 目录中只有本周重要的 Markdown 输入。
 - [ ] 自动采集项按实际情况生成：`daily.md`、`flomo.md`、`weread.md`、`voice.md`、`calendar.md`、`wisdom.md`、`coach.md`；`coach.md` 必须是本次采集覆盖后的筛选结果。
-- [ ] `ai.md` 已由用户手动完成；飞书周记草稿已人工确认并移除草稿标记，随后采回为 `weekly.md`。
+- [ ] 阶段 1 已生成 `ai.generated.md` 或记录 fallback；用户确认后才转正为 `ai.md`；飞书周记草稿已人工确认并移除草稿标记，随后采回为 `weekly.md`。
 - [ ] `build.md` 已写入或明确报告缺口。
 - [ ] `build-bot.md` 已写入或明确报告缺口。
 - [ ] 空模板文件已经删除；自动来源旧文件即使保留，也已由状态侧车标记并不会进入本轮处理。

@@ -7,7 +7,7 @@ description: Learn-X 每周输入自动采集、Weekly Output 报告准备、已
 
 ## 总览
 
-把本 Skill 作为每周固定操作规程。流程逻辑维护在 Markdown 中；确定性工作复用已有采集器和 `learn-x-process` 命令。除非 Markdown 流程反复执行失败，否则不要新增编排脚本。
+把本 Skill 作为每周固定操作规程。流程逻辑维护在 Markdown 中；确定性工作复用已有采集器和 `learn-x-process` 命令。ChatGPT AI 周回顾只通过全局 `chatgpt-web-bridge` 和本 Skill 的窄适配器完成，不使用 API、私有接口或其它浏览器通道。
 
 ## 快速命令
 
@@ -17,6 +17,7 @@ npm run input:calendar -- --week 2026-W27
 npm run input:voice -- --week 2026-W27
 npm run input:daily-coach -- --week 2026-W27
 npm run input:wisdom -- --week 2026-W27
+npm run ai:weekly -- --week 2026-W27
 npm run process:weekly -- --week 2026-W27
 npm run memory:weekly -- --week 2026-W27
 ```
@@ -60,9 +61,12 @@ npm run memory:weekly -- --week 2026-W27
 
 ## 阶段判断
 
-- 定时触发，或用户没有明确继续指令：执行阶段 1；阶段 1 在自动来源采集完成后自动生成飞书周记草稿，不等待 `ai.md` 或用户回复。
+- 定时触发，或用户没有明确继续指令：执行阶段 1；阶段 1 在自动来源采集完成后先自动生成 AI 周回顾草稿，再生成飞书周记草稿，不等待用户确认才启动 AI 生成。
 - `继续` 按当前流程位置解释：阶段 1 已自动生成草稿时不重复生成，仍停在周记人工确认门槛；阶段 2 完成后进入阶段 3。不要把同一短指令按固定全局含义解释。
-- 阶段 1 的自动来源采集完成后，立即调用 `learn-x-weekly-journal`；只生成飞书草稿，不采集 `weekly.md`，不生成 `_dist`。如果历史运行停在草稿未生成状态，用户说 `继续` 或 `生成周记草稿` 时只补做这一动作，仍不要求 `ai.md`。
+- 阶段 1 的自动来源采集完成后，先运行 `npm run ai:weekly -- --week YYYY-Www`，再调用 `learn-x-weekly-journal`；只生成 AI 草稿和飞书草稿，不采集 `weekly.md`，不生成 `_dist`。如果 AI 生成失败，仍继续生成不含 AI 补充的飞书草稿，并在汇报中提供人工 fallback prompt。
+- 已存在 `ai.generated.md` 时不得重复发送；已提交但结果不确定的运行必须停在 `needs_review`，不得自动重发。
+- 若返回 `ego-bootstrap-permission`，说明当前沙箱不能让 Node 子进程连接 Ego Lite；请求 Full Access 后，仅使用 `npm run ai:weekly -- --week YYYY-Www --retry` 重试这次未提交调用，禁止切换到 Chrome、CDP 或其它浏览器。已提交后的超时、归属不确定或输出不完整不得用 `--retry` 重发。
+- 用户回复 `AI 周回顾已确认` 后，运行 `npm run ai:weekly -- --week YYYY-Www --promote --confirm` 将草稿转成正式 `ai.md`；已有实质 `ai.md` 时先备份到对应 `_dist` 目录再覆盖。
 - 用户说 `周记已确认`、`继续生成周报材料` 或同义表达：对同一目标周进入阶段 2，采集已确认的 `weekly.md` 并生成 `_dist`。
 - 阶段 2 完成后，用户说 `继续`、`继续下一步`、`继续记忆`、`报告已完成，写入记忆`、`Memorize`，或确认完整人工步骤已完成：对同一目标周进入阶段 3。此处的 `继续` 视为用户确认已完成阶段 2 汇报中列出的 Chat Pack 人工步骤；阶段 3 仍必须先验证 Weekly Output、芒格之魂洞察和全文核心重点纪要，不能绕过本地门槛硬写 Memory。
 - 阶段 1 的 `继续` 不得跳到阶段 3；阶段 3 只按当前流程位置解析别名。
@@ -73,7 +77,7 @@ npm run memory:weekly -- --week 2026-W27
 
 目标：采集自动来源后，直接用已落盘周信息生成飞书周记草稿，停在人工确认门槛前。
 
-1. 确保 `03_input/weekly/YYYY-Www/` 存在。保留目录中已有的人工内容；若 `ai.md` 缺失，只创建一个空文件壳，不写入提示词、摘要、缺口说明或其他正文；已有 `ai.md` 不改写、不覆盖。不得预建 `weekly.md`。
+1. 确保 `03_input/weekly/YYYY-Www/` 存在。保留目录中已有的人工内容；AI 生成阶段只写入 `ai.generated.md` 和状态侧车，不预建或改写正式 `ai.md`，也不得预建 `weekly.md`。
 2. 采集本地自动来源，并提示飞书机器人侧自查：
    - Flomo：按“启动规则 4”通过 Ego Lite 任务空间打开或复用 `https://v.flomoapp.com/mine`，按 Asia/Shanghai 的目标周起止时间检索；仅在尚未覆盖下界时加载下一批，只把当前页面实际读到、属于目标周的笔记去重后按创建时间正序写入 `flomo.md`。同一次页面读取中，另外同步当前唯一置顶笔记到 `01_core/道/flomo-top.md`：文件包含来源链接、原始创建时间、同步周和正文；每周覆盖更新，不保留旧版本。若置顶数量为 0 或多于 1，保留旧镜像并提示，不阻断其他来源。`flomo.md` 仍只包含目标周数据；旧 `flomo.md` 只作为差异报告依据，不得用来补全当前 Flomo，也不得只取首屏或使用旧本地导出替代。
    - 微信读书：按 `learn-x-input` 执行 `npm run input:weread -- --week YYYY-Www`。验证输出保留目标周、Asia/Shanghai 范围、生成时间、阅读统计、进度快照、个人划线和想法，并包含完整 7 天，包括 0 分钟日期。
@@ -89,17 +93,17 @@ npm run memory:weekly -- --week 2026-W27
 
    - 所有自动来源统一遵守：`ready` 才进入下游；成功 0 条写 `empty` 并报告“0 条记录，文件未生成”；`failed/unavailable` 单独报告，旧文件只保留在磁盘不计入本轮。状态文件为 `03_input/weekly/YYYY-Www/_source-status.json`，外部拥有者可调用 `npm run input:source-status -- --week YYYY-Www --source <source> --status <status> --file <file> --count <n> --summary "..."`。
    - 如果目标周是周六、周日自动判定的当前周提前稿，`daily.md` / `flomo.md` / `weread.md` / `wisdom.md` / `calendar.md` 可以只覆盖截至运行时；文件和汇报必须标出缺失日期 / 未来日期。
-3. 自动来源完成后，在同一阶段立即调用 `learn-x-weekly-journal` 生成飞书周记草稿。`ai.md` 存在且有实质内容时作为反思补充；缺失、空壳或模板时跳过，不阻塞草稿生成。`回顾最近笔记 & flomo 洞察` 整块必须留给用户手写，自动化不得精选、改写或填入 Flomo 内容。
+3. 自动来源完成后，在同一阶段先调用 ChatGPT Web Bridge 生成 `ai.generated.md`。成功时它可作为未确认 AI 草稿供 `learn-x-weekly-journal` 生成飞书草稿；失败、超时或结果不稳定时不写入正式 `ai.md`，继续生成不含 AI 补充的飞书草稿。`回顾最近笔记 & flomo 洞察` 整块必须留给用户手写，自动化不得精选、改写或填入 Flomo 内容。
 4. 阶段 1 不采集飞书周记，不生成 `weekly.md`、`_dist` 或 Weekly Output。
-5. 不访问 AI Chat 或 ChatGPT 历史，也不写入、改写或补全 `ai.md` 正文；阶段 1 仅允许在文件缺失时创建空壳。用户之后可自行补充 `ai.md`，但不需要为生成草稿回复 `继续`。
+5. ChatGPT 输入只读取 `03_input/weekly/00_template/ai.md` 提示词，并附加目标周范围；不主动发送 `daily.md`、`flomo.md` 或其它本地周材料。桥接失败时报告原因和完整人工 fallback prompt；成功结果必须先落为 `ai.generated.md`，只有用户确认后才能成为正式 `ai.md`。
 
-阶段 1 汇报必须包含：目标周、完整来源状态表、缺失或部分完成来源、飞书周记草稿链接、跳过字段（明确列出 `回顾最近笔记 & flomo 洞察` 由用户填写）、阻塞项、当前位置、下一步和再下一步。来源状态表必须区分 `ready`、`empty`、`failed`、`unavailable`，并明确旧文件是否保留但不计入本轮；成功空结果单独报告“0 条记录，文件未生成”，失败/不可用不得写成 0 条。输入文件字数表只统计 `ready` 文件，`ai.md`、`weekly.md` 和人工周记不纳入。
+阶段 1 汇报必须包含：目标周、完整来源状态表、AI 草稿状态（`generated` / `needs_review` / `failed` / `confirmed`）、生成结果路径或 fallback prompt、飞书周记草稿链接、跳过字段（明确列出 `回顾最近笔记 & flomo 洞察` 由用户填写）、阻塞项、当前位置、下一步和再下一步。来源状态表必须区分 `ready`、`empty`、`failed`、`unavailable`，并明确旧文件是否保留但不计入本轮；成功空结果单独报告“0 条记录，文件未生成”，失败/不可用不得写成 0 条。输入文件字数表只统计 `ready` 文件，`ai.md`、`ai.generated.md`、`weekly.md` 和人工周记不纳入。
 
 ## 阶段 1 内：周记草稿生成与人工确认
 
 目标：只从已落盘周输入生成飞书周记草稿，停在人工确认门槛前。
 
-1. 验证 `daily.md`、`flomo.md`；`ai.md` 仅在存在且有实质内容时读取，无效、空壳或缺失都不阻塞草稿。不满足 `daily.md` 或 `flomo.md` 的最低条件时停止，不写飞书、不采集 `weekly.md`、不生成 `_dist`。
+1. 验证 `daily.md`、`flomo.md`；优先读取已确认的 `ai.md`，否则仅在生成侧车为 `generated` 时读取 `ai.generated.md` 作为未确认草稿。AI 文件无效、空壳或缺失都不阻塞草稿。不满足 `daily.md` 或 `flomo.md` 的最低条件时停止，不写飞书、不采集 `weekly.md`、不生成 `_dist`。
 2. 调用 `learn-x-weekly-journal`。它按目标周结束日的下一天定位周记标题，复制模板并只填新模板的安全空位；已有实质内容或草稿时跳过，不覆盖、不刷新。
 3. 成功后停止，提示用户在飞书周记中自行填写 `回顾最近笔记 & flomo 洞察`，再编辑并确认草稿，移除主标题中的 `【待优化】AI 基础草稿` 标记；正文细项不应出现该标记。
 4. 用户确认后必须回复 `周记已确认` 或 `继续生成周报材料`；只有该指令才能进入阶段 2。
@@ -208,7 +212,7 @@ npm run memory:weekly -- --week 2026-W27
 
 ## 边界
 
-- 不自动访问 AI Chat，也不把用户在当前对话直接提供的摘要写入 `ai.md`；用户如需 AI 摘要，可自行保存并维护该可选文件。
+- 不把本地周输入材料发送到 ChatGPT；只通过全局 `chatgpt-web-bridge` 发送模板提示词和目标周范围。未确认 `ai.generated.md` 不进入 Process，确认后才转为正式 `ai.md`。
 - 不在脚本中生成最终 Weekly Output 正文。
 - 不在自动化中生成 `芒格之魂` 洞察。
 - 不读取 `coach.md` 中 URL 指向的页面正文，不下载 AI Coach 附件，不把联系方式或访谈原文写入仓库。

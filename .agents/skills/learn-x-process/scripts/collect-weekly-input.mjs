@@ -7,17 +7,18 @@ import { readWeeklySourceStatus } from "../../learn-x-input/scripts/lib/source-s
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
-const inputRoot = path.join(repoRoot, "03_input", "weekly");
 const supportedExtensions = new Set([".md", ".txt", ".json", ".html", ".htm"]);
-const ignoredFileNames = new Set(["README.md", ".gitkeep"]);
+const ignoredFileNames = new Set(["README.md", ".gitkeep", "ai.generated.md"]);
 
 export async function collectWeeklyInput(options = {}) {
   const week = options.week || defaultWeeklyReviewWeek();
+  const root = options.repoRoot || repoRoot;
+  const weeklyInputRoot = path.join(root, "03_input", "weekly");
   const weekDirectory = distWeekId(week);
-  const weekInputRoot = path.join(inputRoot, weekDirectory);
+  const weekInputRoot = path.join(weeklyInputRoot, weekDirectory);
   const weekPrefix = `03_input/weekly/${weekDirectory}/`;
   const range = isoWeekRange(week);
-  const allFiles = await collectInputFiles(weekInputRoot);
+  const allFiles = await collectInputFiles(weekInputRoot, root);
   const sourceStatus = await readWeeklySourceStatus(weekInputRoot, week);
   const statusEntries = Object.entries(sourceStatus.sources);
   const files = filterFilesBySourceStatus(allFiles, sourceStatus.sources);
@@ -108,14 +109,15 @@ export function findOversizedWeeklyInputs(files, maxChars = MAX_WEEKLY_INPUT_CHA
 
 export async function writeWeeklyInput(options = {}) {
   const payload = await collectWeeklyInput(options);
-  const outputRoot = path.join(repoRoot, "04_output/_dist/weekly", distWeekId(payload.week));
+  const root = options.repoRoot || repoRoot;
+  const outputRoot = path.join(root, "04_output/_dist/weekly", distWeekId(payload.week));
   await mkdir(outputRoot, { recursive: true });
   const outputPath = path.join(outputRoot, "input.json");
   await writeFile(outputPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   return { payload, outputPath };
 }
 
-async function collectInputFiles(dir) {
+async function collectInputFiles(dir, relativeRoot = repoRoot) {
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
@@ -127,17 +129,16 @@ async function collectInputFiles(dir) {
   const files = [];
   for (const entry of entries) {
     const absolutePath = path.join(dir, entry.name);
-    const relativePath = toWebPath(path.relative(repoRoot, absolutePath));
+    const relativePath = toWebPath(path.relative(relativeRoot, absolutePath));
     const kind = inputKindFromRelativePath(relativePath);
 
     if (entry.isDirectory()) {
-      files.push(...(await collectInputFiles(absolutePath)));
+      files.push(...(await collectInputFiles(absolutePath, relativeRoot)));
       continue;
     }
 
     if (!entry.isFile()) continue;
-    if (entry.name.startsWith("_")) continue;
-    if (ignoredFileNames.has(entry.name)) continue;
+    if (isIgnoredWeeklyInputFile(entry.name)) continue;
     if (isExcludedWeeklyPath(relativePath)) continue;
     if (!supportedExtensions.has(path.extname(entry.name).toLowerCase())) continue;
 
@@ -145,6 +146,10 @@ async function collectInputFiles(dir) {
   }
 
   return files.sort((a, b) => a.relativePath.localeCompare(b.relativePath, "zh-Hans-CN"));
+}
+
+export function isIgnoredWeeklyInputFile(fileName) {
+  return String(fileName).startsWith("_") || ignoredFileNames.has(fileName);
 }
 
 function isExcludedWeeklyPath(relativePath) {
