@@ -6,7 +6,7 @@
 - [研究&学习](https://ywhome.feishu.cn/wiki/KcTcwG90OiZh3rksu0ucvwx5nFe)
 - [learn-x](https://simplyy.github.io/learn-x/index.html#learning)
 
-> Learn-X 是我的个人认知进化系统：以「道」校准方向，以「法」形成判断，以「术」推动行动，以「器」降低成本，让 AI 成为我的剑，而不是我的茧。
+> Learn-X 是我的个人 AI native 的知行进化系统：以「道」校准方向，以「法」形成判断，以「术」推动行动，以「器」降低成本，让 AI 成为我的剑，而不是我的茧。
 
 ## 核心目标
 
@@ -74,7 +74,7 @@ Learn-X 不以 Output 为终点。
 6. 月度 / 年度再审计 Memory 与 Output，形成少量道 / 法 / 术候选
 7. 人工确认后，才允许更新 `01_core/道/`、`01_core/法/`
 
-原则：Learn-X 是个人认知进化系统；Weekly / Monthly / Yearly Output 是其中的认知审稿环节，Memory 是跨周上下文，Core 是长期真值源。
+原则：Learn-X 是个人 AI native 的知行进化系统；Weekly / Monthly / Yearly Output 是其中的认知审稿环节，Memory 是跨周上下文，Core 是长期真值源。
 
 ## 入口地图
 

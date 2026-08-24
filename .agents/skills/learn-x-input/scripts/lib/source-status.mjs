@@ -37,8 +37,7 @@ function cleanSummary(summary) {
     .replace(/\b(?:record[_-]?id|technical[_-]?id|document[_-]?id)\s*[:=]\s*\S+/gi, "[id]")
     .replace(/\b(?:rec|tbl|fld|app|base|view|doc|wiki)[A-Za-z0-9_-]{6,}\b/gi, "[id]")
     .trim();
-  if (value.length > 240) throw new Error("来源状态说明过长。");
-  return value;
+  return value.length > 240 ? `${value.slice(0, 237)}...` : value;
 }
 
 function validateEntry(source, entry) {

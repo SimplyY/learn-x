@@ -17,11 +17,11 @@ const GRAPH_DATA_URL = window.LEARN_X_GRAPH_URL || "data/graph.json";
 const CONTENT_DATA_URL = window.LEARN_X_CONTENT_URL || "data/content.json";
 const PROMPTS_DATA_URL = window.LEARN_X_PROMPTS_URL || "data/prompts.json";
 let APP_CONFIG = {
-  brand: { title: "Learn-X", subtitle: "认知进化系统", mark: "LX" },
+  brand: { title: "Learn-X", subtitle: "AI native 的知行进化系统", mark: "LX" },
   promptDirectory: "01_meta-prompts",
   menu: [
     { id: "browse", label: "知", module: "browse", title: "知识库浏览" },
-    { id: "learning", label: "学", module: "learning", title: "认知进化系统" },
+    { id: "learning", label: "学", module: "learning", title: "AI native 的知行进化系统" },
     { id: "action", label: "行", module: "action", title: "行动动力引擎" }
   ]
 };

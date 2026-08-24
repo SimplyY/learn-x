@@ -23,7 +23,8 @@ test("rejects WeRead content whose dated records belong to another week", () => 
 
 test("rejects an AI prompt template and accepts a structured weekly review", () => {
   assert.equal(isValidAiReview("# AI 对话\n\n请基于本次回顾周期输出 500 字，并按当前日期生成一下文件名"), false);
-  assert.equal(isValidAiReview("# Learn-X 周回顾\n\n## 本周反复思考的核心问题\n\n真实判断\n\n## 精华问题摘要\n\n真实答案"), true);
+  assert.equal(isValidAiReview("# Learn-X 周回顾\n\n## 具体的人和事\n\n本周未发现可可靠提炼的具体人/事。\n\n## 本周反复思考的核心问题\n\n真实判断\n\n## 精华问题摘要\n\n真实答案"), true);
+  assert.equal(isValidAiReview("# Learn-X 周回顾\n\n## 本周反复思考的核心问题\n\n真实判断\n\n## 精华问题摘要\n\n真实答案"), false);
 });
 
 test("extracts only substantive system-confirmed weekly output sections", () => {

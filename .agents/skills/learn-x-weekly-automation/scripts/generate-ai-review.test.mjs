@@ -21,7 +21,16 @@ async function fixture() {
   return root;
 }
 
-const validReview = "# Learn-X 周回顾\n\n## 本周反复思考的核心问题\n\n真实判断\n\n## 精华问题摘要\n\n真实答案";
+const validReview = "# Learn-X 周回顾\n\n## 具体的人和事（独立主线，优先保留）\n\n本周未发现可可靠提炼的具体人/事。\n\n## 本周反复思考的核心问题\n\n真实判断\n\n## 精华问题摘要\n\n真实答案";
+
+test("template keeps people-and-events as an independent evidence-first axis", async () => {
+  const template = await readFile(new URL("../../../../03_input/weekly/00_template/ai.md", import.meta.url), "utf8");
+  assert.match(template, /## 具体的人和事（独立主线，优先保留）/);
+  assert.match(template, /先做两次独立扫描/);
+  assert.match(template, /截图是证据/);
+  assert.match(template, /AI 推测\/待确认/);
+  assert.match(template, /没有足够材料时写/);
+});
 
 test("builds target-week prompt and strips only the outer markdown fence", () => {
   const prompt = buildReviewPrompt("# 原有提示词", "2026-W27");

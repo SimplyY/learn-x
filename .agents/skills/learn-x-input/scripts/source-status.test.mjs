@@ -52,6 +52,26 @@ test("source status redacts URLs, credentials, and technical identifiers", async
   }
 });
 
+test("source status truncates long summaries so failure state can be recorded", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-source-status-"));
+  try {
+    await updateWeeklySourceStatus({
+      weekRoot: root,
+      week: "2026-W32",
+      source: "voice",
+      status: "failed",
+      file: "voice.md",
+      count: 0,
+      summary: `采集失败：${"x".repeat(400)}`
+    });
+    const result = await readWeeklySourceStatus(root, "2026-W32");
+    assert.equal(result.sources.voice.summary.length, 240);
+    assert.match(result.sources.voice.summary, /\.\.\.$/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("invalid source status sidecar fails closed", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-source-status-"));
   try {

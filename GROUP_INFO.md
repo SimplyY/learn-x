@@ -6,10 +6,10 @@ group_name: "learn-x"
 repo_path: "/Users/yuwei/code/learn-x"
 repo_url: null
 group_info_path: "/Users/yuwei/code/learn-x/GROUP_INFO.md"
-updated_at: "2026-08-19T00:00:43.013Z"
+updated_at: "2026-08-23T00:00:35.064Z"
 icon: "🧠"
 name_zh: "learn-x"
-summary: "认知系统。核心功能 chat pack（chat 上下文提示词） + IPO(输入、处理、输出)"
+summary: "认知进化系统。核心功能 chat pack（chat 上下文提示词） + 定期（周、月、年）复盘 IPO (输入、处理、输出)"
 detail: "认知系统：学习输入、复盘、知识沉淀的全流程自动化。飞书机器人 / Code X Bot 每周 Build 复盘报告生成；采集外部每周证据（微信读书等）写入 Learn-X 输入目录"
 tags: "build-bot-log，learn-x-input，learn-x-monthly-automation，learn-x-monthly-journal，learn-x-process，learn-x-weekly-automation，wisdom-gate"
 entry_url: "https://ywhome.feishu.cn/base/W6NLbDh1YahvZ9sbjIccEirBnae"
@@ -19,7 +19,7 @@ priority: 1
 # Group Info: learn-x
 
 ## 群定位
-认知系统。核心功能 chat pack（chat 上下文提示词） + IPO(输入、处理、输出)
+认知进化系统。核心功能 chat pack（chat 上下文提示词） + 定期（周、月、年）复盘 IPO (输入、处理、输出)
 
 ## 绑定信息
 - 飞书群：learn-x
@@ -56,4 +56,4 @@ priority: 1
 - 工作目录：可访问
 - 链接数：2
 - Skill 扫描：正常
-- 最近更新时间：2026-08-19T00:00:43.013Z
+- 最近更新时间：2026-08-23T00:00:35.064Z
