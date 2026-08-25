@@ -442,12 +442,22 @@ export function wereadMatchesDeclaredWeek(content, week) {
 }
 
 export function isValidAiReview(content) {
+  return validateAiReview(content).valid;
+}
+
+export function validateAiReview(content) {
   const text = String(content);
   const sectionCount = [...text.matchAll(/^##\s+.+$/gm)].length;
   const hasReviewContent = /(本周反复思考的核心问题|核心洞察|精华问题摘要|最值得沉淀)/.test(text);
   const hasPeopleAndEvents = /^##\s+具体的人和事/m.test(text);
   const looksLikePrompt = /(请基于本次回顾周期|请输出\s*500|按当前日期生成一下文件名)/.test(text) && sectionCount < 2;
-  return !isPlaceholder(text) && sectionCount >= 2 && hasReviewContent && hasPeopleAndEvents && !looksLikePrompt;
+  const reasons = [];
+  if (isPlaceholder(text)) reasons.push("placeholder");
+  if (sectionCount < 2) reasons.push("too-few-sections");
+  if (!hasPeopleAndEvents) reasons.push("missing-people-and-events");
+  if (!hasReviewContent) reasons.push("missing-review-content");
+  if (looksLikePrompt) reasons.push("prompt-like-output");
+  return { valid: reasons.length === 0, reasons, sectionCount };
 }
 
 export function stripSourceMetadata(text) {

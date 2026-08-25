@@ -11,7 +11,8 @@ const MUNGER_SOUL_QUESTION = "使用芒格之魂的提示词来解析所有上�
 const MUNGER_SOUL_PERIOD_QUESTIONS = {
   weekly: "不要输出 Weekly Output，使用芒格之魂的提示词来解析所有上下文。",
   monthly: "不要输出 Monthly Output，使用芒格之魂的提示词来解析所有上下文。",
-  yearly: "不要输出 Yearly Output，使用芒格之魂的提示词来解析所有上下文。"
+  yearly: "不要输出 Yearly Output，使用芒格之魂的提示词来解析所有上下文。",
+  voiceInsight: "按每条 Voice-X 记录先写核心总结，再按芒格之魂六层生成洞察。"
 };
 const GRAPH_DATA_URL = window.LEARN_X_GRAPH_URL || "data/graph.json";
 const CONTENT_DATA_URL = window.LEARN_X_CONTENT_URL || "data/content.json";
@@ -83,6 +84,18 @@ const PERIOD_OUTPUTS = {
     ],
     labelFromValue: (value) => `${value} 年`,
     prefixFromValue: (value) => `04_output/_dist/yearly/${value}/`
+  },
+  voiceInsight: {
+    subtypeId: "reflective-decision.voice-insight",
+    label: "第几周",
+    emptyLabel: "暂无 Voice-X 洞察上下文",
+    pattern: /^03_input\/weekly\/(\d{4})-W(\d{2})\/_voice-insight-context\.md$/,
+    valueFromMatch: (match) => `${match[1]}-W${match[2]}`,
+    labelFromValue: (value) => {
+      const match = value.match(/^(\d{4})-W(\d{2})$/);
+      return match ? `${match[1]} 年第 ${Number(match[2])} 周` : value;
+    },
+    prefixFromValue: (value) => `03_input/weekly/${value}/`
   }
 };
 
@@ -774,6 +787,7 @@ function periodContextStrategy(mode, value, filePath) {
   }
   if (mode === "monthly") return monthlyContextStrategy(value, filePath);
   if (mode === "yearly") return yearlyContextStrategy(value, filePath);
+  if (mode === "voiceInsight") return filePath === `${PERIOD_OUTPUTS.voiceInsight.prefixFromValue(value)}_voice-insight-context.md` ? "high" : "";
   return "";
 }
 

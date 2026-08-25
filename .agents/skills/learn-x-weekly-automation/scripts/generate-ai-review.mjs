@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { readFile, mkdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isValidAiReview } from "../../learn-x-process/scripts/monthly-process-input.mjs";
+import { validateAiReview } from "../../learn-x-process/scripts/monthly-process-input.mjs";
 import { isoWeekRange } from "../../learn-x-process/scripts/collect-weekly-input.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -32,6 +32,11 @@ export function buildReviewPrompt(template, week) {
     "你正在执行 Learn-X 的 AI 周回顾自动化。",
     `目标回顾周期：${week}（${start} 至 ${end}，Asia/Shanghai）。`,
     "请严格执行下面原有提示词，只回顾目标周期，不要把其它周期内容混入结果。",
+    "输出前必须自检：正文必须包含以下四个原样的二级标题，缺一不可：",
+    "## 具体的人和事（独立主线，优先保留）",
+    "## 本周反复思考的核心问题",
+    "## 精华问题摘要",
+    "## 核心洞察与判断变化",
     "",
     "--- 原有提示词开始 ---",
     template.trim(),
@@ -52,7 +57,7 @@ export function normalizeAiReviewText(text) {
       .replace(/^\*{1,2}|\*{1,2}$/g, "")
       .replace(/^\d+[.)、]\s*/, "")
       .trim();
-    if (/^(本周反复思考的核心问题|核心洞察|精华问题摘要|最值得沉淀|最值得自动化的重复工作流|最值得交给 Codex 执行的任务)$/.test(candidate) && !/^#{1,6}\s/.test(line.trim())) {
+    if (/^(具体的人和事（独立主线，优先保留）|本周反复思考的核心问题|精华问题摘要|核心洞察与判断变化|核心洞察|最值得沉淀|最值得自动化的重复工作流|最值得交给 Codex 执行的任务)$/.test(candidate) && !/^#{1,6}\s/.test(line.trim())) {
       return `## ${candidate}`;
     }
     return line;
@@ -135,6 +140,7 @@ function weekPaths(repoRoot, week) {
     weekDir,
     templatePath: path.join(repoRoot, "03_input/weekly/00_template/ai.md"),
     generatedPath: path.join(weekDir, "ai.generated.md"),
+    invalidPath: path.join(weekDir, "_ai-invalid.generated.md"),
     formalPath: path.join(weekDir, "ai.md"),
     sidecarPath: path.join(weekDir, "_ai-generated.json"),
     archiveDir: path.join(repoRoot, "04_output/_dist/weekly", week)
@@ -168,18 +174,40 @@ export async function generateAiReview(options = {}) {
   const startedAt = new Date().toISOString();
   await mkdir(paths.weekDir, { recursive: true });
 
-  if (await exists(paths.generatedPath)) {
-    return { status: "needs_review", targetWeek: week, reason: "pending-review", generatedPath: paths.generatedPath };
-  }
-
   const previous = await readJson(paths.sidecarPath);
-  const safeRetryReasons = new Set(["ego-bootstrap-permission", "ego-browser-unavailable", "login-required", "captcha-or-blocked", "composer-missing", "chat-mode-switch-failed"]);
-  if (previous?.status === "needs_review" && !(options.retry && safeRetryReasons.has(previous.reason))) {
-    return { status: "needs_review", targetWeek: week, reason: "previous-run-needs-review", manualPrompt: previous.manualPrompt };
+  if (previous?.status === "confirmed" && await exists(paths.formalPath)) {
+    return { status: "confirmed", targetWeek: week, formalPath: paths.formalPath };
+  }
+  if (await exists(paths.generatedPath)) {
+    return await promoteAiReview({ repoRoot, week, confirm: true });
   }
 
   const template = await readFile(paths.templatePath, "utf8");
   const prompt = buildReviewPrompt(template, week);
+  if (previous?.status === "needs_review" && previous.reason === "invalid-ai-review" && previous.promptSha256 === sha256(prompt) && await exists(paths.invalidPath)) {
+    const recoveredText = normalizeAiReviewText(await readFile(paths.invalidPath, "utf8"));
+    const recoveredValidation = validateAiReview(recoveredText);
+    if (recoveredText.length <= maxInputChars && recoveredValidation.valid) {
+      const recovered = {
+        ...resultBase(week, prompt, startedAt),
+        status: "generated",
+        runId: previous.runId,
+        outputSha256: sha256(recoveredText),
+        conversationUrl: previous.conversationUrl,
+        completedAt: new Date().toISOString(),
+        recoveredFrom: paths.invalidPath,
+        generatedPath: paths.generatedPath
+      };
+      await writeAtomic(paths.generatedPath, `${recoveredText}\n`, "draft");
+      await writeAtomic(paths.sidecarPath, `${JSON.stringify(recovered, null, 2)}\n`, "status");
+      return await promoteAiReview({ repoRoot, week, confirm: true });
+    }
+  }
+  const safeRetryReasons = new Set(["ego-bootstrap-permission", "ego-browser-unavailable", "local-rate-limit-cooldown", "login-required", "captcha-or-blocked", "composer-missing", "chat-mode-switch-failed", "empty-ai-review", "ai-review-too-large", "invalid-ai-review"]);
+  if (previous?.status === "needs_review" && !(options.retry && safeRetryReasons.has(previous.reason))) {
+    return { status: "needs_review", targetWeek: week, reason: "previous-run-needs-review", manualPrompt: previous.manualPrompt };
+  }
+
   const runner = options.runBridge || runBridgeCli;
   let bridge;
   try {
@@ -197,6 +225,9 @@ export async function generateAiReview(options = {}) {
       status,
       runId: bridgeResult?.runId,
       reason: bridgeResult?.reason || bridge?.exit?.error || (bridge?.exit?.timedOut ? "bridge-timeout" : "bridge-result-missing"),
+      conversationUrl: bridgeResult?.conversationUrl,
+      retryAfterSeconds: bridgeResult?.retryAfterSeconds,
+      diagnostics: bridgeResult?.diagnostics,
       completedAt: new Date().toISOString(),
       manualPrompt: prompt
     };
@@ -205,16 +236,21 @@ export async function generateAiReview(options = {}) {
   }
 
   const text = normalizeAiReviewText(bridgeResult.text);
-  if (!text || text.length > maxInputChars || !isValidAiReview(text)) {
+  const validation = text ? validateAiReview(text) : { valid: false, reasons: ["empty-output"], sectionCount: 0 };
+  if (!text || text.length > maxInputChars || !validation.valid) {
     const failure = {
       ...base,
       status: "needs_review",
       runId: bridgeResult.runId,
       reason: !text ? "empty-ai-review" : text.length > maxInputChars ? "ai-review-too-large" : "invalid-ai-review",
       outputSha256: text ? sha256(text) : undefined,
+      validation: text.length > maxInputChars ? ["output-too-large", ...validation.reasons] : validation.reasons,
+      conversationUrl: bridgeResult.conversationUrl,
+      invalidOutputPath: text ? paths.invalidPath : undefined,
       completedAt: new Date().toISOString(),
       manualPrompt: prompt
     };
+    if (text) await writeAtomic(paths.invalidPath, `${text.slice(0, maxInputChars)}${text.length > maxInputChars ? "\n\n[输出已截断]" : ""}\n`, "invalid");
     await writeAtomic(paths.sidecarPath, `${JSON.stringify(failure, null, 2)}\n`, "status");
     return { ...failure, targetWeek: week };
   }
@@ -235,7 +271,7 @@ export async function generateAiReview(options = {}) {
     try { await unlink(paths.generatedPath); } catch {}
     throw error;
   }
-  return { ...generated, targetWeek: week };
+  return await promoteAiReview({ repoRoot, week, confirm: true });
 }
 
 export async function promoteAiReview(options = {}) {
@@ -246,7 +282,7 @@ export async function promoteAiReview(options = {}) {
   const generated = await readFile(paths.generatedPath, "utf8");
   const sidecar = await readJson(paths.sidecarPath);
   const text = normalizeAiReviewText(generated);
-  if (sidecar?.status !== "generated" || sidecar.outputSha256 !== sha256(text) || !isValidAiReview(text)) {
+  if (sidecar?.status !== "generated" || sidecar.outputSha256 !== sha256(text) || !validateAiReview(text).valid) {
     throw new Error("generated-review-integrity-check-failed");
   }
 

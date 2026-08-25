@@ -46,6 +46,28 @@ test("merges sources and labels them when not injected", async () => {
   assert.deepEqual(payload.sources, [{ name: "Time-X｜随时记", identity: "bot" }]);
 });
 
+test("counts a one-day all-day event as one day and keeps the inclusive end date", async () => {
+  const payload = await collectCalendarWeekly({
+    week: "2026-W24",
+    getAgenda: async () => [{
+      summary: "【生活】全天事项",
+      start_time: { date: "2026-06-08" },
+      end_time: { date: "2026-06-08" }
+    }]
+  });
+  assert.equal(payload.calendar.status, "available");
+  assert.equal(payload.calendar.daily[0].allDay, 1);
+  assert.equal(payload.calendar.details[0].end, "2026-06-09 00:00:00");
+});
+
+test("keeps the underlying calendar error in an unavailable result", async () => {
+  const payload = await collectCalendarWeekly({
+    week: "2026-W24",
+    getAgenda: async () => { throw new Error("calendar permission expired"); }
+  });
+  assert.deepEqual(payload.calendar, { status: "unavailable", error: "calendar permission expired" });
+});
+
 test("dedupes identical events from shared and personal calendars", () => {
   const event = { summary: "写周记", start_time: { datetime: "2026-06-08T09:00:00+08:00" }, end_time: { datetime: "2026-06-08T10:00:00+08:00" } };
   const unique = dedupeEvents([event, { ...event }, { summary: "读书", start_time: { datetime: "2026-06-08T11:00:00+08:00" }, end_time: { datetime: "2026-06-08T12:00:00+08:00" } }]);

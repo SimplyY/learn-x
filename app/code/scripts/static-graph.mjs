@@ -61,12 +61,14 @@ const PUBLIC_PRIVATE_PREFIXES = ["03_input/", ".agents/skills/learn-x-process/",
 const PERIOD_OUTPUT_SUBTYPE_IDS = new Set([
   "reflective-decision.weekly-output",
   "reflective-decision.monthly-output",
-  "reflective-decision.yearly-output"
+  "reflective-decision.yearly-output",
+  "reflective-decision.voice-insight"
 ]);
 const PUBLIC_PRIVATE_FILES = new Set([
   "02_prompts/chatpack/reflective-decision/weekly-output.md",
   "02_prompts/chatpack/reflective-decision/monthly-output.md",
-  "02_prompts/chatpack/reflective-decision/yearly-output.md"
+  "02_prompts/chatpack/reflective-decision/yearly-output.md",
+  "02_prompts/chatpack/reflective-decision/voice-insight.md"
 ]);
 const TOOLTIP_MAX_CHARS = 200;
 

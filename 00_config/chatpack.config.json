@@ -146,6 +146,14 @@
             "01_core/memory",
             ".agents/skills/learn-x-process/resources/yearly-output-rules.md"
           ]
+        },
+        {
+          "id": "reflective-decision.voice-insight",
+          "name": "Voice-X 周日洞察",
+          "summary": "批量基于 Voice-X 处理后原文生成核心总结与芒格之魂洞察。",
+          "includeBaseRecommendedSources": false,
+          "recommendedSources": [],
+          "currentQuestion": "基于每条 Voice-X 处理后原文，先写核心总结，再用芒格之魂做六层洞察；只输出两部分。"
         }
       ],
       "avoid": [

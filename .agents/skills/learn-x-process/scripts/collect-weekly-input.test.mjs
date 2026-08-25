@@ -53,6 +53,26 @@ test("keeps the unconfirmed AI draft out of weekly process input", () => {
   assert.equal(isIgnoredWeeklyInputFile("ai.md"), false);
 });
 
+test("records raw and effective character counts for each Process file", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-weekly-char-counts-"));
+  try {
+    const weekDir = path.join(root, "03_input/weekly/2026-W29");
+    await mkdir(weekDir, { recursive: true });
+    await writeFile(path.join(weekDir, "wisdom.md"), [
+      "# 智慧之门｜2026-W29", "", "## 记录", "", "### 2026-07-17",
+      "- 所属主题：主题 A", "- 核心问题和使用场景：问题与场景", "- 一句话精华：一句话判断",
+      `- 长篇内容、原始内容：${"这是一大段原始正文。".repeat(20)}`, "- 层级：法", "- 智慧时效性：长期"
+    ].join("\n"), "utf8");
+    const result = await collectWeeklyInput({ repoRoot: root, week: "2026-W29" });
+    assert.equal(result.files.length, 1);
+    assert.ok(result.files[0].rawChars > 0);
+    assert.ok(result.files[0].effectiveChars > 0);
+    assert.equal(result.files[0].effectiveChars, result.items[0].text.length);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("collects from an explicit repo root and excludes only the unconfirmed draft", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-weekly-input-"));
   try {

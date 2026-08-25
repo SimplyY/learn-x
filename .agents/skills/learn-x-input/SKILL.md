@@ -51,12 +51,14 @@ Run `npm run input:calendar -- --week YYYY-Www` once to collect the target ISO w
 
 ## Voice-X Weekly Input
 
-Run `npm run input:voice -- --week YYYY-Www` to read the fixed Voice-X Base with `lark-cli --as bot` and write `voice.md`.
+Run `npm run input:voice -- --week YYYY-Www` to read the fixed Voice-X Base with `lark-cli --as bot` and write `voice.md` from completed AI insight documents.
 
-- Select by `录制时间` using the target Asia/Shanghai ISO week and require `处理后原文` non-empty.
+- Select by `录制时间` using the target Asia/Shanghai ISO week and require `处理后原文` non-empty. Query `AI 洞察文档` as a required field too.
+- Read the processed-original document only for its character count. The weekly body must come from a new-format `# Voice-X AI 洞察` document with `## 核心总结` followed by `## 芒格之魂洞察`.
+- Missing or placeholder insight is `pending`; substantive old-format insight is `legacy`. Neither enters `voice.md`, and the collector never falls back to the rough processed original.
 - Traverse every Base page, sort by recorded time and a stable business key, then fetch the core Markdown document for each row. Keep only the compressed core-summary section before any recognized advice/full-detail boundary: `# 对我的建议`、`## 3. 对我的建议（仅留档，不采集到 Learn-X）` or `# 压缩原文`; never copy the detailed full transcript after those boundaries. Old documents without a recognized boundary remain unchanged for compatibility.
 - Never fetch or copy `原始文字稿`; Voice-X Base remains the index and Docx remains the only正文 authority.
-- A successful zero-result query records `empty` and does not create a new file. Any Base/schema/document/size failure preserves the previous `voice.md` byte-for-byte and records `failed/unavailable`.
+- Each written record retains the title, recording time, processed-original character count, AI-insight character count, core summary, and Munger-soul insight. A successful zero-result query records `empty` and does not create a new file. Any Base/schema/document/size failure preserves the previous `voice.md` byte-for-byte and records `failed/unavailable`.
 
 ## Weekly input size contract
 
@@ -82,7 +84,7 @@ Run `npm run input:wisdom -- --week YYYY-Www` to collect the 智慧之门 table 
 - Verify the table and fields, filter the target Asia/Shanghai week server-side by 创建时间, traverse every page, then write `wisdom.md` only when at least one new record remains.
 - If no new Wisdom Gate record remains, report `0 条记录，文件未生成`; this is a successful empty source, not a collection failure.
 - `wisdom.md` uses `创建时间` as the weekly boundary: collect only records created in the target week; do not collect updates to existing records caused by review/revisit/status changes.
-- Preserve ordinary fields and URLs; exclude contact details, technical record IDs, and linked-page正文.
+- Preserve the structured value-added fields plus an adaptive extractive compression of `长篇内容、原始内容`: target around 300 Unicode characters per record, normally within 200-500, with the budget determined by independent core claims, causal/model structure, conclusions, boundaries, risks, and reference-field overlap. Short records are not artificially expanded; long records never exceed 500. Never write the raw field to local input. The Base URL remains the audit path for omitted original content.
 - Config-driven via `collect-base-weekly.mjs` and the shared `lib/base-collector.mjs`; adding a new Base source only needs a new entry in the `COLLECTORS` array.
 
 ## Shared source status

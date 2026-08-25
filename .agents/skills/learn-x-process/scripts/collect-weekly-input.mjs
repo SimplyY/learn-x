@@ -32,8 +32,8 @@ export async function collectWeeklyInput(options = {}) {
   for (const file of files) {
     const info = await stat(file.absolutePath);
     const content = await readFile(file.absolutePath, "utf8");
-    const chars = countInputChars(content);
-    if (chars > MAX_WEEKLY_INPUT_CHARS) oversized.push({ path: file.relativePath, chars });
+    const rawChars = countInputChars(content);
+    if (rawChars > MAX_WEEKLY_INPUT_CHARS) oversized.push({ path: file.relativePath, chars: rawChars });
     const parsedItems = parseInputFile(content, file);
     const fileItems = parsedItems
       .map((item, index) => ({
@@ -52,6 +52,8 @@ export async function collectWeeklyInput(options = {}) {
 
     file.modifiedAt = info.mtime.toISOString();
     file.size = info.size;
+    file.rawChars = rawChars;
+    file.effectiveChars = fileItems.reduce((total, item) => total + item.text.length, 0);
     activeFiles.push(file);
     rawItems.push(...fileItems);
   }

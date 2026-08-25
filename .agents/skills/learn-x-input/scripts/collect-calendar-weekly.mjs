@@ -24,7 +24,7 @@ export async function collectCalendarWeekly(options = {}) {
   const getAgenda = options.getAgenda || (({ start, endExclusive }) => readAllAgenda(userCalendars, { start, endExclusive }));
   const calendar = await getAgenda({ start: range.startEpoch, endExclusive: range.endEpoch })
     .then((events) => summarizeCalendar(range, events))
-    .catch(() => ({ status: "unavailable" }));
+    .catch((error) => ({ status: "unavailable", error: error instanceof Error ? error.message : String(error) }));
   return {
     week,
     timezone: TIMEZONE,
@@ -54,7 +54,8 @@ export async function writeCalendarWeekly(options = {}) {
       await writeFile(tempPath, content, "utf8");
       await rename(tempPath, calendarPath);
     }
-    await updateWeeklySourceStatus({ weekRoot: outputRoot, week, source: "calendar", status: written ? "ready" : payload.calendar.status === "available" ? "empty" : "unavailable", file: "calendar.md", count, summary: written ? "本周有有效日历块" : payload.calendar.status === "available" ? "本周 0 条记录，文件未生成" : "Time-X 日历查询不可用，未使用旧文件", preservedStaleFile: !written && await fileExists(calendarPath) });
+    const unavailableSummary = payload.calendar.error ? `Time-X 日历查询不可用：${payload.calendar.error}，未使用旧文件` : "Time-X 日历查询不可用，未使用旧文件";
+    await updateWeeklySourceStatus({ weekRoot: outputRoot, week, source: "calendar", status: written ? "ready" : payload.calendar.status === "available" ? "empty" : "unavailable", file: "calendar.md", count, summary: written ? "本周有有效日历块" : payload.calendar.status === "available" ? "本周 0 条记录，文件未生成" : unavailableSummary, preservedStaleFile: !written && await fileExists(calendarPath) });
     return { payload, calendarPath: written ? calendarPath : null };
   } catch (error) {
     await updateWeeklySourceStatus({ weekRoot: outputRoot, week, source: "calendar", status: "failed", file: "calendar.md", count: 0, summary: `采集失败：${error.message}`, preservedStaleFile: await fileExists(calendarPath) });
@@ -78,7 +79,9 @@ export function summarizeCalendar(range, events) {
     const tags = CATEGORIES.filter((category) => String(event?.summary || "").includes(`【${category}】`));
     if (!tags.length) untagged += 1;
     const start = parseCalendarTime(event?.start_time);
-    const end = parseCalendarTime(event?.end_time);
+    const rawEnd = parseCalendarTime(event?.end_time);
+    const isAllDay = Boolean(event?.is_all_day || (event?.start_time?.date && event?.end_time?.date));
+    const end = isAllDay ? rawEnd + DAY_MS : rawEnd;
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) throw new Error("Time-X calendar returned an invalid interval.");
     details.push({
       date: formatShanghaiDate(start / 1000),
@@ -93,7 +96,7 @@ export function summarizeCalendar(range, events) {
       const intervalStart = Math.max(start, dayStart);
       const intervalEnd = Math.min(end, dayEnd);
       if (intervalEnd <= intervalStart) continue;
-      if (event.is_all_day) {
+      if (isAllDay) {
         days[index].allDay += 1;
         continue;
       }

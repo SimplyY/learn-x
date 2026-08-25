@@ -16,6 +16,7 @@
     "security:scan:staged": "node scripts/security-scan.mjs --staged",
     "input:calendar": "node .agents/skills/learn-x-input/scripts/collect-calendar-weekly.mjs",
     "input:voice": "node .agents/skills/learn-x-input/scripts/collect-voice-weekly.mjs",
+    "voice:insight": "node .agents/skills/learn-x-voice-insight/scripts/generate-voice-insight.mjs",
     "input:compress": "node .agents/skills/learn-x-input/scripts/compress-weekly-input.mjs",
     "input:daily-coach": "node .agents/skills/learn-x-input/scripts/collect-daily-coach-weekly.mjs",
     "input:weread": "node .agents/skills/learn-x-input/scripts/collect-weread-weekly.mjs",

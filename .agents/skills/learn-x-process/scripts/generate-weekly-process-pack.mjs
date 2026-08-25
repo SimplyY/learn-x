@@ -77,11 +77,14 @@ function renderSourceStatuses(payload) {
   const rows = Object.entries(payload.sourceStatuses || {}).map(([source, entry]) => {
     const usable = entry.status === "ready" ? "计入" : "排除";
     const stale = entry.preservedStaleFile ? "旧文件已保留但过期" : "无旧文件";
-    return `| ${source} | ${entry.status} | ${entry.count} | ${entry.file} | ${usable} | ${stale}；${entry.summary} |`;
+    const present = payload.files.some((file) => file.path.endsWith(`/${entry.file}`))
+      || payload.excludedFiles.some((file) => file.file === entry.file && file.present);
+    const link = present ? localFileLink(`../../../../${payload.selection.path}`, entry.file) : "—";
+    return `| ${source} | ${entry.status} | ${entry.count} | ${link} | ${usable} | ${stale}；${entry.summary} |`;
   });
   if (!rows.length) return "- 未发现状态侧车；按历史周兼容规则读取现有文件。";
   return [
-    "| 来源 | 状态 | 记录数 | 文件 | 本轮处理 | 说明 |",
+    "| 来源 | 状态 | 记录数 | 核查文件 | 本轮处理 | 说明 |",
     "| --- | --- | ---: | --- | --- | --- |",
     ...rows
   ].join("\n");
@@ -160,8 +163,9 @@ function buildFileSummaries(payload) {
       source: file.source,
       modifiedAt: file.modifiedAt,
       size: file.size,
+      rawChars: file.rawChars,
+      effectiveChars: file.effectiveChars,
       itemCount: 0,
-      totalChars: 0,
       samples: []
     });
   }
@@ -170,7 +174,6 @@ function buildFileSummaries(payload) {
     if (!byPath.has(item.path)) continue;
     const file = byPath.get(item.path);
     file.itemCount += 1;
-    file.totalChars += item.text.length;
     if (file.samples.length < 2) {
       file.samples.push(`${item.title}: ${truncateInline(item.text, 120)}`);
     }
@@ -199,16 +202,21 @@ function renderSourceIndex(fileSummaries) {
 
   const rows = fileSummaries.map((file, index) => {
     const sourceId = sourceFileId(index);
-    return `| ${sourceId} | ${file.category} | ${file.source} | \`${file.shortPath}\` | ${file.itemCount} | ${file.totalChars} |`;
+    return `| ${sourceId} | ${file.category} | ${file.source} | ${localFileLink("../../../../", file.path)} | ${file.itemCount} | ${file.rawChars} | ${file.effectiveChars} |`;
   });
 
   return [
     "> source id 用于在 AI Chat 中回溯来源；完整机器字段见同目录 `input.json`。",
     "",
-    "| source id | 输入类型 | 来源 | 短路径 | 材料数 | 字符数 |",
-    "| --- | --- | --- | --- | ---: | ---: |",
+    "| source id | 输入类型 | 来源 | 核查文件 | 材料数 | 原始字符数 | 纳入字符数 |",
+    "| --- | --- | --- | --- | ---: | ---: | ---: |",
     ...rows
   ].join("\n");
+}
+
+function localFileLink(basePath, fileName) {
+  const normalizedBase = String(basePath).replace(/\/$/, "");
+  return `[${fileName}](${normalizedBase}/${fileName})`;
 }
 
 function renderFileMaterials(items, fileSummaries) {

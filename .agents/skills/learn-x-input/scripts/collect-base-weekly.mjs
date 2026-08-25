@@ -10,6 +10,8 @@ import {
 import { fileExists, updateWeeklySourceStatus } from "./lib/source-status.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
+const WISDOM_RAW_FIELD = "长篇内容、原始内容";
+const WISDOM_COMPRESSION_LABEL = "核心压缩内容";
 
 // 采集器配置注册表。新增数据源在此追加一项。
 const COLLECTORS = [
@@ -18,9 +20,10 @@ const COLLECTORS = [
     sourceUrl: "https://ywhome.feishu.cn/wiki/KcTcwG90OiZh3rksu0ucvwx5nFe",
     tableId: "tblMGGWdVH4Iq9Og",
     fields: [
-      "所属主题", "核心问题和使用场景", "一句话精华", "长篇内容、原始内容",
-      "层级", "智慧时效性", "创建时间",
+      "所属主题", "核心问题和使用场景", "一句话精华",
+      WISDOM_RAW_FIELD, "层级", "智慧时效性", "创建时间",
     ],
+    compression: { sourceField: WISDOM_RAW_FIELD, minChars: 200, maxChars: 500 },
     filterField: "创建时间",
     outputFile: "wisdom.md",
     title: "智慧之门",
@@ -79,13 +82,120 @@ function render(config, week, range, data) {
   ];
   for (const r of data.records) {
     lines.push(`### ${r.values[config.filterField] || "(无时间)"}`);
-    for (const [k, v] of Object.entries(r.values)) {
+    for (const k of config.fields) {
+      const v = r.values[k];
       if (k === config.filterField) continue;
+      if (config.compression?.sourceField === k) continue;
       if (v) lines.push(`- ${k}：${v}`);
+    }
+    if (config.compression) {
+      const raw = String(r.values[config.compression.sourceField] || "").trim();
+      const profile = wisdomCompressionProfile(raw, {
+        anchor: r.values["一句话精华"],
+        context: r.values["核心问题和使用场景"],
+        level: r.values["层级"],
+        timeliness: r.values["智慧时效性"],
+        minChars: config.compression.minChars,
+        maxChars: config.compression.maxChars,
+      });
+      const compressed = compressWisdomContent(raw, profile);
+      if (compressed) {
+        const rawChars = [...raw].length;
+        const compressedChars = [...compressed].length;
+        lines.push(`- ${WISDOM_COMPRESSION_LABEL}：${compressed}`);
+        lines.push(`- 原文压缩：${rawChars} → ${compressedChars} 字符；自适应预算 ${profile.targetChars} 字符（范围 ${profile.minChars}-${profile.maxChars}）`);
+      }
     }
     lines.push("");
   }
   return lines.join("\n");
+}
+
+// ponytail: 这是确定性抽取式压缩，不伪装成完整语义重写；若 Base 内容改为叙事长文，再升级为人工/AI 审核步骤。
+export function wisdomCompressionProfile(raw, options = {}) {
+  const source = String(raw || "").replace(/\r\n/g, "\n").trim();
+  const minChars = Number(options.minChars || 200);
+  const maxChars = Number(options.maxChars || 500);
+  const units = wisdomUnits(source);
+  const rawChars = [...source].length;
+  if (!source || rawChars <= maxChars) return { minChars, maxChars, targetChars: rawChars, units, signalCount: 0 };
+  const reference = `${options.anchor || ""} ${options.context || ""}`;
+  const referenceTerms = String(reference).split(/[，。；、：\s]+/u).filter((term) => term.length >= 2);
+  const signalCount = units.filter((line) => /本质|核心|关键|因此|结论|真正|最重要|最终|价值|风险|边界|迁移|不是|而是|适合|适用于|最强|最弱|瓶颈|护城河|长期竞争力|最稀缺/u.test(line)).length;
+  const modelCount = units.filter((line) => /→|=|×|\+|从.+到/u.test(line)).length;
+  const referenceCount = units.filter((line) => referenceTerms.some((term) => line.includes(term))).length;
+  const sectionCount = units.filter((line) => /^\d+[）.)]|^[一二三四五六七八九十]+[、.]|^模块/u.test(line)).length;
+  const signalDensity = Math.min(1, signalCount / Math.max(1, units.length));
+  const structureDensity = Math.min(1, (modelCount + sectionCount) / Math.max(4, units.length / 2));
+  const referenceDensity = Math.min(1, referenceCount / Math.max(1, units.length));
+  const complexity = Math.min(1, Math.log2(units.length + 1) / 6);
+  const importance = (/道|法/u.test(String(options.level || "")) ? 0.5 : 0)
+    + (/长期/u.test(String(options.timeliness || "")) ? 0.5 : 0);
+  // 预算以 300 左右为中心；密度和复杂度只做有限调整，避免“信号越多就无限加长”。
+  const adaptive = 55 * signalDensity + 35 * structureDensity + 20 * referenceDensity
+    + 35 * complexity + 20 * importance;
+  return {
+    minChars,
+    maxChars,
+    targetChars: Math.min(maxChars, Math.max(minChars, Math.round(240 + adaptive))),
+    units,
+    signalCount,
+  };
+}
+
+export function compressWisdomContent(raw, options = {}) {
+  const source = String(raw || "").replace(/\r\n/g, "\n").trim();
+  if (!source) return "";
+  const profile = options.targetChars == null ? wisdomCompressionProfile(source, options) : options;
+  if ([...source].length <= profile.targetChars) return source.replace(/\n+/g, "；");
+  const units = profile.units?.length ? profile.units : wisdomUnits(source);
+  const target = profile.targetChars;
+  const reference = `${options.anchor || ""} ${options.context || ""}`;
+  const anchorTerms = reference.split(/[，。；、：\s]+/u).filter((term) => term.length >= 2);
+  const unique = [...new Map(units.map((line) => [line.replace(/\s+/g, ""), line])).values()];
+  const scored = unique.map((line, index) => {
+    let score = index === 0 ? 2 : 0;
+    if (/本质|核心|关键|因此|结论|真正|最重要|最终|价值|风险|边界|迁移|不是|而是|适合|适用于|最强|最弱|瓶颈|护城河|长期竞争力|最稀缺/u.test(line)) score += 8;
+    if (/→|=|×|\+|从.+到/u.test(line)) score += 4;
+    if (/^\d+[）.)]|^[一二三四五六七八九十]+[、.]/u.test(line)) score += 3;
+    if (anchorTerms.some((term) => line.includes(term))) score += 2;
+    if (line.length > target * 0.6) score -= 2;
+    return { line, index, score };
+  });
+  const selected = [];
+  let used = 0;
+  for (const item of scored.sort((a, b) => b.score - a.score || a.index - b.index)) {
+    const length = [...item.line].length;
+    const separator = selected.length ? 1 : 0;
+    if (used + separator + length > target && selected.length) continue;
+    selected.push(item);
+    used += separator + length;
+    if (used >= target) break;
+  }
+  return selected
+    .sort((a, b) => a.index - b.index)
+    .map(({ line }) => line.replace(/[；。！？]+$/u, "").trim())
+    .filter(Boolean)
+    .join("；");
+}
+
+function wisdomUnits(source) {
+  if (!source) return [];
+  const lines = source.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  const mergedLines = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (/^(一句话结论|最终结论|结论|第一层|第二层|第三层|第四层|模块[一二三四])(?:\s|$)/u.test(line)
+      && !/[：:。！？；]$/u.test(line) && lines[index + 1]) {
+      mergedLines.push(`${line}：${lines[++index]}`);
+    } else {
+      mergedLines.push(line);
+    }
+  }
+  return mergedLines
+    .flatMap((line) => line.split(/(?<=[。！？；])/u))
+    .map((line) => line.replace(/^[·•*-]\s*/, "").replace(/^【|】$/g, "").trim())
+    .filter((line) => line.length >= 4);
 }
 
 async function main() {

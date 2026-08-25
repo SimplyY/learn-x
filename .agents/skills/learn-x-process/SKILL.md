@@ -71,6 +71,8 @@ Learn-X 的 `Input -> Process Pack -> Output Shell` 工作流。
 
    Weekly Process 在读取周目录时先执行单文件 15,000 Unicode 字符门禁。超限时汇总所有文件、保留原文件并停止，不生成或更新 `input.json`、`process-pack.md` 或 Output 壳。用户确认数据无误后，可运行 `npm run input:compress -- --week YYYY-Www` 生成批量压缩审核包；只有显式 `--apply --confirm` 才能把已审核候选写回原输入。
 
+   `智慧之门` 的增值源是飞书 Base；采集入口读取结构化字段，并把 `长篇内容、原始内容` 做自适应高信号抽取：以每条约 300 Unicode 字符为中心，通常保留 200-500 字，预算根据独立核心判断、因果/模型结构、结论、边界、风险和与参考字段的关联度有限调整；短内容不硬扩，长内容不超过 500。只把压缩内容写入本地，原文不落盘。因此 `wisdom.md`、`input.json` 和 Process Pack 保持同一内容口径；需要核查长篇原文时回到 Base 链接。各来源仍记录原始字符数与纳入字符数，避免把材料体量和实际纳入上下文混为一谈。
+
    该脚本写入 `04_output/_dist/weekly/YYYY-Www/input.json` 和 `04_output/_dist/weekly/YYYY-Www/process-pack.md`，并在 `04_output/weekly/YYYY-WW.md` 不存在或为空时创建最小壳。
    如需指定月：
 
