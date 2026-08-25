@@ -1,5 +1,6 @@
 ---
 name: build-bot-log
+description_zh: 生成每周飞书机器人 Build 复盘报告
 description: >-
   Generate a weekly Feishu Bot / Code X Bot Build retrospective report
   (build-bot.md) for Learn-X 03_input/weekly/YYYY-Www/. Use when the user asks

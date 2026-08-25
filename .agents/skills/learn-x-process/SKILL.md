@@ -1,5 +1,6 @@
 ---
 name: learn-x-process
+description_zh: 处理每周月度输入并生成输出壳与记忆候选
 description: Process Learn-X 03_input into Process Pack and Output shell, then generate Memory candidates from reviewed Output. Use when the user asks for running weekly/monthly process, generating _dist, or preparing memory candidates.
 ---
 
