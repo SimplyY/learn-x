@@ -14,6 +14,7 @@ const sensitivePathPatterns = [
   { name: "credential-bearing filename", pattern: /(token|secret|credential|password|cookie|session|wallet)/i },
   { name: "private learning input", pattern: /^03_input\/(?!README\.md$|usage\.md$|weekly\/00_template\/|monthly\/\.gitkeep$|yearly\/\.gitkeep$|weekly-history\/\.gitkeep$)/ },
   { name: "private core memory", pattern: /^01_core\/memory\/(?!\.gitkeep$)/ },
+  { name: "private ChatGPT self-understanding", pattern: /^01_core\/ChatGPT-自我阅读版\.md$/ },
   { name: "private flomo digest", pattern: /^01_core\/\u9053\/flomo-top\.md$/ },
   { name: "private personal image", pattern: /^01_core\/good-images\/me\// },
   { name: "private generated output", pattern: /^04_output\/(?!README\.md$|usage\.md$|(monthly|weekly|yearly)\/\.gitkeep$)/ },

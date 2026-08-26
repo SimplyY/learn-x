@@ -25,6 +25,7 @@
     "process:weekly": "node .agents/skills/learn-x-process/scripts/generate-weekly-process-pack.mjs",
     "ai:weekly": "node .agents/skills/learn-x-weekly-automation/scripts/generate-ai-review.mjs",
     "process:monthly": "node .agents/skills/learn-x-process/scripts/generate-monthly-process-pack.mjs",
+    "chatgpt:monthly-understanding": "node .agents/skills/learn-x-monthly-automation/scripts/export-chatgpt-understanding.mjs",
     "memory:weekly": "node .agents/skills/learn-x-process/scripts/prepare-weekly-memory.mjs",
     "backup:weekly": "node .agents/skills/learn-x-process/scripts/backup-weekly.mjs backup",
     "restore:weekly": "node .agents/skills/learn-x-process/scripts/backup-weekly.mjs restore",

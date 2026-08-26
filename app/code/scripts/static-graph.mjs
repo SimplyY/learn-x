@@ -57,7 +57,7 @@ const CUSTOM_CONTEXT_IGNORED_DIRS = new Set([".git", ".test-tmp", "node_modules"
 const CUSTOM_CONTEXT_IGNORED_FILES = new Set(["AGENTS.md", "CONTEXT_MASTER.md"]);
 const PROMPT_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
 const CHATPACK_PROMPT_ROOT = "02_prompts/chatpack";
-const PUBLIC_PRIVATE_PREFIXES = ["03_input/", ".agents/skills/learn-x-process/", "04_output/_dist/"];
+const PUBLIC_PRIVATE_PREFIXES = ["03_input/", ".agents/skills/learn-x-process/", "04_output/_dist/", "01_core/memory/"];
 const PERIOD_OUTPUT_SUBTYPE_IDS = new Set([
   "reflective-decision.weekly-output",
   "reflective-decision.monthly-output",
@@ -65,6 +65,7 @@ const PERIOD_OUTPUT_SUBTYPE_IDS = new Set([
   "reflective-decision.voice-insight"
 ]);
 const PUBLIC_PRIVATE_FILES = new Set([
+  "01_core/ChatGPT-自我阅读版.md",
   "02_prompts/chatpack/reflective-decision/weekly-output.md",
   "02_prompts/chatpack/reflective-decision/monthly-output.md",
   "02_prompts/chatpack/reflective-decision/yearly-output.md",

@@ -41,6 +41,7 @@ Chat Pack 是 Learn-X 的对话启动器。它把一个具体场景所需的 Pro
 
 - 默认使用对应周期的 `process-pack.md`，不默认选择 `input.json` 或回捞原始 Input。
 - 推荐 `01_core/道/`、`01_core/memory/` 和对应周期规则。
+- 本地自动生成的 `01_core/memory/ChatGPT-AI记忆版.md` 随 `01_core/memory/` 默认勾选；`01_core/ChatGPT-自我阅读版.md` 只供人工阅读，不默认加入上下文。
 - 启用“芒格之魂”时切换为独立洞察，不生成 Output 正文；关闭后恢复普通 Output 上下文。
 - AI 只生成审稿草稿，是否写入 Output、Memory、道或法由人确认。
 
