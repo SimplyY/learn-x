@@ -6,7 +6,11 @@ group_name: "learn-x"
 repo_path: "/Users/yuwei/code/learn-x"
 repo_url: null
 group_info_path: "/Users/yuwei/code/learn-x/GROUP_INFO.md"
-updated_at: "2026-08-27T09:15:30.110Z"
+registry_source: "live"
+registry_fetched_at: "2026-08-29T03:22:34.783Z"
+registry_age_seconds: 0
+registry_degraded: false
+updated_at: "2026-08-29T03:22:38.255Z"
 icon: "🧠"
 name_zh: "learn-x"
 summary: "认知进化系统。核心功能 chat pack（chat 上下文提示词） + 定期（周、月、年）复盘 IPO (输入、处理、输出)"
@@ -27,6 +31,7 @@ priority: 1
 - 链接：研究&学习 → https://ywhome.feishu.cn/wiki/KcTcwG90OiZh3rksu0ucvwx5nFe
 - 链接：learn-x → https://simplyy.github.io/learn-x/index.html#learning
 - 默认机器人：Codex / Code X bot
+- 注册表来源：live，约 0 秒前读取
 
 ## 可用 Skill
 1. build-bot-log：生成每周飞书机器人 Build 复盘报告
@@ -57,4 +62,5 @@ priority: 1
 - 工作目录：可访问
 - 链接数：2
 - Skill 扫描：正常
-- 最近更新时间：2026-08-27T09:15:30.110Z
+- 注册表新鲜度：可用
+- 最近更新时间：2026-08-29T03:22:38.255Z

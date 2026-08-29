@@ -1,7 +1,8 @@
 ---
 name: learn-x-process
-description_zh: 处理每周月度输入并生成输出壳与记忆候选
 description: Process Learn-X 03_input into Process Pack and Output shell, then generate Memory candidates from reviewed Output. Use when the user asks for running weekly/monthly process, generating _dist, or preparing memory candidates.
+metadata:
+  description_zh: 处理每周月度输入并生成输出壳与记忆候选
 ---
 
 # learn-x-process
@@ -11,6 +12,8 @@ Learn-X 的 `Input -> Process Pack -> Output Shell` 工作流。
 面向人的功能概览见 `docs/LEARN_X_PROCESS.md`；本文只维护 Agent 的调用和执行规则。
 
 本 Skill 从 `03_input/weekly/` 或 `03_input/monthly/` 读取手动导入材料，生成可追溯的 Input Pack 和 Process Pack，并创建 Output 最小壳。Output 正文由用户自己基于 AI Chat 生成和写入。人工审核后，Codex 可以调用内部脚本生成 Memory 候选，再由 Codex 按规则无损整理并写入 Memory。它不自动修改正式长期资产。
+
+Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 生成最新的三档核心上下文、私有 `full-full` 摘要和六仓受限切片；六仓切片必须先写入暂存目录并经 `publish-repo-context.mjs` 校验后原子发布。切片生成或校验失败时不得用旧产物冒充新鲜上下文，也不得绕过人工确认直接写入 Memory。
 
 ## Skill 本质
 
