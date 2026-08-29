@@ -1,5 +1,5 @@
 import { searchCustomContext } from "./custom-context-search.js";
-import { renderFinalTaskAnchor } from "./chatpack.js";
+import { renderExecutionContract, renderFinalTaskAnchor } from "./chatpack.js";
 import { buildContext, demoteMarkdownHeadings, filterFilesByIncludes } from "./context.js";
 import { els, state } from "./runtime.js";
 import { closePromptEditor, openPromptEditor, renderEditorAvailability, savePromptEditor } from "./editor.js";
@@ -1367,6 +1367,11 @@ ${prompt}
     ? contextToText(state.context, { questionReference, dialogueType, dialogueSubtype, enhancers, emptyPrompt })
     : "（Context 尚未生成）";
   const finalTaskAnchor = renderFinalTaskAnchor(questionReference, priorityBasis);
+  const executionProtocol = renderExecutionContract({
+    categoryEnabled: !emptyPrompt && Boolean(dialogueType),
+    subtypeEnabled: !emptyPrompt && Boolean(dialogueSubtype),
+    enhancerEnabled: enhancers.length > 0
+  });
   const contextSection = contextEnabled
     ? `## Context Priority Map
 
@@ -1398,6 +1403,8 @@ ${promptSection}
 - 长度：${lengthRequirement}
 - 禁止事项：不要编造；不要强行合并冲突材料；不要让背景 Context 覆盖 Current Question。
 ${chatOnlyRequirement}
+
+${executionProtocol}
 
 ${contextSection}
 ${finalTaskAnchor}
@@ -1660,10 +1667,11 @@ function renderFramePreview() {
     `2. 大类行为协议：${emptyPrompt ? "无" : type?.name || "未选择"}`,
     `3. 子类型 Prompt：${emptyPrompt ? "无" : subtype?.name || "未选择"}`,
     `4. 增强器 Prompt：${enhancers.length ? enhancers.map((item) => item.name).join(" + ") : "无"}`,
-    "5. Output Requirements"
+    "5. Output Requirements",
+    "6. Execution Protocol"
   ];
-  if (contextEnabled) frame.push(`6. Context Priority Map：High ${highCount} / Normal ${normalCount}`, "7. High Priority Context", "8. Normal Context");
-  frame.push(`${contextEnabled ? "9" : "6"}. 末尾任务锚定`);
+  if (contextEnabled) frame.push(`7. Context Priority Map：High ${highCount} / Normal ${normalCount}`, "8. High Priority Context", "9. Normal Context");
+  frame.push(`${contextEnabled ? "10" : "7"}. 末尾任务锚定`);
   els.chatPackFramePreview.value = frame.join("\n");
 
   const summary = [
