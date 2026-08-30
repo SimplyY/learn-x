@@ -105,6 +105,7 @@ let promptTooltip;
 let contentIndexPromise;
 let promptPayloadPromise;
 let promptProtocolsLoaded = false;
+let lastAutoAssembledPrompt = "";
 
 async function boot() {
   const graph = await loadGraph();
@@ -236,6 +237,9 @@ export async function ensurePromptProtocols() {
     promptPayloadPromise = fetch(PROMPTS_DATA_URL).then((response) => {
       if (!response.ok) throw new Error(`Static prompts missing: ${response.status}`);
       return response.json();
+    }).catch((error) => {
+      promptPayloadPromise = null;
+      throw error;
     });
   }
   const payload = await promptPayloadPromise;
@@ -248,6 +252,8 @@ export async function ensurePromptProtocols() {
     enhancer.protocol = payload.enhancers?.[enhancer.id] || enhancer.protocol || "";
   }
   promptProtocolsLoaded = true;
+  if (els.metaPrompt.value === lastAutoAssembledPrompt) setAutoAssembledPrompt();
+  renderChatPackPreview();
 }
 
 function scheduleWarmup() {
@@ -594,7 +600,7 @@ export function renderEnhancers() {
         applyPeriodContextSelection(periodMode, state.activePeriodValues[periodMode]);
         resetExpandedContextDirs();
         renderSourceChecklist();
-        els.metaPrompt.value = assembledPrompt();
+        setAutoAssembledPrompt();
         resetGeneratedContext(message);
       } else {
         applyPromptOnlySelection(message);
@@ -669,7 +675,7 @@ export function applyChatPackSelection(message) {
     : "Learning Mode · Chat Pack";
   els.scenarioTitle.textContent = subtype ? `${type?.name || "大类"} · ${subtype.name}` : type?.name || "Chat Pack";
   els.domainField.hidden = !subtype?.needsDomain;
-  els.metaPrompt.value = assembledPrompt();
+  setAutoAssembledPrompt();
   syncCurrentQuestionDefault(type, subtype);
   if (chatPackContextEnabled()) {
     applyRecommendedSources();
@@ -687,7 +693,7 @@ function chatPackContextEnabled() {
 }
 
 export function applyPromptOnlySelection(message) {
-  els.metaPrompt.value = assembledPrompt();
+  setAutoAssembledPrompt();
   els.learningStatus.textContent = message;
   renderChatPackPreview();
 }
@@ -1319,16 +1325,21 @@ function getCurrentPrompt() {
   return els.metaPrompt.value.trim();
 }
 
+function setAutoAssembledPrompt() {
+  lastAutoAssembledPrompt = assembledPrompt();
+  els.metaPrompt.value = lastAutoAssembledPrompt;
+}
+
 async function resetPrompt() {
   await ensurePromptProtocols();
-  els.metaPrompt.value = assembledPrompt();
+  setAutoAssembledPrompt();
   els.learningStatus.textContent = "装配 Prompt 已刷新。";
   renderChatPackPreview();
 }
 
 async function generateChatPack() {
   await ensurePromptProtocols();
-  if (!els.metaPrompt.value.trim()) els.metaPrompt.value = assembledPrompt();
+  if (!els.metaPrompt.value.trim()) setAutoAssembledPrompt();
   if (chatPackContextEnabled()) {
     await generateContext();
     if (!state.context) return;

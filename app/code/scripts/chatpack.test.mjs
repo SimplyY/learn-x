@@ -1,5 +1,7 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { test } from "node:test";
+import { JSDOM } from "jsdom";
 import { renderExecutionContract, renderFinalTaskAnchor } from "../public/chatpack.js";
 
 test("完整模式：执行契约覆盖全部已启用 Prompt 自检项", () => {
@@ -37,4 +39,99 @@ test("回归：Final Task Anchor 保持既有输出", () => {
   assert.match(out, /^## Final Task Anchor/);
   assert.match(out, /Q/);
   assert.match(out, /回答时优先遵守：Current Question、Assembled Prompt。/);
+});
+
+test("异步 Prompt 装载后刷新自动装配，切换与失败重试不丢失正文", async () => {
+  const html = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
+  const dom = new JSDOM(html, { url: "http://127.0.0.1:4173/#learning" });
+  const graph = {
+    runtime: { target: "public", canEditChatPack: false, includesPrivateContext: false, contextEnabled: false },
+    appConfig: {
+      brand: { title: "Learn-X", subtitle: "Test", mark: "LX" },
+      menu: [{ id: "learning", label: "学", module: "learning", title: "学习" }]
+    },
+    chatPackConfig: {
+      contextBudget: { models: [] },
+      dialogueTypes: [{
+        id: "test-type",
+        name: "测试",
+        subtypes: [
+          { id: "test-type.example", name: "示例" },
+          { id: "test-type.second", name: "第二" }
+        ]
+      }],
+      enhancers: []
+    },
+    files: [],
+    sources: [],
+    contextFiles: [],
+    customContextFiles: [],
+    domains: []
+  };
+  const previous = {
+    window: globalThis.window,
+    document: globalThis.document,
+    localStorage: globalThis.localStorage,
+    fetch: globalThis.fetch
+  };
+  let releasePromptPayload;
+  let promptFetchStarted;
+  let promptAttempts = 0;
+  let firstPromptFailed = false;
+  const promptFetchStartedPromise = new Promise((resolve) => {
+    promptFetchStarted = resolve;
+  });
+  const promptPayloadPromise = new Promise((resolve) => {
+    releasePromptPayload = resolve;
+  });
+
+  try {
+    dom.window.LEARN_X_GRAPH = graph;
+    dom.window.requestIdleCallback = (callback) => dom.window.setTimeout(callback, 0);
+    Object.assign(globalThis, {
+      window: dom.window,
+      document: dom.window.document,
+      localStorage: dom.window.localStorage,
+      fetch: async (url) => {
+        if (String(url).includes("prompts")) {
+          promptAttempts += 1;
+          promptFetchStarted();
+          await promptPayloadPromise;
+          if (promptAttempts === 1) {
+            firstPromptFailed = true;
+            return { ok: false, status: 503, json: async () => ({}) };
+          }
+          return { ok: true, json: async () => ({ subtypes: {
+            "test-type.example": "FIRST PROTOCOL",
+            "test-type.second": "SECOND PROTOCOL"
+          }, enhancers: {} }) };
+        }
+        return { ok: true, json: async () => ({ files: {}, customContextFiles: {} }) };
+      }
+    });
+
+    const app = await import("../public/app.js");
+    for (let attempt = 0; attempt < 100 && document.querySelector("#learningStatus").textContent !== "已加载 Chat Pack 类型体系。"; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    await promptFetchStartedPromise;
+    assert.doesNotMatch(document.querySelector("#metaPrompt").value, /PROTOCOL/);
+
+    document.querySelectorAll("#dialogueSubtypeList button")[1].click();
+    assert.match(document.querySelector("#metaPrompt").value, /第二/);
+    releasePromptPayload();
+
+    for (let attempt = 0; attempt < 100 && !firstPromptFailed; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await app.ensurePromptProtocols();
+    assert.match(document.querySelector("#metaPrompt").value, /SECOND PROTOCOL/);
+  } finally {
+    dom.window.close();
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete globalThis[key];
+      else globalThis[key] = value;
+    }
+  }
 });
