@@ -17,6 +17,7 @@ const repoRoot = path.resolve(__dirname, "../../..");
 const fixtureRoot = path.join(repoRoot, "app/code/.test-tmp/chatpack-editor");
 
 test("public graph excludes private workflow material and local graph retains capabilities", async () => {
+  assert.equal(isPublicPrivatePath("01_core/memory-archive/2026-Q2.memory.md"), true);
   const [publicGraph, localGraph] = await Promise.all([
     buildGraphPayload({ includeContent: false, target: "public" }),
     buildGraphPayload({ includeContent: false, target: "local" })

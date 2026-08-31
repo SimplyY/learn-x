@@ -57,7 +57,7 @@ const CUSTOM_CONTEXT_IGNORED_DIRS = new Set([".git", ".test-tmp", "node_modules"
 const CUSTOM_CONTEXT_IGNORED_FILES = new Set(["AGENTS.md", "CONTEXT_MASTER.md"]);
 const PROMPT_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
 const CHATPACK_PROMPT_ROOT = "02_prompts/chatpack";
-const PUBLIC_PRIVATE_PREFIXES = ["03_input/", ".agents/skills/learn-x-process/", "04_output/_dist/", "01_core/memory/"];
+const PUBLIC_PRIVATE_PREFIXES = ["03_input/", ".agents/skills/learn-x-process/", "04_output/_dist/", "01_core/memory/", "01_core/memory-archive/"];
 const PERIOD_OUTPUT_SUBTYPE_IDS = new Set([
   "reflective-decision.weekly-output",
   "reflective-decision.monthly-output",

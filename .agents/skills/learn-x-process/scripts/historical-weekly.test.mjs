@@ -10,6 +10,8 @@ async function fixture() {
   await mkdir(path.join(root, "03_input/yearly/2025/2025-1"), { recursive: true });
   await mkdir(path.join(root, "03_input/monthly/2025-1"), { recursive: true });
   await mkdir(path.join(root, "03_input/weekly/2025-W01"), { recursive: true });
+  await mkdir(path.join(root, "01_core/memory"), { recursive: true });
+  await mkdir(path.join(root, "01_core/memory-archive"), { recursive: true });
   await writeFile(path.join(root, "03_input/yearly/2025/2025-1/daily.md"), [
     "## 2024-12-30\n\n最喜悦的事：短记录",
     "## 2024-12-31\n\n最喜悦的事：这是一段明显更长的记录，用于验证最长来源选择。",
@@ -20,6 +22,8 @@ async function fixture() {
     "## 2025-01-01\n\n内容乙内容乙内容乙"
   ].join("\n\n"));
   await writeFile(path.join(root, "03_input/weekly/2025-W01/weekly.md"), "# 周记\n\n已有周记正文");
+  await writeFile(path.join(root, "01_core/memory/2025.memory.md"), "# 年度 Memory\n\n一条正式记忆");
+  await writeFile(path.join(root, "01_core/memory-archive/2024-Q4.memory.md"), "# 归档\n\n不应进入活动清单");
   return root;
 }
 
@@ -44,4 +48,11 @@ test("keeps a substantive canonical weekly source without generating a history c
   assert.equal(week.status, "blocked");
   assert.equal(week.syncSource, null);
   assert.equal(week.candidates.find((candidate) => candidate.kind === "canonical").kind, "canonical");
+});
+
+test("scans active quarter and annual Memory only", async () => {
+  const root = await fixture();
+  const manifest = await buildHistoricalManifest(root);
+  assert.deepEqual(manifest.memory.map((entry) => entry.id), ["2025"]);
+  assert.doesNotMatch(JSON.stringify(manifest.memory), /memory-archive/);
 });

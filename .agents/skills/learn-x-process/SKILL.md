@@ -35,7 +35,7 @@ Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 生成最新的�
 
 ## 使用时机
 
-当用户要求「每周处理」「每周输出」「从 input 生成报告」「发现道法术候选」「做中学复盘」「生成 weekly memory」「生成每周记忆」「压缩本周确认内容」时使用本 Skill。
+当用户要求「每周处理」「每周输出」「从 input 生成报告」「发现道法术候选」「做中学复盘」「生成 weekly memory」「生成每周记忆」「压缩本周确认内容」「压缩历史 Memory」时使用本 Skill。
 
 ## 工作边界
 
@@ -47,6 +47,10 @@ Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 生成最新的�
 - 可以生成 metadata-only 的 `04_output/_dist/monthly/YYYY-MM/input.json`、压缩请求和自包含的 `process-pack.md`。
 - 可以读取 `04_output/weekly/YYYY-WW.md`，抽取候选区内已勾选内容及两个精确系统确认章节，生成 `04_output/_dist/weekly/YYYY-Www/memory-candidates.md`，再由 Codex 无损整理写入 `01_core/memory/YYYY-QN.memory.md`。
 - 可以读取 `04_output/monthly/YYYY-MM.md` 或 `04_output/yearly/YYYY.md`，抽取 Memory 候选包，供 Codex 无损整理写入季度或年度 Memory。
+- 可以运行 `npm run memory:compress -- --as-of YYYY-MM-DD` 生成只读压缩规划；Codex 将不含技术注释的语义压缩候选写入 `04_output/_dist/memory-compression/`，技术元数据和 `coreDifferences` 语义摘要放在同目录隐藏 sidecar，脚本再负责比较、哈希、保护范围和预算校验。
+- comparison 报告必须把“核心变化”放在最前面，先说明整份文件实际减少量，再以精简表格列出 5—10 条代表性核心变化的字数变化、之前/现在的内容，并按净减少字数从大到小、再按实际改动量排序；实际改动量按字符级删除加新增计算，净减少不超过 10 字但替换超过 10 字的改写仍需展示。不把所有碎片逐条铺开。实际改动量不超过 10 字的变化按压缩/合并/改动或删除候选归类，超过 10 字但未入选核心的变化只做汇总。不把“变化类型”“具体处理说明”或“人工确认点”单独做成核心表格列。报告另设章节概括未纳入核心表的其他压缩内容，并说明核心摘要与整份文件实际总压缩量的口径区别；缺少 5—10 条核心摘要时标记 `needs_review`，不允许晋级。
+- 语义压缩可以合并重复判断，但必须保留重要、反复出现且承载证据或行动的具象锚点，例如 `出门`、`读书会`、`写诗`、`运动`、人物、地点、项目和方法名；抽象标签不能替代全部具体词。
+- 压缩候选必须人工修改并显式 `--promote ... --confirm` 后才可晋级；定时任务不得替换正式 Memory。详细规则见 `resources/memory-compression-rules.md`。
 - Weekly Output 默认不固定输出图谱、第一性原理、Prompt、Skill、写作或 Demo 候选；必要时才可在做中学复盘或下周行动中简短提及。
 - 可以维护 `03_input/README.md`、`04_output/README.md` 和 `03_input/weekly/00_template/` 下划线模板。
 - 不要自动修改 `README.md`、`01_core/道/`、`01_core/法/`、`02_prompts/` 或 `.agents/skills/` 的正式资产。
@@ -105,6 +109,8 @@ Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 生成最新的�
 
    然后读取 `resources/memory-rules.md` 和对应 `memory-candidates.md`，把已确认内容无损迁移到 Memory，并按来源周期排序；候选不足时报告不建议写入。
    Weekly 自动化将此作为阶段 3：精确标题「全文核心重点纪要」和「芒格之魂的洞察」是系统确认内容，无需 checkbox；前者进入当周 Memory，后者进入季度芒格洞察候选池。其余内容只接受候选区内已勾选 checkbox 或用户当场明确确认；禁止扫描普通正文，禁止把“继续追踪”“重要”“保留”“确认”等词语当作确认。道 / 法 / 术候选即使已勾选，也只进入季度顶部对应候选观察池，不进入普通 Memory。重复执行时不得重复追加同一条目。
+
+10. 如需维护历史 Memory，先读取 `resources/memory-compression-rules.md`，运行压缩规划并由 Codex 生成候选；对候选目录运行 `--validate`。只向用户报告 `ready`、`needs_review` 或 `stale`，不把校验结果描述为语义无损证明。只有用户另行明确确认晋级，才运行 `--promote --confirm`。
 
 ## 输出要求
 

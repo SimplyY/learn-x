@@ -48,6 +48,8 @@ AGENTS.md.backup-*
 # Personal memory, portraits, and generated bot state.
 01_core/memory/*
 !01_core/memory/.gitkeep
+01_core/memory-archive/*
+!01_core/memory-archive/.gitkeep
 01_core/ChatGPT-自我阅读版.md
 01_core/道/flomo-top.md
 01_core/good-images/me/*

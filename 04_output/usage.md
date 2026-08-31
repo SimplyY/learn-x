@@ -95,6 +95,28 @@ Codex 会读取对应 Output 和规则，必要时生成 `memory-candidates.md`�
 
 阶段 3 必须可重复执行：同一周已写入的完全重复条目不得再次追加。未勾选但包含“继续追踪”“重要”“保留”等关键词的候选，仍视为未确认，不能仅靠关键词写入。
 
+## 5. Memory 压缩人工审核
+
+月度自动化会旁路生成历史 Memory 压缩预览，但不替换正式文件。候选和 comparison 报告位于：
+
+```text
+04_output/_dist/memory-compression/YYYY-MM/
+```
+
+先检查源/候选字符数、保护内容、来源标签以及报告中的问题，再手动修改不含技术注释的候选正文。隐藏的 `.memory-compression.json` 由流程维护，不要手动删除或修改。校验：
+
+```bash
+npm run memory:compress -- --validate 04_output/_dist/memory-compression/YYYY-MM
+```
+
+只有人工确认后才显式晋级：
+
+```bash
+npm run memory:compress -- --promote 04_output/_dist/memory-compression/YYYY-MM --confirm
+```
+
+晋级前会重新校验源哈希、保护块、预算和候选覆盖，并将旧季度归档；失败时不应继续操作，修改候选后重新校验即可。`ready` 只代表确定性检查通过，不代表语义无损已自动证明。
+
 ## 边界
 
 - `_dist` 是材料区，不是最终报告。

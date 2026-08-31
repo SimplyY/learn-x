@@ -221,7 +221,9 @@ async function readMonthlySources(repoRoot) {
 }
 
 async function readMemorySources(repoRoot) {
-  const files = await collectFiles(repoRoot, (_relativePath, entry) => /^\d{4}-Q\d\.memory\.md$/.test(entry.name));
+  const files = await collectFiles(repoRoot, (relativePath, entry) => (
+    relativePath.startsWith("01_core/memory/") && /^(?:\d{4}-Q\d|\d{4})\.memory\.md$/.test(entry.name)
+  ));
   const sources = [];
   for (const relativePath of files) {
     const source = await readFile(path.join(repoRoot, relativePath), "utf8");

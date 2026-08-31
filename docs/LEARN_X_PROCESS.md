@@ -31,6 +31,7 @@ Learn-X Process 是周期输入到人工审稿的处理流程。它把指定周�
 - `process-pack.md`：给 AI Chat 的自包含材料包。Monthly 由确定性过滤材料与 Codex 事件压缩共同组成，默认不超过 100 KB。
 - Output 最小壳：只保证目标文件存在，不代写正文，不覆盖已有内容。
 - `memory-candidates.md`：只收集已勾选或明确确认的候选，供 Memorize 使用。
+- Memory 压缩候选：`04_output/_dist/memory-compression/YYYY-MM/` 下的候选与 comparison 报告；只读规划、人工修改和显式晋级，不覆盖源文件。
 
 目录和人工操作分别见 [03_input/README.md](../03_input/README.md)、[03_input/usage.md](../03_input/usage.md)、[04_output/README.md](../04_output/README.md) 和 [04_output/usage.md](../04_output/usage.md)。
 
@@ -42,8 +43,21 @@ Learn-X Process 是周期输入到人工审稿的处理流程。它把指定周�
 - Monthly 额外读取各周 Weekly Output 中系统确认的「全文核心重点纪要」和非占位「芒格之魂的洞察」，不读取其它周报正文代替原始 Input。
 - AI Chat 负责生成判断草稿，人负责审核、取舍和最终沉淀。
 - 已有 Output 不覆盖；未确认候选不写入 Memory；重复执行不重复追加同一条目。
+- Memory 压缩按 Unicode 字符预算运行：当前年硬上限 8000、目标 6000；旧年度按 `max(200, floor(8000 × 0.6^年龄))` 衰减，目标为硬上限的 75%。当前月、跨月周块和无法识别来源的条目保护；内容压缩由 Codex 完成，脚本只校验。比较报告先说明整份文件实际减少量，再展示稳定的 Markdown 5—10 条核心变化表；按净减少字数排序，实际改动量按字符级删除加新增计算，实际改动量不超过 10 字的变化归类，较大但未入选核心的变化汇总，最后展示量化校验。语义合并必须保留重要、反复出现且承载证据或行动的具象锚点，例如 `出门`、`读书会`、`写诗`、`运动`、人物、地点、项目和方法名。
 - 不自动修改 `01_core/道/`、`01_core/法/` 或 Prompt、Skill 等正式资产。
 - 不引入数据库、RAG、自动抓取、多 Agent 或全自动价值判断。
+
+## Memory 月度压缩
+
+月度目标月解析后旁路生成一次压缩预览：
+
+```text
+读取活动 Memory 与源哈希 -> 计算保护范围和预算
+  -> Codex 生成候选 -> 脚本生成 comparison 并校验
+  -> 人工修改 -> 显式 --promote --confirm 才晋级
+```
+
+候选始终位于 `04_output/_dist/memory-compression/`，正文只保留 Markdown 记忆；源哈希、预算和保护范围放在同目录隐藏 sidecar，并在 comparison 中展示。已有候选不覆盖；源变化标记 `stale`。当前年仍按季度文件组织，上一年度在新年度开始后合并为年度文件；年度晋级先归档旧季度到 `01_core/memory-archive/` 并校验哈希。归档目录不参与活动 Memory、Chat Pack 或公开静态图。
 
 ## 与 Chat Pack 的关系
 
