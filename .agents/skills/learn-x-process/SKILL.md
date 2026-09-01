@@ -47,8 +47,9 @@ Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 生成最新的�
 - 可以生成 metadata-only 的 `04_output/_dist/monthly/YYYY-MM/input.json`、压缩请求和自包含的 `process-pack.md`。
 - 可以读取 `04_output/weekly/YYYY-WW.md`，抽取候选区内已勾选内容及两个精确系统确认章节，生成 `04_output/_dist/weekly/YYYY-Www/memory-candidates.md`，再由 Codex 无损整理写入 `01_core/memory/YYYY-QN.memory.md`。
 - 可以读取 `04_output/monthly/YYYY-MM.md` 或 `04_output/yearly/YYYY.md`，抽取 Memory 候选包，供 Codex 无损整理写入季度或年度 Memory。
-- 可以运行 `npm run memory:compress -- --as-of YYYY-MM-DD` 生成只读压缩规划；Codex 将不含技术注释的语义压缩候选写入 `04_output/_dist/memory-compression/`，技术元数据和 `coreDifferences` 语义摘要放在同目录隐藏 sidecar，脚本再负责比较、哈希、保护范围和预算校验。
-- comparison 报告必须把“核心变化”放在最前面，先说明整份文件实际减少量，再以精简表格列出 5—10 条代表性核心变化的字数变化、之前/现在的内容，并按净减少字数从大到小、再按实际改动量排序；实际改动量按字符级删除加新增计算，净减少不超过 10 字但替换超过 10 字的改写仍需展示。不把所有碎片逐条铺开。实际改动量不超过 10 字的变化按压缩/合并/改动或删除候选归类，超过 10 字但未入选核心的变化只做汇总。不把“变化类型”“具体处理说明”或“人工确认点”单独做成核心表格列。报告另设章节概括未纳入核心表的其他压缩内容，并说明核心摘要与整份文件实际总压缩量的口径区别；缺少 5—10 条核心摘要时标记 `needs_review`，不允许晋级。
+- 可以运行 `npm run memory:compress -- --as-of YYYY-MM-DD` 生成只读压缩规划；Codex 将不含技术注释的语义压缩候选写入 `04_output/_dist/memory-compression/`，技术元数据、`changeSummary`、`coreDifferences` 和 `otherChanges` 放在同目录隐藏 sidecar，脚本再负责比较、哈希、保护范围和预算校验。`changeSummary` 必须由 Codex 通读原文与候选后按 `resources/memory-compression-rules.md` 生成，脚本不得用固定句式代写。
+- comparison 报告必须把“核心变化”放在最前面，先说明整份文件实际减少量，再按上一版的简洁表格列出 5—10 条代表性核心变化：字数变化（风险写在括号内）、之前是什么、现在是什么，并按风险从高到低、同风险按净减少字数排序；实际改动量按字符级删除加新增计算，净减少不超过 10 字但替换超过 10 字的改写仍需展示。不把所有碎片逐条铺开。实际改动量不超过 10 字的变化按类型归类，超过 10 字但未入选核心的变化只做汇总。报告另设“非删除类变化”表，说明改动（风险写在括号内），并把原文和压缩后拆成两列；未逐字保留的来源单元再按候选池小节、Memory、洞察和继续追踪等类型细分，删除候选不得与普通合并混为一类。保护范围和量化校验后置；报告说明核心摘要与整份文件实际总压缩量的口径区别；缺少 5—10 条核心摘要时标记 `needs_review`，不允许晋级。
+- 来源审计不能把“整条原文未逐字出现”直接当成删除。若候选保留该单元的 `[YYYY-Www]` 或 `[Monthly｜YYYY-MM]` 来源标签，说明它可能已被归纳进核心判断，报告标记“已归纳（仍需语义核对）”；没有原文、来源标签和保护依据的单元才进入删除候选。
 - 语义压缩可以合并重复判断，但必须保留重要、反复出现且承载证据或行动的具象锚点，例如 `出门`、`读书会`、`写诗`、`运动`、人物、地点、项目和方法名；抽象标签不能替代全部具体词。
 - 压缩候选必须人工修改并显式 `--promote ... --confirm` 后才可晋级；定时任务不得替换正式 Memory。详细规则见 `resources/memory-compression-rules.md`。
 - Weekly Output 默认不固定输出图谱、第一性原理、Prompt、Skill、写作或 Demo 候选；必要时才可在做中学复盘或下周行动中简短提及。

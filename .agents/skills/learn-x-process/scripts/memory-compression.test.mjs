@@ -67,6 +67,10 @@ async function writeCandidate(root, candidate, body, overrides = {}) {
   const metadata = {
     ...candidate.metadata,
     ...overrides,
+    changeSummary: overrides.changeSummary ?? {
+      whatChanged: "测试变化摘要：把测试原文中的重复判断合并成更短的候选。\n\n同时保留测试来源与具体边界。",
+      primaryRisk: "风险来自合并重复判断。\n\n原文中的独立限定条件可能被遗漏，需要人工核对候选是否完整承接。"
+    },
     coreDifferences: overrides.coreDifferences ?? Array.from({ length: 5 }, (_, index) => ({
       topic: `测试核心区别${index + 1}`,
       original: `原文判断内容一二三四五${index + 1}`,
@@ -77,6 +81,9 @@ async function writeCandidate(root, candidate, body, overrides = {}) {
     })),
     otherChanges: overrides.otherChanges ?? [{
       topic: "测试中的其他压缩",
+      category: "测试分类",
+      change: "把多条细节合并为一条背景说明。",
+      risk: "低",
       before: "原来有多条细节记录。",
       after: "合并为一条背景说明。",
       examples: "保留一个代表性例子。"
@@ -123,9 +130,10 @@ test("validates a manually edited candidate without modifying the source", async
   assert.equal(result.protectedOk, true);
   assert.equal(result.coreDifferencesOk, true);
   assert.equal(result.otherChangesOk, true);
+  assert.equal(result.changeSummaryOk, true);
   const comparison = await readFile(result.comparisonPath, "utf8");
-  assert.ok(comparison.indexOf("## 核心变化（先看这里）") < comparison.indexOf("## 量化校验"));
-  assert.ok(comparison.indexOf("## 核心变化（先看这里）") < comparison.indexOf("## 辅助统计：文件级变化"));
+  assert.ok(comparison.indexOf("## 变化摘要（先看这里）") < comparison.indexOf("## 量化校验"));
+  assert.ok(comparison.indexOf("## 变化摘要（先看这里）") < comparison.indexOf("## 辅助统计：文件级变化"));
   const q3ComparisonPath = result.comparisonPaths.find((filePath) => filePath.includes("2026-Q3.memory"));
   const q3Comparison = await readFile(q3ComparisonPath, "utf8");
   assert.match(comparison, /01_core\/memory\/2026-Q2\.memory\.md/);
@@ -133,20 +141,34 @@ test("validates a manually edited candidate without modifying the source", async
   assert.match(q3Comparison, /01_core\/memory\/2026-Q3\.memory\.md/);
   assert.doesNotMatch(q3Comparison, /01_core\/memory\/2026-Q2\.memory\.md/);
   assert.notEqual(comparison, q3Comparison);
-  assert.match(comparison, /\| 排序 \| 核心点 \| 字数变化 \| 之前是什么 \| 现在是什么 \|/);
+  assert.match(comparison, /\| 核心点 \| 字数变化（风险在前） \| 现在是什么 \| 之前是什么 \|/);
+  assert.doesNotMatch(comparison, /\| 排序 \|/);
   assert.doesNotMatch(comparison, /<table|<tbody|<td>/);
-  assert.match(comparison, /之前是什么/);
-  assert.match(comparison, /现在是什么/);
+  assert.match(comparison, /改了什么/);
+  assert.match(comparison, /风险/);
+  assert.match(comparison, /风险：/);
   assert.match(comparison, /字数变化/);
   assert.doesNotMatch(comparison, /具体变了什么/);
   assert.doesNotMatch(comparison, /变化类型/);
   assert.doesNotMatch(comparison, /<th>人工确认<\/th>/);
   assert.match(comparison, /整体压缩量（单独计算）/);
-  assert.match(comparison, /其他压缩内容概览/);
-  assert.match(comparison, /其他变化归类/);
-  assert.match(comparison, /测试中的其他压缩/);
+  assert.ok(comparison.indexOf("## 来源承接与删除审计") < comparison.indexOf("## 保护范围（后置）"));
+  assert.ok(comparison.indexOf("## 保护范围（后置）") < comparison.indexOf("## 量化校验"));
+  assert.match(comparison, /非删除类变化/);
+  assert.match(comparison, /来源承接与删除审计/);
+  assert.match(comparison, /\| 类型 \| 规模（风险及具体风险） \| 原文代表例子 \| 候选中的具体承接 \|/);
+  assert.match(comparison, /字数变化（含风险及具体风险）/);
+  assert.match(comparison, /测试变化摘要/);
+  assert.match(comparison, /更短的候选。\n\n同时保留测试来源/);
+  assert.match(comparison, /\*\*最核心风险\*\*\n\n风险来自合并重复判断。\n\n原文中的独立限定条件/);
+  assert.doesNotMatch(comparison, /本次主要把候选观察池/);
+  assert.doesNotMatch(comparison.split("### 核心变化")[0], /^> /m);
+  assert.match(comparison, /测试分类/);
   assert.equal((comparison.match(/\| \*\*本报告\*\*/g) ?? []).length, 0);
-  assert.match(comparison, /未纳入核心表的差额/);
+  assert.match(comparison, /整份文件减少量按内容区域拆解/);
+  assert.match(comparison, /核心表之外的算术差额/);
+  assert.doesNotMatch(comparison, /非删除类变化.*1790 字差额/);
+  assert.doesNotMatch(comparison, /候选承接仍需核对/);
   const original = await readFile(path.join(root, "01_core/memory/2026-Q3.memory.md"), "utf8");
   assert.match(original, /当前月判断/);
 
@@ -182,6 +204,9 @@ test("groups small changes instead of expanding every non-retained source unit",
   await writeCandidate(root, q3, await readFile(path.join(root, q3.metadata.sourcePaths[0]), "utf8"), {
     otherChanges: [{
       topic: "等长替换测试",
+      category: "等长替换",
+      change: "验证等长替换仍按实际改动量展示。",
+      risk: "高",
       before: "甲".repeat(40),
       after: "乙".repeat(40),
       examples: "验证等长但实质替换的内容按实际改动量处理。"
@@ -190,17 +215,51 @@ test("groups small changes instead of expanding every non-retained source unit",
   const result = await validateMemoryCompression({ repoRoot: root, candidatePath: path.join(root, operation.outputDir) });
   assert.equal(result.status, "ready");
   const comparison = await readFile(result.comparisonPaths.find((filePath) => filePath.includes("2026-Q2.memory")), "utf8");
-  assert.match(comparison, /其他变化归类/);
-  assert.match(comparison, /删除候选 \/ 未找到对应/);
+  assert.match(comparison, /来源承接与删除审计/);
+  assert.doesNotMatch(comparison, /周度 Memory 细节（风险：/);
+  assert.match(comparison, /周度 Memory 细节 \| \d+ 个 \/ \d+ 字；风险：高（风险来自/);
+  assert.match(comparison, /周度 Memory 细节/);
   assert.match(comparison, /小于等于10字：统一归类/);
-  assert.match(comparison, /未逐字保留的其他内容：归类/);
+  assert.match(comparison, /原文承接状态：按来源细分/);
+  assert.match(comparison, /周度 Memory 细节/);
   const q3Comparison = await readFile(result.comparisonPaths.find((filePath) => filePath.includes("2026-Q3.memory")), "utf8");
   assert.match(q3Comparison, /## 保护范围/);
   assert.match(q3Comparison, /当前月或跨月周块/);
-  const q3SmallSection = q3Comparison.split("### 小于等于10字：统一归类")[1].split("### 未逐字保留的其他内容：归类")[0];
+  const q3SmallSection = q3Comparison.split("### 小于等于10字：统一归类")[1].split("### 原文承接状态：按来源细分")[0];
   assert.doesNotMatch(q3SmallSection, /等长替换测试/);
-  assert.match(q3Comparison, /等长替换测试.*实际改动 80 字/);
+  assert.match(q3Comparison, /等长替换.*实际改动 80/);
   assert.equal(source.includes("旧月份判断"), true);
+});
+
+test("treats a period-tagged summary as represented instead of deleting the source unit", async () => {
+  const root = await fixture();
+  const plan = await planMemoryCompression({ repoRoot: root, asOf: "2026-08-30" });
+  const operation = plan.operations.find((entry) => entry.mode === "current-year");
+  const q2 = operation.candidates.find((candidate) => candidate.sourcePath.endsWith("2026-Q2.memory.md"));
+  await writeCandidate(root, q2, [
+    "# Learn-X Memory｜2026-Q2",
+    "",
+    "## 压缩合并",
+    "",
+    "- [2026-W28] 旧月份判断已归纳进核心判断。",
+    "",
+    "## 2026-W31",
+    "",
+    "- 跨越当前月的周块。",
+    "",
+    "## 未识别来源",
+    "",
+    "- 未识别来源判断，默认保护。"
+  ].join("\n"));
+  const q3 = operation.candidates.find((candidate) => candidate.sourcePath.endsWith("2026-Q3.memory.md"));
+  await writeCandidate(root, q3, await readFile(path.join(root, q3.metadata.sourcePaths[0]), "utf8"));
+  const result = await validateMemoryCompression({ repoRoot: root, candidatePath: path.join(root, operation.outputDir) });
+  const q2Entry = result.entries.find((entry) => entry.metadata.targetPath.endsWith("2026-Q2.memory.md"));
+  const summarized = q2Entry.unitAudit.find((unit) => unit.period?.week === 28);
+  assert.equal(summarized.category, "represented_by_trace");
+  const comparison = await readFile(result.comparisonPaths.find((filePath) => filePath.includes("2026-Q2.memory")), "utf8");
+  assert.match(comparison, /周度 Memory 已归纳/);
+  assert.doesNotMatch(comparison, /\|.*删除候选/);
 });
 
 test("promotes only after explicit confirmation and archives the original", async () => {
@@ -273,6 +332,21 @@ test("requires a readable core-differences summary before promotion", async () =
   assert.equal(result.status, "needs_review");
   assert.equal(result.coreDifferencesOk, false);
   await assert.rejects(() => promoteMemoryCompression({ repoRoot: root, candidatePath: path.join(root, candidate.directory), confirm: true }), /core-differences/);
+});
+
+test("requires an AI-authored change summary before promotion", async () => {
+  const root = await fixture();
+  const plan = await planMemoryCompression({ repoRoot: root, asOf: "2026-08-30" });
+  const candidate = plan.operations.find((entry) => entry.mode === "current-year").candidates[0];
+  await writeCandidate(root, candidate, await readFile(path.join(root, candidate.metadata.sourcePaths[0]), "utf8"));
+  const metadataPath = path.join(root, candidate.metadataPath);
+  const metadata = JSON.parse(await readFile(metadataPath, "utf8"));
+  delete metadata.changeSummary;
+  await writeFile(metadataPath, JSON.stringify(metadata));
+  const result = await validateMemoryCompression({ repoRoot: root, candidatePath: path.join(root, candidate.directory) });
+  assert.equal(result.status, "needs_review");
+  assert.equal(result.changeSummaryOk, false);
+  await assert.rejects(() => promoteMemoryCompression({ repoRoot: root, candidatePath: path.join(root, candidate.directory), confirm: true }), /AI change-summary/);
 });
 
 test("replaces an oversized annual file without moving the target out of active memory", async () => {

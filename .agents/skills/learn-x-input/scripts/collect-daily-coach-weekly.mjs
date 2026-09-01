@@ -12,7 +12,7 @@ const TZ = "Asia/Shanghai";
 const DAILY_URL = "https://ywhome.feishu.cn/base/WPZRbLRrGarf8bsfYoJcZ8Kwnqc";
 const COACH_URL = "https://ywhome.feishu.cn/wiki/UeHNwP3ebihXPJkU2Lfc2mIsncb";
 const DAILY_TABLE = "日记";
-const DAILY_FIELDS = ["日期", "核心事项（语音输入，写清楚时间、地点、人）", "明日规划", "最喜悦的事", "思考&收获&洞察&幽默"];
+const DAILY_FIELDS = ["日期", "今日饮食", "今日运动", "今日心情（允许万物穿过自己）", "核心事项（语音输入，写清楚时间、地点、人）", "明日规划", "最喜悦的事", "思考&收获&洞察&幽默"];
 const COACH_TABLES = [
   { name: "服务对象", fields: ["姓名", "优先级", "创建时间", "更新时间"], filterField: "创建时间" },
   { name: "服务记录", fields: ["日期", "姓名", "服务内容", "服务资料", "核心图"], filterField: "日期" },
@@ -53,7 +53,7 @@ export function shouldWriteCoachFile(data) {
 
 async function collectDaily(range, runCli) {
   const base = await resolve(DAILY_URL, runCli);
-  const blocks = await runCli(["base", "+base-block-list", "--base-token", base, "--as", "bot", "--format", "json"]);
+  const blocks = await runCli(["base", "+base-block-list", "--base-token", base, "--as", "user", "--format", "json"]);
   const table = (blocks.data?.blocks || []).find((item) => item.name === DAILY_TABLE);
   if (!table) throw new Error("日常记录 Base 未找到「日记」表。");
   await verifyFields(base, table.table_id || table.id, DAILY_FIELDS, runCli);
@@ -65,7 +65,7 @@ async function collectDaily(range, runCli) {
 
 async function collectCoach(range, runCli) {
   const base = await resolve(COACH_URL, runCli);
-  const blocks = await runCli(["base", "+base-block-list", "--base-token", base, "--as", "bot", "--format", "json"]);
+  const blocks = await runCli(["base", "+base-block-list", "--base-token", base, "--as", "user", "--format", "json"]);
   const tables = blocks.data?.blocks || [];
   const output = {};
   for (const config of COACH_TABLES) {
@@ -95,11 +95,11 @@ export function isCoachReviewRecord(values) {
 }
 
 async function resolve(url, runCli) { return (await runCli(["base", "+url-resolve", "--url", url, "--as", "bot", "--format", "json"])).data?.base_token; }
-async function verifyFields(base, table, required, runCli) { const result = await runCli(["base", "+field-list", "--base-token", base, "--table-id", table, "--limit", "100", "--as", "bot", "--format", "json"]); const names = new Set((result.data?.fields || []).map((field) => field.name)); if (required.some((field) => !names.has(field))) throw new Error(`飞书表字段核验失败：${required.filter((field) => !names.has(field)).join("、")}`); }
+async function verifyFields(base, table, required, runCli) { const result = await runCli(["base", "+field-list", "--base-token", base, "--table-id", table, "--limit", "100", "--as", "user", "--format", "json"]); const names = new Set((result.data?.fields || []).map((field) => field.name)); if (required.some((field) => !names.has(field))) throw new Error(`飞书表字段核验失败：${required.filter((field) => !names.has(field)).join("、")}`); }
 async function listRecords(base, table, fields, conditions, runCli) {
   const pages = []; let offset = 0; let pageCount = 0;
   while (true) {
-    const result = await runCli(["base", "+record-list", "--base-token", base, "--table-id", table, ...fields.flatMap((field) => ["--field-id", field]), "--filter-json", JSON.stringify({ logic: "and", conditions }), "--offset", String(offset), "--limit", "200", "--as", "bot", "--format", "json"]);
+    const result = await runCli(["base", "+record-list", "--base-token", base, "--table-id", table, ...fields.flatMap((field) => ["--field-id", field]), "--filter-json", JSON.stringify({ logic: "and", conditions }), "--offset", String(offset), "--limit", "200", "--as", "user", "--format", "json"]);
     const data = result.data || {}; const names = data.fields || fields; const rows = data.data || [];
     pages.push(...rows.map((row, index) => ({ id: data.record_id_list?.[index], values: Object.fromEntries(names.map((name, i) => [name, safeValue(row[i])])) })));
     pageCount += 1;
@@ -128,7 +128,7 @@ function safeValue(value) {
 }
 
 function renderDaily(week, range, data) {
-  const lines = [`# 飞书日记｜${week}`, "", `- 来源：日常记录（飞书 Base）`, `- Base URL：${data.baseUrl}`, `- 目标范围：${range.start} 至 ${range.end}（Asia/Shanghai）`, `- 采集时间：${new Date().toISOString()}`, `- CLI 来源：\`lark-cli base +url-resolve --as bot\`、\`+base-block-list\`、\`+field-list\`、\`+record-list --filter-json\``, `- 字段 provenance：已核验「${data.fields.join("、")}」`, `- 记录数：${data.records.length}`, `- 分页：${data.complete ? `已完成（${data.pages} 页）` : "未完成"}`, "", "## 记录", ""];
+  const lines = [`# 飞书日记｜${week}`, "", `- 来源：日常记录（飞书 Base）`, `- Base URL：${data.baseUrl}`, `- 目标范围：${range.start} 至 ${range.end}（Asia/Shanghai）`, `- 采集时间：${new Date().toISOString()}`, `- CLI 来源：\`lark-cli base +url-resolve --as user\`、\`+base-block-list\`、\`+field-list\`、\`+record-list --filter-json\``, `- 字段 provenance：已核验「${data.fields.join("、")}」`, `- 记录数：${data.records.length}`, `- 分页：${data.complete ? `已完成（${data.pages} 页）` : "未完成"}`, "", "## 记录", ""];
   for (const record of data.records.sort((a, b) => String(a.values.日期).localeCompare(String(b.values.日期)))) { lines.push(`### ${record.values.日期.slice(0, 10)}`); for (const [key, value] of Object.entries(record.values).slice(1)) if (value) lines.push(`- ${key}：${value}`); lines.push(""); }
   return lines.join("\n");
 }
@@ -140,7 +140,7 @@ function renderCoach(week, range, data) {
     `- 目标范围：${range.start} 至 ${range.end}（${TZ}）`,
     `- 采集时间：${new Date().toISOString()}`,
     "- 输入边界：保留新增记录；在采集器内排除回顾、复看和推送状态更新，不由通用 Input 二次排除。",
-    "- CLI 来源：`lark-cli base +url-resolve --as bot`、`+base-block-list`、`+field-list`、`+record-list --filter-json`",
+    "- CLI 来源：`lark-cli base +url-resolve --as user`、`+base-block-list`、`+field-list`、`+record-list --filter-json`",
     "- 结构核验：四张表与字段已现场核验。", "",
   ];
   for (const [name, table] of Object.entries(data.tables)) {

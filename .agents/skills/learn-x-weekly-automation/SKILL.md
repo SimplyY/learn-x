@@ -33,6 +33,18 @@ npm run memory:weekly -- --week 2026-W27
 - 新增、更新、修改、删除 Base 的表、字段、记录、权限或其他资源：使用 `--as user`。
 - 不因应用缺少 Base 写权限而反复申请应用权限；应用身份只用于默认读取。
 
+### 周记草稿的持续授权边界
+
+用户已明确授予持续授权：本自动化在阶段 1 可使用用户身份，将目标周输入生成的草稿写入固定文档 `https://ywhome.feishu.cn/wiki/EOlbwTVLyiQp7Fkrr9ucdI9hnac` 的 `周记` 区域，仅限目标周结束日次日对应的新周记段落和模板安全空位。允许复制缺失模板、填写空白字段并保留 `【待优化】AI 基础草稿` 标题标记；必须跳过 `回顾最近笔记 & flomo 洞察` 手写区，不覆盖已有内容，不修改其他周或其他文档。
+
+该持续授权不涵盖 `weekly.md`、Weekly Output、Memory、备份、Flomo 同步、AI/ChatGPT 外发或任何其他外部写入。目标文档、目标段落、用户身份、写入范围或删除动作发生变化时必须停止并重新确认；在授权范围内无需每周重复询问，但每次写入后仍必须定位核验并回读确认。
+
+### 默认采集范围
+
+阶段 1 默认执行本 Skill 所列的全部自动来源：Flomo、微信读书、Time-X 日历、Voice-X、飞书日记与 AI Coach、智慧之门；同时检查独立产物 `build.md`、`build-bot.md`、`health.md`。不得因为历史自动化 prompt、旧运行记忆或上一次的临时选择，缩减本轮来源，也不要逐项询问是否采集。用户明确说“本轮只采集……”时才临时缩小范围，该选择仅对当前目标周、当前运行有效；下一次自动恢复全量。
+
+`input:daily-coach` 是一个物理上的联合采集入口，但逻辑上必须分别记录 `daily` 和 `coach` 状态：`coach` 为 0 条只表示成功空结果，不得把它解释为 `daily` 不可用；只有日记查询本身失败或无法取得有效日记记录时，才将 `daily` 标为 `failed/unavailable`。
+
 ### Code X 周日 Voice-X 自动化
 
 Deep Code X 另有一个独立的周日调度（`learn-x-voice-insight`，20:00，Asia/Shanghai），不改写周一 `learn-x-3` 的阶段边界。它按当前 ISO 周执行 `npm run voice:insight -- --week YYYY-Www`：默认只生成预览上下文、状态和新版洞察采集结果，不添加 `--send`，不自动调用 ChatGPT，不覆盖旧 `voice.md`。需要正式批量生成时，必须在人工确认后显式执行 `--send --confirm`；旧格式迁移使用 `--migrate-legacy --confirm`。
@@ -83,12 +95,12 @@ Deep Code X 另有一个独立的周日调度（`learn-x-voice-insight`，20:00�
 目标：采集自动来源后，直接用已落盘周信息生成飞书周记草稿，停在人工确认门槛前。
 
 1. 确保 `03_input/weekly/YYYY-Www/` 存在。保留目录中已有的人工内容；AI 生成阶段先写入 `ai.generated.md` 和状态侧车，通过结构与完整性校验后自动移动为正式 `ai.md`，并在 `_dist` 保留审计副本；不得预建 `weekly.md`。
-2. 采集本地自动来源，并提示飞书机器人侧自查：
-   - Flomo：按“启动规则 4”通过 Ego Lite 任务空间打开或复用 `https://v.flomoapp.com/mine`，按 Asia/Shanghai 的目标周起止时间检索；仅在尚未覆盖下界时加载下一批，只把当前页面实际读到、属于目标周的笔记去重后按创建时间正序写入 `flomo.md`。同一次页面读取中，另外同步当前唯一置顶笔记到 `01_core/道/flomo-top.md`：文件包含来源链接、原始创建时间、同步周和正文；每周覆盖更新，不保留旧版本。若置顶数量为 0 或多于 1，保留旧镜像并提示，不阻断其他来源。`flomo.md` 仍只包含目标周数据；旧 `flomo.md` 只作为差异报告依据，不得用来补全当前 Flomo，也不得只取首屏或使用旧本地导出替代。
+2. 按“默认采集范围”采集本地自动来源，并提示飞书机器人侧自查：
+   - Flomo：按“启动规则 4”通过 Ego Lite 任务空间打开或复用 `https://v.flomoapp.com/mine`，按 Asia/Shanghai 的目标周起止时间检索；仅在尚未覆盖下界时加载下一批。写入前整条排除可确认属于 Learn-X 生成产物的 memo，不把它的周记正文拆开保留：正文或标签命中 `Learn-X 周记`、`Learn-X 记忆`、`Learn-X 月记`、`#learn-x/`、`# 飞书周记`、`AI 基础草稿` 或 `Learn-X 同步校验` 等标识时，整条不写入 `flomo.md`；该过滤不影响当前唯一置顶镜像。其余当前页面实际读到、属于目标周的笔记按 `(创建时间, 正文)` 去重后按创建时间正序写入 `flomo.md`。同一次页面读取中，另外同步当前唯一置顶笔记到 `01_core/道/flomo-top.md`：文件包含来源链接、原始创建时间、同步周和正文；每周覆盖更新，不保留旧版本。若置顶数量为 0 或多于 1，保留旧镜像并提示，不阻断其他来源。`flomo.md` 仍只包含过滤后的目标周数据；旧 `flomo.md` 只作为差异报告依据，不得用来补全当前 Flomo，也不得只取首屏或使用旧本地导出替代。
    - 微信读书：按 `learn-x-input` 执行 `npm run input:weread -- --week YYYY-Www`。验证输出保留目标周、Asia/Shanghai 范围、生成时间、阅读统计、进度快照、个人划线和想法，并包含完整 7 天，包括 0 分钟日期。
    - Time-X 日历：按 `learn-x-input` 执行一次 `npm run input:calendar -- --week YYYY-Www`，只读取固定 `Time-X｜随时记` 共享日历，将日历汇总及每个日历块的日期、起止、标题、描述写入 `calendar.md`。不得读取用户主日历，不保存日历人员、地点、ID、链接或系统元数据。
    - Voice-X：按 `learn-x-input` 执行 `npm run input:voice -- --week YYYY-Www`，只读取目标 ISO 周已归档的新版 AI 洞察文档写入 `voice.md`。每条保留标题、录制时间、处理后原文字符数、AI 洞察字符数、核心总结和芒格之魂洞察；缺失/占位计入 `pending`，旧格式计入 `legacy`，不回退到处理后原文。周日 `npm run voice:insight -- --week YYYY-Www` 是独立阶段，不由周一流程隐式触发；0 条、查询/文档/长度失败均按来源状态处理并保留旧文件。
-   - 飞书日记与 AI Coach：执行 `npm run input:daily-coach -- --week YYYY-Www`。采集器先用 `--as bot` 现场核验 Base、表和字段，再按各表边界筛选并遍历全部分页；各来源状态写入 `_source-status.json`。0 条时不生成新文件，旧文件可保留但标记过期；失败时保留旧文件但标记失败。
+   - 飞书日记与 AI Coach：执行 `npm run input:daily-coach -- --week YYYY-Www`。采集器先用 `--as bot` 现场核验 Base、表和字段，再按各表边界筛选并遍历全部分页；各来源状态写入 `_source-status.json`。日记与 Coach 分别判定：Coach 0 条时记录 `coach=empty` 且不生成 `coach.md`，不影响有记录的 `daily.md`；日记 0 条时记录 `daily=empty`，查询或字段失败才记录 `daily=failed/unavailable`。旧文件可保留但标记过期；失败时保留旧文件但标记失败。
    - 智慧之门：执行 `npm run input:wisdom -- --week YYYY-Www`。通过 `collect-base-weekly.mjs` 按创建时间筛目标周并遍历全部分页；0 条时报告“0 条记录，文件未生成”，失败不得伪装成空结果。
    - 飞书机器人 Build 复盘：本流程不执行 `build-bot-log`，不生成或追加 `build-bot.md`。必须提示用户：`build-bot-log 需要在飞书机器人上完成，请自查`。
      - 如果目标周是提前写当周，提示用户去飞书上手动执行，并输出自动化链接：https://ywhome.feishu.cn/wiki/KcTcwG90OiZh3rksu0ucvwx5nFe?table=wkfVC125gMp3snTX
@@ -104,6 +116,7 @@ Deep Code X 另有一个独立的周日调度（`learn-x-voice-insight`，20:00�
 
 阶段 1 汇报必须包含：目标周、完整来源状态表、AI 草稿状态（`generated` / `needs_review` / `failed` / `confirmed`）、生成结果路径或 fallback prompt、飞书周记草稿链接、跳过字段（明确列出 `回顾最近笔记 & flomo 洞察` 由用户填写）、阻塞项、当前位置、下一步和再下一步。来源状态表必须区分 `ready`、`empty`、`failed`、`unavailable`，并明确旧文件是否保留但不计入本轮；成功空结果单独报告“0 条记录，文件未生成”，失败/不可用不得写成 0 条。输入文件字数表只统计 `ready` 文件，`ai.md`、`ai.generated.md`、`weekly.md` 和人工周记不纳入。
 每个来源还必须给出原始字符数、纳入下游的有效字符数和可点击核查文件链接；不可用但保留旧文件的来源也要给链接并标注“过期、不计入”。
+飞书周记草稿链接必须是周记 Skill 在写入后回读确认的目标段落锚点链接：优先使用实际 `#share-...` 锚点，CLI 未返回时使用最新目标标题 block id 的 `#<target-block-id>` 直达链接；不得汇报固定文档首页、旧周锚点或未带 fragment 的 URL。
 
 ## 阶段 1 内：周记草稿生成与人工确认
 

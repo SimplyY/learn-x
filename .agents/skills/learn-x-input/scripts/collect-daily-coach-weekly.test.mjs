@@ -37,7 +37,7 @@ test("daily and Coach collectors preserve old files on empty and mark ready on r
     week: "2026-W24",
     outputRoot,
     runCli: createFakeRun({
-      dailyRecords: [{ 日期: "2026-06-08 09:00:00", "核心事项（语音输入，写清楚时间、地点、人）": "有实质日记记录" }],
+      dailyRecords: [{ 日期: "2026-06-08 09:00:00", "今日饮食": 4, "今日运动": 5, "今日心情（允许万物穿过自己）": 6, "核心事项（语音输入，写清楚时间、地点、人）": "有实质日记记录" }],
       coachRecords: [{ "创建时间": "2026-06-08 10:00:00", 姓名: "新对象" }]
     })
   });
@@ -46,6 +46,9 @@ test("daily and Coach collectors preserve old files on empty and mark ready on r
   assert.equal(readyStatus.sources.daily.status, "ready");
   assert.equal(readyStatus.sources.coach.status, "ready");
   assert.match(await readFile(dailyPath, "utf8"), /有实质日记记录/);
+  assert.match(await readFile(dailyPath, "utf8"), /今日饮食：4/);
+  assert.match(await readFile(dailyPath, "utf8"), /今日运动：5/);
+  assert.match(await readFile(dailyPath, "utf8"), /今日心情（允许万物穿过自己）：6/);
   assert.match(await readFile(coachPath, "utf8"), /新对象/);
   assert.ok((await readdir(outputRoot)).includes("_source-status.json"));
 });
@@ -72,7 +75,7 @@ function createFakeRun({ dailyRecords, coachRecords }) {
     if (args[1] === "+base-block-list") {
       return { ok: true, data: { blocks: args[3] === "daily-base" ? [{ name: "日记", id: "daily-table" }] : ["服务对象", "服务记录", "ai coach thinking", "项目"].map((name) => ({ name, id: name })) } };
     }
-    if (args[1] === "+field-list") return { ok: true, data: { fields: args.includes("daily-table") ? ["日期", "核心事项（语音输入，写清楚时间、地点、人）", "明日规划", "最喜悦的事", "思考&收获&洞察&幽默"].map((name) => ({ name })) : ["姓名", "优先级", "创建时间", "更新时间", "日期", "服务内容", "服务资料", "核心图", "主题", "核心思考", "已推送轮次", "回顾状态", "上次推送时间", "超链接", "附件", "项目名", "状态", "项目类型", "备注", "产出链接", "阻塞与风险", "当前阶段", "下一步", "当前方案"].map((name) => ({ name })) } };
+    if (args[1] === "+field-list") return { ok: true, data: { fields: args.includes("daily-table") ? ["日期", "今日饮食", "今日运动", "今日心情（允许万物穿过自己）", "核心事项（语音输入，写清楚时间、地点、人）", "明日规划", "最喜悦的事", "思考&收获&洞察&幽默"].map((name) => ({ name })) : ["姓名", "优先级", "创建时间", "更新时间", "日期", "服务内容", "服务资料", "核心图", "主题", "核心思考", "已推送轮次", "回顾状态", "上次推送时间", "超链接", "附件", "项目名", "状态", "项目类型", "备注", "产出链接", "阻塞与风险", "当前阶段", "下一步", "当前方案"].map((name) => ({ name })) } };
     if (args[1] === "+record-list") {
       const table = args[args.indexOf("--table-id") + 1];
       const source = table === "daily-table" ? dailyRecords : table === "服务对象" ? coachRecords : [];
