@@ -11,7 +11,8 @@ export const VOICE_X_BASE_URL = "https://ywhome.feishu.cn/base/OBapbpVNIaw7kfsM1
 const TABLE_ID = "tbljFGhqPgKaMD5l";
 const TABLE_NAME = "内容索引";
 const TIMEZONE = "Asia/Shanghai";
-const REQUIRED_FIELDS = ["标题", "录制时间", "处理后原文", "AI 洞察文档", "内容指纹"];
+const REQUIRED_FIELDS = ["标题", "录制时间", "处理后原文", "内容指纹"];
+const INSIGHT_FIELD_CANDIDATES = ["AI 文档", "AI 洞察文档"];
 const EXCLUDED_HEADING_PATTERNS = [
   /^#{1,6}\s+对我的建议(?:（仅留档，不采集到 Learn-X）)?\s*$/,
   /^#{1,6}\s+\d+\.\s*对我的建议(?:（仅留档，不采集到 Learn-X）)?\s*$/,
@@ -139,21 +140,22 @@ export function stripAdviceFromVoiceMarkdown(markdown) {
 
 export function isStructuredInsight(markdown) {
   const text = normalizeInsightDocument(markdown);
-  return /^# Voice-X AI 洞察\s*\n+## 核心总结\s*\n+[\s\S]*?\n+## 芒格之魂洞察\s*\n+[\s\S]+$/m.test(text) && !/^#{1,6}\s+(?:压缩原文|原始文字稿|对我的建议)(?:\s|$)/m.test(text);
+  return /^(?:# Voice-X (?:AI 洞察|ai 总结 & 洞察)\s*\n+)?## 核心总结\s*\n+[\s\S]*?\n+## 芒格之魂洞察\s*\n+[\s\S]+$/m.test(text) && !/^#{1,6}\s+(?:压缩原文|原始文字稿|对我的建议)(?:\s|$)/m.test(text);
 }
 
 export function extractInsightMarkdown(markdown) {
   const text = normalizeInsightDocument(markdown);
-  const start = text.indexOf("# Voice-X AI 洞察");
+  const start = text.search(/^# Voice-X (?:AI 洞察|ai 总结 & 洞察)/m);
   return start === -1 ? text : text.slice(start).trim();
 }
 
 function isInsightPlaceholder(markdown) { return /占位文档/.test(String(markdown || "")); }
-function normalizeInsightDocument(markdown) { return String(markdown || "").replace(/\r\n/g, "\n").replace(/^# AI 洞察(?: v2)? · .+?\s*\n+/, "").trim(); }
+function normalizeInsightDocument(markdown) { return String(markdown || "").replace(/\r\n/g, "\n").replace(/^<title>[\s\S]*?<\/title>\s*\n*/i, "").replace(/^# (?:AI 洞察|ai 总结 & 洞察)(?: v2)? · .+?\s*\n+/, "").trim(); }
 function countChars(markdown) { return Array.from(String(markdown || "").replace(/\r\n/g, "\n")).length; }
 
 export function createLarkTransport() {
   let baseToken = "";
+  let insightFields = [];
   return {
     async prepare() {
       const resolved = await runLarkJson(["base", "+url-resolve", "--url", VOICE_X_BASE_URL, "--as", "bot", "--format", "json"]);
@@ -164,12 +166,13 @@ export function createLarkTransport() {
       if (!table) throw new Error("Voice-X 内容索引表读回失败。");
       const fields = await runLarkJson(["base", "+field-list", "--base-token", baseToken, "--table-id", TABLE_ID, "--limit", "100", "--as", "bot", "--format", "json"]);
       const names = new Set((fields?.data?.fields || []).map((field) => field.name));
-      if (REQUIRED_FIELDS.some((name) => !names.has(name))) throw new Error("Voice-X 必需字段读回不完整。");
+      insightFields = INSIGHT_FIELD_CANDIDATES.filter((name) => names.has(name));
+      if (!insightFields.length || REQUIRED_FIELDS.some((name) => !names.has(name))) throw new Error("Voice-X 必需字段读回不完整。");
     },
     async listRecords({ startEpoch, endEpoch, offset, limit }) {
       if (!baseToken) throw new Error("Voice-X Base 尚未准备。");
       const filter = buildVoiceFilter(startEpoch, endEpoch);
-      const result = await runLarkJson(["base", "+record-list", "--base-token", baseToken, "--table-id", TABLE_ID, ...REQUIRED_FIELDS.flatMap((field) => ["--field-id", field]), "--filter-json", JSON.stringify(filter), "--offset", String(offset), "--limit", String(limit), "--as", "bot", "--format", "json"]);
+      const result = await runLarkJson(["base", "+record-list", "--base-token", baseToken, "--table-id", TABLE_ID, ...[...REQUIRED_FIELDS, ...insightFields].flatMap((field) => ["--field-id", field]), "--filter-json", JSON.stringify(filter), "--offset", String(offset), "--limit", String(limit), "--as", "bot", "--format", "json"]);
       const data = result?.data || {};
       const names = data.fields || [];
       const ids = data.record_id_list || [];
@@ -199,7 +202,7 @@ function normalizeRecord(record) {
   const title = scalar(record.fields?.["标题"]) || "未命名语音记录";
   const recordedAt = scalar(record.fields?.["录制时间"]);
   const coreUrl = extractUrl(record.fields?.["处理后原文"]);
-  const insightUrl = extractUrl(record.fields?.["AI 洞察文档"]);
+  const insightUrl = extractUrl(record.fields?.["AI 文档"] || record.fields?.["AI 洞察文档"]);
   const fingerprint = scalar(record.fields?.["内容指纹"]);
   if (!recordedAt) throw new Error(`Voice-X 记录 ${record.id || title} 缺少录制时间。`);
   return { id: record.id, key: fingerprint || record.id || title, title, recordedAt, coreUrl, insightUrl };

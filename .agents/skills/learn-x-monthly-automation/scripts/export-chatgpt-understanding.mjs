@@ -333,6 +333,7 @@ export async function exportChatgptUnderstanding(options = {}) {
     return { ...failure, files: current.paths };
   }
 
+  // outputSha256 tracks canonical Markdown content; replacePair persists one trailing newline.
   const hashes = { self: sha256(outputs.self), memory: sha256(outputs.memory) };
   await writeJsonAtomic(statePath, {
     schemaVersion: 1, month, status: "validated", outputSha256: hashes,

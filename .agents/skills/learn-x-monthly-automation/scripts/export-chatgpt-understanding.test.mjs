@@ -9,6 +9,7 @@ import {
   diffLines,
   exportChatgptUnderstanding,
   extractOutput,
+  sha256,
   validateOutputs
 } from "./export-chatgpt-understanding.mjs";
 
@@ -217,6 +218,9 @@ test("successful output updates both files and exposes the complete diff", async
   assert.match(result.diff, /\+模型自定结构/);
     assert.doesNotMatch(prompts[0].prompt, /旧自我阅读版/);
     assert.match(await readFile(path.join(root, "01_core/memory/ChatGPT-AI记忆版.md"), "utf8"), /新记忆/);
+    const state = JSON.parse(await readFile(path.join(root, "04_output/_dist/monthly/2026-08/chatgpt-understanding.json"), "utf8"));
+    assert.equal(state.outputSha256.self, sha256((await readFile(path.join(root, "01_core/ChatGPT-自我阅读版.md"), "utf8")).trim()));
+    assert.equal(state.outputSha256.memory, sha256((await readFile(path.join(root, "01_core/memory/ChatGPT-AI记忆版.md"), "utf8")).trim()));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

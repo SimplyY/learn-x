@@ -13,6 +13,7 @@ class FakeCollectorTransport {
 }
 
 function insight(text = "核心总结。", munger = "洞察。") { return `# Voice-X AI 洞察\n\n## 核心总结\n\n${text}\n\n## 芒格之魂洞察\n\n${munger}`; }
+function insightWithoutTitle(text = "核心总结。", munger = "洞察。") { return `## 核心总结\n\n${text}\n\n## 芒格之魂洞察\n\n${munger}`; }
 function record(id, title, recordedAt, coreUrl, rawUrl = "https://raw.invalid/RAW_SENTINEL", insightUrl = `https://insight.invalid/${id}`) {
   return { id, fields: { 标题: title, 录制时间: recordedAt, 原始文字稿: rawUrl, "处理后原文": coreUrl, "AI 洞察文档": insightUrl, 内容指纹: `hash-${id}` } };
 }
@@ -38,9 +39,35 @@ test("recognizes the live Voice-X headings and excludes full detail text", () =>
 
 test("accepts only the new two-section insight format", () => {
   assert.equal(isStructuredInsight(insight()), true);
+  assert.equal(isStructuredInsight(insightWithoutTitle()), true);
   assert.equal(isStructuredInsight("# AI 洞察 · 语音标题\n\n" + insight()), true);
   assert.equal(isStructuredInsight("# AI 洞察\n\n历史内容"), false);
   assert.equal(isStructuredInsight(`${insight()}\n\n# 压缩原文\n全文`), false);
+});
+
+test("reads the current AI 文档 column while retaining the legacy column fallback", async () => {
+  const modern = record("modern", "当前字段记录标题", "2026-06-08T09:00:00+08:00", "https://core/modern");
+  delete modern.fields["AI 洞察文档"];
+  modern.fields["AI 文档"] = "https://insight.invalid/modern";
+  const transport = new FakeCollectorTransport(new Map([[0, { hasMore: false, records: [modern] }]]), {
+    "https://core/modern": "粗加工 modern",
+    "https://insight.invalid/modern": insightWithoutTitle("现代总结", "现代洞察")
+  });
+  const payload = await collectVoiceWeekly({ week: "2026-W24", transport });
+  assert.deepEqual(payload.records.map((item) => item.id), ["modern"]);
+  assert.match(renderVoiceMarkdown(payload), /现代总结|现代洞察/);
+});
+
+test("falls back per record when both insight columns exist", async () => {
+  const legacy = record("legacy-column", "旧列记录标题", "2026-06-08T09:00:00+08:00", "https://core/legacy-column");
+  legacy.fields["AI 文档"] = "";
+  const transport = new FakeCollectorTransport(new Map([[0, { hasMore: false, records: [legacy] }]]), {
+    "https://core/legacy-column": "粗加工旧列",
+    "https://insight.invalid/legacy-column": insightWithoutTitle("旧列总结", "旧列洞察")
+  });
+  const payload = await collectVoiceWeekly({ week: "2026-W24", transport });
+  assert.deepEqual(payload.records.map((item) => item.id), ["legacy-column"]);
+  assert.match(renderVoiceMarkdown(payload), /旧列总结|旧列洞察/);
 });
 
 test("builds an inclusive weekly lower bound with supported datetime operators", () => {

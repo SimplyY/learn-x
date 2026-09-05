@@ -53,8 +53,8 @@ Run `npm run input:calendar -- --week YYYY-Www` once to collect the target ISO w
 
 Run `npm run input:voice -- --week YYYY-Www` to read the fixed Voice-X Base with `lark-cli --as bot` and write `voice.md` from completed AI insight documents.
 
-- Select by `录制时间` using the target Asia/Shanghai ISO week and require `处理后原文` non-empty. Query `AI 洞察文档` as a required field too.
-- Read the processed-original document only for its character count. The weekly body must come from a new-format `# Voice-X AI 洞察` document with `## 核心总结` followed by `## 芒格之魂洞察`.
+- Select by `录制时间` using the target Asia/Shanghai ISO week and require `处理后原文` non-empty. Query the current `AI 文档` field (falling back to legacy `AI 洞察文档`) as a required field too.
+- Read the processed-original document only for its character count. The weekly body must come from a new-format document with `## 核心总结` followed by `## 芒格之魂洞察`; the optional legacy `# Voice-X …` body title is accepted for compatibility.
 - Missing or placeholder insight is `pending`; substantive old-format insight is `legacy`. Neither enters `voice.md`, and the collector never falls back to the rough processed original.
 - Traverse every Base page, sort by recorded time and a stable business key, then fetch the core Markdown document for each row. Keep only the compressed core-summary section before any recognized advice/full-detail boundary: `# 对我的建议`、`## 3. 对我的建议（仅留档，不采集到 Learn-X）` or `# 压缩原文`; never copy the detailed full transcript after those boundaries. Old documents without a recognized boundary remain unchanged for compatibility.
 - Never fetch or copy `原始文字稿`; Voice-X Base remains the index and Docx remains the only正文 authority.

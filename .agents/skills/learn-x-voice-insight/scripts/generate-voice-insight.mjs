@@ -18,7 +18,8 @@ const defaultBridgePath = path.join(homedir(), ".codex/skills/chatgpt-web-bridge
 const { validateInsightMarkdown } = await import(pathToFileURL(voiceScript).href);
 const BASE_URL = "https://ywhome.feishu.cn/base/OBapbpVNIaw7kfsM1Q9cftlmnbe?table=tbljFGhqPgKaMD5l&view=vew4IAgkv3";
 const TABLE_ID = "tbljFGhqPgKaMD5l";
-const FIELDS = ["标题", "录制时间", "处理后原文", "AI 洞察文档", "内容指纹"];
+const REQUIRED_FIELDS = ["标题", "录制时间", "处理后原文", "内容指纹"];
+const INSIGHT_FIELD_CANDIDATES = ["AI 文档", "AI 洞察文档"];
 
 export async function runVoiceInsight(options = {}) {
   const week = normalizeWeek(options.week || defaultWeeklyReviewWeek());
@@ -176,7 +177,7 @@ export function parseBatchOutput(text, expectedIds) {
 
 function validateInsightContent(content) {
   validateInsightMarkdown(content);
-  if (!/^# Voice-X AI 洞察\s*\n+## 核心总结\s*\n+[\s\S]*?\n+## 芒格之魂洞察\s*\n+[\s\S]+$/m.test(content) || /^#{1,6}\s+(?:压缩原文|原始文字稿|对我的建议)(?:\s|$)/m.test(content)) throw new Error("AI 洞察不是新版两段格式");
+  if (!/^(?:# Voice-X (?:AI 洞察|ai 总结 & 洞察)\s*\n+)?## 核心总结\s*\n+[\s\S]*?\n+## 芒格之魂洞察\s*\n+[\s\S]+$/m.test(content) || /^#{1,6}\s+(?:压缩原文|原始文字稿|对我的建议)(?:\s|$)/m.test(content)) throw new Error("AI 洞察不是新版两段格式");
 }
 
 function renderGeneratedBlocks(blocks) { return [...blocks.entries()].map(([id, content]) => `<!-- VOICE_RECORD: ${id} -->\n${content}\n<!-- END VOICE_RECORD: ${id} -->`).join("\n\n---\n\n") + "\n"; }
@@ -189,11 +190,12 @@ async function readJson(filePath) { try { return JSON.parse(await readFile(fileP
 async function writeAtomic(filePath, content) { const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`; await writeFile(tempPath, content, "utf8"); await rename(tempPath, filePath); }
 function scalar(value) { return String(Array.isArray(value) ? value[0] ?? "" : value ?? ""); }
 function extractUrl(value) { return scalar(value).match(/https?:\/\/[^)\s\]]+/)?.[0] || ""; }
-function isStructuredInsight(text) { const value = String(text || "").replace(/\r\n/g, "\n").replace(/^# AI 洞察(?: v2)? · .+?\s*\n+/, "").trim(); return /^# Voice-X AI 洞察\s*\n+## 核心总结\s*\n+[\s\S]*?\n+## 芒格之魂洞察\s*\n+[\s\S]+$/m.test(value) && !/^#{1,6}\s+(?:压缩原文|原始文字稿|对我的建议)(?:\s|$)/m.test(value); }
+function isStructuredInsight(text) { const value = String(text || "").replace(/\r\n/g, "\n").replace(/^<title>[\s\S]*?<\/title>\s*\n*/i, "").replace(/^# (?:AI 洞察|ai 总结 & 洞察)(?: v2)? · .+?\s*\n+/, "").trim(); return /^(?:# Voice-X (?:AI 洞察|ai 总结 & 洞察)\s*\n+)?## 核心总结\s*\n+[\s\S]*?\n+## 芒格之魂洞察\s*\n+[\s\S]+$/m.test(value) && !/^#{1,6}\s+(?:压缩原文|原始文字稿|对我的建议)(?:\s|$)/m.test(value); }
 function isRoughProcessedOriginal(text) { return !/^#{1,6}\s+(?:核心总结|AI 洞察|芒格之魂洞察|压缩原文|对我的建议)(?:\s|$)/m.test(String(text || "")); }
 
 export function createVoiceTransport() {
   let baseToken = "";
+  let insightFields = [];
   return {
     async prepare() {
       const resolved = await runLarkJson(["base", "+url-resolve", "--url", BASE_URL, "--as", "bot", "--format", "json"]);
@@ -201,14 +203,15 @@ export function createVoiceTransport() {
       if (!baseToken || resolved?.data?.table_id !== TABLE_ID) throw new Error("Voice-X Base URL 解析结果不一致");
       const fields = await runLarkJson(["base", "+field-list", "--base-token", baseToken, "--table-id", TABLE_ID, "--limit", "100", "--as", "bot", "--format", "json"]);
       const names = new Set((fields?.data?.fields || []).map((field) => field.name));
-      if (FIELDS.some((field) => !names.has(field))) throw new Error("Voice-X 必需字段读回不完整");
+      insightFields = INSIGHT_FIELD_CANDIDATES.filter((field) => names.has(field));
+      if (!insightFields.length || REQUIRED_FIELDS.some((field) => !names.has(field))) throw new Error("Voice-X 必需字段读回不完整");
     },
     async listRecords({ startEpoch, endEpoch }) {
       const filter = { logic: "and", conditions: [["录制时间", ">", `ExactDate(${formatShanghaiIso(startEpoch - 1)})`], ["录制时间", "<", `ExactDate(${formatShanghaiIso(endEpoch)})`], ["处理后原文", "non_empty", null]] };
       const records = [];
       let offset = 0;
       while (true) {
-        const result = await runLarkJson(["base", "+record-list", "--base-token", baseToken, "--table-id", TABLE_ID, ...FIELDS.flatMap((field) => ["--field-id", field]), "--filter-json", JSON.stringify(filter), "--offset", String(offset), "--limit", "200", "--as", "bot", "--format", "json"]);
+        const result = await runLarkJson(["base", "+record-list", "--base-token", baseToken, "--table-id", TABLE_ID, ...[...REQUIRED_FIELDS, ...insightFields].flatMap((field) => ["--field-id", field]), "--filter-json", JSON.stringify(filter), "--offset", String(offset), "--limit", "200", "--as", "bot", "--format", "json"]);
         const data = result?.data || {};
         const page = (data.data || []).map((row, index) => ({ id: data.record_id_list?.[index], fields: Object.fromEntries((data.fields || []).map((name, fieldIndex) => [name, row[fieldIndex]])) }));
         records.push(...page);
@@ -216,7 +219,7 @@ export function createVoiceTransport() {
         if (!page.length) throw new Error("Voice-X Base 分页 has_more=true 但没有新增记录");
         offset += page.length;
       }
-      return records.map((record) => ({ id: record.id, title: scalar(record.fields?.["标题"]), recordedAt: scalar(record.fields?.["录制时间"]), coreUrl: extractUrl(record.fields?.["处理后原文"]), insightUrl: extractUrl(record.fields?.["AI 洞察文档"]) }));
+      return records.map((record) => ({ id: record.id, title: scalar(record.fields?.["标题"]), recordedAt: scalar(record.fields?.["录制时间"]), coreUrl: extractUrl(record.fields?.["处理后原文"]), insightUrl: extractUrl(record.fields?.["AI 文档"] || record.fields?.["AI 洞察文档"]) }));
     },
     async fetchMarkdown(url) {
       const result = await runLarkJson(["docs", "+fetch", "--doc", url, "--doc-format", "markdown", "--as", "bot", "--format", "json"]);

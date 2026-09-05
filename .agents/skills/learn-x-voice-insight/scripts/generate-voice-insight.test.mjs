@@ -5,8 +5,25 @@ import path from "node:path";
 import test from "node:test";
 import { parseBatchOutput, runVoiceInsight } from "./generate-voice-insight.mjs";
 
-const structured = (summary = "总结", insight = "洞察") => `# Voice-X AI 洞察\n\n## 核心总结\n\n${summary}\n\n## 芒格之魂洞察\n\n${insight}`;
+const mungerSection = (heading, id) => `### ${heading}\n\n这是围绕记录 ${id} 的独立分析，先说明底层机制，再说明它如何影响判断与行动。这里保留足够上下文，避免把洞察压缩成口号。\n\n这一层还会把观察放回具体场景，说明证据、限制与可验证的下一步，帮助读者形成可复用的判断。`;
+const structured = (id = "rec1", withTitle = true) => `${withTitle ? "# Voice-X AI 洞察\\n\\n" : ""}## 核心总结\n\n### 会谈概览\n\n记录 ${id} 的核心讨论围绕事实、选择与行动展开。\n\n### （00:00–01:00）主题\n\n**先抓住一个可验证的结论。**\n\n这段说明把处理后原文中的关键事实串起来，并指出它对后续判断的直接影响。\n\n> 【金句】「处理后原文 ${id}」\n> 【金句】「处理后原文 ${id}」\n> 【重要】「处理后原文 ${id}」\n\n因此，结论应回到事实与行动，而不是停留在抽象描述。\n\n### 最终收束\n\n把本次讨论收束为一个可执行、可复盘的判断。\n\n## 芒格之魂洞察\n\n${["底层本质", "领域同构", "反转假设", "观察尺度", "简化支点", "整合跃迁"].map((heading) => mungerSection(heading, id)).join("\\n\\n")}\n\n## 核心建议\n\n1. 先验证记录 ${id} 中最关键的事实。\n2. 把判断拆成可以观察的变量。\n3. 为主要假设设置反证条件。\n4. 选择最小可行的下一步行动。\n5. 在复盘时记录结果并修正模型。`;
 function makeRecord(id, insightUrl = "") { return { id, title: `语音 ${id}`, recordedAt: "2026-06-08T09:00:00+08:00", coreUrl: `core:${id}`, insightUrl }; }
+
+const validStructured = (id = "rec1", withTitle = true) => {
+  const headings = ["底层本质", "领域同构", "反转假设", "观察尺度", "简化支点", "整合跃迁"];
+  return [
+    ...(withTitle ? ["# Voice-X ai 总结 & 洞察", ""] : []),
+    "## 核心总结", "",
+    "### 会谈概览", "", `记录 ${id} 的核心讨论围绕事实、选择与行动展开。`, "",
+    "### （00:00–01:00）主题", "", "**先抓住一个可验证的结论。**", "", "这段说明把处理后原文中的关键事实串起来，并指出它对后续判断的直接影响。", "",
+    `> 【金句】「处理后原文 ${id}」`, `> 【金句】「处理后原文 ${id}」`, `> 【重要】「处理后原文 ${id}」`, "", "因此，结论应回到事实与行动，而不是停留在抽象描述。", "",
+    "### 最终收束", "", "把本次讨论收束为一个可执行、可复盘的判断。", "",
+    "## 芒格之魂洞察", "",
+    ...headings.flatMap((heading) => [`### ${heading}`, "", `记录 ${id} 的这一层洞察用于测试独立结构。`, ""]),
+    "## 核心建议", "",
+    `1. 先验证记录 ${id} 中最关键的事实。`, "2. 把判断拆成可以观察的变量。", "3. 为主要假设设置反证条件。", "4. 选择最小可行的下一步行动。", "5. 在复盘时记录结果并修正模型。"
+  ].join("\n");
+};
 
 class FakeTransport {
   constructor(records) { this.records = records; this.docs = new Map(records.flatMap((record) => [[record.coreUrl, record.coreText || `处理后原文 ${record.id}`], ...(record.insightUrl ? [[record.insightUrl, record.insightText || "# AI 洞察\n\n> 占位文档"]] : [])])); }
@@ -15,7 +32,7 @@ class FakeTransport {
   async fetchMarkdown(url) { return this.docs.get(url); }
 }
 
-function batch(records) { return records.map((record) => `<!-- VOICE_RECORD: ${record.id} -->\n${structured(`总结 ${record.id}`, `洞察 ${record.id}`)}\n<!-- END VOICE_RECORD: ${record.id} -->`).join("\n\n"); }
+function batch(records, withTitle = true) { return records.map((record) => `<!-- VOICE_RECORD: ${record.id} -->\n${validStructured(record.id, withTitle)}\n<!-- END VOICE_RECORD: ${record.id} -->`).join("\n\n"); }
 
 test("preview writes private context and does not call the bridge", async (t) => {
   const outputRoot = await mkdtemp(path.join(os.tmpdir(), "voice-insight-preview-"));
@@ -69,7 +86,7 @@ test("partial archive resumes from generated output without another bridge call"
   const archive = async (record) => {
     if (record.id === "rec2" && failSecond) { failSecond = false; throw new Error("temporary archive failure"); }
     record.insightUrl = `insight:${record.id}`;
-    transport.docs.set(record.insightUrl, structured());
+    transport.docs.set(record.insightUrl, validStructured());
     return { insightUrl: record.insightUrl };
   };
   const first = await runVoiceInsight({ outputRoot, week: "2026-W24", send: true, confirm: true, transport, refreshVoice: false, runBridge: async () => { bridgeCalls += 1; return { result: { status: "succeeded", text: batch(records), runId: "run1" } }; }, archive });
@@ -85,6 +102,12 @@ test("rejects duplicate or missing batch blocks before archive", () => {
   assert.throws(() => parseBatchOutput(batch([one]), ["rec1", "rec2"]), /数量或标识/);
   assert.throws(() => parseBatchOutput(`${batch([one])}\n额外文本`, ["rec1"]), /未标记文本/);
   assert.throws(() => parseBatchOutput(batch([one]).replace("END VOICE_RECORD: rec1", "END VOICE_RECORD: rec2"), ["rec1"]), /起止标识不一致/);
+});
+
+test("accepts current no-H1 insight blocks", () => {
+  const record = makeRecord("rec1");
+  const blocks = parseBatchOutput(batch([record], false), [record.id]);
+  assert.match(blocks.get(record.id), /^## 核心总结/);
 });
 
 test("resume rejects generated output with an extra record block", async (t) => {
