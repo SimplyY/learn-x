@@ -195,13 +195,17 @@ function bridgeFailureReason(bridge) {
   return "bridge-result-missing";
 }
 
-async function currentFiles(repoRoot) {
+async function currentFiles(repoRoot, month) {
   const paths = {
     self: path.join(repoRoot, "01_core/ChatGPT-自我阅读版.md"),
-    memory: path.join(repoRoot, "01_core/memory/ChatGPT-AI记忆版.md")
+    memory: path.join(repoRoot, "01_core/memory/ChatGPT-AI记忆版.md"),
+    diff: path.join(repoRoot, "04_output/_dist/monthly", month, "chatgpt-understanding.diff.md")
   };
+  const files = { self: paths.self, memory: paths.memory };
+  if (await exists(paths.diff)) files.diff = paths.diff;
   return {
     paths,
+    files,
     self: await exists(paths.self) ? await readFile(paths.self, "utf8") : "",
     memory: await exists(paths.memory) ? await readFile(paths.memory, "utf8") : ""
   };
@@ -212,7 +216,7 @@ export async function exportChatgptUnderstanding(options = {}) {
   const month = normalizeMonth(options.month);
   const statePath = sidecarPath(repoRoot, month);
   const previousState = await readJson(statePath);
-  const current = await currentFiles(repoRoot);
+  const current = await currentFiles(repoRoot, month);
   const [selfTemplate, memoryTemplate] = await Promise.all([
     readFile(path.join(repoRoot, "02_prompts/meta/chatgpt-self-reading.md"), "utf8"),
     readFile(path.join(repoRoot, "02_prompts/meta/chatgpt-ai-memory.md"), "utf8")
@@ -224,10 +228,11 @@ export async function exportChatgptUnderstanding(options = {}) {
   if (previousState?.status === "succeeded") {
     const unchanged = previousState.outputSha256?.self === sha256(current.self.trim())
       && previousState.outputSha256?.memory === sha256(current.memory.trim());
-    const promptsUnchanged = previousState.promptSha256?.self === sha256(prompts.self)
-      && previousState.promptSha256?.memory === sha256(prompts.memory);
-    if (unchanged && promptsUnchanged && !options.retry) return { status: "skipped", reason: "already-succeeded", month, files: current.paths };
-    if (!unchanged && !options.retry) return { status: "needs_review", reason: "output-modified-after-success", month, files: current.paths };
+    const promptsUnchanged = !previousState.promptSha256
+      || (previousState.promptSha256.self === sha256(prompts.self)
+        && previousState.promptSha256.memory === sha256(prompts.memory));
+    if (unchanged && promptsUnchanged && !options.retry) return { status: "skipped", reason: "already-succeeded", month, files: current.files };
+    if (!unchanged && !options.retry) return { status: "needs_review", reason: "output-modified-after-success", month, files: current.files };
   }
   const fallbackRetryNotBefore = previousState?.reason === "local-rate-limit-cooldown" && previousState.completedAt
     ? new Date(previousState.completedAt).getTime() + DEFAULT_BRIDGE_GAP_MS
@@ -235,15 +240,15 @@ export async function exportChatgptUnderstanding(options = {}) {
   const retryNotBefore = Number(previousState?.retryNotBefore || fallbackRetryNotBefore);
   if (retryNotBefore > Date.now()) {
     return {
-      status: "needs_review", reason: "local-rate-limit-cooldown", month, files: current.paths,
+      status: "needs_review", reason: "local-rate-limit-cooldown", month, files: current.files,
       retryAfterSeconds: Math.ceil((retryNotBefore - Date.now()) / 1000)
     };
   }
   if (previousState?.status === "needs_review" && !(options.retry && safeRetryReasons.has(previousState.reason))) {
-    return { status: "needs_review", reason: "previous-run-needs-review", month, files: current.paths };
+    return { status: "needs_review", reason: "previous-run-needs-review", month, files: current.files };
   }
   if (previousState?.status === "failed" && !options.retry) {
-    return { status: "needs_review", reason: "previous-run-failed", month, files: current.paths };
+    return { status: "needs_review", reason: "previous-run-failed", month, files: current.files };
   }
 
   if (previousState?.status === "running" || previousState?.status === "validated") {
@@ -253,10 +258,10 @@ export async function exportChatgptUnderstanding(options = {}) {
     if (validatedFilesMatch) {
       const recovered = { ...previousState, status: "succeeded", recovered: true, recoveredAt: new Date().toISOString() };
       await writeJsonAtomic(statePath, recovered);
-      return { status: "skipped", reason: "recovered-after-commit", month, files: current.paths };
+      return { status: "skipped", reason: "recovered-after-commit", month, files: current.files };
     }
     if (!(options.retry && safeRetryReasons.has("previous-run-uncertain"))) {
-      return { status: "needs_review", reason: "previous-run-uncertain", month, files: current.paths };
+      return { status: "needs_review", reason: "previous-run-uncertain", month, files: current.files };
     }
   }
   await writeJsonAtomic(statePath, {
@@ -288,7 +293,7 @@ export async function exportChatgptUnderstanding(options = {}) {
       completedAt: new Date().toISOString()
     };
     await writeJsonAtomic(statePath, failure);
-    return { ...failure, files: current.paths };
+    return { ...failure, files: current.files };
   }
 
   const bridgeGapMs = options.bridgeGapMs ?? DEFAULT_BRIDGE_GAP_MS;
@@ -311,7 +316,7 @@ export async function exportChatgptUnderstanding(options = {}) {
       completedAt: new Date().toISOString()
     };
     await writeJsonAtomic(statePath, failure);
-    return { ...failure, files: current.paths };
+    return { ...failure, files: current.files };
   }
 
   const outputs = {
@@ -330,13 +335,15 @@ export async function exportChatgptUnderstanding(options = {}) {
       completedAt: new Date().toISOString()
     };
     await writeJsonAtomic(statePath, failure);
-    return { ...failure, files: current.paths };
+    return { ...failure, files: current.files };
   }
 
   // outputSha256 tracks canonical Markdown content; replacePair persists one trailing newline.
   const hashes = { self: sha256(outputs.self), memory: sha256(outputs.memory) };
   await writeJsonAtomic(statePath, {
-    schemaVersion: 1, month, status: "validated", outputSha256: hashes,
+    schemaVersion: 1, month, status: "validated",
+    promptSha256: { self: sha256(prompts.self), memory: sha256(prompts.memory) },
+    outputSha256: hashes,
     runs: {
       self: { runId: selfResult.runId, conversationUrl: selfResult.conversationUrl },
       memory: { runId: memoryResult.runId, conversationUrl: memoryResult.conversationUrl }
@@ -353,11 +360,27 @@ export async function exportChatgptUnderstanding(options = {}) {
         memory: { runId: memoryResult.runId, conversationUrl: memoryResult.conversationUrl }
       }, completedAt: new Date().toISOString()
     });
-    return { status: "needs_review", reason: "validated-output-not-committed", month, files: current.paths };
+    return { status: "needs_review", reason: "validated-output-not-committed", month, files: current.files };
   }
   const diff = diffLines(current.self, outputs.self);
+  try {
+    await writeAtomic(current.paths.diff, `${diff}\n`);
+  } catch (error) {
+    const failure = {
+      schemaVersion: 1, month, status: "needs_review", reason: "diff-not-committed",
+      outputSha256: hashes, runs: {
+        self: { runId: selfResult.runId, conversationUrl: selfResult.conversationUrl },
+        memory: { runId: memoryResult.runId, conversationUrl: memoryResult.conversationUrl }
+      }, completedAt: new Date().toISOString()
+    };
+    await writeJsonAtomic(statePath, failure);
+    return { ...failure, files: current.files };
+  }
+  const files = { ...current.files, diff: current.paths.diff };
   await writeJsonAtomic(statePath, {
-    schemaVersion: 1, month, status: "succeeded", outputSha256: hashes,
+    schemaVersion: 1, month, status: "succeeded",
+    promptSha256: { self: sha256(prompts.self), memory: sha256(prompts.memory) },
+    outputSha256: hashes,
     runs: {
       self: { runId: selfResult.runId, conversationUrl: selfResult.conversationUrl },
       memory: { runId: memoryResult.runId, conversationUrl: memoryResult.conversationUrl }
@@ -365,7 +388,7 @@ export async function exportChatgptUnderstanding(options = {}) {
     completedAt: new Date().toISOString()
   });
   return {
-    status: "succeeded", month, files: current.paths, selfReading: outputs.self, diff,
+    status: "succeeded", month, files,
     outputSha256: hashes,
     runIds: { self: selfResult.runId, memory: memoryResult.runId },
     conversationUrls: { self: selfResult.conversationUrl, memory: memoryResult.conversationUrl }

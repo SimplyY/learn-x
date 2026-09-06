@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { demoteEmbeddedHeadings, renderProcessPack, validateCompressionDocument } from "./generate-monthly-process-pack.mjs";
-import { datedSections, extractWeeklyConfirmedSections, filterBoundaryContent, isPlaceholder, isValidAiReview, requiresCompressionReview, reviewMonthlyTypes, wereadMatchesDeclaredWeek, weeksIntersectingMonth } from "./monthly-process-input.mjs";
+import { datedSections, extractWeeklyConfirmedSections, filterBoundaryContent, isPlaceholder, isValidAiReview, monthlyCompressionPolicies, monthlyCompressionRatioRules, monthlyVoiceMaxChars, monthlyVoiceMaxRatio, monthlyVoiceMinRatio, requiresCompressionReview, reviewMonthlyTypes, wereadMatchesDeclaredWeek, weeksIntersectingMonth } from "./monthly-process-input.mjs";
 
 test("selects all ISO weeks intersecting a month", () => {
   assert.deepEqual(weeksIntersectingMonth("2026-06"), ["2026-W23", "2026-W24", "2026-W25", "2026-W26", "2026-W27"]);
@@ -37,6 +37,17 @@ test("extracts only substantive system-confirmed weekly output sections", () => 
 test("reviews the monthly aggregate by type instead of individual file size", () => {
   assert.equal(requiresCompressionReview("ai"), true);
   assert.equal(requiresCompressionReview("build"), true);
+  assert.equal(requiresCompressionReview("voice"), true);
+  assert.equal(monthlyVoiceMaxChars, 10_000);
+  assert.equal(monthlyVoiceMinRatio, 0.05);
+  assert.equal(monthlyVoiceMaxRatio, 0.10);
+  assert.deepEqual(monthlyCompressionRatioRules, {
+    ai: { min: 0.10, max: 0.30 },
+    build: { min: 0.02, max: 0.08 },
+    "build-bot": { min: 0.02, max: 0.08 }
+  });
+  assert.equal(monthlyCompressionPolicies.ai.signalToNoise, 0.60);
+  assert.ok(Math.abs(monthlyCompressionPolicies.ai.minRatio + (monthlyCompressionPolicies.ai.maxRatio - monthlyCompressionPolicies.ai.minRatio) * monthlyCompressionPolicies.ai.signalToNoise - 0.22) < 1e-9);
   const reviews = reviewMonthlyTypes([
     { source: "build", text: "甲".repeat(1800) },
     { source: "build", text: "乙".repeat(1800) },
@@ -82,9 +93,30 @@ test("compression requires current hashes, target-month dates, and complete sour
   }, payload), /structured bullet points|unstructured paragraph/);
 });
 
+test("enforces the monthly Voice character budget", () => {
+  const request = { path: "voice.md", sha256: "voice-hash", originalChars: 20000, source: "voice" };
+  const text = Array.from({ length: 2500 }, (_, index) => `- 核心事件${index}`).join("\n");
+  assert.ok(text.length > monthlyVoiceMaxChars);
+  assert.throws(() => validateCompressionDocument({
+    schemaVersion: 1,
+    month: "2026-06",
+    events: [{
+      id: "V001",
+      title: "voice",
+      category: "insight",
+      source: "voice",
+      importance: "core",
+      dateRange: { start: "2026-06-01", end: "2026-06-30" },
+      sourcePaths: [request.path],
+      sourceHashes: { [request.path]: request.sha256 },
+      text
+    }]
+  }, { month: "2026-06", compressionRequests: [request] }), /Monthly Voice compression/);
+});
+
 test("preserves each AI weekly review as its own structured core event", () => {
   const requests = ["W27", "W29"].map((week) => ({
-    path: `${week}/ai.md`, sha256: week, originalChars: 1200, source: "ai"
+    path: `${week}/ai.md`, sha256: week, originalChars: 300, source: "ai"
   }));
   const aiText = "#### 本周主线\n- 主线\n\n#### 核心洞察与判断\n- 洞察\n\n#### 行动反馈与未闭环问题\n- 反馈";
   const document = {
@@ -117,7 +149,7 @@ test("preserves each AI weekly review as its own structured core event", () => {
   }, { month: "2026-06", compressionRequests: requests }), /one weekly source/);
 });
 
-test("renders fixed monthly groups and demotes embedded source headings", () => {
+test("renders Input source-type groups and demotes embedded source headings", () => {
   const payload = {
     month: "2026-06",
     selection: { weeklyPaths: ["03_input/weekly/2026-W23"], missingWeeklyPaths: ["03_input/weekly/2026-W27"], monthlyPath: "03_input/monthly/2026-6" },
@@ -128,14 +160,20 @@ test("renders fixed monthly groups and demotes embedded source headings", () => 
   const compression = { stats: { sourceCount: 0, eventCount: 0, originalChars: 0, outputChars: 0 } };
   const items = [
     { title: "日记", category: "log", source: "daily", paths: ["daily.md"], text: "# 原始一级标题\n\n正文", outputChars: 8 },
-    { title: "AI W23", category: "inbox", source: "ai", paths: ["ai.md"], text: "## 原始二级标题\n\n- 核心\n- 反馈", outputChars: 12 }
+    { title: "AI W23", category: "inbox", source: "ai", paths: ["ai.md"], text: "## 原始二级标题\n\n- 核心\n- 反馈", outputChars: 12 },
+    { title: "工程 W23", category: "action", source: "build", paths: ["build-bot.md", "build.md"], text: "- 工程\n- 反馈", outputChars: 10 }
   ];
   const pack = renderProcessPack(payload, compression, items);
-  assert.ok(pack.indexOf("## 1. 月度核心判断") < pack.indexOf("## 2. 自我反馈与生命状态"));
+  assert.ok(pack.indexOf("## 1. 按 Input 文件类型组织的材料") < pack.indexOf("## 2. 来源与处理审计"));
   assert.match(pack, /未提供相交周.*2026-W27.*不阻断生成/);
-  for (const heading of ["## 0. 完整性与缺口", "## 1. 月度核心判断", "## 2. 自我反馈与生命状态", "## 3. 行动与现实反馈", "## 4. 支撑性输入", "## 5. 来源与处理审计"]) {
+  for (const heading of ["## 0. 完整性与缺口", "## 1. 按 Input 文件类型组织的材料", "## 2. 来源与处理审计", "### 1. `ai`", "### 2. `daily`", "### 3. `build + build-bot`"]) {
     assert.match(pack, new RegExp(heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
+  assert.match(pack, /- 来源文件：1 个/);
+  assert.match(pack, /#### M001｜AI W23/);
+  assert.match(pack, /#### M002｜日记/);
+  assert.match(pack, /#### M003｜工程 W23/);
+  assert.doesNotMatch(pack, /自我反馈与生命状态|月度核心判断|支撑性输入/);
   assert.match(pack, /#### 原始一级标题/);
   assert.match(pack, /#### 原始二级标题/);
   assert.doesNotMatch(pack, /\n# 原始一级标题/);

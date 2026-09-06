@@ -191,7 +191,7 @@ test("local cooldown short-circuits before the bridge is called", async () => {
   }
 });
 
-test("successful output updates both files and exposes the complete diff", async () => {
+test("successful output updates both files and writes the complete diff", async () => {
   const root = await fixture();
   try {
     await writeFile(path.join(root, "01_core/ChatGPT-自我阅读版.md"), "旧\n");
@@ -214,13 +214,46 @@ test("successful output updates both files and exposes the complete diff", async
     assert.equal(result.status, "succeeded");
     assert.deepEqual(prompts.map(({ part }) => part), ["self", "memory"]);
     assert.doesNotMatch(prompts[1].prompt, /旧/);
-    assert.match(result.diff, /--- previous/);
-  assert.match(result.diff, /\+模型自定结构/);
+    assert.equal("selfReading" in result, false);
+    assert.equal("diff" in result, false);
+    assert.match(result.files.diff, /chatgpt-understanding\.diff\.md$/);
+    const diff = await readFile(result.files.diff, "utf8");
+    assert.match(diff, /--- previous/);
+    assert.match(diff, /\+模型自定结构/);
     assert.doesNotMatch(prompts[0].prompt, /旧自我阅读版/);
     assert.match(await readFile(path.join(root, "01_core/memory/ChatGPT-AI记忆版.md"), "utf8"), /新记忆/);
     const state = JSON.parse(await readFile(path.join(root, "04_output/_dist/monthly/2026-08/chatgpt-understanding.json"), "utf8"));
     assert.equal(state.outputSha256.self, sha256((await readFile(path.join(root, "01_core/ChatGPT-自我阅读版.md"), "utf8")).trim()));
     assert.equal(state.outputSha256.memory, sha256((await readFile(path.join(root, "01_core/memory/ChatGPT-AI记忆版.md"), "utf8")).trim()));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a legacy successful state skips the bridge when outputs are unchanged", async () => {
+  const root = await fixture();
+  try {
+    const selfPath = path.join(root, "01_core/ChatGPT-自我阅读版.md");
+    const memoryPath = path.join(root, "01_core/memory/ChatGPT-AI记忆版.md");
+    const self = "稳定自我阅读版";
+    const memory = "稳定 AI 记忆版";
+    await writeFile(selfPath, `${self}\n`);
+    await writeFile(memoryPath, `${memory}\n`);
+    const statePath = path.join(root, "04_output/_dist/monthly/2026-08/chatgpt-understanding.json");
+    await mkdir(path.dirname(statePath), { recursive: true });
+    await writeFile(statePath, JSON.stringify({
+      schemaVersion: 1, month: "2026-08", status: "succeeded",
+      outputSha256: { self: sha256(self), memory: sha256(memory) }
+    }));
+    let called = false;
+    const result = await exportChatgptUnderstanding({
+      repoRoot: root,
+      month: "2026-08",
+      runBridge: async () => { called = true; return { result: { status: "succeeded" } }; }
+    });
+    assert.equal(result.status, "skipped");
+    assert.equal(called, false);
+    assert.deepEqual(result.files, { self: selfPath, memory: memoryPath });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

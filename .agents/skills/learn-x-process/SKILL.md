@@ -89,7 +89,7 @@ Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 生成最新的�
    node .agents/skills/learn-x-process/scripts/generate-monthly-process-pack.mjs --month 2026-01
    ```
 
-   该脚本先读取相交周、月度独有输入，以及各周 Weekly Output 中系统确认的标题 10「全文核心重点纪要」和标题 11「芒格之魂的洞察」，执行日期过滤、空值过滤、Daily 元数据合并和去重；不读取 Weekly Output 的其它正文代替原始 Input。周目录存在 `_source-status.json` 时，只有 `ready` 文件进入 `input.json`、Process Pack 和月度输入；`empty/failed/unavailable` 的旧文件保留但被排除，状态表仍展示 0 条或失败原因。侧车缺失保持历史周兼容，格式非法则失败关闭。`ai`、`research`、`weread`、`build`、`build-bot` 必须按价值策略语义整理；AI 必须先排除提示词/模板，再逐周保留核心事件，不能跨周压成一个段落。月记、周记、Daily、Flomo、Health、Voice、Calendar 和 Time 默认只做确定性清洗。脚本写出 `compression-requests.json` 并停止；Codex 按 `learn-x-monthly-automation/references/monthly-compression.md` 生成结构化 `compressed-events.json` 后重跑。最终写入 metadata-only `input.json` 和不超过 100 KB 的固定分层 `process-pack.md`。
+   该脚本先读取相交周、月度独有输入，以及各周 Weekly Output 中系统确认的标题 10「全文核心重点纪要」和标题 11「芒格之魂的洞察」，执行日期过滤、空值过滤、Daily 元数据合并和去重；不读取 Weekly Output 的其它正文代替原始 Input。周目录存在 `_source-status.json` 时，只有 `ready` 文件进入 `input.json`、Process Pack 和月度输入；`empty/failed/unavailable` 的旧文件保留但被排除，状态表仍展示 0 条或失败原因。侧车缺失保持历史周兼容，格式非法则失败关闭。`ai`、`research`、`weread`、`build`、`build-bot` 和 `voice` 必须按价值策略语义整理；AI 必须先排除提示词/模板，再逐周保留核心事件，不能跨周压成一个段落；月度 `ai` 保留比例控制在 10%–30%，`build` 与 `build-bot` 各控制在 2%–8%；Voice 每月一律只保留最核心事件，月度累计不超过 10,000 字符，并优先保留原文约 5%–10% 的可核查核心内容。月记、周记、Daily、Flomo、Health、Calendar 和 Time 默认只做确定性清洗。脚本写出 `compression-requests.json` 并停止；Codex 按 `learn-x-monthly-automation/references/monthly-compression.md` 生成结构化 `compressed-events.json` 后重跑。最终写入 metadata-only `input.json`、不超过 100 KB 的按 Input 文件类型分组的 `process-pack.md`，以及可点击的 `compression-review/` 临时原文审阅文件。
 6. Codex 报告 `_dist` 路径、Output 最小壳路径和输入缺口，不生成 Weekly Output 正文。
 7. 用户按 `04_output/usage.md`，把 `process-pack.md` 与需要的规则文件交给 AI Chat，自行生成并写入 Weekly Output 正文。
 8. 人工审核候选，不要直接写入正式 core 文件。
@@ -133,7 +133,7 @@ Memory 必须遵守 `resources/memory-rules.md`。只有精确标题「全文核
 
 1. Deterministic Collector：代码收集周度与月度来源，过滤月份、空值和重复元数据，并生成压缩请求与 metadata-only `input.json`。
 2. Compression：Codex 按信息价值把长来源拆成结构化事件；脚本校验哈希、日期、来源覆盖、AI 逐周核心事件、正文结构和总体积，不在代码中调用 AI。
-3. Process Pack：代码按「核心判断 / 自我反馈 / 行动反馈 / 支撑输入 / 审计」固定层级组装自包含材料包，并把来源内部标题统一降级；不做道 / 法 / 术 / Prompt / Skill 判断。
+3. Process Pack：代码先按 `03_input` 的文件类型 / 来源标识聚合，再在来源组内放置事件；保留每条事件的实际来源路径，并把来源内部标题统一降级。不按“生命状态”“行动反馈”等语义主题重分组；不做道 / 法 / 术 / Prompt / Skill 判断。
 4. Output Shell：脚本只创建对应周期 Output 最小壳；已有内容不改。
 5. AI Chat Review：用户基于 Process Pack 和规则文件，在 AI Chat 中生成 Output 正文。
 6. Memory：人工审核后，脚本抽取确认线索，Codex 再按规则无损整理为跨期上下文。

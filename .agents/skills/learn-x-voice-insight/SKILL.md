@@ -14,7 +14,7 @@ description: Learn-X 周日 Voice-X 批量洞察自动化。读取目标周已�
 - 只处理有处理后原文的记录：缺少洞察链接为 `pending`；占位洞察进入本轮；旧格式为 `legacy`；新版洞察跳过。历史处理后原文若仍含核心总结/压缩原文，也标为 `pending`，必须先重新粗加工，不能把旧深加工文档送入新 Prompt。
 - ChatGPT 通过 Ego Lite Bridge 一次批量提交。默认只生成预览；真实发送必须显式 `--send --confirm`。
 - Bridge 失败、登录失效、限流、输出不确定或结构校验失败时不写入任何洞察，不自动重发；状态保存 runId、conversationUrl、输出 hash 和原因。
-- 只在所有区块完整、唯一且顺序正确时逐条归档。新版内容替换占位；旧格式迁移使用 `--migrate-legacy --confirm` 创建 v2 文档并保留旧文档。
+- 只在所有区块完整、唯一且顺序正确时逐条归档。新版内容替换占位；旧格式迁移使用 `--migrate-legacy --confirm` 创建版本化文档并保留旧文档，历史识别兼容 v2 及更高版本。
 
 ## 命令
 

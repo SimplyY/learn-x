@@ -190,7 +190,7 @@ async function readJson(filePath) { try { return JSON.parse(await readFile(fileP
 async function writeAtomic(filePath, content) { const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`; await writeFile(tempPath, content, "utf8"); await rename(tempPath, filePath); }
 function scalar(value) { return String(Array.isArray(value) ? value[0] ?? "" : value ?? ""); }
 function extractUrl(value) { return scalar(value).match(/https?:\/\/[^)\s\]]+/)?.[0] || ""; }
-function isStructuredInsight(text) { const value = String(text || "").replace(/\r\n/g, "\n").replace(/^<title>[\s\S]*?<\/title>\s*\n*/i, "").replace(/^# (?:AI 洞察|ai 总结 & 洞察)(?: v2)? · .+?\s*\n+/, "").trim(); return /^(?:# Voice-X (?:AI 洞察|ai 总结 & 洞察)\s*\n+)?## 核心总结\s*\n+[\s\S]*?\n+## 芒格之魂洞察\s*\n+[\s\S]+$/m.test(value) && !/^#{1,6}\s+(?:压缩原文|原始文字稿|对我的建议)(?:\s|$)/m.test(value); }
+function isStructuredInsight(text) { const value = String(text || "").replace(/\r\n/g, "\n").replace(/^<title>[\s\S]*?<\/title>\s*\n*/i, "").replace(/^# (?:AI 洞察|ai 总结 & 洞察)(?: v\d+)? · .+?\s*\n+/, "").trim(); return /^(?:# Voice-X (?:AI 洞察|ai 总结 & 洞察)\s*\n+)?## 核心总结\s*\n+[\s\S]*?\n+## 芒格之魂洞察\s*\n+[\s\S]+$/m.test(value) && !/^#{1,6}\s+(?:压缩原文|原始文字稿|对我的建议)(?:\s|$)/m.test(value); }
 function isRoughProcessedOriginal(text) { return !/^#{1,6}\s+(?:核心总结|AI 洞察|芒格之魂洞察|压缩原文|对我的建议)(?:\s|$)/m.test(String(text || "")); }
 
 export function createVoiceTransport() {

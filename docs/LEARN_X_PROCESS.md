@@ -28,7 +28,7 @@ Learn-X Process 是周期输入到人工审稿的处理流程。它把指定周�
 ## 核心产物
 
 - `input.json`：metadata-only 审计清单。Monthly 记录周度与月度来源、日期过滤、哈希、去重和压缩统计，不保存正文。
-- `process-pack.md`：给 AI Chat 的自包含材料包。Monthly 由确定性过滤材料与 Codex 事件压缩共同组成，默认不超过 100 KB。
+- `process-pack.md`：给 AI Chat 的自包含材料包。Monthly 按 Input 文件类型 / 来源标识分组，由确定性过滤材料与 Codex 事件压缩共同组成；对每个语义压缩来源另生成可点击的 `_dist/monthly/YYYY-MM/compression-review/` 审阅目录，默认不超过 100 KB。
 - Output 最小壳：只保证目标文件存在，不代写正文，不覆盖已有内容。
 - `memory-candidates.md`：只收集已勾选或明确确认的候选，供 Memorize 使用。
 - Memory 压缩候选：`04_output/_dist/memory-compression/YYYY-MM/` 下的候选与 comparison 报告；只读规划、人工修改和显式晋级，不覆盖源文件。
@@ -39,7 +39,7 @@ Learn-X Process 是周期输入到人工审稿的处理流程。它把指定周�
 
 - Weekly 读取指定周目录；Monthly 读取实际存在的目标月相交周目录和指定月目录，不按文件修改时间猜测范围。缺少相交周目录或周来源时写入缺口审计，不创建空容器，也不阻断月度生成。
 - 脚本负责读取、清洗、去重、编号、来源追踪和生成材料包。
-- Monthly 的语义整理由 Codex 按 Skill 规则完成；脚本只生成请求并校验来源哈希、月份、AI 逐周核心事件、结构化正文和总大小。月记、周记、Daily、Flomo 等高密度个人输入默认只做确定性清洗；微信读书、Builder 和长调研承担主要压缩量。AI Coach 与智慧之门的新增/回顾边界由采集器负责；Process 不再对已落盘文件做来源内容排除。
+- Monthly 的语义整理由 Codex 按 Skill 规则完成；脚本只生成请求并校验来源哈希、月份、AI 逐周核心事件、结构化正文和总大小。月记、周记、Daily、Flomo 等高密度个人输入默认只做确定性清洗；微信读书、Builder 和长调研承担主要压缩量。Voice 每月只保留最核心事件，优先保留原文约 5%–10%，累计不超过 10,000 字符；`ai`/`build`/`build-bot` 按比例护栏与 0–1 信噪比计算保留比例，跨类型合并事件保留组合来源路径。AI Coach 与智慧之门的新增/回顾边界由采集器负责；Process 不再对已落盘文件做来源内容排除。
 - Monthly 额外读取各周 Weekly Output 中系统确认的「全文核心重点纪要」和非占位「芒格之魂的洞察」，不读取其它周报正文代替原始 Input。
 - AI Chat 负责生成判断草稿，人负责审核、取舍和最终沉淀。
 - 已有 Output 不覆盖；未确认候选不写入 Memory；重复执行不重复追加同一条目。

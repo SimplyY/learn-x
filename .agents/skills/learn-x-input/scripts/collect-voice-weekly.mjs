@@ -150,7 +150,7 @@ export function extractInsightMarkdown(markdown) {
 }
 
 function isInsightPlaceholder(markdown) { return /占位文档/.test(String(markdown || "")); }
-function normalizeInsightDocument(markdown) { return String(markdown || "").replace(/\r\n/g, "\n").replace(/^<title>[\s\S]*?<\/title>\s*\n*/i, "").replace(/^# (?:AI 洞察|ai 总结 & 洞察)(?: v2)? · .+?\s*\n+/, "").trim(); }
+function normalizeInsightDocument(markdown) { return String(markdown || "").replace(/\r\n/g, "\n").replace(/^<title>[\s\S]*?<\/title>\s*\n*/i, "").replace(/^# (?:AI 洞察|ai 总结 & 洞察)(?: v\d+)? · .+?\s*\n+/, "").trim(); }
 function countChars(markdown) { return Array.from(String(markdown || "").replace(/\r\n/g, "\n")).length; }
 
 export function createLarkTransport() {

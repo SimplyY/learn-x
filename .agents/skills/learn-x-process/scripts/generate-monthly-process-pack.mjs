@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { collectMonthlyProcessInput, normalizeMonthId } from "./monthly-process-input.mjs";
+import { collectMonthlyProcessInput, monthlyCompressionPolicies, monthlyVoiceMaxChars, monthlyVoiceMaxRatio, monthlyVoiceMinRatio, normalizeMonthId } from "./monthly-process-input.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
@@ -39,8 +39,9 @@ export async function generateMonthlyProcessPack(options = {}) {
     const manifest = renderManifest(payload, compression, items, processPackBytes);
     await writeFile(inputPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
     await writeFile(processPackPath, processPack, "utf8");
+    const compressionReviewDir = await writeCompressionReviewFiles(outputRoot, payload, compression);
     const shellPath = await ensureMonthlyOutputShell(payload.month);
-    results.push({ payload, compression, inputPath, processPackPath, requestsPath, compressedPath, shellPath, processPackBytes });
+    results.push({ payload, compression, inputPath, processPackPath, requestsPath, compressedPath, compressionReviewDir, shellPath, processPackBytes });
   }
 
   return results;
@@ -152,6 +153,43 @@ export function validateCompressionDocument(document, payload) {
 
   const originalChars = payload.compressionRequests.reduce((sum, request) => sum + request.originalChars, 0);
   const outputChars = [...events, ...passthroughs].reduce((sum, event) => sum + event.outputChars, 0);
+  const voiceOutputChars = [...events, ...passthroughs]
+    .filter((event) => event.source === "voice")
+    .reduce((sum, event) => sum + event.outputChars, 0);
+  const voiceCoveredPaths = new Set([...events, ...passthroughs].flatMap((event) => event.paths));
+  const voiceOriginalChars = [...requests.values()]
+    .filter((request) => request.source === "voice" && voiceCoveredPaths.has(request.path))
+    .reduce((sum, request) => sum + request.originalChars, 0);
+  const voiceMinChars = Math.ceil(voiceOriginalChars * monthlyVoiceMinRatio);
+  const voiceMaxChars = Math.floor(voiceOriginalChars * monthlyVoiceMaxRatio);
+  if (voiceOriginalChars && voiceOutputChars < voiceMinChars) {
+    throw new Error(`Monthly Voice compression is ${voiceOutputChars} characters; keep at least ${voiceMinChars} characters (${monthlyVoiceMinRatio * 100}% of source).`);
+  }
+  if (voiceOriginalChars && voiceOutputChars > voiceMaxChars) {
+    throw new Error(`Monthly Voice compression is ${voiceOutputChars} characters; keep at most ${voiceMaxChars} characters (${monthlyVoiceMaxRatio * 100}% of source).`);
+  }
+  if (voiceOutputChars > monthlyVoiceMaxChars) {
+    throw new Error(`Monthly Voice compression is ${voiceOutputChars} characters; keep only core events below ${monthlyVoiceMaxChars}.`);
+  }
+  const ratioGuidance = [];
+  for (const [source, policy] of Object.entries(monthlyCompressionPolicies)) {
+    const sourcePaths = new Set([...requests.values()].filter((request) => request.source === source).map((request) => request.path));
+    const originalChars = [...requests.values()]
+      .filter((request) => sourcePaths.has(request.path) && !omissions.some((omission) => omission.sourcePath === request.path))
+      .reduce((sum, request) => sum + request.originalChars, 0);
+    if (!originalChars) continue;
+    const outputChars = [...events, ...passthroughs]
+      .filter((event) => event.paths.some((sourcePath) => sourcePaths.has(sourcePath)))
+      .reduce((sum, event) => sum + event.outputChars, 0);
+    const ratio = outputChars / originalChars;
+    const minRatio = policy.minRatio ?? 0.01;
+    const maxRatio = policy.maxRatio ?? 0.10;
+    const recommendedRatio = minRatio + (maxRatio - minRatio) * policy.signalToNoise;
+    ratioGuidance.push({ source, signalToNoise: policy.signalToNoise, originalChars, outputChars, actualRatio: Number(ratio.toFixed(4)), recommendedRatio: Number(recommendedRatio.toFixed(4)), minRatio, maxRatio });
+    if (policy.minRatio != null && (ratio < policy.minRatio || ratio > policy.maxRatio)) {
+      throw new Error(`Monthly ${source} compression is ${(ratio * 100).toFixed(2)}%; keep between ${policy.minRatio * 100}% and ${policy.maxRatio * 100}%.`);
+    }
+  }
   return {
     items: [...events, ...passthroughs],
     omissions,
@@ -162,9 +200,69 @@ export function validateCompressionDocument(document, payload) {
       omissionCount: omissions.length,
       originalChars,
       outputChars,
-      ratio: originalChars ? Number((outputChars / originalChars).toFixed(4)) : 0
+      ratio: originalChars ? Number((outputChars / originalChars).toFixed(4)) : 0,
+      ratioGuidance
     }
   };
+}
+
+async function writeCompressionReviewFiles(outputRoot, payload, compression) {
+  const reviewDir = path.join(outputRoot, "compression-review");
+  await mkdir(reviewDir, { recursive: true });
+  const requestsBySource = new Map();
+  for (const request of payload.compressionRequests) {
+    if (!requestsBySource.has(request.source)) requestsBySource.set(request.source, []);
+    requestsBySource.get(request.source).push(request);
+  }
+  const sourceFiles = [];
+  for (const [source, requests] of [...requestsBySource.entries()].sort(([left], [right]) => left.localeCompare(right, "zh-Hans-CN"))) {
+    const requestPaths = new Set(requests.map((request) => request.path));
+    const omittedPaths = new Set(compression.omissions.map((omission) => omission.sourcePath));
+    const compressedItems = compression.items.filter((item) => item.paths.some((sourcePath) => requestPaths.has(sourcePath)));
+    const originalChars = requests.reduce((sum, request) => sum + request.originalChars, 0);
+    const includedOriginalChars = requests.filter((request) => !omittedPaths.has(request.path)).reduce((sum, request) => sum + request.originalChars, 0);
+    const outputChars = compressedItems.reduce((sum, item) => sum + item.outputChars, 0);
+    const fileName = `${safeReviewName(source)}.md`;
+    const lines = [
+      `# 月度压缩审阅｜${payload.month}｜${source}`,
+      "",
+      "> 临时审阅文件：原始 Input 保持原文；下方附本类型进入 Process Pack 的压缩结果。",
+      `> 全部原始字符：${originalChars}；本月纳入原始字符：${includedOriginalChars}；压缩字符：${outputChars}；本月纳入保留比例：${includedOriginalChars ? (outputChars / includedOriginalChars * 100).toFixed(2) : "0.00"}%`,
+      "",
+      "## 原始 Input",
+      ""
+    ];
+    for (const request of requests) {
+      lines.push(`### ${request.path}`, "", `- 原始字符：${request.originalChars}`, `- 处理状态：${omittedPaths.has(request.path) ? "本月未纳入 Process Pack" : "本月纳入"}`, "", request.rawText.trim(), "");
+    }
+    lines.push("## 压缩后进入 Process Pack 的内容", "");
+    if (!compressedItems.length) lines.push("- 本类型没有进入 Pack 的压缩事件。", "");
+    for (const item of compressedItems) {
+      lines.push(`### ${item.id}｜${item.title}`, "", `- 来源：${item.paths.map((entry) => `\`${entry}\``).join("、")}`, `- 压缩字符：${item.outputChars}`, "", item.text, "");
+    }
+    await writeFile(path.join(reviewDir, fileName), `${lines.join("\n").trim()}\n`, "utf8");
+    const policy = monthlyCompressionPolicies[source];
+    const minRatio = policy?.minRatio ?? 0.01;
+    const maxRatio = policy?.maxRatio ?? 0.10;
+    const recommendedRatio = policy ? minRatio + (maxRatio - minRatio) * policy.signalToNoise : null;
+    sourceFiles.push({ source, fileName, originalChars, includedOriginalChars, outputChars, signalToNoise: policy?.signalToNoise, recommendedRatio });
+  }
+  const indexLines = [
+    `# 月度压缩审阅索引｜${payload.month}`,
+    "",
+    "> 点击来源类型即可查看原始 Input 与对应的压缩结果。文件位于本次月度 `_dist` 临时目录。",
+    "",
+    "| Input 文件类型 | 信噪比 | 推荐保留 | 全部原始字符 | 本月纳入原始字符 | 压缩字符 | 纳入保留比例 | 审阅文件 |",
+    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+    ...sourceFiles.map(({ source, fileName, originalChars, includedOriginalChars, outputChars, signalToNoise, recommendedRatio }) => `| ${source} | ${signalToNoise == null ? "—" : signalToNoise.toFixed(2)} | ${recommendedRatio == null ? "—" : (recommendedRatio * 100).toFixed(1) + "%"} | ${originalChars} | ${includedOriginalChars} | ${outputChars} | ${includedOriginalChars ? (outputChars / includedOriginalChars * 100).toFixed(2) : "0.00"}% | [打开原文与压缩结果](./${fileName}) |`),
+    ""
+  ];
+  await writeFile(path.join(reviewDir, "index.md"), `${indexLines.join("\n")}\n`, "utf8");
+  return reviewDir;
+}
+
+function safeReviewName(source) {
+  return String(source).replace(/[^\p{L}\p{N}._-]+/gu, "-");
 }
 
 export function validateStructuredCompressionText(text, eventId, requests = []) {
@@ -258,18 +356,22 @@ export function renderProcessPack(payload, compression, items) {
     ""
   ];
 
+  lines.push("## 1. 按 Input 文件类型组织的材料", "");
   let itemIndex = 0;
-  for (const group of processPackGroups) {
-    const groupItems = items.filter((item) => group.matches(item)).sort(comparePackItems);
-    lines.push(group.heading, "");
-    if (!groupItems.length) {
-      lines.push("- 本月无有效来源。", "");
-      continue;
-    }
-    for (const item of groupItems) {
+  for (const group of groupSourceItems(items)) {
+    const summary = sourceGroupSummary(payload, group.items);
+    lines.push(
+      `### ${group.index}. \`${group.source}\``,
+      "",
+      `- 来源文件：${summary.paths.length} 个，${summary.paths.map((entry) => `\`${entry}\``).join("、")}`,
+      `- 原始字符：${summary.rawChars}；进入 Pack：${group.items.length} 个事件，${summary.outputChars} 字符`,
+      ...(renderSourcePolicySummary(group.source) ? [`- 信噪比策略：${renderSourcePolicySummary(group.source)}`] : []),
+      ""
+    );
+    for (const item of group.items) {
       itemIndex += 1;
       lines.push(
-        `### M${String(itemIndex).padStart(3, "0")}｜${item.title}`,
+        `#### M${String(itemIndex).padStart(3, "0")}｜${item.title}`,
         "",
         `- 类型：${item.category} / ${item.source}`,
         `- 来源：${item.paths.map((entry) => `\`${entry}\``).join("、")}`,
@@ -282,7 +384,7 @@ export function renderProcessPack(payload, compression, items) {
     }
   }
   lines.push(
-    "## 5. 来源与处理审计",
+    "## 2. 来源与处理审计",
     "",
     `- 原始来源：${payload.stats.sourceCount} 个；最终事件：${items.length} 个。`,
     `- 语义压缩：${compression.stats.sourceCount} 个来源，${compression.stats.originalChars} → ${compression.stats.outputChars} 字符。`,
@@ -291,17 +393,6 @@ export function renderProcessPack(payload, compression, items) {
   );
   return `${lines.join("\n").trim()}\n`;
 }
-
-const coreSources = new Set(["monthly-journal", "ai", "ai-synthesis", "weekly-core", "weekly-munger"]);
-const selfSources = new Set(["weekly", "daily", "flomo", "health", "voice"]);
-const actionSources = new Set(["coach", "build", "build-bot", "feedback", "meeting", "chat"]);
-const supportSources = new Set(["weread", "calendar", "time", "research", "podcast"]);
-const processPackGroups = [
-  { heading: "## 1. 月度核心判断", matches: (item) => coreSources.has(item.source) },
-  { heading: "## 2. 自我反馈与生命状态", matches: (item) => selfSources.has(item.source) },
-  { heading: "## 3. 行动与现实反馈", matches: (item) => actionSources.has(item.source) },
-  { heading: "## 4. 支撑性输入", matches: (item) => supportSources.has(item.source) || !coreSources.has(item.source) && !selfSources.has(item.source) && !actionSources.has(item.source) }
-];
 
 const sourcePriority = new Map([
   ["monthly-journal", 0], ["ai", 1], ["ai-synthesis", 2], ["weekly-core", 3], ["weekly-munger", 4],
@@ -314,6 +405,61 @@ function comparePackItems(left, right) {
   return (sourcePriority.get(left.source) ?? 99) - (sourcePriority.get(right.source) ?? 99)
     || left.paths[0].localeCompare(right.paths[0], "zh-Hans-CN")
     || left.title.localeCompare(right.title, "zh-Hans-CN");
+}
+
+function groupSourceItems(items) {
+  const groups = new Map();
+  for (const item of items) {
+    const sourceGroup = inputSourceGroup(item);
+    if (!groups.has(sourceGroup)) groups.set(sourceGroup, []);
+    groups.get(sourceGroup).push(item);
+  }
+  return [...groups.entries()]
+    .sort(([left], [right]) => sourceGroupPriority(left) - sourceGroupPriority(right) || left.localeCompare(right, "zh-Hans-CN"))
+    .map(([source, groupItems], index) => ({
+      index: index + 1,
+      source,
+      items: groupItems.sort(comparePackItems)
+    }));
+}
+
+function inputSourceGroup(item) {
+  if (["weekly-core", "weekly-munger"].includes(item.source)) return item.source;
+  const types = [...new Set(item.paths.map((sourcePath) => path.basename(sourcePath, path.extname(sourcePath))))]
+    .filter((source) => !/^\d{4}-\d{2}$/.test(source));
+  if (!types.length) return item.source;
+  return types.sort((left, right) => sourcePriorityForType(left) - sourcePriorityForType(right) || left.localeCompare(right, "zh-Hans-CN")).join(" + ");
+}
+
+function sourceGroupPriority(sourceGroup) {
+  return sourceGroup.split(" + ").reduce((priority, source) => Math.min(priority, sourcePriorityForType(source)), 99);
+}
+
+function sourcePriorityForType(source) {
+  return sourcePriority.get(source) ?? 99;
+}
+
+function sourceGroupSummary(payload, items) {
+  const paths = [...new Set(items.flatMap((item) => item.paths))].sort((left, right) => left.localeCompare(right, "zh-Hans-CN"));
+  const sourceByPath = new Map(payload.sources.map((source) => [source.path, source]));
+  const rawChars = paths.reduce((sum, sourcePath) => sum + (sourceByPath.get(sourcePath)?.chars ?? 0), 0);
+  return {
+    paths,
+    rawChars: rawChars || items.reduce((sum, item) => sum + (item.originalChars || 0), 0),
+    outputChars: items.reduce((sum, item) => sum + item.outputChars, 0)
+  };
+}
+
+function renderSourcePolicySummary(sourceGroup) {
+  const summaries = sourceGroup.split(" + ").map((source) => {
+    const policy = monthlyCompressionPolicies[source];
+    if (!policy) return null;
+    const minRatio = policy.minRatio ?? 0.01;
+    const maxRatio = policy.maxRatio ?? 0.10;
+    const recommendedRatio = minRatio + (maxRatio - minRatio) * policy.signalToNoise;
+    return `${source} SNR ${policy.signalToNoise.toFixed(2)}，推荐保留 ${(recommendedRatio * 100).toFixed(1)}%，范围 ${(minRatio * 100).toFixed(0)}%–${(maxRatio * 100).toFixed(0)}%`;
+  }).filter(Boolean);
+  return summaries.join("；");
 }
 
 export function demoteEmbeddedHeadings(text) {
