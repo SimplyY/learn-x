@@ -63,6 +63,16 @@
           "id": "learning-insight.munger-soul",
           "name": "芒格之魂",
           "summary": "以芒格之魂作为子类型 Prompt，用多元模型、反过来想和长期理性展开问题。"
+        },
+        {
+          "id": "learning-insight.concept-teacher",
+          "name": "讲解概念",
+          "summary": "用视觉化类比帮学习者看见并理解抽象概念。"
+        },
+        {
+          "id": "learning-insight.first-principles",
+          "name": "公理与第一性原理",
+          "summary": "探寻领域的第一性原理，找到不能再简化却解释一切的真理。"
         }
       ],
       "avoid": [
