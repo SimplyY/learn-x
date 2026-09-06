@@ -126,6 +126,7 @@
           "id": "reflective-decision.weekly-output",
           "name": "周输出",
           "summary": "基于 Weekly Output 规则和 _dist 材料生成周度报告。",
+          "defaultEnhancerIds": ["language-edge", "one-step-deeper"],
           "includeBaseRecommendedSources": false,
           "recommendedSources": [
             "01_core/道",
@@ -139,6 +140,7 @@
           "id": "reflective-decision.monthly-output",
           "name": "月输出",
           "summary": "基于 Monthly Output 规则和 _dist 材料生成月度报告。",
+          "defaultEnhancerIds": ["language-edge", "one-step-deeper"],
           "includeBaseRecommendedSources": false,
           "recommendedSources": [
             "01_core/道",
@@ -301,14 +303,14 @@
       "summary": "把重要判断压缩成短而硬、受证据约束、能触发反思的认知钉子。"
     },
     {
-      "id": "clarify-question",
-      "name": "问清问题",
-      "summary": "问题模糊时启用，先澄清目标、约束和真正问题。"
-    },
-    {
       "id": "one-step-deeper",
       "name": "多思考一步",
       "summary": "复杂问题时启用，向上看系统，向下看结构，旁边找反例。"
+    },
+    {
+      "id": "clarify-question",
+      "name": "问清问题",
+      "summary": "问题模糊时启用，先澄清目标、约束和真正问题。"
     },
     {
       "id": "reality-check",

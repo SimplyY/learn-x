@@ -668,6 +668,7 @@ function currentFileTitle() {
 }
 
 export function applyChatPackSelection(message) {
+  resetEnhancersForSubtype();
   const type = activeDialogueType();
   const subtype = activeDialogueSubtype();
   els.scenarioEyebrow.textContent = subtype?.needsDomain
@@ -854,9 +855,21 @@ function normalizedSubtypes(type) {
       needsDomain: Boolean(subtype.needsDomain),
       includeBaseRecommendedSources: subtype.includeBaseRecommendedSources !== false,
       recommendedSources: subtype.recommendedSources || [],
+      defaultEnhancerIds: subtype.defaultEnhancerIds || [],
       protocol: subtype.protocol || ""
     };
   });
+}
+
+function resetEnhancersForSubtype() {
+  const defaults = normalizeEnhancerIds(activeDialogueSubtype()?.defaultEnhancerIds || []);
+  const next = new Set(defaults);
+  const same =
+    state.activeEnhancerIds.size === next.size && [...state.activeEnhancerIds].every((id) => next.has(id));
+  if (same) return;
+  state.activeEnhancerIds = next;
+  localStorage.setItem(enhancerKey(), JSON.stringify([...state.activeEnhancerIds]));
+  renderEnhancers();
 }
 
 function isEmptyPromptType(type) {
