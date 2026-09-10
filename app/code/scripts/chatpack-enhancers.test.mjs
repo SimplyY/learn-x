@@ -12,7 +12,7 @@ test("配置契约：周输出/月输出默认增强器 id 必须存在", async 
   for (const subtypeId of ["reflective-decision.weekly-output", "reflective-decision.monthly-output"]) {
     const subtype = subtypes.find((item) => item.id === subtypeId);
     assert.ok(subtype, `缺少子类型 ${subtypeId}`);
-    assert.deepEqual(subtype.defaultEnhancerIds, ["language-edge", "one-step-deeper"]);
+    assert.deepEqual(subtype.defaultEnhancerIds, ["one-step-deeper"]);
     for (const enhancerId of subtype.defaultEnhancerIds) {
       assert.ok(enhancerIds.has(enhancerId), `${subtypeId} 引用了不存在的增强器 ${enhancerId}`);
     }
@@ -38,14 +38,13 @@ test("切换子类型时增强器重置：周输出默认勾选，其他子类�
             {
               id: "reflective-decision.weekly-output",
               name: "周输出",
-              defaultEnhancerIds: ["language-edge", "one-step-deeper"]
+              defaultEnhancerIds: ["one-step-deeper"]
             },
             { id: "reflective-decision.plain", name: "普通" }
           ]
         }
       ],
       enhancers: [
-        { id: "language-edge", name: "语言锋芒" },
         { id: "one-step-deeper", name: "多思考一步" },
         { id: "munger-soul", name: "芒格之魂" }
       ]
@@ -92,8 +91,8 @@ test("切换子类型时增强器重置：周输出默认勾选，其他子类�
     const clickSubtype = (name) => subtypeButtons().find((button) => button.textContent.trim() === name).click();
     const clickEnhancer = (name) => enhancerButtons().find((button) => button.textContent.trim() === name).click();
 
-    assert.deepEqual(stored(), ["language-edge", "one-step-deeper"]);
-    assert.deepEqual(activeEnhancerNames(), ["语言锋芒", "多思考一步"]);
+    assert.deepEqual(stored(), ["one-step-deeper"]);
+    assert.deepEqual(activeEnhancerNames(), ["多思考一步"]);
 
     clickSubtype("普通");
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -104,8 +103,8 @@ test("切换子类型时增强器重置：周输出默认勾选，其他子类�
     assert.deepEqual(stored(), ["munger-soul"]);
     clickSubtype("周输出");
     await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.deepEqual(stored(), ["language-edge", "one-step-deeper"]);
-    assert.deepEqual(activeEnhancerNames(), ["语言锋芒", "多思考一步"]);
+    assert.deepEqual(stored(), ["one-step-deeper"]);
+    assert.deepEqual(activeEnhancerNames(), ["多思考一步"]);
   } finally {
     dom.window.close();
     for (const [key, value] of Object.entries(previous)) {
