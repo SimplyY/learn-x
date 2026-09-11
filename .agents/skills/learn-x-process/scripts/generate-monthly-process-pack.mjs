@@ -39,7 +39,7 @@ export async function generateMonthlyProcessPack(options = {}) {
     const manifest = renderManifest(payload, compression, items, processPackBytes);
     await writeFile(inputPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
     await writeFile(processPackPath, processPack, "utf8");
-    const compressionReviewDir = await writeCompressionReviewFiles(outputRoot, payload, compression);
+    const compressionReviewDir = await writeCompressionReviewFiles(outputRoot, payload, compression, items);
     const shellPath = await ensureMonthlyOutputShell(payload.month);
     results.push({ payload, compression, inputPath, processPackPath, requestsPath, compressedPath, compressionReviewDir, shellPath, processPackBytes });
   }
@@ -206,7 +206,7 @@ export function validateCompressionDocument(document, payload) {
   };
 }
 
-async function writeCompressionReviewFiles(outputRoot, payload, compression) {
+async function writeCompressionReviewFiles(outputRoot, payload, compression, items) {
   const reviewDir = path.join(outputRoot, "compression-review");
   await mkdir(reviewDir, { recursive: true });
   const requestsBySource = new Map();
@@ -252,9 +252,19 @@ async function writeCompressionReviewFiles(outputRoot, payload, compression) {
     "",
     "> 点击来源类型即可查看原始 Input 与对应的压缩结果。文件位于本次月度 `_dist` 临时目录。",
     "",
+    "## 需要语义压缩的来源",
+    "",
     "| Input 文件类型 | 信噪比 | 推荐保留 | 全部原始字符 | 本月纳入原始字符 | 压缩字符 | 纳入保留比例 | 审阅文件 |",
     "| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
     ...sourceFiles.map(({ source, fileName, originalChars, includedOriginalChars, outputChars, signalToNoise, recommendedRatio }) => `| ${source} | ${signalToNoise == null ? "—" : signalToNoise.toFixed(2)} | ${recommendedRatio == null ? "—" : (recommendedRatio * 100).toFixed(1) + "%"} | ${originalChars} | ${includedOriginalChars} | ${outputChars} | ${includedOriginalChars ? (outputChars / includedOriginalChars * 100).toFixed(2) : "0.00"}% | [打开原文与压缩结果](./${fileName}) |`),
+    "",
+    "## 全部 Input 文件类型",
+    "",
+    "> 原始字符来自本月实际读取的 Input 文件；Pack 字符按来源类型归属事件。跨多个类型的共享压缩事件会在各自类型中计入一次，但不会在 Process Pack 中复制。",
+    "",
+    "| Input 文件类型 | 文件数 | 原始字符 | Pack 事件 | Pack 字符 | 处理状态 | 审阅文件 |",
+    "| --- | ---: | ---: | ---: | ---: | --- | --- |",
+    ...renderAllSourceStats(payload, items, sourceFiles),
     ""
   ];
   await writeFile(path.join(reviewDir, "index.md"), `${indexLines.join("\n")}\n`, "utf8");
@@ -263,6 +273,45 @@ async function writeCompressionReviewFiles(outputRoot, payload, compression) {
 
 function safeReviewName(source) {
   return String(source).replace(/[^\p{L}\p{N}._-]+/gu, "-");
+}
+
+function renderAllSourceStats(payload, items, sourceFiles) {
+  const stats = new Map();
+  const ensure = (source) => {
+    if (!stats.has(source)) stats.set(source, { source, fileCount: 0, rawChars: 0, packEvents: 0, packChars: 0, statuses: new Map(), hasInputFile: false });
+    return stats.get(source);
+  };
+  for (const entry of payload.sources) {
+    const stat = ensure(entry.source);
+    stat.fileCount += 1;
+    stat.rawChars += entry.chars;
+    stat.hasInputFile ||= entry.origin !== "weekly-output";
+    stat.statuses.set(entry.status, (stat.statuses.get(entry.status) || 0) + 1);
+  }
+  for (const item of items) {
+    for (const source of inputSourceTypes(item)) {
+      const stat = ensure(source);
+      stat.packEvents += 1;
+      stat.packChars += item.outputChars;
+    }
+  }
+  const reviewBySource = new Map(sourceFiles.map((entry) => [entry.source, entry.fileName]));
+  const compressedSources = new Set(sourceFiles.map((entry) => entry.source));
+  return [...stats.values()]
+    .filter((stat) => !compressedSources.has(stat.source) && stat.hasInputFile)
+    .sort((left, right) => left.source.localeCompare(right.source, "zh-Hans-CN"))
+    .map((stat) => {
+      const status = [...stat.statuses.entries()].map(([name, count]) => `${name}×${count}`).join("；") || "无文件";
+      const review = reviewBySource.get(stat.source);
+      return `| ${stat.source} | ${stat.fileCount} | ${stat.rawChars} | ${stat.packEvents} | ${stat.packChars} | ${status} | ${review ? `[打开审阅文件](./${review})` : "—"} |`;
+    });
+}
+
+function inputSourceTypes(item) {
+  if (["weekly-core", "weekly-munger"].includes(item.source)) return [item.source];
+  const types = [...new Set(item.paths.map((sourcePath) => path.basename(sourcePath, path.extname(sourcePath))))]
+    .filter((source) => !/^\d{4}-\d{2}$/.test(source));
+  return types.length ? types : [item.source];
 }
 
 export function validateStructuredCompressionText(text, eventId, requests = []) {

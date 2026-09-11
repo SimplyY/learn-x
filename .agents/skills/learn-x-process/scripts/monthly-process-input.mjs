@@ -9,8 +9,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
 const supportedExtensions = new Set([".md", ".txt", ".json", ".html", ".htm"]);
 const ignoredNames = new Set(["README.md", ".gitkeep", "weekly-inputs.md"]);
-const compressedSources = new Set(["ai", "research", "weread", "build", "build-bot", "coach", "podcast", "voice"]);
-const preservedTypes = new Set(["monthly-journal", "weekly", "daily", "flomo", "health", "calendar", "time", "weekly-core", "weekly-munger"]);
+const compressedSources = new Set(["ai", "research", "weread", "build", "build-bot", "coach", "podcast", "voice", "calendar"]);
+const preservedTypes = new Set(["monthly-journal", "weekly", "daily", "flomo", "health", "time", "weekly-core", "weekly-munger"]);
 const typeReviewThresholdBytes = 10 * 1024;
 export const monthlyVoiceMaxChars = 10_000;
 export const monthlyVoiceMinRatio = 0.05;
@@ -20,6 +20,7 @@ export const monthlyCompressionPolicies = Object.freeze({
   build: Object.freeze({ signalToNoise: 0.67, minRatio: 0.02, maxRatio: 0.08 }),
   "build-bot": Object.freeze({ signalToNoise: 0.33, minRatio: 0.02, maxRatio: 0.08 }),
   voice: Object.freeze({ signalToNoise: 0.30, minRatio: 0.05, maxRatio: 0.10 }),
+  calendar: Object.freeze({ signalToNoise: 0.15, minRatio: 0.08, maxRatio: 0.15 }),
   weread: Object.freeze({ signalToNoise: 0.15 }),
   wisdom: Object.freeze({ signalToNoise: 0.20 }),
   WeChat: Object.freeze({ signalToNoise: 0.25 }),
@@ -85,6 +86,11 @@ export async function collectMonthlyProcessInput(monthId) {
     if (isPlaceholder(content)) {
       source.status = "excluded";
       source.reason = "empty-or-placeholder";
+      continue;
+    }
+    if (sourceName === "ai.generated") {
+      source.status = "excluded";
+      source.reason = "generated-temporary-not-chatpack";
       continue;
     }
     if (sourceName === "weread" && !wereadMatchesDeclaredWeek(content, file.week)) {
