@@ -41,7 +41,7 @@ npm run memory:weekly -- --week 2026-W27
 
 ### 默认采集范围
 
-阶段 1 默认执行本 Skill 所列的全部自动来源：Flomo、微信读书、Time-X 日历、Voice-X、飞书日记与 AI Coach、智慧之门；同时检查独立产物 `build.md`、`build-bot.md`、`health.md`。不得因为历史自动化 prompt、旧运行记忆或上一次的临时选择，缩减本轮来源，也不要逐项询问是否采集。用户明确说“本轮只采集……”时才临时缩小范围，该选择仅对当前目标周、当前运行有效；下一次自动恢复全量。
+阶段 1 默认执行本 Skill 所列的全部自动来源：Flomo（含 Flomo 需回顾增量导入）、微信读书、Time-X 日历、Voice-X、飞书日记与 AI Coach、智慧之门；同时检查独立产物 `build.md`、`build-bot.md`、`health.md`。不得因为历史自动化 prompt、旧运行记忆或上一次的临时选择，缩减本轮来源，也不要逐项询问是否采集。用户明确说“本轮只采集……”时才临时缩小范围，该选择仅对当前目标周、当前运行有效；下一次自动恢复全量。
 
 `input:daily-coach` 是一个物理上的联合采集入口，但逻辑上必须分别记录 `daily` 和 `coach` 状态：`coach` 为 0 条只表示成功空结果，不得把它解释为 `daily` 不可用；只有日记查询本身失败或无法取得有效日记记录时，才将 `daily` 标为 `failed/unavailable`。
 
@@ -97,6 +97,13 @@ Deep Code X 另有一个独立的周日调度（`learn-x-voice-insight`，20:00�
 1. 确保 `03_input/weekly/YYYY-Www/` 存在。保留目录中已有的人工内容；AI 生成阶段先写入 `ai.generated.md` 和状态侧车，通过结构与完整性校验后自动移动为正式 `ai.md`，并在 `_dist` 保留审计副本；不得预建 `weekly.md`。
 2. 按“默认采集范围”采集本地自动来源，并提示飞书机器人侧自查：
    - Flomo：按“启动规则 4”通过 Ego Lite 任务空间打开或复用 `https://v.flomoapp.com/mine`，按 Asia/Shanghai 的目标周起止时间检索；仅在尚未覆盖下界时加载下一批。写入前整条排除可确认属于 Learn-X 生成产物的 memo，不把它的周记正文拆开保留：正文或标签命中 `Learn-X 周记`、`Learn-X 记忆`、`Learn-X 月记`、`#learn-x/`、`# 飞书周记`、`AI 基础草稿` 或 `Learn-X 同步校验` 等标识时，整条不写入 `flomo.md`；该过滤不影响当前唯一置顶镜像。其余当前页面实际读到、属于目标周的笔记按 `(创建时间, 正文)` 去重后按创建时间正序写入 `flomo.md`。同一次页面读取中，另外同步当前唯一置顶笔记到 `01_core/道/flomo-top.md`：文件包含来源链接、原始创建时间、同步周和正文；每周覆盖更新，不保留旧版本。若置顶数量为 0 或多于 1，保留旧镜像并提示，不阻断其他来源。`flomo.md` 仍只包含过滤后的目标周数据；旧 `flomo.md` 只作为差异报告依据，不得用来补全当前 Flomo，也不得只取首屏或使用旧本地导出替代。
+   - Flomo 需回顾增量导入：在 Flomo `flomo.md` 采集完成后、`npm run input:wisdom` 之前执行（先导入再采集智慧之门，保证本周新导入记录进入本周 `wisdom.md`）：
+
+     ```bash
+     node /Users/yuwei/code/research-x/.agents/skills/wisdom-gate/scripts/import-flomo-review.mjs --week <目标周> --apply
+     ```
+
+     该命令把目标周内带 `#需回顾` 标签的 Flomo 笔记写入智慧之门 Base（`来源标识=flomo:<memo_id>` 幂等去重），`智慧时效性`（短期/中期/长期）与 `层级`（道法术器）由 MoonBridge 按内容初判；初判只是草稿，用户可随时在 Base 修改。`#需回顾` 标签本身即用户确认，因此增量模式直接 `--apply`，不要求先 dry-run。脚本自身 fail closed：时间不可解析、正文不完整、初判非法或写回读回失败即停止。Ego Lite 桌面路径不可用时与 Flomo 来源一并跳过并报告，不阻断周流程；导入失败时在汇报中提示手动运行一次全量模式（缺省不带 `--week`）兜底。结果 JSON 的 `report` 字段（新增条目含标题、层级、时效性、一句话精华与 Flomo/Base 双链接）必须原样纳入阶段 1 汇报。
    - 微信读书：按 `learn-x-input` 执行 `npm run input:weread -- --week YYYY-Www`。验证输出保留目标周、Asia/Shanghai 范围、生成时间、阅读统计、进度快照、个人划线和想法，并包含完整 7 天，包括 0 分钟日期。
    - Time-X 日历：按 `learn-x-input` 执行一次 `npm run input:calendar -- --week YYYY-Www`，只读取固定 `Time-X｜随时记` 共享日历，将日历汇总及每个日历块的日期、起止、标题、描述写入 `calendar.md`。不得读取用户主日历，不保存日历人员、地点、ID、链接或系统元数据。
    - Voice-X：按 `learn-x-input` 执行 `npm run input:voice -- --week YYYY-Www`，只读取目标 ISO 周已归档的新版 AI 洞察文档，将完整结构化洞察写入 `voice.md`。缺失/占位计入 `pending`，旧格式计入 `legacy`，不回退到处理后原文；30,000 字符只是强提示线，不是采集门槛。统一生成 Process Pack 时仅压缩一次，目标保留约 20%，并报告整体及各文件的原始字符、压缩字符和保留比例。周日 `npm run voice:insight -- --week YYYY-Www` 是独立阶段，不由周一流程隐式触发；0 条、查询或文档失败均按来源状态处理并保留旧文件。
@@ -114,7 +121,7 @@ Deep Code X 另有一个独立的周日调度（`learn-x-voice-insight`，20:00�
 4. 阶段 1 不采集飞书周记，不生成 `weekly.md`、`_dist` 或 Weekly Output。
 5. ChatGPT 输入只读取 `03_input/weekly/00_template/ai.md` 提示词，并附加目标周范围；不主动发送 `daily.md`、`flomo.md` 或其它本地周材料。桥接失败时报告原因和完整人工 fallback prompt；成功结果先落为 `ai.generated.md`，完整性校验通过后自动成为正式 `ai.md`，并保留审计副本。回复未通过结构验收时写入 `_ai-invalid.generated.md` 和验证原因；后续代码修复能确定性恢复时优先本地恢复，不重复外发，否则只有用户显式 `--retry` 才能重新提交。
 
-阶段 1 汇报必须包含：目标周、完整来源状态表、AI 草稿状态（`generated` / `needs_review` / `failed` / `confirmed`）、生成结果路径或 fallback prompt、飞书周记草稿链接、跳过字段（明确列出 `回顾最近笔记 & flomo 洞察` 由用户填写）、阻塞项、当前位置、下一步和再下一步。来源状态表必须区分 `ready`、`empty`、`failed`、`unavailable`，并明确旧文件是否保留但不计入本轮；成功空结果单独报告“0 条记录，文件未生成”，失败/不可用不得写成 0 条。输入文件字数表只统计 `ready` 文件，`ai.md`、`ai.generated.md`、`weekly.md` 和人工周记不纳入。
+阶段 1 汇报必须包含：目标周、完整来源状态表、Flomo 需回顾增量导入结果（`report` 字段原文：新增清单含标题/层级/时效性/精华/双链接，或失败与跳过说明；0 条新增时明确报告“本周 0 条需回顾新增”）、AI 草稿状态（`generated` / `needs_review` / `failed` / `confirmed`）、生成结果路径或 fallback prompt、飞书周记草稿链接、跳过字段（明确列出 `回顾最近笔记 & flomo 洞察` 由用户填写）、阻塞项、当前位置、下一步和再下一步。来源状态表必须区分 `ready`、`empty`、`failed`、`unavailable`，并明确旧文件是否保留但不计入本轮；成功空结果单独报告“0 条记录，文件未生成”，失败/不可用不得写成 0 条。输入文件字数表只统计 `ready` 文件，`ai.md`、`ai.generated.md`、`weekly.md` 和人工周记不纳入。
 每个来源还必须给出原始字符数、纳入下游的有效字符数和可点击核查文件链接；不可用但保留旧文件的来源也要给链接并标注“过期、不计入”。
 飞书周记草稿链接必须是周记 Skill 在写入后回读确认的目标段落锚点链接：优先使用实际 `#share-...` 锚点，CLI 未返回时使用最新目标标题 block id 的 `#<target-block-id>` 直达链接；不得汇报固定文档首页、旧周锚点或未带 fragment 的 URL。
 
