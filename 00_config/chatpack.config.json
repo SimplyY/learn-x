@@ -93,6 +93,47 @@
       "outputGoal": "帮助我做更清醒、更可验证的判断，并把想法推进成产物或行动。",
       "subtypes": [
         {
+          "id": "reflective-decision.weekly-output",
+          "name": "周输出",
+          "summary": "基于 Weekly Output 规则和 _dist 材料生成周度报告。",
+          "defaultEnhancerIds": [
+            "one-step-deeper"
+          ],
+          "includeBaseRecommendedSources": false,
+          "recommendedSources": [
+            "01_core/道",
+            "01_core/memory",
+            ".agents/skills/learn-x-process/resources/weekly-output-rules.md",
+            "04_output/README.md",
+            "04_output/usage.md"
+          ]
+        },
+        {
+          "id": "reflective-decision.monthly-output",
+          "name": "月输出",
+          "summary": "基于 Monthly Output 规则和 _dist 材料生成月度报告。",
+          "defaultEnhancerIds": [
+            "one-step-deeper"
+          ],
+          "includeBaseRecommendedSources": false,
+          "recommendedSources": [
+            "01_core/道",
+            "01_core/memory",
+            ".agents/skills/learn-x-process/resources/monthly-output-rules.md"
+          ]
+        },
+        {
+          "id": "reflective-decision.yearly-output",
+          "name": "年输出",
+          "summary": "基于 Yearly Output 规则和 _dist 材料生成年度报告。",
+          "includeBaseRecommendedSources": false,
+          "recommendedSources": [
+            "01_core/道",
+            "01_core/memory",
+            ".agents/skills/learn-x-process/resources/yearly-output-rules.md"
+          ]
+        },
+        {
           "id": "reflective-decision.system-audit",
           "name": "Learn-X系统审计",
           "summary": "Learn-X、Chat Pack、Skill、目录结构、复杂度、反馈闭环。",
@@ -120,43 +161,6 @@
           "recommendedSources": [
             "README.md",
             "01_core"
-          ]
-        },
-        {
-          "id": "reflective-decision.weekly-output",
-          "name": "周输出",
-          "summary": "基于 Weekly Output 规则和 _dist 材料生成周度报告。",
-          "defaultEnhancerIds": ["one-step-deeper"],
-          "includeBaseRecommendedSources": false,
-          "recommendedSources": [
-            "01_core/道",
-            "01_core/memory",
-            ".agents/skills/learn-x-process/resources/weekly-output-rules.md",
-            "04_output/README.md",
-            "04_output/usage.md"
-          ]
-        },
-        {
-          "id": "reflective-decision.monthly-output",
-          "name": "月输出",
-          "summary": "基于 Monthly Output 规则和 _dist 材料生成月度报告。",
-          "defaultEnhancerIds": ["one-step-deeper"],
-          "includeBaseRecommendedSources": false,
-          "recommendedSources": [
-            "01_core/道",
-            "01_core/memory",
-            ".agents/skills/learn-x-process/resources/monthly-output-rules.md"
-          ]
-        },
-        {
-          "id": "reflective-decision.yearly-output",
-          "name": "年输出",
-          "summary": "基于 Yearly Output 规则和 _dist 材料生成年度报告。",
-          "includeBaseRecommendedSources": false,
-          "recommendedSources": [
-            "01_core/道",
-            "01_core/memory",
-            ".agents/skills/learn-x-process/resources/yearly-output-rules.md"
           ]
         },
         {

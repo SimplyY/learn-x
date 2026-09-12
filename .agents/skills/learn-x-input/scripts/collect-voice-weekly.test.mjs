@@ -42,7 +42,8 @@ test("accepts only the new two-section insight format", () => {
   assert.equal(isStructuredInsight(insightWithoutTitle()), true);
   assert.equal(isStructuredInsight("# AI 洞察 · 语音标题\n\n" + insight()), true);
   assert.equal(isStructuredInsight("# AI 洞察\n\n历史内容"), false);
-  assert.equal(isStructuredInsight(`${insight()}\n\n# 压缩原文\n全文`), false);
+  assert.equal(isStructuredInsight(`${insight()}\n\n# 压缩原文\n全文`), true);
+  assert.equal(isStructuredInsight(`${insight()}\n\n## 原始文字稿\n全文`), false);
 });
 
 test("reads the current AI 文档 column while retaining the legacy column fallback", async () => {
@@ -168,7 +169,7 @@ test("fails closed when pagination claims more without advancing", async () => {
   await assert.rejects(collectVoiceWeekly({ week: "2026-W24", transport }), /没有新增记录/);
 });
 
-test("preserves the previous voice file when the compressed output exceeds 15000 characters", async (t) => {
+test("writes the full Voice-X insight without a collection-stage size gate", async (t) => {
   const outputRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-voice-limit-"));
   t.after(() => rm(outputRoot, { recursive: true, force: true }));
   const notesPath = path.join(outputRoot, "voice.md");
@@ -177,6 +178,8 @@ test("preserves the previous voice file when the compressed output exceeds 15000
     "https://core/large": "# 处理后原文\n事实底稿",
     "https://insight.invalid/large": insight("保留核心。".repeat(4000), "洞察")
   });
-  await assert.rejects(writeVoiceWeekly({ week: "2026-W24", outputRoot, transport }), /超过周输入上限/);
-  assert.equal(await readFile(notesPath, "utf8"), "keep old voice\n");
+  await writeVoiceWeekly({ week: "2026-W24", outputRoot, transport });
+  const content = await readFile(notesPath, "utf8");
+  assert.match(content, /保留核心。/);
+  assert.match(await readFile(path.join(outputRoot, "_source-status.json"), "utf8"), /"status": "ready"/);
 });

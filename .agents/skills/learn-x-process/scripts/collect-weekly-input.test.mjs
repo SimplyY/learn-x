@@ -36,9 +36,25 @@ test("reports every oversized weekly input instead of truncating it", () => {
     { path: "flomo.md", content: "y".repeat(15_002) }
   ]);
   assert.deepEqual(result, [
-    { path: "voice.md", chars: 15_001 },
     { path: "flomo.md", chars: 15_002 }
   ]);
+});
+
+test("keeps the full Voice-X record without a Process input gate", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-weekly-voice-limit-"));
+  try {
+    const weekDir = path.join(root, "03_input/weekly/2026-W29");
+    await mkdir(weekDir, { recursive: true });
+    await writeFile(path.join(weekDir, "voice.md"), [
+      "# Voice-X 核心重点｜2026-W29", "", "## with 测试", "", "## 核心总结", "", "内容。".repeat(3_000),
+      "", "## 芒格之魂洞察", "", "洞察。"
+    ].join("\n"), "utf8");
+    const result = await collectWeeklyInput({ repoRoot: root, week: "2026-W29" });
+    assert.equal(result.files[0].path, "03_input/weekly/2026-W29/voice.md");
+    assert.equal(result.items.length, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("excludes stale automatic files while keeping legacy files without status", () => {

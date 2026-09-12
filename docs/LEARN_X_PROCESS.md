@@ -35,6 +35,17 @@ Learn-X Process 是周期输入到人工审稿的处理流程。它把指定周�
 
 目录和人工操作分别见 [03_input/README.md](../03_input/README.md)、[03_input/usage.md](../03_input/usage.md)、[04_output/README.md](../04_output/README.md) 和 [04_output/usage.md](../04_output/usage.md)。
 
+## YW Next 上下文管理
+
+Memory 写入成功后，YW Next 只从已确认的 `01_core/memory/*.memory.md` 重建上下文：
+
+- `/Users/yuwei/code/skills/ywnext/runtime/evidence/YYYY-Www.md`：记录本轮实际读取的 Memory、范围、权重和缺口。
+- `runtime/core-context/full.md`、`weighted.md`、`core.md`：按任务相关性分别供消费者读取；只影响个性化判断，不改变事实、来源状态或写入门禁。
+- `runtime/core-context/full-full.md`：私有完整 Memory 输入，只供 YW Next 生成候选清单，其他仓库和消费者不得读取。
+- `runtime/candidate-list.md`：YW Next 的滚动候选清单，不是 Memory，也不保存周度副本。
+
+这里不再生成六仓库切片、`repo-context.staging` 或发布器。历史遗留目录即使仍在磁盘上，也不参与上下文管理和消费；不得以旧目录冒充本轮刷新结果。
+
 ## 功能边界
 
 - Weekly 读取指定周目录；Monthly 读取实际存在的目标月相交周目录和指定月目录，不按文件修改时间猜测范围。缺少相交周目录或周来源时写入缺口审计，不创建空容器，也不阻断月度生成。

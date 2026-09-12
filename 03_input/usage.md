@@ -54,7 +54,7 @@ rm 03_input/weekly/YYYY-Www/README.md
 - `daily.md` 的飞书多维表格材料必须保留字段表头和 field id 映射。
 - `flomo.md` 必须覆盖完整目标周；若只能部分获取，在文件中说明缺口。
 - `weread.md` 保留采集范围、时区、生成时间、统计、进度快照、个人划线和想法；不保存 ID、位置链接或额外 `_raw.json`。
-- `voice.md` 只保留目标录制周内非空的压缩核心总结，按录制时间正序；识别建议段落和 `压缩原文` 边界，不读取或复制完整细节与原始文字稿。每个周输入文件最多 15,000 个 Unicode 字符；查询、文档或长度校验失败不得覆盖旧文件。
+- `voice.md` 只保留目标录制周内非空的完整结构化洞察，按录制时间正序；保留核心总结、压缩原文、建议和芒格之魂洞察，不读取或复制原始文字稿。30,000 个 Unicode 字符是提示线，不是采集门槛；Voice-X 只在统一生成 Process Pack 时按约 20% 保留比例做确定性高信号压缩，查询或文档读取失败不得覆盖旧文件。
 - `calendar.md` 来自 `Time-X｜随时记` 共享日历与用户个人日历（主日历及自有共享日历，覆盖用户手动建日程）的合并，保留目标周汇总及每个日历块的日期、起止、标题和描述；不保存人员、地点、ID、链接或系统元数据，且不单独作为实际完成证据。读取失败时必须写明不可用，不能沿用旧统计。
 - `health.md` 只保存周度评分、核心数据和健康提示，不复制截图或原始医疗材料。
 - `coach.md` 采集器按表字段保留新增记录，并排除回顾或状态更新；0 条新增记录时不生成文件并记录 `empty`，旧文件若存在也不进入本轮。
@@ -68,9 +68,9 @@ rm 03_input/weekly/YYYY-Www/README.md
 
 ### 周输入超限与批量压缩
 
-- `npm run process:weekly` 会在生成 `_dist` 前校验周目录中每个输入文件，超限时汇总报告并失败关闭。
-- `npm run input:compress -- --week YYYY-Www` 只生成 `_dist/weekly/YYYY-Www/input-compression-review/` 下的诊断、来源哈希和候选文件，不修改 `03_input`。
-- 候选必须人工检查，确认没有坏数据且核心判断仍完整后，才可执行 `npm run input:compress -- --week YYYY-Www --apply --confirm`；不允许机械截断或无确认覆盖。
+- `npm run process:weekly` 对普通输入保留字数校验；Voice-X 的 `voice.md` 允许完整落盘，30,000 字符只触发 Process Pack 强提示，随后在该环节统一压缩一次。
+- `npm run input:compress -- --week YYYY-Www` 只处理普通周输入的审核候选；Voice-X 不在采集阶段单独压缩。
+- 普通输入候选必须人工检查，确认没有坏数据且核心判断仍完整后，才可执行 `npm run input:compress -- --week YYYY-Www --apply --confirm`；Voice-X 不走该候选流程，也不允许机械截断。
 
 ### 3. 生成 Weekly Output Dist
 

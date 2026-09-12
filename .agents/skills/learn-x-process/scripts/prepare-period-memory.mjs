@@ -100,11 +100,17 @@ export function extractRequiredSections(content) {
     if (!key) continue;
     const next = headings.slice(index + 1).find((candidate) => candidate.level <= heading.level);
     const body = lines.slice(heading.index + 1, next?.index ?? lines.length).join("\n").trim();
-    if (body && !/^(todo|待补充|暂无|无|占位)$/i.test(body)) result[key].push({ section: heading.title, text: body });
+    if (body && !isPlaceholderSection(body)) result[key].push({ section: heading.title, text: body });
   }
   result.coreSummary = uniqueCandidates(result.coreSummary);
   result.mungerInsights = uniqueCandidates(result.mungerInsights);
   return result;
+}
+
+function isPlaceholderSection(body) {
+  if (/^(todo|待补充|暂无|无|占位)$/i.test(String(body).trim())) return true;
+  const lines = String(body).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  return lines.length > 0 && lines.every((line) => /^\d+[.)、．]\s*x+$/i.test(line));
 }
 
 function normalizeHeading(title) {

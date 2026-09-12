@@ -56,16 +56,15 @@ Run `npm run input:voice -- --week YYYY-Www` to read the fixed Voice-X Base with
 - Select by `录制时间` using the target Asia/Shanghai ISO week and require `处理后原文` non-empty. Query the current `AI 文档` field (falling back to legacy `AI 洞察文档`) as a required field too.
 - Read the processed-original document only for its character count. The weekly body must come from a new-format document with `## 核心总结` followed by `## 芒格之魂洞察`; the optional legacy `# Voice-X …` body title is accepted for compatibility.
 - Missing or placeholder insight is `pending`; substantive old-format insight is `legacy`. Neither enters `voice.md`, and the collector never falls back to the rough processed original.
-- Traverse every Base page, sort by recorded time and a stable business key, then fetch the core Markdown document for each row. Keep only the compressed core-summary section before any recognized advice/full-detail boundary: `# 对我的建议`、`## 3. 对我的建议（仅留档，不采集到 Learn-X）` or `# 压缩原文`; never copy the detailed full transcript after those boundaries. Old documents without a recognized boundary remain unchanged for compatibility.
+- Traverse every Base page, sort by recorded time and a stable business key, then fetch the core Markdown document for each row. Keep the complete structured insight sections for core summary, compressed original, advice, and Munger-soul insight; never copy `原始文字稿`. Voice-X is compressed once later during weekly Process Pack generation, targeting about 20% retained content while preserving high-signal sentences, concrete anchors, and section order. Old documents without a recognized boundary remain unchanged for compatibility.
 - Never fetch or copy `原始文字稿`; Voice-X Base remains the index and Docx remains the only正文 authority.
-- Each written record retains the title, recording time, processed-original character count, AI-insight character count, core summary, and Munger-soul insight. A successful zero-result query records `empty` and does not create a new file. Any Base/schema/document/size failure preserves the previous `voice.md` byte-for-byte and records `failed/unavailable`.
+- Each written record retains the title, recording time, processed-original character count, AI-insight character count, and the complete structured insight sections; it does not copy `原始文字稿`. A successful zero-result query records `empty` and does not create a new file. Any Base/schema/document failure preserves the previous `voice.md` byte-for-byte and records `failed/unavailable`.
 
 ## Weekly input size contract
 
-- Every `03_input/weekly/YYYY-Www/*` input file, including manual and separate automation outputs, must be at most 15,000 Unicode characters, counting Markdown metadata and line breaks.
-- Collectors and `process:weekly` both enforce this limit. `process:weekly` aggregates every violation and stops before writing `input.json` or `process-pack.md`.
-- Never mechanically truncate an oversized file. Run `npm run input:compress -- --week YYYY-Www` to create a review manifest, diagnostics, and only safe structural candidates; candidates live under `_dist` and never replace the original automatically.
-- Apply candidates only after the user has reviewed the diagnostics and explicitly confirms the exact target week, using `npm run input:compress -- --week YYYY-Www --apply --confirm`.
+- Every ordinary `03_input/weekly/YYYY-Www/*` input file remains at most 15,000 Unicode characters. Voice-X is a special source: `voice.md` may be up to 30,000 characters before a strong warning, and this is not a collection or write gate.
+- Voice-X is compressed exactly once while generating the weekly Process Pack: the complete `voice.md` stays in the input snapshot, and the Pack applies a deterministic high-signal extraction targeting about 20% retained content while preserving concrete anchors and section order. The Pack reports overall and per-file original/output characters and ratios.
+- Do not mechanically truncate `voice.md`, and do not run `input:compress` for Voice-X. Only ordinary oversized files use the separate review workflow.
 
 ## Daily Weekly Input
 

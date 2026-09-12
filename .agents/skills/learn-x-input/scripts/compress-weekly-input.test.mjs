@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { applyCompressionReview, createCompressionReview } from "./compress-weekly-input.mjs";
 
-test("creates a review candidate without touching the original Voice-X input", async (t) => {
+test("does not create an early Voice-X compression candidate", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-compress-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const weekRoot = path.join(root, "03_input/weekly/2026-W33");
@@ -15,22 +15,18 @@ test("creates a review candidate without touching the original Voice-X input", a
     "",
     "## with 测试",
     "",
-    "# 核心总结",
+    "## 核心总结",
     "保留核心。",
     "",
-    "# 对我的建议",
-    "排除建议。",
+    "## 对我的建议",
+    "保留建议。",
     "",
-    "# 压缩原文",
-    "排除全文。".repeat(4_000)
+    "## 压缩原文",
+    "保留原文要点。".repeat(4_000)
   ].join("\n");
   await writeFile(path.join(weekRoot, "voice.md"), source, "utf8");
   const result = await createCompressionReview({ week: "2026-W33", root });
-  const candidate = result.manifest.entries[0].candidate;
-  assert.ok(candidate);
-  assert.ok(candidate.chars <= 15_000);
-  assert.match(await readFile(path.join(root, candidate.path), "utf8"), /保留核心/);
-  assert.doesNotMatch(await readFile(path.join(root, candidate.path), "utf8"), /排除建议|排除全文/);
+  assert.equal(result.overLimitCount, 0);
   assert.equal(await readFile(path.join(weekRoot, "voice.md"), "utf8"), source);
 });
 

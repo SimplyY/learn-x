@@ -4,7 +4,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { defaultWeeklyReviewWeek, isoWeekRangeShanghai, normalizeWeek } from "./collect-weread-weekly.mjs";
-import { assertWeeklyInputSize } from "./lib/input-limits.mjs";
+import { inputSize, VOICE_TARGET_RETAINED_RATIO } from "./lib/input-limits.mjs";
 import { fileExists, updateWeeklySourceStatus } from "./lib/source-status.mjs";
 
 export const VOICE_X_BASE_URL = "https://ywhome.feishu.cn/base/OBapbpVNIaw7kfsM1Q9cftlmnbe?table=tbljFGhqPgKaMD5l&view=vew4IAgkv3";
@@ -95,7 +95,6 @@ export async function writeVoiceWeekly(options = {}) {
     if (written) {
       const tempPath = `${notesPath}.${process.pid}-${Date.now()}.tmp`;
       const content = renderVoiceMarkdown(payload);
-      assertWeeklyInputSize(content, notesPath);
       await mkdir(outputRoot, { recursive: true });
       await writeFile(tempPath, content, "utf8");
       await rename(tempPath, notesPath);
@@ -138,9 +137,160 @@ export function stripAdviceFromVoiceMarkdown(markdown) {
   return index === -1 ? String(markdown) : lines.slice(0, index).join("\n").trimEnd();
 }
 
+export function compressVoiceForProcessPack(content) {
+  const source = String(content).replace(/\r\n/g, "\n");
+  const firstRecord = source.search(/^## with /m);
+  if (firstRecord < 0) return stripAdviceFromVoiceMarkdown(source);
+  const header = source.slice(0, firstRecord).trimEnd();
+  const records = splitVoiceRecords(source).map(compactVoiceRecord).filter(Boolean);
+  return `${header}\n\n${records.join("\n\n---\n\n")}\n`;
+}
+
+function compactVoiceRecord(markdown) {
+  const text = String(markdown).replace(/\r\n/g, "\n").trim();
+  const targetChars = Math.ceil(inputSize(text).chars * VOICE_TARGET_RETAINED_RATIO);
+
+  const lines = text.split("\n");
+  const firstSection = lines.findIndex((line, index) => index > 0 && /^## /.test(line));
+  if (firstSection < 0) return fitVoiceText(text, targetChars);
+  const prefix = lines.slice(0, firstSection).join("\n").trim();
+  const sections = parseVoiceSections(lines.slice(firstSection).join("\n"))
+    .filter(({ heading }) => !/^## .*原始文字稿/.test(heading));
+  if (!sections.length) return fitVoiceText(prefix, targetChars);
+
+  const fixed = inputSize(prefix).chars + sections.reduce((total, section) => total + inputSize(section.heading).chars, 0) + ((sections.length) * 4);
+  const contentBudget = Math.max(0, targetChars - fixed);
+  const weights = sections.map(({ heading }) => voiceSectionWeight(heading));
+  const budgets = distributeBudgets(contentBudget, sections.map(({ body }) => inputSize(body).chars), weights);
+  const compacted = sections.map((section, index) => `${section.heading}\n\n${compactVoiceText(section.body, budgets[index])}`.trim());
+  const render = () => [prefix, ...compacted].filter(Boolean).join("\n\n").trim();
+  let result = render();
+  for (let index = compacted.length - 1; index >= 0 && inputSize(result).chars > targetChars; index -= 1) {
+    const body = compactVoiceText(sections[index].body, budgets[index]);
+    const overflow = inputSize(result).chars - targetChars;
+    const nextBudget = Math.max(0, inputSize(body).chars - overflow);
+    compacted[index] = `${sections[index].heading}\n\n${fitVoiceText(body, nextBudget)}`.trim();
+    result = render();
+  }
+  return inputSize(result).chars <= targetChars ? result : fitVoiceText(result, targetChars);
+}
+
+export function voiceCompressionMetrics(source, candidate) {
+  const sourceRecords = splitVoiceRecords(source);
+  const candidateRecords = splitVoiceRecords(candidate);
+  const sourceChars = inputSize(source).chars;
+  const candidateChars = inputSize(candidate).chars;
+  return {
+    targetRetainedRatio: VOICE_TARGET_RETAINED_RATIO,
+    overall: {
+      sourceChars,
+      candidateChars,
+      retainedRatio: sourceChars ? Number((candidateChars / sourceChars).toFixed(3)) : 0,
+      reductionRatio: sourceChars ? Number((1 - candidateChars / sourceChars).toFixed(3)) : 0
+    },
+    records: sourceRecords.map((record, index) => {
+      const sourceChars = inputSize(record).chars;
+      const candidateChars = inputSize(candidateRecords[index] || "").chars;
+      return {
+        title: record.match(/^## (.+)$/m)?.[1] || `记录 ${index + 1}`,
+        sourceChars,
+        candidateChars,
+        retainedRatio: sourceChars ? Number((candidateChars / sourceChars).toFixed(3)) : 0,
+        reductionRatio: sourceChars ? Number((1 - candidateChars / sourceChars).toFixed(3)) : 0
+      };
+    })
+  };
+}
+
+function splitVoiceRecords(content) {
+  const source = String(content).replace(/\r\n/g, "\n");
+  const firstRecord = source.search(/^## with /m);
+  return firstRecord < 0 ? [] : source.slice(firstRecord)
+    .split(/(?=^## with )/m)
+    .map((record) => record.replace(/\n\s*---\s*$/u, "").trim())
+    .filter(Boolean);
+}
+
+function parseVoiceSections(text) {
+  const starts = [...String(text).matchAll(/^## .+$/gm)].map((match) => ({ heading: match[0].trim(), index: match.index }));
+  return starts.map((start, index) => ({
+    heading: start.heading,
+    body: String(text).slice(start.index + start.heading.length, starts[index + 1]?.index ?? String(text).length).trim()
+  }));
+}
+
+function voiceSectionWeight(heading) {
+  if (/核心总结|芒格之魂洞察/.test(heading)) return 4;
+  if (/压缩原文|核心建议|对我的建议/.test(heading)) return 3;
+  return 1;
+}
+
+function distributeBudgets(total, lengths, weights) {
+  const active = lengths.map((length, index) => ({ length, weight: weights[index], index })).filter(({ length }) => length > 0);
+  if (!active.length) return lengths.map(() => 0);
+  const result = lengths.map(() => 0);
+  const weightTotal = active.reduce((sum, item) => sum + item.weight, 0);
+  let remaining = total;
+  for (const item of active) {
+    const share = Math.min(item.length, Math.floor(total * item.weight / weightTotal));
+    result[item.index] = share;
+    remaining -= share;
+  }
+  while (remaining > 0) {
+    let progressed = false;
+    for (const item of active) {
+      if (remaining <= 0) break;
+      if (result[item.index] >= item.length) continue;
+      result[item.index] += 1;
+      remaining -= 1;
+      progressed = true;
+    }
+    if (!progressed) break;
+  }
+  return result;
+}
+
+function compactVoiceText(text, budget) {
+  const normalized = String(text || "").replace(/\n{3,}/g, "\n\n").trim();
+  if (!normalized || budget <= 0) return "";
+  if (inputSize(normalized).chars <= budget) return normalized;
+  const units = normalized.match(/[^。！？!?；;\n]+[。！？!?；;\n]?/gu)?.map((unit) => unit.trim()).filter(Boolean) || [normalized];
+  const ranked = units.map((unit, index) => ({ unit, index, score: voiceUnitScore(unit) + (index === 0 || index === units.length - 1 ? 3 : 0) }));
+  const selected = new Set([0, units.length - 1]);
+  let used = 0;
+  for (const index of selected) used += inputSize(units[index]).chars;
+  for (const item of ranked.sort((a, b) => b.score - a.score || a.index - b.index)) {
+    if (selected.has(item.index)) continue;
+    const extra = inputSize(item.unit).chars + 1;
+    if (used + extra > budget) continue;
+    selected.add(item.index);
+    used += extra;
+  }
+  const kept = [...selected].sort((a, b) => a - b).map((index) => units[index]);
+  const result = kept.join(" ");
+  return inputSize(result).chars <= budget ? result : fitVoiceText(result, budget);
+}
+
+function voiceUnitScore(text) {
+  return (String(text).match(/关键|核心|本质|因此|因为|必须|不能|不应|风险|边界|行动|反馈|未闭环|选择|优先|成本|机会|约束|复利|概率|逆向|激励|能力圈|安全边际|健康|真实|建议|问题/g) || []).length;
+}
+
+function fitVoiceText(text, budget) {
+  if (budget <= 0) return "";
+  const value = Array.from(String(text)).join("");
+  if (value.length <= budget) return value;
+  const head = Math.ceil((budget - 1) / 2);
+  const tail = Math.floor((budget - 1) / 2);
+  return `${Array.from(value).slice(0, head).join("")}…${Array.from(value).slice(-tail).join("")}`;
+}
+
 export function isStructuredInsight(markdown) {
   const text = normalizeInsightDocument(markdown);
-  return /^(?:# Voice-X (?:AI 洞察|ai 总结 & 洞察)\s*\n+)?## 核心总结\s*\n+[\s\S]*?\n+## 芒格之魂洞察\s*\n+[\s\S]+$/m.test(text) && !/^#{1,6}\s+(?:压缩原文|原始文字稿|对我的建议)(?:\s|$)/m.test(text);
+  return /^(?:# Voice-X (?:AI 洞察|ai 总结 & 洞察)\s*\n+)?## 核心总结\s*\n+[\s\S]*?\n+## 芒格之魂洞察\s*\n+[\s\S]+$/m.test(text) && !/^#{1,6}\s+原始文字稿(?:\s|$)/m.test(text);
+}
+
+function renderVoiceRecord(record) {
+  return [`## ${record.title}`, `- 录制时间：${record.recordedAt}`, `- 处理后原文字符数：${record.processedOriginalChars}`, `- AI 洞察字符数：${record.insightChars}`, record.markdown].join("\n\n");
 }
 
 export function extractInsightMarkdown(markdown) {

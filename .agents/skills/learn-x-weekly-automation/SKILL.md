@@ -99,7 +99,7 @@ Deep Code X 另有一个独立的周日调度（`learn-x-voice-insight`，20:00�
    - Flomo：按“启动规则 4”通过 Ego Lite 任务空间打开或复用 `https://v.flomoapp.com/mine`，按 Asia/Shanghai 的目标周起止时间检索；仅在尚未覆盖下界时加载下一批。写入前整条排除可确认属于 Learn-X 生成产物的 memo，不把它的周记正文拆开保留：正文或标签命中 `Learn-X 周记`、`Learn-X 记忆`、`Learn-X 月记`、`#learn-x/`、`# 飞书周记`、`AI 基础草稿` 或 `Learn-X 同步校验` 等标识时，整条不写入 `flomo.md`；该过滤不影响当前唯一置顶镜像。其余当前页面实际读到、属于目标周的笔记按 `(创建时间, 正文)` 去重后按创建时间正序写入 `flomo.md`。同一次页面读取中，另外同步当前唯一置顶笔记到 `01_core/道/flomo-top.md`：文件包含来源链接、原始创建时间、同步周和正文；每周覆盖更新，不保留旧版本。若置顶数量为 0 或多于 1，保留旧镜像并提示，不阻断其他来源。`flomo.md` 仍只包含过滤后的目标周数据；旧 `flomo.md` 只作为差异报告依据，不得用来补全当前 Flomo，也不得只取首屏或使用旧本地导出替代。
    - 微信读书：按 `learn-x-input` 执行 `npm run input:weread -- --week YYYY-Www`。验证输出保留目标周、Asia/Shanghai 范围、生成时间、阅读统计、进度快照、个人划线和想法，并包含完整 7 天，包括 0 分钟日期。
    - Time-X 日历：按 `learn-x-input` 执行一次 `npm run input:calendar -- --week YYYY-Www`，只读取固定 `Time-X｜随时记` 共享日历，将日历汇总及每个日历块的日期、起止、标题、描述写入 `calendar.md`。不得读取用户主日历，不保存日历人员、地点、ID、链接或系统元数据。
-   - Voice-X：按 `learn-x-input` 执行 `npm run input:voice -- --week YYYY-Www`，只读取目标 ISO 周已归档的新版 AI 洞察文档写入 `voice.md`。每条保留标题、录制时间、处理后原文字符数、AI 洞察字符数、核心总结和芒格之魂洞察；缺失/占位计入 `pending`，旧格式计入 `legacy`，不回退到处理后原文。周日 `npm run voice:insight -- --week YYYY-Www` 是独立阶段，不由周一流程隐式触发；0 条、查询/文档/长度失败均按来源状态处理并保留旧文件。
+   - Voice-X：按 `learn-x-input` 执行 `npm run input:voice -- --week YYYY-Www`，只读取目标 ISO 周已归档的新版 AI 洞察文档，将完整结构化洞察写入 `voice.md`。缺失/占位计入 `pending`，旧格式计入 `legacy`，不回退到处理后原文；30,000 字符只是强提示线，不是采集门槛。统一生成 Process Pack 时仅压缩一次，目标保留约 20%，并报告整体及各文件的原始字符、压缩字符和保留比例。周日 `npm run voice:insight -- --week YYYY-Www` 是独立阶段，不由周一流程隐式触发；0 条、查询或文档失败均按来源状态处理并保留旧文件。
    - 飞书日记与 AI Coach：执行 `npm run input:daily-coach -- --week YYYY-Www`。采集器先用 `--as bot` 现场核验 Base、表和字段，再按各表边界筛选并遍历全部分页；各来源状态写入 `_source-status.json`。日记与 Coach 分别判定：Coach 0 条时记录 `coach=empty` 且不生成 `coach.md`，不影响有记录的 `daily.md`；日记 0 条时记录 `daily=empty`，查询或字段失败才记录 `daily=failed/unavailable`。旧文件可保留但标记过期；失败时保留旧文件但标记失败。
    - 智慧之门：执行 `npm run input:wisdom -- --week YYYY-Www`。通过 `collect-base-weekly.mjs` 按创建时间筛目标周并遍历全部分页；0 条时报告“0 条记录，文件未生成”，失败不得伪装成空结果。
    - 飞书机器人 Build 复盘：本流程不执行 `build-bot-log`，不生成或追加 `build-bot.md`。必须提示用户：`build-bot-log 需要在飞书机器人上完成，请自查`。
@@ -139,7 +139,7 @@ Deep Code X 另有一个独立的周日调度（`learn-x-voice-insight`，20:00�
    - `daily.md`
    - `flomo.md`
    - `weread.md`
-   - `voice.md`（仅在状态为 `ready` 时读取；只含目标周新版 AI 洞察的核心总结与芒格之魂洞察，不含粗加工原文、建议段落或原始文字稿，且不超过 15,000 字符）
+   - `voice.md`（仅在状态为 `ready` 时读取；含目标周新版 AI 洞察的完整结构化内容，不含原始文字稿；30,000 字符为提示线，统一在 Process Pack 压缩）
    - `calendar.md`（仅在状态为 `ready` 时读取；只作计划上下文，`empty/unavailable` 时报告但不将其当作行动证据）
    - `coach.md`（本次采集有新增记录时才存在；包含新增记录并标注采集器排除的回顾更新；0 条时按来源状态记录，不阻塞）
    - `wisdom.md`（本次采集有新增记录时才存在；采集器按创建时间生成；0 条时按来源状态记录，不阻塞）
@@ -155,7 +155,7 @@ Deep Code X 另有一个独立的周日调度（`learn-x-voice-insight`，20:00�
    npm run process:weekly -- --week YYYY-Www
    ```
 
-   若因单文件超过 15,000 字符失败，先运行 `npm run input:compress -- --week YYYY-Www` 生成审核包；它不会覆盖输入。只有用户确认诊断无误后，才允许显式应用候选，再重新运行本阶段。
+   若普通文件超过 15,000 字符，先运行 `npm run input:compress -- --week YYYY-Www` 生成审核包；Voice-X 不在采集阶段单独压缩，超出 30,000 字符只作强提示，仍由 Process Pack 统一处理。
 
 9. 汇报：
    - `04_output/_dist/weekly/YYYY-Www/input.json`
@@ -209,8 +209,7 @@ Deep Code X 另有一个独立的周日调度（`learn-x-voice-insight`，20:00�
    - 读取“找事配置” Base 的启用记录，运行 `$ywnext` 的配置校验脚本，将原始快照写入 `/Users/yuwei/code/skills/ywnext/runtime/evidence/YYYY-Www.config.json`；脚本不归一化权重、不提炼证据、不生成建议。
    - 由 AI 严格依据 `$ywnext` 的 Markdown 规则阅读 Memory，生成 `/Users/yuwei/code/skills/ywnext/runtime/evidence/YYYY-Www.md`（Memory 来源路径、范围、全文阅读状态与缺口）及 `runtime/core-context/full.md`、`weighted.md`、`core.md`（三档独立静态核心上下文）。不生成或读取 `current.md`。
    - 继续生成仅供 YW Next 使用的 `runtime/core-context/full-full.md`：只全文保留 `01_core/memory/*.memory.md`，再由 AI 仅基于该文件生成 `/Users/yuwei/code/skills/ywnext/runtime/candidate-list.md`，做、学、玩、思考各 20 条，含详情、适用条件与候选权重。候选不另存周度快照。
-   - 六仓切片先写入 `runtime/repo-context.staging/{repo}.md`，六个文件齐全后运行 `publish-repo-context.mjs`；发布器会再次校验并原子替换当前切片，失败时保留旧目录和恢复点，不允许半套切片进入运行时。
-   - 运行 Memory 证据、三档核心上下文、full-full Memory-only、六仓切片与候选清单校验。配置读取失败时，在证据索引中标注缺口且不生成新的核心上下文或候选清单；不得用旧外部数据伪装为本次更新，也不得阻塞已成功写入的 Memory。
+   - 运行 Memory 证据、三档核心上下文、full-full Memory-only 与候选清单校验。YW Next 不生成六仓库切片；其他仓库只按相关性读取通过校验的 `runtime/core-context/full.md`、`weighted.md` 或 `core.md`，不得读取 `full-full.md` 或历史遗留切片目录。配置读取失败时，在证据索引中标注缺口且不生成新的核心上下文或候选清单；不得用旧外部数据伪装为本次更新，也不得阻塞已成功写入的 Memory。
 13. 仅在 YW Next 全部校验成功后，执行最后一步 Flomo 同步。阶段 3 事务卡已覆盖该目标周的两条 Flomo 写入和读回校验，不再单独请求确认；若默认沙箱无法连接 Ego Lite，允许在同一目标周授权范围内申请 Full Access 重试，不得把运行环境切换再变成一次用户确认：
 
    ```bash

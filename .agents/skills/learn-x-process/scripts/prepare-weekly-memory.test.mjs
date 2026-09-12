@@ -49,6 +49,25 @@ todo
   assert.equal(result.coreSummary[0].text, "- 保留这条。");
 });
 
+test("rejects numbered xx placeholders", () => {
+  const result = extractRequiredSections(`# Weekly
+
+## 10. 全文核心重点纪要
+
+1. xx
+2. xx
+3. xx
+
+## 11. 芒格之魂的洞察
+
+1. xx
+2. xx
+3. xx`);
+
+  assert.deepEqual(result.coreSummary, []);
+  assert.deepEqual(result.mungerInsights, []);
+});
+
 test("does not infer memory from ordinary prose or checks outside candidate sections", async () => {
   const { extractMemoryCandidates } = await import("./prepare-weekly-memory.mjs");
   const result = extractMemoryCandidates(`# Weekly

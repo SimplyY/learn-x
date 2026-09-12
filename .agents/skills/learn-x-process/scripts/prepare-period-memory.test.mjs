@@ -42,3 +42,22 @@ test("period memory only extracts candidate-zone checks and exact system section
   assert.match(result.coreSummary[0].text, /系统确认纪要/);
   assert.match(result.mungerInsights[0].text, /系统确认洞察/);
 });
+
+test("period memory rejects numbered xx placeholders", () => {
+  const result = extractMemoryCandidates(`# Weekly
+
+## 全文核心重点纪要
+
+1. xx
+2. xx
+3. xx
+
+## 芒格之魂的洞察
+
+1. xx
+2. xx
+3. xx`);
+
+  assert.deepEqual(result.coreSummary, []);
+  assert.deepEqual(result.mungerInsights, []);
+});

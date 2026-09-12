@@ -65,7 +65,7 @@ Weekly 输入由周目录决定，不依赖 weekly index 或文件修改时间�
 - `ai.md`：默认由阶段 1 通过全局 ChatGPT Web Bridge 生成暂存稿 `ai.generated.md`，用户确认后转正；桥接失败时使用自动化报告中的 fallback prompt 手动生成。
 - `flomo.md`：目标周 Flomo 内容。
 - `weread.md`：微信读书周度阅读活动、进度快照、个人划线和想法，由 `learn-x-input` 采集。
-- `voice.md`：Voice-X 中按录制周筛选的压缩核心总结 Markdown；不包含建议段落、完整细节或原始文字稿，由 `npm run input:voice` 采集；每个周输入文件最多 15,000 个 Unicode 字符。
+- `voice.md`：Voice-X 中按录制周筛选的完整结构化洞察 Markdown，保留核心总结、压缩原文、建议和芒格之魂洞察，不包含原始文字稿，由 `npm run input:voice` 采集；Voice 周文件 30,000 个 Unicode 字符是提示线，不是采集门槛，统一在 Process Pack 环节按来源压缩。
 - `calendar.md`：`Time-X｜随时记` 共享日历与用户个人日历（主日历及自有共享日历，用户手动建日程）合并的每日与全周汇总，以及每个日历块的日期、起止、标题和描述；不保存人员、地点、ID、链接或系统元数据。
 - `health.md`：Health-X 周报摘要，由 Health-X 在飞书周报同步成功后生成。
 - `coach.md`：按表字段保留新增记录，在采集器内排除回顾、复看和推送状态更新；本周 0 条新增记录时不生成文件，但每周自动化必须报告 0 条记录。

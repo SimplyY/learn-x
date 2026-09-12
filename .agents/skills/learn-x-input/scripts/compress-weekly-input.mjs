@@ -1,9 +1,8 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { stripAdviceFromVoiceMarkdown } from "./collect-voice-weekly.mjs";
-import { inputSize, MAX_WEEKLY_INPUT_CHARS } from "./lib/input-limits.mjs";
+import { inputSize, maxInputCharsForPath } from "./lib/input-limits.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
@@ -15,36 +14,22 @@ export async function createCompressionReview({ week, root = repoRoot } = {}) {
   const entries = [];
   for (const name of (await readdir(weekRoot)).sort()) {
     if (name.startsWith("_") || !supportedExtensions.has(path.extname(name).toLowerCase())) continue;
+    if (name === "voice.md") continue;
     const absolutePath = path.join(weekRoot, name);
     const content = await readFile(absolutePath, "utf8");
     const size = inputSize(content);
-    if (size.chars <= MAX_WEEKLY_INPUT_CHARS) continue;
+    if (size.chars <= maxInputCharsForPath(name)) continue;
     const entry = {
       path: `03_input/weekly/${normalizeWeek(week)}/${name}`,
       sourceHash: sha256(content),
-      sourceChars: size.chars,
-      sourceBytes: size.bytes,
+    sourceChars: size.chars,
+    sourceBytes: size.bytes,
+      targetRetainedRatio: null,
       diagnostics: diagnose(name, content),
-      mode: name === "voice.md" ? "voice-structural" : "manual-semantic-review",
+      mode: "manual-semantic-review",
+      compression: null,
       candidate: null
     };
-    if (name === "voice.md") {
-      const candidate = buildVoiceCandidate(content);
-      const candidateSize = inputSize(candidate);
-      if (candidateSize.chars <= MAX_WEEKLY_INPUT_CHARS) {
-        const candidatePath = path.join(reviewRoot, "candidates", name);
-        entry.candidate = {
-          path: `04_output/_dist/weekly/${normalizeWeek(week)}/input-compression-review/candidates/${name}`,
-          hash: sha256(candidate),
-          chars: candidateSize.chars,
-          bytes: candidateSize.bytes
-        };
-        entry.candidateText = candidate;
-        entry.diagnostics.push("已生成结构化候选：保留核心总结，排除建议与压缩原文。");
-      } else {
-        entry.diagnostics.push(`结构化候选仍有 ${candidateSize.chars} 字符，需人工语义压缩。`);
-      }
-    }
     entries.push(entry);
   }
 
@@ -58,7 +43,7 @@ export async function createCompressionReview({ week, root = repoRoot } = {}) {
     schemaVersion: 1,
     week: normalizeWeek(week),
     generatedAt: new Date().toISOString(),
-    maxChars: MAX_WEEKLY_INPUT_CHARS,
+    maxChars: maxInputCharsForPath("input.md"),
     entries
   };
   await writeFile(path.join(reviewRoot, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
@@ -75,12 +60,14 @@ export async function applyCompressionReview({ week, root = repoRoot, confirm = 
   const replacements = [];
   for (const entry of manifest.entries) {
     if (!entry.candidate) continue;
-    const sourcePath = path.join(root, entry.path);
     const candidatePath = path.join(root, entry.candidate.path);
+    const sourcePath = path.join(root, entry.path);
     const source = await readFile(sourcePath, "utf8");
     const candidate = await readFile(candidatePath, "utf8");
     if (sha256(source) !== entry.sourceHash) throw new Error(`源文件在审核后发生变化，停止应用：${entry.path}`);
-    if (inputSize(candidate).chars > MAX_WEEKLY_INPUT_CHARS) throw new Error(`候选仍超过上限，停止应用：${entry.candidate.path}`);
+    if (inputSize(candidate).chars > maxInputCharsForPath(entry.path)) {
+      throw new Error(`候选仍超过上限，停止应用：${entry.candidate.path}`);
+    }
     if (!isInside(sourcePath, weekRoot) || !isInside(candidatePath, reviewRoot)) throw new Error("压缩路径越界，停止应用。");
     replacements.push({ sourcePath, candidate });
   }
@@ -90,15 +77,6 @@ export async function applyCompressionReview({ week, root = repoRoot, confirm = 
     await rename(temporary, replacement.sourcePath);
   }
   return { week: weekId, applied: replacements.map(({ sourcePath }) => sourcePath) };
-}
-
-export function buildVoiceCandidate(content) {
-  const source = String(content).replace(/\r\n/g, "\n");
-  const firstRecord = source.search(/^## with /m);
-  if (firstRecord < 0) return stripAdviceFromVoiceMarkdown(source);
-  const header = source.slice(0, firstRecord).trimEnd();
-  const records = source.slice(firstRecord).split(/(?=^## with )/m).map(stripAdviceFromVoiceMarkdown).filter(Boolean);
-  return `${header}\n\n${records.join("\n\n---\n\n")}\n`;
 }
 
 export function diagnose(name, content) {
@@ -125,7 +103,15 @@ function renderReviewMarkdown(manifest) {
     "",
     "## 诊断",
     "",
-    ...manifest.entries.flatMap((entry) => [`### ${entry.path}`, "", ...entry.diagnostics.map((item) => `- ${item}`), ""])
+    ...manifest.entries.flatMap((entry) => {
+      const ratioRows = entry.compression?.records?.length ? [
+        "",
+        "| 记录 | 原始字符 | 候选字符 | 保留比例 | 压缩幅度 |",
+        "| --- | ---: | ---: | ---: | ---: |",
+        ...entry.compression.records.map((record) => `| ${record.title} | ${record.sourceChars} | ${record.candidateChars} | ${Math.round(record.retainedRatio * 100)}% | ${Math.round(record.reductionRatio * 100)}% |`)
+      ] : [];
+      return [`### ${entry.path}`, "", ...entry.diagnostics.map((item) => `- ${item}`), ...ratioRows, ""];
+    })
   ];
   return `${lines.join("\n").trimEnd()}\n`;
 }

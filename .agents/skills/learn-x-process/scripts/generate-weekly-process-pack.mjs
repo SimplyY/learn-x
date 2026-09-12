@@ -1,6 +1,8 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { compressVoiceForProcessPack, voiceCompressionMetrics } from "../../learn-x-input/scripts/collect-voice-weekly.mjs";
+import { inputSize, MAX_VOICE_WEEKLY_INPUT_CHARS, VOICE_TARGET_RETAINED_RATIO } from "../../learn-x-input/scripts/lib/input-limits.mjs";
 import { defaultWeeklyReviewWeek, writeWeeklyInput } from "./collect-weekly-input.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -10,8 +12,9 @@ export async function generateWeeklyProcessPack(options = {}) {
   const week = options.week || defaultWeeklyReviewWeek();
   const { payload } = await writeWeeklyInput({ week });
   const sourceSummaries = buildSourceSummaries(payload);
-  const fileSummaries = buildFileSummaries(payload);
-  const processPack = renderProcessPack(payload, sourceSummaries, fileSummaries);
+  const { items, compression } = compressWeeklyProcessItems(payload.items, payload.files);
+  const fileSummaries = buildFileSummaries(payload, items);
+  const processPack = renderProcessPack(payload, sourceSummaries, fileSummaries, items, compression);
   const outputRoot = path.join(repoRoot, "04_output/_dist/weekly", distWeekId(payload.week));
   const shellPath = await ensureWeeklyOutputShell(payload.week);
 
@@ -23,12 +26,13 @@ export async function generateWeeklyProcessPack(options = {}) {
     payload,
     sourceSummaries,
     fileSummaries,
+    compression,
     outputPath,
     shellPath
   };
 }
 
-function renderProcessPack(payload, sourceSummaries, fileSummaries) {
+function renderProcessPack(payload, sourceSummaries, fileSummaries, items, compression) {
   return [
     `# Learn-X Process Pack｜${payload.week}`,
     "",
@@ -67,9 +71,57 @@ function renderProcessPack(payload, sourceSummaries, fileSummaries) {
     "",
     renderSourceIndex(fileSummaries),
     "",
-    "## 5. 材料正文",
+    "## 5. 统一压缩概览",
     "",
-    renderFileMaterials(payload.items, fileSummaries)
+    renderCompressionSummary(compression),
+    "",
+    "## 6. 材料正文",
+    "",
+    renderFileMaterials(items, fileSummaries)
+  ].join("\n");
+}
+
+export function compressWeeklyProcessItems(items, files = []) {
+  const filesByPath = new Map(files.map((file) => [file.path, file]));
+  const processItems = items.map((item) => {
+    if (!item.path.endsWith("/voice.md")) return item;
+    const compressed = compressVoiceForProcessPack(item.text);
+    return { ...item, text: compressed };
+  });
+  const voiceItems = items.filter((item) => item.path.endsWith("/voice.md"));
+  const compressedVoiceItems = processItems.filter((item) => item.path.endsWith("/voice.md"));
+  const sourceChars = voiceItems.reduce((sum, item) => sum + (filesByPath.get(item.path)?.rawChars ?? inputSize(item.text).chars), 0);
+  const outputChars = compressedVoiceItems.reduce((sum, item) => sum + inputSize(item.text).chars, 0);
+  return {
+    items: processItems,
+    compression: {
+      sourceCount: voiceItems.length,
+      sourceChars,
+      outputChars,
+      retainedRatio: sourceChars ? Number((outputChars / sourceChars).toFixed(3)) : 0,
+      reductionRatio: sourceChars ? Number((1 - outputChars / sourceChars).toFixed(3)) : 0,
+      targetRetainedRatio: VOICE_TARGET_RETAINED_RATIO,
+      warnings: sourceChars > MAX_VOICE_WEEKLY_INPUT_CHARS
+        ? [`Voice.md 原始内容 ${sourceChars} 字符，超过提示线 ${MAX_VOICE_WEEKLY_INPUT_CHARS} 字符；仍保留完整输入，并在 Process Pack 统一压缩。`]
+        : [],
+      files: voiceItems.map((item, index) => ({
+        path: item.path,
+        ...voiceCompressionMetrics(item.text, compressedVoiceItems[index]?.text || "").overall,
+        sourceChars: filesByPath.get(item.path)?.rawChars ?? inputSize(item.text).chars
+      }))
+    }
+  };
+}
+
+function renderCompressionSummary(compression) {
+  if (!compression.sourceCount) return "- 本周没有 Voice-X 内容需要统一压缩。";
+  return [
+    `- Voice-X：整体原始 ${compression.sourceChars} 字符 → Process Pack ${compression.outputChars} 字符；整体保留比例 ${Math.round(compression.retainedRatio * 100)}%，整体压缩幅度 ${Math.round(compression.reductionRatio * 100)}%；目标保留比例 ${Math.round(compression.targetRetainedRatio * 100)}%。`,
+    ...compression.warnings.map((warning) => `- 强提示：${warning}`),
+    "",
+    "| 文件 | 原始字符 | 纳入 Process Pack 字符 | 保留比例 |",
+    "| --- | ---: | ---: | ---: |",
+    ...compression.files.map((file) => `| ${file.path} | ${file.sourceChars} | ${file.candidateChars} | ${Math.round(file.retainedRatio * 100)}% |`)
   ].join("\n");
 }
 
@@ -153,7 +205,7 @@ function buildSourceSummaries(payload) {
   return [...bySource.values()].sort((a, b) => `${a.category}/${a.source}`.localeCompare(`${b.category}/${b.source}`, "zh-Hans-CN"));
 }
 
-function buildFileSummaries(payload) {
+function buildFileSummaries(payload, processItems = payload.items) {
   const byPath = new Map();
   for (const file of payload.files) {
     byPath.set(file.path, {
@@ -165,15 +217,17 @@ function buildFileSummaries(payload) {
       size: file.size,
       rawChars: file.rawChars,
       effectiveChars: file.effectiveChars,
+      processChars: 0,
       itemCount: 0,
       samples: []
     });
   }
 
-  for (const item of payload.items) {
+  for (const item of processItems) {
     if (!byPath.has(item.path)) continue;
     const file = byPath.get(item.path);
     file.itemCount += 1;
+    file.processChars += inputSize(item.text).chars;
     if (file.samples.length < 2) {
       file.samples.push(`${item.title}: ${truncateInline(item.text, 120)}`);
     }
@@ -202,13 +256,13 @@ function renderSourceIndex(fileSummaries) {
 
   const rows = fileSummaries.map((file, index) => {
     const sourceId = sourceFileId(index);
-    return `| ${sourceId} | ${file.category} | ${file.source} | ${localFileLink("../../../../", file.path)} | ${file.itemCount} | ${file.rawChars} | ${file.effectiveChars} |`;
+    return `| ${sourceId} | ${file.category} | ${file.source} | ${localFileLink("../../../../", file.path)} | ${file.itemCount} | ${file.rawChars} | ${file.processChars} |`;
   });
 
   return [
     "> source id 用于在 AI Chat 中回溯来源；完整机器字段见同目录 `input.json`。",
     "",
-    "| source id | 输入类型 | 来源 | 核查文件 | 材料数 | 原始字符数 | 纳入字符数 |",
+    "| source id | 输入类型 | 来源 | 核查文件 | 材料数 | 原始字符数 | 纳入 Process Pack 字符数 |",
     "| --- | --- | --- | --- | ---: | ---: | ---: |",
     ...rows
   ].join("\n");

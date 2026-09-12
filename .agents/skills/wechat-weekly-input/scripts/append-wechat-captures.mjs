@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +24,18 @@ const ISSUE_CODES = new Set([
   "no_target_week_messages"
 ]);
 
+
+const ALIASES_PATH = path.join(__dirname, "..", "wechat-aliases.json");
+function loadAliases() {
+  try {
+    const raw = readFileSync(ALIASES_PATH, "utf8");
+    return new Map(Object.entries(JSON.parse(raw).aliases ?? {}));
+  } catch (error) {
+    if (error.code === "ENOENT") return new Map();
+    throw error;
+  }
+}
+const ALIASES = loadAliases();
 export function shanghaiWeekRange(week) {
   if (!/^\d{4}-W(?:0[1-9]|[1-4]\d|5[0-3])$/.test(week)) throw new Error("周格式必须是 YYYY-Www。");
   // ponytail: shared helper is UTC-based; shift its boundaries once here rather than changing every Learn-X caller.
@@ -90,12 +103,14 @@ function normalizeMessage(raw, index) {
   const rawText = raw.text == null ? "" : String(raw.text).trim();
   if (kind === "text" && !rawText) throw new Error(`第 ${index + 1} 条消息缺少可确认正文。`);
   const text = rawText || `[${kind}]`;
-  return { timeMs: parsedTime.milliseconds, timePrecision: parsedTime.precision, sender: raw.sender.trim(), isFromMe: raw.is_from_me, kind, text, order: index };
+  const rawSender = raw.sender.trim();
+  return { timeMs: parsedTime.milliseconds, timePrecision: parsedTime.precision, sender: ALIASES.get(rawSender) ?? rawSender, isFromMe: raw.is_from_me, kind, text, order: index };
 }
 
 function normalizeCapture(rawCapture, captureDate, weekRange, index) {
   if (!rawCapture || typeof rawCapture !== "object") throw new Error(`第 ${index + 1} 个截图记录不是对象。`);
-  const chatName = typeof rawCapture.chat_name === "string" ? rawCapture.chat_name.trim() : "";
+  const rawChatName = typeof rawCapture.chat_name === "string" ? rawCapture.chat_name.trim() : "";
+  const chatName = ALIASES.get(rawChatName) ?? rawChatName;
   if (!chatName) throw new Error(`第 ${index + 1} 个截图缺少聊天名称。`);
   const chatType = rawCapture.chat_type;
   if (!["private", "group", "folded"].includes(chatType)) throw new Error(`截图 ${chatName} 的 chat_type 不确定。`);

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile, readdir, stat, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { MAX_WEEKLY_INPUT_CHARS, countInputChars } from "../../learn-x-input/scripts/lib/input-limits.mjs";
+import { MAX_WEEKLY_INPUT_CHARS, countInputChars, maxInputCharsForPath } from "../../learn-x-input/scripts/lib/input-limits.mjs";
 import { readWeeklySourceStatus } from "../../learn-x-input/scripts/lib/source-status.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -33,7 +33,10 @@ export async function collectWeeklyInput(options = {}) {
     const info = await stat(file.absolutePath);
     const content = await readFile(file.absolutePath, "utf8");
     const rawChars = countInputChars(content);
-    if (rawChars > MAX_WEEKLY_INPUT_CHARS) oversized.push({ path: file.relativePath, chars: rawChars });
+    const maxChars = maxInputCharsForPath(file.relativePath);
+    if (rawChars > maxChars && path.basename(file.relativePath) !== "voice.md") {
+      oversized.push({ path: file.relativePath, chars: rawChars, maxChars });
+    }
     const parsedItems = parseInputFile(content, file);
     const fileItems = parsedItems
       .map((item, index) => ({
@@ -59,7 +62,7 @@ export async function collectWeeklyInput(options = {}) {
   }
 
   if (oversized.length) {
-    const details = oversized.map(({ path: filePath, chars }) => `- ${filePath}: ${chars} 字符`).join("\n");
+    const details = oversized.map(({ path: filePath, chars, maxChars }) => `- ${filePath}: ${chars} 字符（上限 ${maxChars}）`).join("\n");
     throw new Error([
       `周输入超过单文件上限 ${MAX_WEEKLY_INPUT_CHARS} 字符，已停止生成 input.json / Process Pack。`,
       details,
@@ -105,8 +108,9 @@ export function filterFilesBySourceStatus(files, sources) {
 
 export function findOversizedWeeklyInputs(files, maxChars = MAX_WEEKLY_INPUT_CHARS) {
   return files
-    .map(({ path: filePath, content }) => ({ path: filePath, chars: countInputChars(content) }))
-    .filter(({ chars }) => chars > maxChars);
+    .map(({ path: filePath, content }) => ({ path: filePath, chars: countInputChars(content), maxChars: path.basename(filePath) === "voice.md" ? maxInputCharsForPath(filePath) : maxChars }))
+    .filter(({ chars, maxChars: limit }) => chars > limit)
+    .map(({ path: filePath, chars }) => ({ path: filePath, chars }));
 }
 
 export async function writeWeeklyInput(options = {}) {

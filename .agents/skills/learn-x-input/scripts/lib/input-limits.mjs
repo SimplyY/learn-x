@@ -1,4 +1,6 @@
 export const MAX_WEEKLY_INPUT_CHARS = 15_000;
+export const MAX_VOICE_WEEKLY_INPUT_CHARS = 30_000;
+export const VOICE_TARGET_RETAINED_RATIO = 0.20;
 
 export function countInputChars(value) {
   return Array.from(String(value)).length;
@@ -15,4 +17,8 @@ export function assertWeeklyInputSize(value, label) {
     throw new Error(`${label} 超过周输入上限：${size.chars} 字符（上限 ${MAX_WEEKLY_INPUT_CHARS}）。请先运行批量压缩预览，人工确认后再应用候选。`);
   }
   return size;
+}
+
+export function maxInputCharsForPath(filePath) {
+  return String(filePath).split("/").at(-1) === "voice.md" ? MAX_VOICE_WEEKLY_INPUT_CHARS : MAX_WEEKLY_INPUT_CHARS;
 }

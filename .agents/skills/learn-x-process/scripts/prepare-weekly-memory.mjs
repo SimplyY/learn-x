@@ -195,7 +195,12 @@ function isSubstantiveSection(body) {
     .replace(/^\d+[.、．]\s+/gm, "")
     .replace(/[\s*_`>#。.!！-]/g, "")
     .toLowerCase();
-  return Boolean(plain) && !["todo", "待补充", "暂无", "无", "占位"].includes(plain);
+  return Boolean(plain) && !["todo", "待补充", "暂无", "无", "占位"].includes(plain) && !isPlaceholderList(body);
+}
+
+function isPlaceholderList(body) {
+  const lines = String(body).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  return lines.length > 0 && lines.every((line) => /^\d+[.)、．]\s*x+$/i.test(line));
 }
 
 function quarterFromIsoWeek(weekId) {

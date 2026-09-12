@@ -13,7 +13,7 @@ Learn-X 的 `Input -> Process Pack -> Output Shell` 工作流。
 
 本 Skill 从 `03_input/weekly/` 或 `03_input/monthly/` 读取手动导入材料，生成可追溯的 Input Pack 和 Process Pack，并创建 Output 最小壳。Output 正文由用户自己基于 AI Chat 生成和写入。人工审核后，Codex 可以调用内部脚本生成 Memory 候选，再由 Codex 按规则无损整理并写入 Memory。它不自动修改正式长期资产。
 
-Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 生成最新的三档核心上下文、私有 `full-full` 摘要和六仓受限切片；六仓切片必须先写入暂存目录并经 `publish-repo-context.mjs` 校验后原子发布。切片生成或校验失败时不得用旧产物冒充新鲜上下文，也不得绕过人工确认直接写入 Memory。
+Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 刷新 YW Next 的证据索引、三档核心上下文、私有 `full-full` 摘要和滚动候选清单。上下文唯一语义源是已确认的 `01_core/memory/*.memory.md`：`full.md`、`weighted.md`、`core.md` 供消费者按相关性读取，`full-full.md` 只供 YW Next 生成候选清单，不对外提供。不存在六仓库切片、暂存目录或发布器；历史遗留目录不读取、不作为新鲜上下文。
 
 ## Skill 本质
 
@@ -78,7 +78,7 @@ Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 生成最新的�
    node .agents/skills/learn-x-process/scripts/generate-weekly-process-pack.mjs --week 2026-22
    ```
 
-   Weekly Process 在读取周目录时先执行单文件 15,000 Unicode 字符门禁。超限时汇总所有文件、保留原文件并停止，不生成或更新 `input.json`、`process-pack.md` 或 Output 壳。用户确认数据无误后，可运行 `npm run input:compress -- --week YYYY-Www` 生成批量压缩审核包；只有显式 `--apply --confirm` 才能把已审核候选写回原输入。
+   Weekly Process 对普通文件保留 15,000 Unicode 字符校验；Voice-X 的 `voice.md` 完整落盘，30,000 字符只是强提示，不阻断输入生成。统一生成 Process Pack 时对 Voice-X 做一次约 20% 保留比例的高信号压缩，并报告整体及文件级原始/纳入字符数；`input:compress` 不处理 Voice-X。
 
    `智慧之门` 的增值源是飞书 Base；采集入口读取结构化字段，并把 `长篇内容、原始内容` 做自适应高信号抽取：以每条约 300 Unicode 字符为中心，通常保留 200-500 字，预算根据独立核心判断、因果/模型结构、结论、边界、风险和与参考字段的关联度有限调整；短内容不硬扩，长内容不超过 500。只把压缩内容写入本地，原文不落盘。因此 `wisdom.md`、`input.json` 和 Process Pack 保持同一内容口径；需要核查长篇原文时回到 Base 链接。各来源仍记录原始字符数与纳入字符数，避免把材料体量和实际纳入上下文混为一谈。
 
