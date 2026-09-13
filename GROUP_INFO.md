@@ -7,10 +7,10 @@ repo_path: "/Users/yuwei/code/learn-x"
 repo_url: null
 group_info_path: "/Users/yuwei/code/learn-x/GROUP_INFO.md"
 registry_source: "live"
-registry_fetched_at: "2026-08-29T03:22:34.783Z"
+registry_fetched_at: "2026-09-13T00:09:30.378Z"
 registry_age_seconds: 0
 registry_degraded: false
-updated_at: "2026-08-29T03:22:38.255Z"
+updated_at: "2026-09-13T00:09:35.114Z"
 icon: "🧠"
 name_zh: "learn-x"
 summary: "认知进化系统。核心功能 chat pack（chat 上下文提示词） + 定期（周、月、年）复盘 IPO (输入、处理、输出)"
@@ -39,11 +39,12 @@ priority: 1
 3. learn-x-monthly-automation：月度自动化中文工作流
 4. learn-x-monthly-journal：从 Learn-X 本地周输入和已确认周记生成安全
 5. learn-x-process：处理每周月度输入并生成输出壳与记忆候选
-6. learn-x-voice-insight
-7. learn-x-weekly-automation：每周输入自动采集、Weekly Output 报告
-8. learn-x-weekly-journal：从 Learn-X 已落盘的周输入生成安全的飞书周
-9. long-article-research：长文系统性深度研究 Skill。接收长文本输入，通
-10. wechat-weekly-input：通过用户手动提供的微信聊天截图生成重点聊天周度
+6. learn-x-prompt-usage：合并 Learn-X 两端 Chat Pack 提
+7. learn-x-voice-insight
+8. learn-x-weekly-automation：每周输入自动采集、Weekly Output 报告
+9. learn-x-weekly-journal：从 Learn-X 已落盘的周输入生成安全的飞书周
+10. long-article-research：长文系统性深度研究 Skill。接收长文本输入，通
+11. wechat-weekly-input：通过用户手动提供的微信聊天截图生成重点聊天周度
 
 ## 可用 Workflow
 1. learn-x-monthly-automation：月度自动化中文工作流
@@ -63,4 +64,4 @@ priority: 1
 - 链接数：2
 - Skill 扫描：正常
 - 注册表新鲜度：可用
-- 最近更新时间：2026-08-29T03:22:38.255Z
+- 最近更新时间：2026-09-13T00:09:35.114Z

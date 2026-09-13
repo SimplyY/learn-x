@@ -6,6 +6,8 @@ import { watch } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { collectDocumentsMarkdown, readDocumentsMarkdown } from "./scripts/documents-context.mjs";
+import { buildUsageView, readLocalUsageStore, readUsageBaseline, recordLocalUsage } from "./scripts/chatpack-usage.mjs";
+import { readChatPackConfig } from "./scripts/static-graph.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../..");
@@ -15,6 +17,8 @@ const host = process.env.HOST || "127.0.0.1";
 const ignoredWatchDirs = new Set([".git", ".test-tmp", "node_modules", "dist"]);
 let suppressWatchUntil = 0;
 let editorSaveInProgress = false;
+// ponytail: one process-wide request gate; the shared file lock protects other processes.
+let usageWriteInProgress = false;
 
 async function serveStatic(_req, res, url) {
   const pathname = decodeURIComponent(url.pathname);
@@ -167,7 +171,43 @@ async function handleDocumentsContext(req, res, url) {
   }
 }
 
-function isLocalRequest(req) {
+async function handleChatPackUsage(req, res) {
+  if (!isLocalRequest(req)) {
+    sendJson(res, 403, { error: "Local usage requests only" });
+    return;
+  }
+  if (req.method === "GET") {
+    try {
+      const baseline = await readUsageBaseline(repoRoot);
+      const local = await readLocalUsageStore(repoRoot);
+      sendJson(res, 200, { ok: true, usage: buildUsageView(baseline, local) });
+    } catch (error) {
+      sendJson(res, 500, { error: error.message || "Unable to read Chat Pack usage" });
+    }
+    return;
+  }
+  if (!(req.headers["content-type"] || "").toLowerCase().startsWith("application/json")) {
+    sendJson(res, 415, { error: "Content-Type must be application/json" });
+    return;
+  }
+  if (usageWriteInProgress) {
+    sendJson(res, 409, { error: "Another Chat Pack usage write is still running" });
+    return;
+  }
+  usageWriteInProgress = true;
+  try {
+    const payload = await readJsonBody(req);
+    const config = await readChatPackConfig();
+    const result = await recordLocalUsage({ repoRoot, payload, config });
+    sendJson(res, 200, result);
+  } catch (error) {
+    sendJson(res, 400, { error: error.message || "Unable to record Chat Pack usage" });
+  } finally {
+    usageWriteInProgress = false;
+  }
+}
+
+export function isLocalRequest(req) {
   const remoteAddress = req.socket.remoteAddress || "";
   if (!new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]).has(remoteAddress)) return false;
   const hostHeader = req.headers.host || "";
@@ -217,6 +257,10 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
     if (req.method === "PUT" && url.pathname === "/api/chatpack/editor") {
       await handleChatPackSave(req, res);
+      return;
+    }
+    if (url.pathname === "/api/chatpack/usage" && new Set(["GET", "POST"]).has(req.method)) {
+      await handleChatPackUsage(req, res);
       return;
     }
     if (req.method === "GET" && new Set(["/api/context-files", "/api/file"]).has(url.pathname)) {

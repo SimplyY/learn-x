@@ -24,6 +24,7 @@
 | --- | --- | --- |
 | 本地应用、静态构建、API、验证 | `docs/TECH.md` | 修改 `app/code/`、构建脚本、前端或接口 |
 | Chat Pack | `docs/CHAT_PACK.md` | 修改对话类型、Prompt 组合、Context、编辑器或发布边界 |
+| Prompt 使用统计 | `docs/CHAT_PACK.md`、`.agents/skills/learn-x-prompt-usage/` | 合并或校验两端 Chat Pack 使用记录 |
 | Process / Output / Memory | `docs/LEARN_X_PROCESS.md`、`.agents/skills/learn-x-process/` | 处理周/月/年 Output、Process Pack、Memory 候选 |
 | Input 流程 | `03_input/README.md`、`03_input/usage.md`、`.agents/skills/learn-x-input/` | 采集、校验或生成 `03_input/` |
 | 安全与提交 | `docs/SECURITY.md` | 提交、扫描、处理隐私材料或敏感文件 |

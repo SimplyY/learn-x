@@ -78,6 +78,7 @@ export const els = {
   contextBudgetList: document.querySelector("#contextBudgetList"),
   contextControls: document.querySelector("#contextControls"),
   generateChatPack: document.querySelector("#generateChatPackBtn"),
+  copyChatPackUsage: document.querySelector("#copyChatPackUsageBtn"),
   resetPrompt: document.querySelector("#resetPromptBtn"),
   editPromptCategories: document.querySelector("#editPromptCategoriesBtn"),
   sortPromptCatalog: document.querySelector("#sortPromptCatalogBtn"),

@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "mergedThrough": "2026-08",
+  "subtypes": {
+    "learning-insight.ljg-learn": 10,
+    "learning-insight.ljg-read": 10,
+    "learning-insight.ljg-roundtable": 50,
+    "learning-insight.book-decode": 200,
+    "learning-insight.ljg-think": 10,
+    "learning-insight.ljg-card": 8,
+    "learning-insight.ljg-travel": 5,
+    "learning-insight.munger-soul": 200,
+    "learning-insight.concept-teacher": 5,
+    "learning-insight.first-principles": 10,
+    "reflective-decision.weekly-output": 55,
+    "reflective-decision.monthly-output": 12,
+    "reflective-decision.yearly-output": 5,
+    "reflective-decision.system-audit": 10,
+    "reflective-decision.broad-investment-decision": 8,
+    "reflective-decision.daofashuqi-audit": 8,
+    "reflective-decision.voice-insight": 8,
+    "ljg-skills.ljg-book": 10,
+    "ljg-skills.ljg-rank": 8,
+    "ljg-skills.ljg-writes": 8,
+    "ljg-skills.ljg-word": 5,
+    "ljg-skills.ljg-plain": 8,
+    "ljg-skills.ljg-present": 5,
+    "ljg-skills.ljg-qa": 5,
+    "ljg-skills.ljg-invest": 5,
+    "ljg-skills.ljg-relationship": 5,
+    "ljg-skills.ljg-skill-map": 3,
+    "ljg-skills.ljg-word-flow": 3,
+    "ljg-skills.ljg-paper": 5,
+    "ljg-skills.ljg-paper-flow": 3,
+    "ljg-skills.ljg-paper-river": 3,
+    "other-prompts.empty-prompt": 10
+  },
+  "enhancers": {
+    "munger-soul": 200,
+    "one-step-deeper": 10
+  }
+}

@@ -68,7 +68,10 @@ Chat Pack 编辑器只在本地桌面端显示。排序、大类增删改、子�
 - `/api/file?path=README.md`：返回单文件 Markdown 原文和已清理 HTML。
 - `/api/context?scene=<场景>&include=<路径>`：按文件或目录切片生成上下文包。
 - `PUT /api/chatpack/editor`：仅本地回环地址和同源页面可用，校验并保存 Chat Pack 排序、文案、推荐上下文及单个 Prompt，然后重建本地静态数据。
+- `GET/POST /api/chatpack/usage`：仅本地回环地址和同源页面可用；读取本机统计视图或以幂等事件记录当前月份的使用次数。公开 Pages 不提供该接口。
 - Chat Pack 在前端组装，Context 来源统一来自 `/api/context`。
+
+提示词使用基线位于 `00_config/chatpack-usage.json`，缺失时本地构建和合并均失败关闭。本地端的未合并月度记录写入被 Git 忽略的 `app/code/.local/chatpack-usage.json`；公开版只在浏览器保存自己的月度记录。`learn-x-prompt-usage` Skill 接收公开版复制的 JSON，拒绝未知 ID、非法月份、异常次数或已有基线改动，正常时只提交统计基线。
 - 静态部署读取构建产物；本地服务优先请求 API。
 
 ## 维护边界

@@ -3,6 +3,20 @@ import { renderExecutionContract, renderFinalTaskAnchor } from "./chatpack.js";
 import { buildContext, demoteMarkdownHeadings, filterFilesByIncludes } from "./context.js";
 import { els, state } from "./runtime.js";
 import { closePromptEditor, openPromptEditor, renderEditorAvailability, savePromptEditor } from "./editor.js";
+import {
+  USAGE_SCHEMA_VERSION,
+  USAGE_STORAGE_KEY,
+  addUsageCount,
+  buildUsageExport,
+  compareMonths,
+  currentShanghaiMonth,
+  emptyMonthCounts,
+  emptyUsageStore,
+  isValidUsageMonth,
+  isLowFrequencyUsage,
+  normalizeUsageStore,
+  sortUsageItems
+} from "./chatpack-usage.js";
 
 const STORAGE_PREFIX = "learn-x";
 const MUNGER_SOUL_ENHANCER_ID = "munger-soul";
@@ -116,6 +130,8 @@ async function boot() {
   CHATPACK_CONFIG = graph.chatPackConfig || CHATPACK_CONFIG;
   DIALOGUE_TYPES = CHATPACK_CONFIG.dialogueTypes || [];
   ENHANCERS = CHATPACK_CONFIG.enhancers || [];
+  if (state.runtime.target === "local") await refreshLocalUsage();
+  else applyBrowserUsage();
   state.mode = initialMode();
   state.activeDialogueTypeId =
     localStorage.getItem(dialogueTypeKey()) || state.activeDialogueTypeId || DIALOGUE_TYPES[0]?.id || "";
@@ -152,6 +168,7 @@ async function boot() {
   renderDomains();
   renderDialogueTypes();
   renderEnhancers();
+  els.copyChatPackUsage.hidden = state.runtime.target !== "public" || !chatPackContextEnabled();
   renderTopNav();
   renderEditorAvailability();
   bindEvents();
@@ -171,6 +188,50 @@ async function loadGraph() {
   const response = await fetch(GRAPH_DATA_URL);
   if (!response.ok) throw new Error(`Static graph missing: ${response.status}`);
   return response.json();
+}
+
+function usageView() {
+  if (!CHATPACK_CONFIG.usage) {
+    CHATPACK_CONFIG.usage = { schemaVersion: USAGE_SCHEMA_VERSION, mergedThrough: "0000-00", subtypes: {}, enhancers: {} };
+  }
+  CHATPACK_CONFIG.usage.subtypes ||= {};
+  CHATPACK_CONFIG.usage.enhancers ||= {};
+  return CHATPACK_CONFIG.usage;
+}
+
+function applyBrowserUsage() {
+  if (!CHATPACK_CONFIG.usage) return;
+  const usage = CHATPACK_CONFIG.usage;
+  let stored;
+  try {
+    stored = normalizeUsageStore(JSON.parse(localStorage.getItem(USAGE_STORAGE_KEY) || "null"));
+  } catch {
+    stored = emptyUsageStore("browser");
+  }
+  const allowedSubtypes = new Set(DIALOGUE_TYPES.flatMap((type) => (type.subtypes || []).map((subtype) => typeof subtype === "string" ? slugify(subtype) : subtype.id)));
+  const allowedEnhancers = new Set(ENHANCERS.filter((enhancer) => enhancer.group !== "length").map((enhancer) => enhancer.id));
+  for (const [month, counts] of Object.entries(stored.months)) {
+    if (!isValidUsageMonth(month) || compareMonths(month, usage.mergedThrough || "0000-00") <= 0) continue;
+    if (compareMonths(month, currentShanghaiMonth()) >= 0) continue;
+    for (const [id, count] of Object.entries(counts?.subtypes || {})) {
+      if (allowedSubtypes.has(id) && Number.isSafeInteger(count) && count >= 0) addUsageCount(usage, "subtypes", id, count);
+    }
+    for (const [id, count] of Object.entries(counts?.enhancers || {})) {
+      if (allowedEnhancers.has(id) && Number.isSafeInteger(count) && count >= 0) addUsageCount(usage, "enhancers", id, count);
+    }
+  }
+}
+
+async function refreshLocalUsage() {
+  try {
+    const response = await fetch("api/chatpack/usage");
+    if (response.ok) {
+      const payload = await response.json();
+      if (payload.usage) CHATPACK_CONFIG.usage = payload.usage;
+    }
+  } catch {
+    // The static build remains usable when the optional local usage endpoint is unavailable.
+  }
 }
 
 async function getJson(url) {
@@ -317,6 +378,7 @@ function bindEvents() {
   els.applyCustomContext.addEventListener("click", applyCustomContextSelections);
 
   els.generateChatPack.addEventListener("click", generateChatPack);
+  els.copyChatPackUsage.addEventListener("click", copyChatPackUsage);
   els.resetPrompt.addEventListener("click", resetPrompt);
   els.editPromptCategories.addEventListener("click", () => openPromptEditor("category"));
   els.sortPromptCatalog.addEventListener("click", () => openPromptEditor("sort"));
@@ -548,12 +610,19 @@ export function renderDialogueSubtypes() {
   const subtypes = normalizedSubtypes(type);
   if (!subtypes.length) return;
 
-  for (const subtype of subtypes) {
+  const usage = CHATPACK_CONFIG.usage;
+  const ordered = usage ? sortUsageItems(subtypes, usage) : subtypes;
+  const visible = usage
+    ? ordered.filter((subtype, index) => !isLowFrequencyUsage(subtype.usageCount, index, ordered.length))
+    : ordered;
+  const hidden = usage ? ordered.filter((subtype) => !visible.some((item) => item.id === subtype.id)) : [];
+
+  for (const subtype of visible) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `dialogue-subtype-btn${subtype.id === state.activeDialogueSubtypeId ? " active" : ""}`;
     bindPromptTooltip(button, subtype.tooltip || subtype.summary || subtype.protocol || subtype.name);
-    button.textContent = subtype.name;
+    button.textContent = usage ? `${subtype.name}（${subtype.usageCount}）` : subtype.name;
     button.addEventListener("click", () => {
       if (subtype.id === state.activeDialogueSubtypeId) {
         if (activePeriodOutputMode()) applyChatPackSelection(`已恢复「${subtype.name}」推荐上下文。`);
@@ -566,19 +635,42 @@ export function renderDialogueSubtypes() {
     });
     els.dialogueSubtypeList.append(button);
   }
+
+  if (hidden.length) {
+    const field = document.createElement("label");
+    field.className = "prompt-usage-select";
+    field.innerHTML = `<span>其他提示词</span>`;
+    const select = document.createElement("select");
+    select.setAttribute("aria-label", "其他提示词");
+    select.innerHTML = `<option value="">选择低频提示词</option>${hidden
+      .map((subtype) => `<option value="${escapeHtml(subtype.id)}"${subtype.id === state.activeDialogueSubtypeId ? " selected" : ""}>${escapeHtml(subtype.name)}（${subtype.usageCount}）</option>`)
+      .join("")}`;
+    select.addEventListener("change", () => {
+      const subtype = hidden.find((item) => item.id === select.value);
+      if (!subtype) return;
+      state.activeDialogueSubtypeId = subtype.id;
+      localStorage.setItem(dialogueSubtypeKey(type.id), subtype.id);
+      renderDialogueSubtypes();
+      applyChatPackSelection(`子类型已切换为「${subtype.name}」。`);
+    });
+    field.append(select);
+    els.dialogueSubtypeList.append(field);
+  }
 }
 
 export function renderEnhancers() {
   els.enhancerList.innerHTML = "";
   const lengthItems = ENHANCERS.filter((enhancer) => enhancer.group === "length");
   const buttonItems = ENHANCERS.filter((enhancer) => enhancer.group !== "length");
+  const usage = CHATPACK_CONFIG.usage;
+  const orderedButtonItems = usage ? sortUsageItems(buttonItems, usage, "enhancers") : buttonItems;
 
-  for (const enhancer of buttonItems) {
+  for (const enhancer of orderedButtonItems) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `dialogue-subtype-btn${state.activeEnhancerIds.has(enhancer.id) ? " active" : ""}`;
     bindPromptTooltip(button, enhancer.tooltip || enhancer.summary || enhancer.protocol || enhancer.name);
-    button.textContent = enhancer.name;
+    button.textContent = usage ? `${enhancer.name}（${enhancer.usageCount}）` : enhancer.name;
     button.addEventListener("click", () => {
       const enhancerWasActive = state.activeEnhancerIds.has(enhancer.id);
       if (state.activeEnhancerIds.has(enhancer.id)) {
@@ -1359,7 +1451,96 @@ async function generateChatPack() {
   }
   const chatPack = buildChatPack();
   const copied = await copyText(chatPack, "Chat Pack 已生成并复制。");
+  const usageResult = await recordGeneratedUsage();
+  if (usageResult.warning) {
+    els.learningStatus.textContent = `${copied ? "Chat Pack 已生成并复制。" : "Chat Pack 已生成。"}${usageResult.warning}`;
+  }
   if (copied) showToast("已复制到剪贴板，请去 ai chat");
+}
+
+function createUsageEventId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `usage-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function readBrowserUsageStore() {
+  try {
+    return normalizeUsageStore(JSON.parse(localStorage.getItem(USAGE_STORAGE_KEY) || "null"));
+  } catch {
+    // A malformed local record is replaced by a clean store; it cannot affect the Chat Pack itself.
+  }
+  return emptyUsageStore("browser");
+}
+
+function incrementUsageView(subtypeId, enhancerIds) {
+  const usage = usageView();
+  addUsageCount(usage, "subtypes", subtypeId);
+  for (const enhancerId of enhancerIds) addUsageCount(usage, "enhancers", enhancerId);
+  renderDialogueSubtypes();
+  renderEnhancers();
+}
+
+async function recordGeneratedUsage() {
+  if (!chatPackContextEnabled()) return { recorded: false };
+  const subtype = activeDialogueSubtype();
+  if (!subtype) return { recorded: false };
+  const enhancerIds = selectedEnhancers()
+    .filter((enhancer) => enhancer.group !== "length")
+    .map((enhancer) => enhancer.id);
+  const month = currentShanghaiMonth();
+
+  if (state.runtime.target === "local") {
+    const payload = { eventId: createUsageEventId(), month, subtypeId: subtype.id, enhancerIds };
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const response = await fetch("api/chatpack/usage", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (response.ok) {
+          const result = await response.json();
+          // A retry can receive a duplicate after the first write succeeded but its response was lost.
+          // Refresh the in-memory view for that generation as well.
+          incrementUsageView(subtype.id, enhancerIds);
+          return { recorded: true };
+        }
+      } catch {}
+    }
+    return { recorded: false, warning: " 使用次数未记录，请稍后重试。" };
+  }
+
+  const write = async () => {
+    const store = readBrowserUsageStore();
+    const monthCounts = store.months[month] || emptyMonthCounts();
+    addUsageCount(monthCounts, "subtypes", subtype.id);
+    for (const enhancerId of enhancerIds) addUsageCount(monthCounts, "enhancers", enhancerId);
+    store.months[month] = monthCounts;
+    localStorage.setItem(USAGE_STORAGE_KEY, JSON.stringify(store));
+    incrementUsageView(subtype.id, enhancerIds);
+    return { recorded: true };
+  };
+  try {
+    // Native Web Locks serializes multi-tab read-modify-write; older browsers retain the best-effort path.
+    return navigator.locks?.request ? await navigator.locks.request("learn-x-chatpack-usage", write) : await write();
+  } catch {
+    return { recorded: false, warning: " 使用次数未记录，请稍后重试。" };
+  }
+}
+
+async function copyChatPackUsage() {
+  if (state.runtime.target !== "public" || !chatPackContextEnabled()) return;
+  const usage = usageView();
+  const payload = buildUsageExport(readBrowserUsageStore(), usage.mergedThrough);
+  const text = [
+    "请使用 $learn-x-prompt-usage 合并以下 Learn-X 提示词使用记录。正常时自动提交并推送；发现异常请停止并提醒我。",
+    "",
+    "```json",
+    JSON.stringify(payload, null, 2),
+    "```"
+  ].join("\n");
+  const copied = await copyText(text, "使用记录已复制，请发送给 Learn-X。");
+  if (copied) showToast("使用记录已复制，请发送给 Learn-X");
 }
 
 function buildChatPack() {

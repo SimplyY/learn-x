@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import MarkdownIt from "markdown-it";
 import createDOMPurify from "dompurify";
 import { JSDOM } from "jsdom";
+import { buildUsageView, readLocalUsageStore, readUsageBaseline } from "./chatpack-usage.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../..");
@@ -187,6 +188,8 @@ export async function buildGraphPayload({ includeContent = false, target = "publ
   const chatPackConfig = await hydrateChatPackMetadata(
     target === "public" ? publicChatPackConfig(sourceChatPackConfig) : sourceChatPackConfig
   );
+  const usageBaseline = await readUsageBaseline(repoRoot);
+  const usage = buildUsageView(usageBaseline, target === "local" ? await readLocalUsageStore(repoRoot) : null);
   const allFiles = await collectMarkdownFiles();
   const files = target === "public" ? allFiles.filter((file) => !isPublicPrivatePath(file.path)) : allFiles;
   const customFiles = contextEnabled
@@ -202,7 +205,7 @@ export async function buildGraphPayload({ includeContent = false, target = "publ
       contextEnabled
     },
     appConfig,
-    chatPackConfig,
+    chatPackConfig: { ...chatPackConfig, usage },
     files: files.map((file) => {
       const preview = file.content.trim().split(/\n\s*\n/)[0] || "";
       const payload = {

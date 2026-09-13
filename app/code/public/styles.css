@@ -642,6 +642,24 @@ button:disabled {
   gap: 6px;
 }
 
+.prompt-usage-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.prompt-usage-select select {
+  min-height: 30px;
+  max-width: 220px;
+  border-radius: 999px;
+  padding: 0 10px;
+  background: #fbfcff;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .dialogue-subtype-btn {
   min-height: 30px;
   border-radius: 999px;

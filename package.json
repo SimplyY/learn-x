@@ -10,7 +10,7 @@
     "build:public:no-context": "LEARN_X_CHATPACK_CONTEXT=off node app/code/scripts/build-static-data.mjs --target=public --out-dir=dist/no-context",
     "build:local": "node app/code/scripts/build-static-data.mjs --target=local",
     "dev": "npm run build:local && node app/code/server.mjs",
-    "test": "node --test app/code/scripts/*.test.mjs .agents/skills/learn-x-input/scripts/*.test.mjs .agents/skills/learn-x-process/scripts/*.test.mjs .agents/skills/wechat-weekly-input/scripts/*.test.mjs",
+    "test": "node --test app/code/scripts/*.test.mjs .agents/skills/learn-x-input/scripts/*.test.mjs .agents/skills/learn-x-process/scripts/*.test.mjs .agents/skills/wechat-weekly-input/scripts/*.test.mjs .agents/skills/learn-x-prompt-usage/scripts/*.test.mjs",
     "snapshot": "npm run build",
     "security:scan": "node scripts/security-scan.mjs",
     "security:scan:staged": "node scripts/security-scan.mjs --staged",

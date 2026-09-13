@@ -17,6 +17,7 @@ output/
 04_output/yearly/*
 !04_output/yearly/.gitkeep
 app/code/.test-tmp/
+app/code/.local/
 *.DS_Store
 .env
 .env.*
