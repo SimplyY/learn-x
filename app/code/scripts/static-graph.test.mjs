@@ -9,7 +9,8 @@ import {
   buildChatPackTooltip,
   buildGraphPayload,
   extractPromptTooltipSource,
-  isPublicPrivatePath
+  isPublicPrivatePath,
+  renderMarkdown
 } from "./static-graph.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -90,6 +91,14 @@ First paragraph.
   assert.equal(fallback, "第一段正文，带 加粗 、链接 和 code 。");
 
   assert.equal(buildChatPackTooltip("x".repeat(260)).length, 200);
+});
+
+test("renders Learn-X file links as resolvable internal targets", () => {
+  const html = renderMarkdown("[daily.md](learnx://03_input%2Fweekly%2F2026-W36%2Fdaily.md)");
+  assert.match(html, /href="#"/);
+  assert.match(html, /class="wiki-link"/);
+  assert.match(html, /data-target="03_input\/weekly\/2026-W36\/daily\.md"/);
+  assert.doesNotMatch(renderMarkdown("daily.md"), /href=/);
 });
 
 test("editor preserves immutable fields while updating order and editable content", () => {

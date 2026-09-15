@@ -11,6 +11,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const defaultRepoRoot = path.resolve(__dirname, "../../../..");
 const defaultBridgePath = path.join(homedir(), ".codex/skills/chatgpt-web-bridge/scripts/bridge.mjs");
 const maxInputChars = 15_000;
+// Bridge 默认预算为 120 秒观察 + 90 秒传输/清理余量；适配器必须覆盖完整协议预算。
+export const DEFAULT_BRIDGE_TIMEOUT_MS = 240_000;
 
 export function normalizeWeek(value) {
   const match = String(value || "").match(/^(\d{4})-W?(\d{1,2})$/);
@@ -22,6 +24,10 @@ export function normalizeWeek(value) {
 
 export function sha256(value) {
   return createHash("sha256").update(String(value), "utf8").digest("hex");
+}
+
+export function manualAiShell(week) {
+  return `# AI 周回顾｜${week}\n\n<!-- 手动完成后，将 ChatGPT 返回的完整 Markdown 正文粘贴到这里；不要粘贴提示词或外层代码块。 -->\n`;
 }
 
 export function buildReviewPrompt(template, week) {
@@ -77,7 +83,7 @@ export function parseJsonLines(text) {
 
 export async function runBridgeCli(prompt, options = {}) {
   const bridgePath = options.bridgePath || process.env.LEARN_X_CHATGPT_BRIDGE || defaultBridgePath;
-  const timeoutMs = options.timeoutMs || 150_000;
+  const timeoutMs = options.timeoutMs || DEFAULT_BRIDGE_TIMEOUT_MS;
   const child = spawn(process.execPath, [bridgePath], { stdio: ["pipe", "pipe", "pipe"] });
   let stdout = "";
   let stderr = "";
@@ -120,6 +126,12 @@ async function readJson(filePath) {
     if (error.code === "ENOENT") return null;
     throw error;
   }
+}
+
+async function ensureManualAiShell(paths, week) {
+  if (await exists(paths.formalPath)) return false;
+  await writeAtomic(paths.formalPath, manualAiShell(week), "manual");
+  return true;
 }
 
 async function writeAtomic(filePath, content, suffix = "tmp") {
@@ -181,9 +193,9 @@ export async function generateAiReview(options = {}) {
   if (await exists(paths.generatedPath)) {
     return await promoteAiReview({ repoRoot, week, confirm: true });
   }
-
   const template = await readFile(paths.templatePath, "utf8");
   const prompt = buildReviewPrompt(template, week);
+
   if (previous?.status === "needs_review" && previous.reason === "invalid-ai-review" && previous.promptSha256 === sha256(prompt) && await exists(paths.invalidPath)) {
     const recoveredText = normalizeAiReviewText(await readFile(paths.invalidPath, "utf8"));
     const recoveredValidation = validateAiReview(recoveredText);
@@ -205,7 +217,8 @@ export async function generateAiReview(options = {}) {
   }
   const safeRetryReasons = new Set(["ego-bootstrap-permission", "ego-browser-unavailable", "local-rate-limit-cooldown", "login-required", "captcha-or-blocked", "composer-missing", "chat-mode-switch-failed", "empty-ai-review", "ai-review-too-large", "invalid-ai-review"]);
   if (previous?.status === "needs_review" && !(options.retry && safeRetryReasons.has(previous.reason))) {
-    return { status: "needs_review", targetWeek: week, reason: "previous-run-needs-review", manualPrompt: previous.manualPrompt };
+    await ensureManualAiShell(paths, week);
+    return { status: "needs_review", targetWeek: week, reason: "previous-run-needs-review", manualPrompt: previous.manualPrompt || prompt, manualPath: paths.formalPath };
   }
 
   const runner = options.runBridge || runBridgeCli;
@@ -231,6 +244,8 @@ export async function generateAiReview(options = {}) {
       completedAt: new Date().toISOString(),
       manualPrompt: prompt
     };
+    await ensureManualAiShell(paths, week);
+    failure.manualPath = paths.formalPath;
     await writeAtomic(paths.sidecarPath, `${JSON.stringify(failure, null, 2)}\n`, "status");
     return { ...failure, targetWeek: week };
   }
@@ -250,6 +265,8 @@ export async function generateAiReview(options = {}) {
       completedAt: new Date().toISOString(),
       manualPrompt: prompt
     };
+    await ensureManualAiShell(paths, week);
+    failure.manualPath = paths.formalPath;
     if (text) await writeAtomic(paths.invalidPath, `${text.slice(0, maxInputChars)}${text.length > maxInputChars ? "\n\n[输出已截断]" : ""}\n`, "invalid");
     await writeAtomic(paths.sidecarPath, `${JSON.stringify(failure, null, 2)}\n`, "status");
     return { ...failure, targetWeek: week };

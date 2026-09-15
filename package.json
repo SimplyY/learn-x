@@ -10,7 +10,7 @@
     "build:public:no-context": "LEARN_X_CHATPACK_CONTEXT=off node app/code/scripts/build-static-data.mjs --target=public --out-dir=dist/no-context",
     "build:local": "node app/code/scripts/build-static-data.mjs --target=local",
     "dev": "npm run build:local && node app/code/server.mjs",
-    "test": "node --test app/code/scripts/*.test.mjs .agents/skills/learn-x-input/scripts/*.test.mjs .agents/skills/learn-x-process/scripts/*.test.mjs .agents/skills/wechat-weekly-input/scripts/*.test.mjs .agents/skills/learn-x-prompt-usage/scripts/*.test.mjs",
+    "test": "node --test app/code/scripts/*.test.mjs .agents/skills/learn-x-input/scripts/*.test.mjs .agents/skills/learn-x-process/scripts/*.test.mjs .agents/skills/wechat-weekly-input/scripts/*.test.mjs .agents/skills/learn-x-prompt-usage/scripts/*.test.mjs .agents/skills/learn-x-question-review/scripts/*.test.mjs",
     "snapshot": "npm run build",
     "security:scan": "node scripts/security-scan.mjs",
     "security:scan:staged": "node scripts/security-scan.mjs --staged",
@@ -40,7 +40,8 @@
     "input:build-bot": "node .agents/skills/build-bot-log/scripts/generate-build-bot.mjs",
     "research:ingest": "node .agents/skills/long-article-research/scripts/research-ingest.mjs",
     "input:wisdom": "node .agents/skills/learn-x-input/scripts/collect-base-weekly.mjs",
-    "input:source-status": "node .agents/skills/learn-x-input/scripts/update-weekly-source-status.mjs"
+    "input:source-status": "node .agents/skills/learn-x-input/scripts/update-weekly-source-status.mjs",
+    "inquiry:review": "node .agents/skills/learn-x-question-review/scripts/review-questions.mjs"
   },
   "dependencies": {
     "dompurify": "^3.4.2",

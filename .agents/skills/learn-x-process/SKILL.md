@@ -45,7 +45,7 @@ Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 刷新 YW Next �
 - 可以在 `04_output/weekly/YYYY-WW.md` 不存在或为空时创建最小壳；如果已有内容，不覆盖、不改写。
 - 可以生成中间材料 `04_output/_dist/weekly/YYYY-Www/input.json` 和 `04_output/_dist/weekly/YYYY-Www/process-pack.md`。
 - 可以生成 metadata-only 的 `04_output/_dist/monthly/YYYY-MM/input.json`、压缩请求和自包含的 `process-pack.md`。
-- 可以读取 `04_output/weekly/YYYY-WW.md`，抽取候选区内已勾选内容及两个精确系统确认章节，生成 `04_output/_dist/weekly/YYYY-Www/memory-candidates.md`，再由 Codex 无损整理写入 `01_core/memory/YYYY-QN.memory.md`。
+- 可以读取 `04_output/weekly/YYYY-WW.md`，抽取候选区内已勾选内容及三个系统确认章节（全文核心重点纪要、芒格之魂的洞察、问题与回答），生成 `04_output/_dist/weekly/YYYY-Www/memory-candidates.md`，再由 Codex 无损整理写入 `01_core/memory/YYYY-QN.memory.md`。
 - 可以读取 `04_output/monthly/YYYY-MM.md` 或 `04_output/yearly/YYYY.md`，抽取 Memory 候选包，供 Codex 无损整理写入季度或年度 Memory。
 - 可以运行 `npm run memory:compress -- --as-of YYYY-MM-DD` 生成只读压缩规划；Codex 将不含技术注释的语义压缩候选写入 `04_output/_dist/memory-compression/`，技术元数据、`changeSummary`、`coreDifferences` 和 `otherChanges` 放在同目录隐藏 sidecar，脚本再负责比较、哈希、保护范围和预算校验。`changeSummary` 必须由 Codex 通读原文与候选后按 `resources/memory-compression-rules.md` 生成，脚本不得用固定句式代写。
 - comparison 报告必须把“核心变化”放在最前面，先说明整份文件实际减少量，再按上一版的简洁表格列出 5—10 条代表性核心变化：字数变化（风险写在括号内）、之前是什么、现在是什么，并按风险从高到低、同风险按净减少字数排序；实际改动量按字符级删除加新增计算，净减少不超过 10 字但替换超过 10 字的改写仍需展示。不把所有碎片逐条铺开。实际改动量不超过 10 字的变化按类型归类，超过 10 字但未入选核心的变化只做汇总。报告另设“非删除类变化”表，说明改动（风险写在括号内），并把原文和压缩后拆成两列；未逐字保留的来源单元再按候选池小节、Memory、洞察和继续追踪等类型细分，删除候选不得与普通合并混为一类。保护范围和量化校验后置；报告说明核心摘要与整份文件实际总压缩量的口径区别；缺少 5—10 条核心摘要时标记 `needs_review`，不允许晋级。
@@ -78,7 +78,7 @@ Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 刷新 YW Next �
    node .agents/skills/learn-x-process/scripts/generate-weekly-process-pack.mjs --week 2026-22
    ```
 
-   Weekly Process 对普通文件保留 15,000 Unicode 字符校验；Voice-X 的 `voice.md` 完整落盘，30,000 字符只是强提示，不阻断输入生成。统一生成 Process Pack 时对 Voice-X 做一次约 20% 保留比例的高信号压缩，并报告整体及文件级原始/纳入字符数；`input:compress` 不处理 Voice-X。
+   Weekly Process 对普通文件保留 15,000 Unicode 字符校验；Voice-X 的 `voice.md` 完整落盘，30,000 字符只是强提示，不阻断输入生成。统一生成 Process Pack 时先输出固定顺序的「输入与压缩总表」，逐来源合并状态、记录/材料数、原始 → 纳入字符链路和结果；只有 Voice-X 做一次约 20% 保留比例的高信号压缩并在字符链路后标明，普通来源不做语义压缩，`input:compress` 不处理 Voice-X。
 
    `智慧之门` 的增值源是飞书 Base；采集入口读取结构化字段，并把 `长篇内容、原始内容` 做自适应高信号抽取：以每条约 300 Unicode 字符为中心，通常保留 200-500 字，预算根据独立核心判断、因果/模型结构、结论、边界、风险和与参考字段的关联度有限调整；短内容不硬扩，长内容不超过 500。只把压缩内容写入本地，原文不落盘。因此 `wisdom.md`、`input.json` 和 Process Pack 保持同一内容口径；需要核查长篇原文时回到 Base 链接。各来源仍记录原始字符数与纳入字符数，避免把材料体量和实际纳入上下文混为一谈。
 
@@ -109,7 +109,7 @@ Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 刷新 YW Next �
    ```
 
    然后读取 `resources/memory-rules.md` 和对应 `memory-candidates.md`，把已确认内容无损迁移到 Memory，并按来源周期排序；候选不足时报告不建议写入。
-   Weekly 自动化将此作为阶段 3：精确标题「全文核心重点纪要」和「芒格之魂的洞察」是系统确认内容，无需 checkbox；前者进入当周 Memory，后者进入季度芒格洞察候选池。其余内容只接受候选区内已勾选 checkbox 或用户当场明确确认；禁止扫描普通正文，禁止把“继续追踪”“重要”“保留”“确认”等词语当作确认。道 / 法 / 术候选即使已勾选，也只进入季度顶部对应候选观察池，不进入普通 Memory。重复执行时不得重复追加同一条目。
+   Weekly 自动化将此作为阶段 3：标题「全文核心重点纪要」「芒格之魂的洞察」和“本周最值得思考的问题与回答”是系统确认内容，无需 checkbox；前者和问题与回答进入当周 Memory，芒格洞察进入季度芒格洞察候选池。问题与回答必须成对保留，不只记问题或只记答案。其余内容只接受候选区内已勾选 checkbox 或用户当场明确确认；禁止扫描普通正文，禁止把“继续追踪”“重要”“保留”“确认”等词语当作确认。道 / 法 / 术候选即使已勾选，也只进入季度顶部对应候选观察池，不进入普通 Memory。重复执行时不得重复追加同一条目。
 
 10. 如需维护历史 Memory，先读取 `resources/memory-compression-rules.md`，运行压缩规划并由 Codex 生成候选；对候选目录运行 `--validate`。只向用户报告 `ready`、`needs_review` 或 `stale`，不把校验结果描述为语义无损证明。只有用户另行明确确认晋级，才运行 `--promote --confirm`。
 
@@ -127,7 +127,7 @@ Weekly Output 要综合三类输入：
 
 Weekly Output 默认围绕核心问题、做中学复盘、下周 3 件事、道 / 法 / 术和处理信息；行动闭环检查并入做中学复盘，不单独成节。
 
-Memory 必须遵守 `resources/memory-rules.md`。只有精确标题「全文核心重点纪要」和「芒格之魂的洞察」可作为系统确认章节；允许轻度去重压缩，但不得丢失独立判断。其余只处理候选区内已勾选内容或用户当场明确确认内容。已勾选道 / 法 / 术候选观察进入季度 Memory 文件顶部对应候选池，并保留来源，不进入普通 Memory；普通正文和未勾选内容默认不写入。具体用法见 `04_output/usage.md`。
+Memory 必须遵守 `resources/memory-rules.md`。标题「全文核心重点纪要」「芒格之魂的洞察」和“本周最值得思考的问题与回答”可作为系统确认章节；允许轻度去重压缩，但不得丢失独立判断、问题、回答及其对应关系。其余只处理候选区内已勾选内容或用户当场明确确认内容。已勾选道 / 法 / 术候选观察进入季度 Memory 文件顶部对应候选池，并保留来源，不进入普通 Memory；普通正文和未勾选内容默认不写入。具体用法见 `04_output/usage.md`。
 
 ## 六阶段架构
 

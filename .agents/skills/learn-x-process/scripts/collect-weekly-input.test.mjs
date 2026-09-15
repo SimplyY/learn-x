@@ -89,6 +89,20 @@ test("records raw and effective character counts for each Process file", async (
   }
 });
 
+test("counts effective characters by Unicode code point", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-weekly-unicode-counts-"));
+  try {
+    const weekDir = path.join(root, "03_input/weekly/2026-W29");
+    await mkdir(weekDir, { recursive: true });
+    await writeFile(path.join(weekDir, "research.md"), "# 研究\n\n🙂🙂🙂🙂🙂🙂", "utf8");
+    const result = await collectWeeklyInput({ repoRoot: root, week: "2026-W29" });
+    assert.equal(result.files[0].effectiveChars, Array.from(result.items[0].text).length);
+    assert.notEqual(result.files[0].effectiveChars, result.items[0].text.length);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("collects from an explicit repo root and excludes only the unconfirmed draft", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-weekly-input-"));
   try {

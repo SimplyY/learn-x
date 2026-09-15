@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile, readdir, stat, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { MAX_WEEKLY_INPUT_CHARS, countInputChars, maxInputCharsForPath } from "../../learn-x-input/scripts/lib/input-limits.mjs";
+import { MAX_WEEKLY_INPUT_CHARS, countInputChars, inputSize, maxInputCharsForPath } from "../../learn-x-input/scripts/lib/input-limits.mjs";
 import { readWeeklySourceStatus } from "../../learn-x-input/scripts/lib/source-status.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -56,7 +56,7 @@ export async function collectWeeklyInput(options = {}) {
     file.modifiedAt = info.mtime.toISOString();
     file.size = info.size;
     file.rawChars = rawChars;
-    file.effectiveChars = fileItems.reduce((total, item) => total + item.text.length, 0);
+    file.effectiveChars = fileItems.reduce((total, item) => total + inputSize(item.text).chars, 0);
     activeFiles.push(file);
     rawItems.push(...fileItems);
   }

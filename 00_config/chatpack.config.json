@@ -298,7 +298,7 @@
       "id": "munger-soul",
       "name": "芒格之魂",
       "summary": "以芒格之魂为核心提示词来输出，用多元模型、反过来想和长期理性增强原提示词。",
-      "applicationNote": "点击后默认将 Current Question 设为「使用芒格之魂的提示词来解析所有上下文。」；它增强当前大类、子类型、Context、背景和需求。",
+      "applicationNote": "点击后默认将 Current Question 设为「使用芒格之魂的提示词来解析上面我们对话的内容。」；它增强当前大类、子类型、Context、背景和需求。",
       "promptPath": "02_prompts/chatpack/enhancers/munger-soul.md"
     },
     {

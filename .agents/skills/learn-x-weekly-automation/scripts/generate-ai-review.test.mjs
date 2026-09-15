@@ -5,7 +5,9 @@ import path from "node:path";
 import test from "node:test";
 import {
   buildReviewPrompt,
+  DEFAULT_BRIDGE_TIMEOUT_MS,
   generateAiReview,
+  manualAiShell,
   normalizeAiReviewText,
   promoteAiReview,
   sha256,
@@ -22,6 +24,14 @@ async function fixture() {
 }
 
 const validReview = "# Learn-X 周回顾\n\n## 具体的人和事（独立主线，优先保留）\n\n本周未发现可可靠提炼的具体人/事。\n\n## 本周反复思考的核心问题\n\n真实判断\n\n## 精华问题摘要\n\n真实答案";
+
+test("bridge adapter timeout covers the Bridge protocol budget", () => {
+  assert.ok(DEFAULT_BRIDGE_TIMEOUT_MS >= 210_000);
+});
+
+test("manual fallback shell is stable and does not contain the prompt", () => {
+  assert.equal(manualAiShell("2026-W27"), "# AI 周回顾｜2026-W27\n\n<!-- 手动完成后，将 ChatGPT 返回的完整 Markdown 正文粘贴到这里；不要粘贴提示词或外层代码块。 -->\n");
+});
 
 test("template keeps people-and-events as an independent evidence-first axis", async () => {
   const template = await readFile(new URL("../../../../03_input/weekly/00_template/ai.md", import.meta.url), "utf8");
@@ -151,7 +161,29 @@ test("does not resend after a submitted but uncertain result", async () => {
     assert.equal(first.reason, "observer-timeout");
     assert.equal(second.reason, "previous-run-needs-review");
     assert.equal(calls, 1);
+    assert.equal(await readFile(path.join(root, "03_input/weekly/2026-W27/ai.md"), "utf8"), manualAiShell("2026-W27"));
+    assert.match(second.manualPrompt, /目标回顾周期：2026-W27/);
     assert.equal(await readdir(path.join(root, "03_input/weekly/2026-W27")).then((files) => files.includes("ai.generated.md")), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("preserves substantive manual ai.md when automatic review needs review", async () => {
+  const root = await fixture();
+  try {
+    const weekDir = path.join(root, "03_input/weekly/2026-W27");
+    await import("node:fs/promises").then(({ mkdir }) => mkdir(weekDir, { recursive: true }));
+    const manual = "# 人工周回顾\n\n这是用户已经写好的内容。\n";
+    await writeFile(path.join(weekDir, "ai.md"), manual, "utf8");
+    const result = await generateAiReview({
+      repoRoot: root,
+      week: "2026-W27",
+      runBridge: async () => ({ result: { status: "needs_review", runId: "run-manual", reason: "observer-window-ended" } })
+    });
+    assert.equal(result.status, "needs_review");
+    assert.equal(await readFile(path.join(weekDir, "ai.md"), "utf8"), manual);
+    assert.equal(result.manualPath, path.join(weekDir, "ai.md"));
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -168,6 +200,7 @@ test("rejects invalid output and returns the manual fallback prompt", async () =
     assert.equal(result.status, "needs_review");
     assert.equal(result.reason, "invalid-ai-review");
     assert.match(result.manualPrompt, /原有提示词开始/);
+    assert.equal(await readFile(path.join(root, "03_input/weekly/2026-W27/ai.md"), "utf8"), manualAiShell("2026-W27"));
     assert.deepEqual(result.validation, ["placeholder", "too-few-sections", "missing-people-and-events", "missing-review-content"]);
     assert.equal(await readFile(path.join(root, "03_input/weekly/2026-W27/_ai-invalid.generated.md"), "utf8"), "不完整\n");
   } finally {

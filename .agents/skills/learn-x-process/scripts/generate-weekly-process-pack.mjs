@@ -3,10 +3,26 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { compressVoiceForProcessPack, voiceCompressionMetrics } from "../../learn-x-input/scripts/collect-voice-weekly.mjs";
 import { inputSize, MAX_VOICE_WEEKLY_INPUT_CHARS, VOICE_TARGET_RETAINED_RATIO } from "../../learn-x-input/scripts/lib/input-limits.mjs";
+import { SOURCE_FILES } from "../../learn-x-input/scripts/lib/source-status.mjs";
 import { defaultWeeklyReviewWeek, writeWeeklyInput } from "./collect-weekly-input.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
+const FIXED_WEEKLY_INPUTS = [
+  { file: SOURCE_FILES.daily, type: "日志", source: "飞书日记", statusSource: "daily" },
+  { file: "weekly.md", type: "日志", source: "飞书周记", mode: "manual", note: "阶段 2 采回的人工确认周记" },
+  { file: SOURCE_FILES.flomo, type: "输入", source: "Flomo", statusSource: "flomo" },
+  { file: SOURCE_FILES.weread, type: "输入", source: "微信读书", statusSource: "weread" },
+  { file: SOURCE_FILES.wechat, type: "输入", source: "微信聊天", statusSource: "wechat", optional: true, note: "按需手工采集" },
+  { file: SOURCE_FILES.voice, type: "输入", source: "Voice-X", statusSource: "voice" },
+  { file: SOURCE_FILES.calendar, type: "计划", source: "Time-X 日历", statusSource: "calendar" },
+  { file: SOURCE_FILES.health, type: "日志", source: "Health-X", statusSource: "health" },
+  { file: SOURCE_FILES.coach, type: "行动", source: "AI Coach", statusSource: "coach" },
+  { file: SOURCE_FILES.wisdom, type: "输入", source: "智慧之门", statusSource: "wisdom" },
+  { file: "ai.md", type: "补充", source: "AI 周回顾", mode: "manual", optional: true, note: "可选；确认后进入 Process" },
+  { file: SOURCE_FILES.build, type: "复盘", source: "Codex / Code X Build", statusSource: "build" },
+  { file: SOURCE_FILES["build-bot"], type: "复盘", source: "飞书机器人 Build", statusSource: "build-bot" }
+];
 
 export async function generateWeeklyProcessPack(options = {}) {
   const week = options.week || defaultWeeklyReviewWeek();
@@ -59,26 +75,120 @@ function renderProcessPack(payload, sourceSummaries, fileSummaries, items, compr
     `- 被状态侧车排除的旧文件：${payload.stats.excludedFileCount}`,
     `- JSON 中间材料：\`04_output/_dist/weekly/${distWeekId(payload.week)}/input.json\``,
     "",
-    "## 2. 来源状态",
+    "## 2. 输入与压缩总表",
+    "",
+    renderInputAuditTable(payload, fileSummaries, compression),
+    "",
+    "## 3. 来源状态",
     "",
     renderSourceStatuses(payload),
     "",
-    "## 3. 来源覆盖",
+    "## 4. 来源覆盖",
     "",
     renderSourceCoverage(sourceSummaries),
     "",
-    "## 4. 来源索引",
+    "## 5. 来源索引",
     "",
     renderSourceIndex(fileSummaries),
     "",
-    "## 5. 统一压缩概览",
+    "## 6. 统一压缩概览",
     "",
     renderCompressionSummary(compression),
     "",
-    "## 6. 材料正文",
+    "## 7. 材料正文",
     "",
     renderFileMaterials(items, fileSummaries)
   ].join("\n");
+}
+
+export function buildInputAuditRows(payload, fileSummaries, compression) {
+  const summariesByFile = new Map(fileSummaries.map((file) => [path.basename(file.path), file]));
+  const statusesByFile = new Map(Object.entries(payload.sourceStatuses || {}).map(([source, entry]) => [entry.file, { source, entry }]));
+  const fixedFiles = new Set(FIXED_WEEKLY_INPUTS.map((definition) => definition.file));
+  const rows = FIXED_WEEKLY_INPUTS.map((definition) => buildInputAuditRow({
+    payload,
+    definition,
+    fileSummary: summariesByFile.get(definition.file),
+    statusInfo: definition.statusSource ? statusesByFile.get(definition.file) : undefined
+  }));
+
+  for (const fileSummary of fileSummaries) {
+    const fileName = path.basename(fileSummary.path);
+    if (fixedFiles.has(fileName)) continue;
+    rows.push({
+      ...buildInputAuditRow({ payload, definition: { file: fileName, type: "其他", source: fileSummary.source || "未命名来源", mode: "extra" }, fileSummary }),
+      status: "ready（其他）",
+      result: "纳入；如持续出现，请补入固定来源目录"
+    });
+  }
+
+  return rows;
+}
+
+function buildInputAuditRow({ payload, definition, fileSummary, statusInfo }) {
+  const entry = statusInfo?.entry;
+  const isManual = definition.mode === "manual";
+  const hasMaterial = Boolean(fileSummary);
+  const isReady = entry?.status === "ready" || (!entry && hasMaterial);
+  const status = entry?.status || (hasMaterial ? (isManual ? "ready（人工）" : "ready（兼容）") : "未发现");
+  const stale = entry?.preservedStaleFile ? "；旧文件保留但过期、不计入" : "";
+  const present = hasMaterial || Boolean(payload.excludedFiles?.some((file) => file.file === definition.file && file.present));
+  const filePath = fileSummary?.path || `03_input/weekly/${distWeekId(payload.week)}/${definition.file}`;
+  const link = present ? localFileLink(filePath, definition.file) : "—";
+
+  let result;
+  if (entry && entry.status !== "ready") {
+    result = `排除：${entry.summary || entry.status}${stale}`;
+  } else if (entry?.status === "ready" && !hasMaterial) {
+    result = "异常：状态为 ready，但没有可纳入的有效材料";
+  } else if (isReady) {
+    result = isManual ? "纳入（人工文件）" : "纳入";
+  } else if (isManual) {
+    result = definition.note || "可选，当前未发现";
+  } else {
+    result = "未执行或未登记；不计入";
+  }
+
+  return {
+    type: definition.type,
+    source: definition.source,
+    file: definition.file,
+    status,
+    count: isReady && fileSummary ? (entry?.count ?? fileSummary.itemCount) : (entry?.count ?? 0),
+    rawChars: isReady && fileSummary ? fileSummary.rawChars : "—",
+    effectiveChars: isReady && fileSummary ? fileSummary.effectiveChars : "—",
+    processChars: isReady && fileSummary ? fileSummary.processChars : "—",
+    compressionNote: "",
+    result,
+    link,
+    note: entry?.summary || definition.note || "",
+    optional: Boolean(definition.optional)
+  };
+}
+
+export function renderInputAuditTable(payload, fileSummaries, compression) {
+  const rows = buildInputAuditRows(payload, fileSummaries, compression);
+  return [
+    "> 固定顺序：文件类型 / 来源 → 状态 → 记录/材料 → 字符链路（原始 → 纳入）→ 结果；只有发生实际语义压缩时才在字符链路后标注。`ready` 才计入，`empty/failed/unavailable` 和过期旧文件均不计入。",
+    `> 本轮需关注：${renderInputAttention(rows)}`,
+    "",
+    "| 输入类型 | 来源 | 文件 | 状态 | 记录/材料 | 字符链路（原始 → 纳入） | 结果 |",
+    "| --- | --- | --- | --- | ---: | ---: | --- |",
+    ...rows.map((row) => {
+      const detail = compression.files?.find((item) => item.path.endsWith(`/${row.file}`));
+      const compressionNote = detail ? `（Voice-X 压缩，保留 ${Math.round(detail.retainedRatio * 100)}%）` : "";
+      const characterChain = row.rawChars === "—" ? "—" : `${row.rawChars} → ${row.processChars}${compressionNote}`;
+      const fileCell = row.link === "—" ? row.file : row.link;
+      return `| ${row.type} | ${row.source} | ${fileCell} | ${row.status} | ${row.count} | ${characterChain} | ${escapeTableCell(row.result)} |`;
+    })
+  ].join("\n");
+}
+
+function renderInputAttention(rows) {
+  const attention = rows
+    .filter((row) => !row.optional && (/^(empty|failed|unavailable|未发现)$/.test(row.status) || row.result.startsWith("异常")))
+    .map((row) => `${row.source}（${row.file}：${row.status}）`);
+  return attention.length ? attention.join("；") : "无";
 }
 
 export function compressWeeklyProcessItems(items, files = []) {
@@ -131,7 +241,7 @@ function renderSourceStatuses(payload) {
     const stale = entry.preservedStaleFile ? "旧文件已保留但过期" : "无旧文件";
     const present = payload.files.some((file) => file.path.endsWith(`/${entry.file}`))
       || payload.excludedFiles.some((file) => file.file === entry.file && file.present);
-    const link = present ? localFileLink(`../../../../${payload.selection.path}`, entry.file) : "—";
+    const link = present ? localFileLink(`${payload.selection.path}/${entry.file}`, entry.file) : "—";
     return `| ${source} | ${entry.status} | ${entry.count} | ${link} | ${usable} | ${stale}；${entry.summary} |`;
   });
   if (!rows.length) return "- 未发现状态侧车；按历史周兼容规则读取现有文件。";
@@ -256,21 +366,26 @@ function renderSourceIndex(fileSummaries) {
 
   const rows = fileSummaries.map((file, index) => {
     const sourceId = sourceFileId(index);
-    return `| ${sourceId} | ${file.category} | ${file.source} | ${localFileLink("../../../../", file.path)} | ${file.itemCount} | ${file.rawChars} | ${file.processChars} |`;
+    return `| ${sourceId} | ${file.category} | ${file.source} | ${localFileLink(file.path)} | ${file.itemCount} | ${file.rawChars} → ${file.processChars} |`;
   });
 
   return [
     "> source id 用于在 AI Chat 中回溯来源；完整机器字段见同目录 `input.json`。",
     "",
-    "| source id | 输入类型 | 来源 | 核查文件 | 材料数 | 原始字符数 | 纳入 Process Pack 字符数 |",
-    "| --- | --- | --- | --- | ---: | ---: | ---: |",
+    "| source id | 输入类型 | 来源 | 核查文件 | 材料数 | 字符链路（原始 → 纳入） |",
+    "| --- | --- | --- | --- | ---: | ---: |",
     ...rows
   ].join("\n");
 }
 
-function localFileLink(basePath, fileName) {
-  const normalizedBase = String(basePath).replace(/\/$/, "");
-  return `[${fileName}](${normalizedBase}/${fileName})`;
+function localFileLink(filePath, label = path.basename(filePath)) {
+  const absolutePath = path.isAbsolute(filePath) ? filePath : path.resolve(repoRoot, filePath);
+  const relativePath = path.relative(repoRoot, absolutePath).split(path.sep).join("/");
+  return `[${label}](learnx://${encodeURIComponent(relativePath)})`;
+}
+
+function escapeTableCell(value) {
+  return String(value ?? "").replaceAll("|", "／").replace(/[\r\n]+/g, " ").trim();
 }
 
 function renderFileMaterials(items, fileSummaries) {
@@ -342,6 +457,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   console.log(`Input files: ${result.payload.stats.fileCount}`);
   console.log(`Unique items: ${result.payload.stats.uniqueItemCount}`);
   console.log(`Sources: ${result.sourceSummaries.map((source) => `${source.source}:${source.itemCount}`).join(", ") || "none"}`);
+  const attention = Object.entries(result.payload.sourceStatuses || {})
+    .filter(([, entry]) => entry.status !== "ready")
+    .map(([source, entry]) => `${source}:${entry.status}（${entry.summary}）`);
+  console.log(`Input attention: ${attention.join("；") || "none"}`);
 }
 
 function distWeekId(weekId) {

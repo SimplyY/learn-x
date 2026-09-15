@@ -21,11 +21,11 @@ import {
 const STORAGE_PREFIX = "learn-x";
 const MUNGER_SOUL_ENHANCER_ID = "munger-soul";
 const MUNGER_SOUL_SUBTYPE_ID = "other-prompts.munger-soul";
-const MUNGER_SOUL_QUESTION = "使用芒格之魂的提示词来解析所有上下文。";
+const MUNGER_SOUL_QUESTION = "使用芒格之魂的提示词来解析上面我们对话的内容。";
 const MUNGER_SOUL_PERIOD_QUESTIONS = {
-  weekly: "不要输出 Weekly Output，使用芒格之魂的提示词来解析所有上下文。",
-  monthly: "不要输出 Monthly Output，使用芒格之魂的提示词来解析所有上下文。",
-  yearly: "不要输出 Yearly Output，使用芒格之魂的提示词来解析所有上下文。",
+  weekly: "不要输出 Weekly Output，使用芒格之魂的提示词来解析上面我们对话的内容。",
+  monthly: "不要输出 Monthly Output，使用芒格之魂的提示词来解析上面我们对话的内容。",
+  yearly: "不要输出 Yearly Output，使用芒格之魂的提示词来解析上面我们对话的内容。",
   voiceInsight: "按每条 Voice-X 记录先写核心总结，再按芒格之魂六层生成洞察。"
 };
 const GRAPH_DATA_URL = window.LEARN_X_GRAPH_URL || "data/graph.json";

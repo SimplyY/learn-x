@@ -27,6 +27,7 @@ export async function prepareWeeklyMemory(options = {}) {
     counts: {
       coreSummary: candidates.coreSummary.length,
       mungerInsights: candidates.mungerInsights.length,
+      questionsAnswers: candidates.questionsAnswers.length,
       checked: candidates.checked.length,
       observations: candidates.observations.length,
       explicit: candidates.explicit.length,
@@ -76,6 +77,7 @@ export function extractMemoryCandidates(content) {
   return {
     coreSummary: required.coreSummary,
     mungerInsights: required.mungerInsights,
+    questionsAnswers: required.questionsAnswers,
     checked: uniqueCandidates(checked),
     observations: uniqueCandidates(observations),
     unchecked: uniqueCandidates(unchecked),
@@ -97,7 +99,7 @@ function renderCandidatePack(week, quarter, weeklyPath, candidates) {
     `# Learn-X Memory Candidates｜${memoryWeekSectionId(week)}`,
     "",
     "> 这是给 Codex 生成 Weekly Memory 的候选材料，不是最终 Memory。",
-    "> 标题 10/11 是系统确认内容；脚本只抽取候选区内已勾选内容。最终由 Codex 按 `memory-rules.md` 整理并写入。",
+  "> 标题 10/11/12 是系统确认内容；脚本只抽取候选区内已勾选内容。最终由 Codex 按 `memory-rules.md` 整理并写入。",
     "",
     "## 处理信息",
     "",
@@ -112,6 +114,10 @@ function renderCandidatePack(week, quarter, weeklyPath, candidates) {
     "## 系统确认：芒格之魂的洞察",
     "",
     renderBlocks(candidates.mungerInsights),
+    "",
+    "## 系统确认：本周最值得思考的问题与回答",
+    "",
+    renderBlocks(candidates.questionsAnswers),
     "",
     "## 已勾选内容",
     "",
@@ -133,7 +139,8 @@ function renderCandidatePack(week, quarter, weeklyPath, candidates) {
     "",
     "- 非空的「全文核心重点纪要」必须写入当周 `Memory`。",
     "- 非空的「芒格之魂的洞察」必须写入季度 Memory 顶部的芒格洞察候选池。",
-    "- 两个系统确认章节无需 checkbox；只过滤空白、`todo` 和占位文本。",
+    "- 非空的「本周最值得思考的问题与回答」必须写入当周 `Memory`，问题和对应回答成对保留。",
+    "- 三个系统确认章节无需 checkbox；只过滤空白、`todo` 和占位文本。",
     "- 可以轻度去重和压缩重复表述，但不得删除独立判断、限定、反转、隐喻或行动边界。",
     "- 仅候选区内已勾选内容进入 Memory，不设数量上限。",
     "- 道 / 法 / 术 / 器候选观察即使已勾选，也只进入季度候选池，不进入普通 Memory。",
@@ -155,7 +162,7 @@ export function extractRequiredSections(content) {
     headings.push({ index, level: match[1].length, title: normalizeHeading(match[2]) });
   }
 
-  const result = { coreSummary: [], mungerInsights: [] };
+  const result = { coreSummary: [], mungerInsights: [], questionsAnswers: [] };
   for (let index = 0; index < headings.length; index += 1) {
     const heading = headings[index];
     const key = requiredSectionKey(heading.title);
@@ -168,11 +175,13 @@ export function extractRequiredSections(content) {
       .replace(/(?:\n\s*---\s*)+$/g, "")
       .trim();
     if (!isSubstantiveSection(body)) continue;
+    if (key === "questionsAnswers" && !hasQuestionAnswerPair(body)) continue;
     result[key].push({ section: heading.title, text: body });
   }
 
   result.coreSummary = uniqueCandidates(result.coreSummary);
   result.mungerInsights = uniqueCandidates(result.mungerInsights);
+  result.questionsAnswers = uniqueCandidates(result.questionsAnswers);
   return result;
 }
 
@@ -186,6 +195,8 @@ function normalizeHeading(title) {
 function requiredSectionKey(title) {
   if (title === "全文核心重点纪要") return "coreSummary";
   if (title === "芒格之魂的洞察") return "mungerInsights";
+  const compact = String(title).replace(/\s+/g, "");
+  if ((compact.includes("最值得思考") && compact.includes("问题")) || /问题(?:与|和|及)(?:回答|答案)/.test(compact)) return "questionsAnswers";
   return "";
 }
 
@@ -196,6 +207,17 @@ function isSubstantiveSection(body) {
     .replace(/[\s*_`>#。.!！-]/g, "")
     .toLowerCase();
   return Boolean(plain) && !["todo", "待补充", "暂无", "无", "占位"].includes(plain) && !isPlaceholderList(body);
+}
+
+function hasQuestionAnswerPair(body) {
+  const text = String(body);
+  if (/(?:回答|答案|A)\s*[：:]/i.test(text)) return true;
+
+  const entries = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^\d+[.)、．]\s+/.test(line));
+  return entries.length > 0 && entries.every((entry) => /[？?]\s*\S+/.test(entry));
 }
 
 function isPlaceholderList(body) {
@@ -288,6 +310,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   console.log(`Quarterly memory target: 01_core/memory/${result.quarter}.memory.md`);
   console.log(`Core summary sections: ${result.counts.coreSummary}`);
   console.log(`Munger insight sections: ${result.counts.mungerInsights}`);
+  console.log(`Question and answer sections: ${result.counts.questionsAnswers}`);
   console.log(`Checked items: ${result.counts.checked}`);
   console.log(`Explicit markers: ${result.counts.explicit}`);
   console.log(`Core clues: ${result.counts.core}`);

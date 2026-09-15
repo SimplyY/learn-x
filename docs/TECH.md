@@ -21,6 +21,7 @@
 | `learn-x-process` | 从指定周期 Input 生成可追溯的 Process Pack、Output 最小壳和 Memory 候选。 |
 | `learn-x-monthly-automation` | 编排月记、周度与月度原始输入、Codex 事件压缩、Monthly Process 与审核后 Memory。 |
 | `learn-x-prompt-review` | 评审和优化 `02_prompts/` 与 Chat Pack Prompt，要求先定义契约和代表性评测案例。 |
+| `learn-x-question-review` | 从「议题」与「认知事件」Base 表生成周/月思考卡和按需 Chat Pack，只在送达读回后更新复盘调度字段。 |
 
 第三方 Skill 的筛选来源、固定版本和许可证归属见 `THIRD_PARTY_NOTICES.md`。项目内适配只保留与 Learn-X 边界一致的原则，不引入原仓库的 Python、LangChain、多 Agent 或外部服务依赖。
 
@@ -74,12 +75,28 @@ Chat Pack 编辑器只在本地桌面端显示。排序、大类增删改、子�
 提示词使用基线位于 `00_config/chatpack-usage.json`，缺失时本地构建和合并均失败关闭。本地端的未合并月度记录写入被 Git 忽略的 `app/code/.local/chatpack-usage.json`；公开版只在浏览器保存自己的月度记录。`learn-x-prompt-usage` Skill 接收公开版复制的 JSON，拒绝未知 ID、非法月份、异常次数或已有基线改动，正常时只提交统计基线。
 - 静态部署读取构建产物；本地服务优先请求 API。
 
+## 长期认知议题
+
+- 业务真值源是飞书「研究&学习」Base：`议题`=`tbllcm6oBbdMKnkN`，`认知事件`=`tblIE9FK9mWGv7GE`；议题实例和事件不得落盘为 Markdown。
+- 复盘 Workflow 已启用：周复盘=`wkfHoGP5FHaFHE32`（每周一 09:30），月复盘=`wkfrXZKX31rlwAAy`（每月 1 日 10:00）。发送身份已在 Base UI 配置为 bridge 已订阅用户，并通过 `sender_type=user` 的真实消息验收；修改发送身份后必须重新做一次真实读回验收。
+- `.agents/skills/learn-x-question-review/` 只读问题、判断和事件，输出增量思考卡或当前会话 Chat Pack；成功送达并读回后才回写 `上次复盘推送时间`、`下次复盘日期`。
+- `weekly` 覆盖复盘频率为每周的年度重点、每周、按截止时间和临近 14 天重大决策；`monthly` 覆盖每月、每季度；`single` 与 `chat-pack` 需要明确议题编号。
+- `按截止时间` 议题只自动复盘至截止日；截止后停止周审，避免过期日期造成重复推送。
+- `复盘频率=按截止时间` 必须同时有有效的 `决策截止时间`，否则复盘失败关闭。
+- 字段契约：`议题`保存问题身份、类型/状态/阶段、当前判断与未知、决策约束、复盘频率和温故调度；`认知事件`以`内容摘要`、`详细内容`和`关联议题`作为最小人工录入，另保留事件类型、证据方向、发生了什么、认知增量、判断前后、来源标识/链接等可选结构化字段。
+- 月复盘 JSON 另含轻量 `portfolio` 摘要（活跃总数、按类型/阶段计数），只用于发现组合失衡，不自动调整议题。
+- 触发词：`执行议题周复盘`、`执行议题月复盘`、`复盘 IQ-0001`、`为 IQ-0001 生成 Chat Pack`。Learn-X 组装上下文，ChatGPT 负责当前时刻推理；Voice-X、Research-X、Read-X、Doing-X 保留各自原始材料和现实结果。
+- Chat Pack 的事实段由 `review-questions.mjs --mode chat-pack --format markdown` 确定性渲染，必须原样发送；Base 字段为空就保持“未填写”，不得用 Bridge 环境上下文、记忆或模型常识补全个人事实；跨系统事实仅来自认知事件的来源标识/链接或按规则打开的最多 3 个关键来源。
+- 复盘 JSON 的 `consistencyWarnings` 只报告当前判断/类型/状态与最近事件的潜在不一致，人工在 Base 追加事件；脚本不自动补写认知内容。
+- 任何字段、选项或表 ID 不一致都失败关闭；快照变化拒绝回写。Research-X 的 `wisdom-review` 仅把活跃议题作为第五个温故来源，共享既有配额，不进入删除候选。
+
 ## 维护边界
 
 - 不要把 `03_input/`、`04_output/` 或 Weekly Process 规则写进应用代码。
 - 不要把 `AGENTS.md`、`app/code/` 或生成物混入学习上下文。
 - 不要把领域写死为教育、投资或 AI；领域应从 `01_core/法/` 自动发现并支持扩展。
 - 不要让工具反过来塑造或异化「道」和「法」。
+- 长期议题系统只保存系统边界、字段契约和工程规则；问题、判断、事件与 Chat Pack 数据留在 Base 或当前会话。
 
 ## 开发验证
 
@@ -90,6 +107,7 @@ node --check app/code/server.mjs
 node --check app/code/public/app.js
 node --check app/code/scripts/static-graph.mjs
 npm run test:app
+node --test .agents/skills/learn-x-question-review/scripts/*.test.mjs
 npm run build:public
 npm run build:local
 ```

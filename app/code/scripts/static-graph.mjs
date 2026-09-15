@@ -18,6 +18,7 @@ const markdown = new MarkdownIt({
   typographer: true,
   breaks: false
 });
+markdown.linkify.set({ fuzzyLink: false });
 const defaultLinkOpen =
   markdown.renderer.rules.link_open ||
   ((tokens, index, options, _env, self) => self.renderToken(tokens, index, options));
@@ -26,14 +27,15 @@ markdown.renderer.rules.link_open = (tokens, index, options, env, self) => {
   const token = tokens[index];
   const href = token.attrGet("href") || "";
 
-  if (href.startsWith("learnx://") || href.endsWith(".md") || href.includes(".md#")) {
+  const isHttpLink = /^https?:\/\//i.test(href);
+  if (href.startsWith("learnx://") || (!isHttpLink && (href.endsWith(".md") || href.includes(".md#")))) {
     const target = href.startsWith("learnx://")
       ? decodeURIComponent(href.replace("learnx://", ""))
       : normalizeMarkdownLink(href);
     token.attrSet("href", "#");
     token.attrSet("class", "wiki-link");
     token.attrSet("data-target", target);
-  } else if (/^https?:\/\//i.test(href)) {
+  } else if (isHttpLink) {
     token.attrSet("target", "_blank");
     token.attrSet("rel", "noreferrer");
   }

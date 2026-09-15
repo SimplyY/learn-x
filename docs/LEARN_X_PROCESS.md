@@ -28,7 +28,7 @@ Learn-X Process 是周期输入到人工审稿的处理流程。它把指定周�
 ## 核心产物
 
 - `input.json`：metadata-only 审计清单。Monthly 记录周度与月度来源、日期过滤、哈希、去重和压缩统计，不保存正文。
-- `process-pack.md`：给 AI Chat 的自包含材料包。Monthly 按 Input 文件类型 / 来源标识分组，由确定性过滤材料与 Codex 事件压缩共同组成；对每个语义压缩来源另生成可点击的 `_dist/monthly/YYYY-MM/compression-review/` 审阅目录，默认不超过 100 KB。
+- `process-pack.md`：给 AI Chat 的自包含材料包。Weekly 开头先放固定顺序的「输入与压缩总表」，用“原始 → 纳入”字符链路合并来源状态、纳入结果和核查链接；只有实际发生语义压缩时才附带压缩信息，目前周流程只有 Voice-X 在这里做统一语义压缩。Monthly 按 Input 文件类型 / 来源标识分组，由确定性过滤材料与 Codex 事件压缩共同组成；对每个语义压缩来源另生成可点击的 `_dist/monthly/YYYY-MM/compression-review/` 审阅目录，默认不超过 100 KB。
 - Output 最小壳：只保证目标文件存在，不代写正文，不覆盖已有内容。
 - `memory-candidates.md`：只收集已勾选或明确确认的候选，供 Memorize 使用。
 - Memory 压缩候选：`04_output/_dist/memory-compression/YYYY-MM/` 下的候选与 comparison 报告；只读规划、人工修改和显式晋级，不覆盖源文件。
