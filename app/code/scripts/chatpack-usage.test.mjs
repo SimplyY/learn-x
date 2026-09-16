@@ -8,7 +8,8 @@ import {
   emptyUsageStore,
   isLowFrequencyUsage,
   normalizeUsageStore,
-  sortUsageItems
+  sortUsageItems,
+  usageFrequencyLabel
 } from "../public/chatpack-usage.js";
 import { readLocalUsageStore, readUsageBaseline, recordLocalUsage } from "./chatpack-usage.mjs";
 
@@ -24,6 +25,16 @@ test("低频规则是低于 10 或排序后 50% 的并集", () => {
   assert.equal(isLowFrequencyUsage(10, 5, 10), true);
   assert.equal(isLowFrequencyUsage(10, 2, 7), false);
   assert.equal(isLowFrequencyUsage(8, 2, 7), true);
+});
+
+test("频率档位：10 以内为低、11–50 为中、高于 50 为高", () => {
+  assert.equal(usageFrequencyLabel(0), "低");
+  assert.equal(usageFrequencyLabel(10), "低");
+  assert.equal(usageFrequencyLabel(11), "中");
+  assert.equal(usageFrequencyLabel(50), "中");
+  assert.equal(usageFrequencyLabel(51), "高");
+  assert.equal(usageFrequencyLabel(200), "高");
+  assert.equal(usageFrequencyLabel(undefined), "低");
 });
 
 test("复制载荷排除当前月份和已合并月份", () => {
@@ -61,6 +72,10 @@ test("本地记录按事件幂等，拒绝未知提示词", async (context) => {
   await assert.rejects(
     () => recordLocalUsage({ repoRoot: root, payload: { ...event, eventId: "event-5678", subtypeId: "unknown" }, config }),
     /Unknown subtype/
+  );
+  await assert.rejects(
+    () => recordLocalUsage({ repoRoot: root, payload: { ...event, eventId: "event-9012", managedVersions: { "demo.prompt": { month: currentMonth, revision: 1, sha256: "bad" } } }, config }),
+    /Invalid managed prompt version/
   );
 });
 

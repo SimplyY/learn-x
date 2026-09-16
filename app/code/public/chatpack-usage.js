@@ -53,6 +53,11 @@ export function isLowFrequencyUsage(count, index, total) {
   return count < 10 || index >= Math.ceil(total / 2);
 }
 
+export function usageFrequencyLabel(count) {
+  if (!Number.isSafeInteger(count) || count <= 10) return "低";
+  return count <= 50 ? "中" : "高";
+}
+
 export function addUsageCount(usage, kind, id, amount = 1) {
   if (!usage[kind]) usage[kind] = {};
   usage[kind][id] = usageCount(usage, kind, id) + amount;
@@ -64,6 +69,13 @@ export function emptyUsageStore(device = "browser") {
 
 export function emptyMonthCounts() {
   return { subtypes: {}, enhancers: {} };
+}
+
+function normalizeManagedVersions(values) {
+  if (!values || typeof values !== "object" || Array.isArray(values)) return {};
+  return Object.fromEntries(Object.entries(values).filter(([id, value]) =>
+    /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(id) && value && isValidUsageMonth(value.month) && Number.isInteger(value.revision) && value.revision >= 0 && /^[a-f0-9]{64}$/.test(value.sha256)
+  ).map(([id, value]) => [id, { month: value.month, revision: value.revision, sha256: value.sha256, ...(value.synced_at ? { synced_at: value.synced_at } : {}) }]));
 }
 
 export function normalizeUsageStore(store, device = "browser") {
@@ -80,6 +92,8 @@ export function normalizeUsageStore(store, device = "browser") {
         if (Number.isSafeInteger(count) && count >= 0) normalized[kind][id] = count;
       }
     }
+    const managedVersions = normalizeManagedVersions(counts.managedVersions);
+    if (Object.keys(managedVersions).length) normalized.managedVersions = managedVersions;
     months[month] = normalized;
   }
   return { ...emptyUsageStore(store.device || device), months };
@@ -101,10 +115,14 @@ export function buildUsageExport(store, mergedThrough, now = new Date()) {
 }
 
 export function cloneUsage(usage = {}) {
-  return {
+  const cloned = {
     schemaVersion: USAGE_SCHEMA_VERSION,
     mergedThrough: usage.mergedThrough || "0000-00",
     subtypes: { ...(usage.subtypes || {}) },
     enhancers: { ...(usage.enhancers || {}) }
   };
+  for (const field of ["lastUsedMonth", "managedVersions"]) {
+    if (usage[field] && typeof usage[field] === "object" && !Array.isArray(usage[field])) cloned[field] = structuredClone(usage[field]);
+  }
+  return cloned;
 }

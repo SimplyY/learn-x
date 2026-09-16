@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { collectDocumentsMarkdown, readDocumentsMarkdown } from "./scripts/documents-context.mjs";
 import { buildUsageView, readLocalUsageStore, readUsageBaseline, recordLocalUsage } from "./scripts/chatpack-usage.mjs";
 import { readChatPackConfig } from "./scripts/static-graph.mjs";
+import { buildInsightContext } from "../../.agents/skills/learn-x-periodic-insight/scripts/periodic-insight-core.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../..");
@@ -171,6 +172,21 @@ async function handleDocumentsContext(req, res, url) {
   }
 }
 
+async function handlePeriodicInsightContext(req, res, url) {
+  if (!isLocalRequest(req)) { sendJson(res, 403, { error: "Local periodic insight requests only" }); return; }
+  try {
+    const payload = await buildInsightContext({
+      repoRoot,
+      taskId: url.searchParams.get("taskId") || "munger-soul",
+      target: url.searchParams.get("target") || "auto",
+      range: url.searchParams.get("range") || undefined,
+      from: url.searchParams.get("from") || undefined,
+      to: url.searchParams.get("to") || undefined
+    });
+    sendJson(res, 200, payload);
+  } catch (error) { sendJson(res, 400, { error: error.message || "Unable to build periodic insight context" }); }
+}
+
 async function handleChatPackUsage(req, res) {
   if (!isLocalRequest(req)) {
     sendJson(res, 403, { error: "Local usage requests only" });
@@ -265,6 +281,10 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     }
     if (req.method === "GET" && new Set(["/api/context-files", "/api/file"]).has(url.pathname)) {
       await handleDocumentsContext(req, res, url);
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/api/periodic-insights/context") {
+      await handlePeriodicInsightContext(req, res, url);
       return;
     }
     await serveStatic(req, res, url);

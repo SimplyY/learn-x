@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "contextPolicies": {
+    "periodic-v1": {
+      "defaultRange": "1y",
+      "maxContextChars": 100000,
+      "maxPromptChars": 120000,
+      "historicalBudgetChars": 30000,
+      "timezone": "Asia/Shanghai",
+      "materialTypes": ["target-output", "process-pack", "confirmed-output", "quarterly-memory"]
+    }
+  },
+  "tasks": [
+    {
+      "id": "munger-soul",
+      "name": "芒格之魂",
+      "chatPackSubtypeId": "insight.munger-soul",
+      "prompt": { "productionReady": true, "defaultEnhancerIds": ["munger-soul"] },
+      "target": { "preferred": "month", "fallback": "week" },
+      "contextPolicyId": "periodic-v1",
+      "automation": { "enabled": true, "cadence": "weekly" },
+      "output": { "local": true, "feishu": true }
+    },
+    {
+      "id": "weekly-review",
+      "name": "每周复盘",
+      "chatPackSubtypeId": "insight.weekly-review",
+      "prompt": { "productionReady": false, "defaultEnhancerIds": [] },
+      "target": { "preferred": "week" },
+      "contextPolicyId": "periodic-v1",
+      "automation": { "enabled": false, "cadence": "weekly" },
+      "output": { "local": true, "feishu": true }
+    },
+    {
+      "id": "inner-question",
+      "name": "心底之问",
+      "chatPackSubtypeId": "insight.inner-question",
+      "prompt": { "productionReady": false, "defaultEnhancerIds": [] },
+      "target": { "preferred": "month" },
+      "contextPolicyId": "periodic-v1",
+      "automation": { "enabled": false, "cadence": "monthly" },
+      "output": { "local": true, "feishu": true }
+    },
+    {
+      "id": "director-view",
+      "name": "导演视角",
+      "chatPackSubtypeId": "insight.director-view",
+      "prompt": { "productionReady": false, "defaultEnhancerIds": [] },
+      "target": { "preferred": "month" },
+      "contextPolicyId": "periodic-v1",
+      "automation": { "enabled": false, "cadence": "monthly" },
+      "output": { "local": true, "feishu": true }
+    },
+    {
+      "id": "friend-view",
+      "name": "朋友视角",
+      "chatPackSubtypeId": "insight.friend-view",
+      "prompt": { "productionReady": false, "defaultEnhancerIds": [] },
+      "target": { "preferred": "month" },
+      "contextPolicyId": "periodic-v1",
+      "automation": { "enabled": false, "cadence": "monthly" },
+      "output": { "local": true, "feishu": true }
+    },
+    {
+      "id": "blind-spot",
+      "name": "盲区探索",
+      "chatPackSubtypeId": "insight.blind-spot",
+      "prompt": { "productionReady": false, "defaultEnhancerIds": [] },
+      "target": { "preferred": "month" },
+      "contextPolicyId": "periodic-v1",
+      "automation": { "enabled": false, "cadence": "monthly" },
+      "output": { "local": true, "feishu": true }
+    }
+  ]
+}

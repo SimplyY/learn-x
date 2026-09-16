@@ -46,7 +46,7 @@ assetReferences.set("data/graph.json", `data/${graphJsonPath}`);
 assetReferences.set("styles.css", await renameWithHash(distRoot, "styles.css"));
 assetReferences.set("app.js", await renameWithHash(distRoot, "app.js"));
 await rewriteModuleImport(path.join(distRoot, "editor.js"), "./app.js", `./${assetReferences.get("app.js")}`);
-await rewriteIndexReferences(path.join(distRoot, "index.html"), assetReferences, contextEnabled);
+await rewriteIndexReferences(path.join(distRoot, "index.html"), assetReferences, contextEnabled, target);
 await writeFile(path.join(distRoot, ".nojekyll"), "", "utf8");
 
 if (target === "public") assertPublicArtifact(graph);
@@ -95,13 +95,19 @@ async function renameWithHash(root, relativePath) {
   return hashedRelativePath;
 }
 
-async function rewriteIndexReferences(indexPath, references, contextEnabled) {
+async function rewriteIndexReferences(indexPath, references, contextEnabled, target) {
   let html = await readFile(indexPath, "utf8");
   for (const [original, hashed] of references) {
     html = html.replaceAll(original, hashed);
   }
   if (!contextEnabled) {
     html = html.replace('id="contextControls" class="source-box"', 'id="contextControls" class="source-box" hidden');
+  }
+  if (target === "local") {
+    html = html.replace(
+      "</head>",
+      '<script>window.LEARN_X_PERIODIC_INSIGHT_CONTEXT_API="/api/periodic-insights/context";</script>\n</head>'
+    );
   }
   await writeFile(indexPath, html, "utf8");
 }

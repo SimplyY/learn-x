@@ -13,6 +13,7 @@ export const state = {
   activeDialogueSubtypeId: "",
   activeEnhancerIds: new Set(),
   activePeriodValues: {},
+  periodicInsight: { target: "auto", range: "1y", contextStats: null },
   selectedDomain: "",
   contextSelections: new Map(),
   customDraftSelections: new Set(),
@@ -25,7 +26,8 @@ export const state = {
   promptEditorDraft: null,
   promptEditorEntityId: "",
   promptEditorPrompt: null,
-  promptEditorExpandedSourceDirs: new Set()
+  promptEditorExpandedSourceDirs: new Set(),
+  managedAssets: {}
 };
 
 export const els = {
@@ -61,6 +63,15 @@ export const els = {
   periodPicker: document.querySelector("#periodPicker"),
   periodPickerLabel: document.querySelector("#periodPickerLabel"),
   periodSelect: document.querySelector("#periodSelect"),
+  insightControls: document.querySelector("#insightControls"),
+  insightTargetSelect: document.querySelector("#insightTargetSelect"),
+  insightRangeSelect: document.querySelector("#insightRangeSelect"),
+  insightCustomRange: document.querySelector("#insightCustomRange"),
+  insightFromDate: document.querySelector("#insightFromDate"),
+  insightToDate: document.querySelector("#insightToDate"),
+  insightContextSummary: document.querySelector("#insightContextSummary"),
+  insightManifestDetails: document.querySelector("#insightManifestDetails"),
+  insightManifestList: document.querySelector("#insightManifestList"),
   enhancerList: document.querySelector("#enhancerList"),
   sourceChecklist: document.querySelector("#sourceChecklist"),
   selectAllSources: document.querySelector("#selectAllSourcesBtn"),

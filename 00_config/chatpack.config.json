@@ -47,11 +47,6 @@
           "summary": "城市文化研究、旅行卡片、深度漫游。"
         },
         {
-          "id": "learning-insight.munger-soul",
-          "name": "芒格之魂",
-          "summary": "以芒格之魂作为子类型 Prompt，用多元模型、反过来想和长期理性展开问题。"
-        },
-        {
           "id": "learning-insight.concept-teacher",
           "name": "讲解概念",
           "summary": "用视觉化类比帮学习者看见并理解抽象概念。"
@@ -67,6 +62,27 @@
         "堆概念不建结构",
         "替代用户练习"
       ]
+    },
+    {
+      "id": "insight",
+      "name": "洞察",
+      "localOnly": true,
+      "useCases": "基于目标周期与历史 Context 生成候选洞察，供人工阅读和内化。",
+      "behaviorDirections": [
+        "严格区分洞察对象周期与历史 Context 范围。",
+        "把材料中的证据、矛盾、模式和盲区连接起来。",
+        "输出候选判断，不自动修改 Memory、道、法或核心议题。"
+      ],
+      "outputGoal": "把周期材料压缩为可阅读、可验证的候选洞察。",
+      "subtypes": [
+        { "id": "insight.munger-soul", "name": "芒格之魂", "summary": "使用现有芒格之魂增强器生成周期洞察。", "currentQuestion": "围绕目标周期生成芒格之魂洞察。", "defaultEnhancerIds": ["munger-soul"], "includeBaseRecommendedSources": false },
+        { "id": "insight.weekly-review", "name": "每周复盘", "summary": "TODO：后续通过 Flomo 历史样本反推与评测后替换。", "currentQuestion": "TODO：每周复盘 Prompt 待历史样本反推。" },
+        { "id": "insight.inner-question", "name": "心底之问", "summary": "TODO：后续通过 Flomo 历史样本反推与评测后替换。", "currentQuestion": "TODO：心底之问 Prompt 待历史样本反推。" },
+        { "id": "insight.director-view", "name": "导演视角", "summary": "TODO：后续通过 Flomo 历史样本反推与评测后替换。", "currentQuestion": "TODO：导演视角 Prompt 待历史样本反推。" },
+        { "id": "insight.friend-view", "name": "朋友视角", "summary": "TODO：后续通过 Flomo 历史样本反推与评测后替换。", "currentQuestion": "TODO：朋友视角 Prompt 待历史样本反推。" },
+        { "id": "insight.blind-spot", "name": "盲区探索", "summary": "TODO：后续通过 Flomo 历史样本反推与评测后替换。", "currentQuestion": "TODO：盲区探索 Prompt 待历史样本反推。" }
+      ],
+      "avoid": ["把候选洞察当成已确认事实", "自动写入长期认知", "混淆目标周期与历史范围"]
     },
     {
       "id": "reflective-decision",

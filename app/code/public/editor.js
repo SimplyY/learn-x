@@ -24,7 +24,7 @@ export function renderEditorAvailability() {
 
 export async function openPromptEditor(mode) {
   if (!state.runtime.canEditChatPack) return;
-  if (mode === "content") await ensurePromptProtocols();
+  await ensurePromptProtocols();
   state.promptEditorMode = mode;
   state.promptEditorDraft = structuredClone({ dialogueTypes: DIALOGUE_TYPES, enhancers: ENHANCERS });
   state.promptEditorEntityId = mode === "content" ? `subtype:${state.activeDialogueSubtypeId}` : "";
@@ -106,6 +106,9 @@ export function renderPromptCategoryEditor() {
   if (!selectedType) return;
   renderPromptCategoryFields(selectedType);
   renderSubtypeOwnership(selectedType);
+  const deleteType = els.promptCategoryEditor.querySelector("[data-delete-type]");
+  deleteType.disabled = (selectedType.subtypes || []).some((subtype) => state.managedAssets?.[subtype.id]);
+  if (deleteType.disabled) deleteType.title = "包含受治理 Prompt，不能删除";
 }
 
 export function renderPromptCategoryFields(type) {
@@ -127,9 +130,10 @@ export function renderSubtypeOwnership(selectedType) {
   for (const { type, subtype } of allSubtypes) {
     const row = document.createElement("div");
     row.className = "editor-field compact with-action";
-    row.innerHTML = `<span>${escapeHtml(subtype.name || subtype.id)}</span><select>${state.promptEditorDraft.dialogueTypes
+    const managed = Boolean(state.managedAssets?.[subtype.id]);
+    row.innerHTML = `<span>${escapeHtml(subtype.name || subtype.id)}</span><select${managed ? " disabled" : ""}>${state.promptEditorDraft.dialogueTypes
       .map((item) => `<option value="${escapeHtml(item.id)}"${item.id === type.id ? " selected" : ""}>${escapeHtml(item.name || item.id)}</option>`)
-      .join("")}</select><button type="button" class="danger-action compact" aria-label="删除 ${escapeHtml(subtype.name || subtype.id)}">删</button>`;
+      .join("")}</select><button type="button" class="danger-action compact" aria-label="删除 ${escapeHtml(subtype.name || subtype.id)}"${managed ? " disabled" : ""}>删</button>${managed ? "<small>受治理 · 请在飞书修改</small>" : ""}`;
     row.querySelector("select").addEventListener("change", (event) => moveSubtypeToType(subtype, type.id, event.target.value));
     row.querySelector("button").addEventListener("click", () => deletePromptCategorySubtype(type, subtype));
     container.append(row);
@@ -331,12 +335,18 @@ export function renderPromptEntityFields() {
     if (entity.kind === "enhancer") {
       appendEditorTextField("应用说明", "applicationNote", entity.item.applicationNote || "", true);
     }
-    appendEditorTextField("Prompt Markdown", "protocol", entity.item.protocol || "", true, false, "prompt-source-editor");
+    const managed = Boolean(state.managedAssets?.[entity.item.id]);
+    appendEditorTextField("Prompt Markdown", "protocol", entity.item.protocol || "", true, false, "prompt-source-editor", els.promptEntityFields, promptEditorEntity, managed);
+    if (managed) {
+      const hint = document.createElement("small");
+      hint.textContent = "受治理 Prompt：正文只读。请在飞书修改后执行 sync。";
+      els.promptEntityFields.append(hint);
+    }
     if (entity.kind === "subtype") appendRecommendedSourcesEditor(entity.item, entity.type);
   }
 }
 
-export function appendEditorTextField(labelText, fieldName, value, multiline = false, lines = false, className = "", container = els.promptEntityFields, entityResolver = promptEditorEntity) {
+export function appendEditorTextField(labelText, fieldName, value, multiline = false, lines = false, className = "", container = els.promptEntityFields, entityResolver = promptEditorEntity, readOnly = false) {
   const label = document.createElement("label");
   label.className = "editor-field";
   const caption = document.createElement("span");
@@ -344,6 +354,8 @@ export function appendEditorTextField(labelText, fieldName, value, multiline = f
   const control = document.createElement(multiline ? "textarea" : "input");
   if (!multiline) control.type = "text";
   control.value = value;
+  control.readOnly = readOnly;
+  control.disabled = readOnly;
   control.className = className;
   control.addEventListener("input", () => {
     const entity = entityResolver();

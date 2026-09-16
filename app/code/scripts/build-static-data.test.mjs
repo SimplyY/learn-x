@@ -19,6 +19,19 @@ test("built modules reference the hashed application entry", async () => {
   assert.match(editor, new RegExp(`from "\\./${appEntry.replaceAll(".", "\\.")}"`));
 });
 
+test("public build does not expose the local periodic insight route", async () => {
+  execFileSync(process.execPath, ["app/code/scripts/build-static-data.mjs", "--target=local"], { cwd: repoRoot, stdio: "ignore" });
+  const localIndex = await readFile(path.join(repoRoot, "dist/index.html"), "utf8");
+  assert.match(localIndex, /LEARN_X_PERIODIC_INSIGHT_CONTEXT_API/);
+  execFileSync(process.execPath, ["app/code/scripts/build-static-data.mjs", "--target=public"], { cwd: repoRoot, stdio: "ignore" });
+  const publicIndex = await readFile(path.join(repoRoot, "dist/index.html"), "utf8");
+  assert.doesNotMatch(publicIndex, /LEARN_X_PERIODIC_INSIGHT_CONTEXT_API/);
+  const appEntry = publicIndex.match(/src="(app\.[^"]+\.js)"/)?.[1];
+  assert.ok(appEntry);
+  const app = await readFile(path.join(repoRoot, "dist", appEntry), "utf8");
+  assert.doesNotMatch(app, /periodic-insights\/context/);
+});
+
 test("no-context build omits selectable context payloads", async () => {
   execFileSync(process.execPath, ["app/code/scripts/build-static-data.mjs", "--target=public", "--out-dir=dist/no-context"], {
     cwd: repoRoot,

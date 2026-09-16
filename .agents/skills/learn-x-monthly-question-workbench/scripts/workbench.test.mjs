@@ -32,6 +32,26 @@ test("explicit attention horizon orders ordinary candidates before cross-horizon
   assert.deepEqual(rankIssues([long, middle, short], [], "2026-09").map((item) => item["议题编号"]), ["IQ-0003", "IQ-0002", "IQ-0001"]);
 });
 
+test("each horizon layer recommends at most two ordinary candidates", () => {
+  const ranked = rankIssues([
+    issue("0001", { "议题周期": "短期核心问题" }),
+    issue("0002", { "议题周期": "短期核心问题" }),
+    issue("0003", { "议题周期": "短期核心问题" }),
+    issue("0004", { "议题周期": "中期核心问题" }),
+  ], [], "2026-09");
+  assert.deepEqual(ranked.map((item) => item["议题编号"]), ["IQ-0001", "IQ-0002", "IQ-0004"]);
+});
+
+test("urgent decisions stay ahead of and beyond the layer cap", () => {
+  const ranked = rankIssues([
+    issue("0001", { "议题周期": "短期核心问题" }),
+    issue("0002", { "议题周期": "短期核心问题" }),
+    issue("0003", { "议题周期": "短期核心问题" }),
+    issue("0004", { "议题周期": "短期核心问题", "类型": "重大决策", "决策截止时间": "2026-09-25T10:00:00+08:00" }),
+  ], [], "2026-09");
+  assert.deepEqual(ranked.map((item) => item["议题编号"]), ["IQ-0004", "IQ-0001", "IQ-0002"]);
+});
+
 test("selection supports defaults, digit replies and unique quoted additions", () => {
   const candidates = [issue("0001", { position: 1 }), issue("0002", { position: 2 }), issue("0003", { position: 3 })];
   const outside = issue("0004", { "议题": "候选外问题" });
@@ -43,10 +63,20 @@ test("selection supports defaults, digit replies and unique quoted additions", (
 
 test("workbench document escapes user text and keeps a free research region", () => {
   const content = renderWorkbench("2026-09", [issue("0001", { "议题": "A < B & C" })]);
+  assert.match(content, /月度议题研究工作台｜2026-09/);
+  assert.match(content, /议题是本工作台的原子对象：议题可以是问题，也可以是目标/);
+  assert.doesNotMatch(content, /核心问题/);
   assert.match(content, /A &lt; B &amp; C/);
   assert.match(content, /自由研究区/);
   assert.match(content, /议题周期/);
   assert.match(content, /提交不等于完成/);
+});
+
+test("legacy horizon labels normalize to neutral issue horizons", () => {
+  const content = renderWorkbench("2026-09", [issue("0001", { "议题周期": "短期核心问题" })]);
+  assert.match(content, /议题周期：<\/b>短期/);
+  assert.doesNotMatch(content, /议题周期：<\/b>短期核心问题/);
+  assert.doesNotThrow(() => validateProposal({ changes: [{ issueId: "IQ-0001", fields: { "议题周期": "短期" } }], events: [] }, [issue("0001")], ""));
 });
 
 test("snapshot heading lookup accepts both document and outline forms", () => {
@@ -63,7 +93,8 @@ test("proposal rejects system actions and requires evidence for events", () => {
   assert.throws(() => validateProposal({ changes: [{ issueId: "IQ-0001", fields: { "当前判断": "新判断" } }], events: [{ issueId: "IQ-0001", type: "判断更新", summary: "判断变化", detail: "新证据导致新判断", increment: "判断更新", evidence: "新证据导致新判断", blockId: "blk1", before: "旧判断", after: "另一判断" }] }, selected, document), /前后值一致/);
   assert.doesNotThrow(() => validateProposal({ changes: [{ issueId: "IQ-0001", clear: ["当前判断"] }], events: [{ issueId: "IQ-0001", type: "判断更新", summary: "清空判断", detail: "新证据导致新判断", increment: "判断清空", evidence: "新证据导致新判断", blockId: "blk1", before: "旧判断", after: "" }] }, selected, document));
   assert.doesNotThrow(() => validateProposal({ changes: [{ issueId: "IQ-0001", fields: { "研究状态": "暂缓研究" } }], events: [] }, selected, document));
-  assert.doesNotThrow(() => validateProposal({ changes: [{ issueId: "IQ-0001", fields: { "议题周期": "短期核心问题" } }], events: [] }, selected, document));
+  const legacyProposal = validateProposal({ changes: [{ issueId: "IQ-0001", fields: { "议题周期": "短期核心问题" } }], events: [] }, selected, document);
+  assert.equal(legacyProposal.changes[0].fields["议题周期"], "短期");
   assert.doesNotThrow(() => validateProposal({ changes: [{ issueId: "IQ-0001", fields: {}, clear: ["下一步"] }], events: [] }, selected, document));
   assert.throws(() => validateProposal({ changes: [{ issueId: "IQ-0001", fields: {}, clear: ["状态"] }], events: [] }, selected, document), /不允许清空字段/);
 });
@@ -334,4 +365,65 @@ test("a stale lock from a crashed process is reclaimed while a live one fails cl
   await assert.rejects(app.apply({ month: "2026-09", documentToken: "doc-1", revisionId: 1, changes: [], events: [] }), /进行中的提交/);
   assert.equal(state.ledger[0]["流程状态"], "研究中");
   fs.unlinkSync(lock);
+});
+
+test("pagination walks offset pages until has_more is false", async () => {
+  const app = new Workbench(async (args) => {
+    const offset = Number(args[args.indexOf("--offset") + 1]);
+    if (offset === 0) return { ok: true, data: { fields: ["议题编号"], data: [["IQ-0001"]], record_id_list: ["r1"], has_more: true } };
+    return { ok: true, data: { fields: ["议题编号"], data: [["IQ-0002"]], record_id_list: ["r2"], has_more: false } };
+  });
+  const rows = await app.list("tbl-test", ["议题编号"]);
+  assert.deepEqual(rows.map((row) => row["议题编号"]), ["IQ-0001", "IQ-0002"]);
+});
+
+test("a second rollback without a new submission fails closed", async () => {
+  const { app } = fakeApplyApp();
+  await app.apply({ month: "2026-09", documentToken: "doc-1", revisionId: 1, changes: [{ issueId: "IQ-0001", fields: { "研究状态": "暂缓研究" } }], events: [] });
+  await app.rollback("2026-09");
+  await assert.rejects(app.rollback("2026-09"), /没有可撤回/);
+});
+
+test("invalid months fail closed on every ledger command", async () => {
+  const { app } = fakeApplyApp();
+  await assert.rejects(app.status("2026-13"), /月份/);
+  await assert.rejects(app.status("2026-00"), /月份/);
+  await assert.rejects(app.status("202609"), /月份/);
+});
+
+test("events must cite evidence inside their own issue section when sections are known", () => {
+  const selected = [issue("0001"), issue("0002")];
+  const document = '<h2 id="blk1">[IQ-0001] 一</h2><p>证据一。</p><h2 id="blk2">[IQ-0002] 二</h2><p>证据二。</p>';
+  const sections = [
+    { issueId: "IQ-0001", blockId: "blk1", content: '<h2 id="blk1">[IQ-0001] 一</h2><p>证据一。</p>' },
+    { issueId: "IQ-0002", blockId: "blk2", content: '<h2 id="blk2">[IQ-0002] 二</h2><p>证据二。</p>' },
+  ];
+  const event = (issueId, blockId, evidence) => ({ issueId, type: "证据", summary: "s", detail: "d", increment: "i", evidence, blockId });
+  assert.doesNotThrow(() => validateProposal({ changes: [], events: [event("IQ-0001", "blk2", "证据二。")] }, selected, document));
+  assert.throws(() => validateProposal({ changes: [], events: [event("IQ-0001", "blk2", "证据二。")] }, selected, document, sections), /无法在当前文档定位/);
+  assert.doesNotThrow(() => validateProposal({ changes: [], events: [event("IQ-0001", "blk1", "证据一。")] }, selected, document, sections));
+  assert.throws(() => validateProposal({ changes: [], events: [event("IQ-0002", "blk1", "证据一。")] }, selected, document, [sections[0]]), /缺少当前文档小节/);
+});
+
+test("unprocessed entries and event confidence follow the submission contract", () => {
+  const selected = [issue("0001")];
+  const document = '<h2 id="blk1">[IQ-0001] 问题</h2><p>证据。</p>';
+  const event = (overrides) => ({ issueId: "IQ-0001", type: "证据", summary: "s", detail: "d", increment: "i", evidence: "证据。", blockId: "blk1", ...overrides });
+  assert.throws(() => validateProposal({ changes: [], events: [], unprocessed: [{ issueId: "IQ-0002", reason: "x" }] }, selected, document), /不在本月选定范围/);
+  assert.throws(() => validateProposal({ changes: [], events: [], unprocessed: [{ issueId: "IQ-0001" }] }, selected, document), /缺少原因/);
+  assert.throws(() => validateProposal({ changes: [], events: [event({ confidence: 11 })] }, selected, document), /置信度/);
+  assert.throws(() => validateProposal({ changes: [], events: [event({ confidence: 7.5 })] }, selected, document), /置信度/);
+  assert.doesNotThrow(() => validateProposal({ changes: [], events: [event({ confidence: 8 })], unprocessed: [{ issueId: "IQ-0001", reason: "无明确变化" }] }, selected, document));
+});
+
+test("apply fails closed with a clear error when an issue vanished mid-flight", async () => {
+  const { app, state } = fakeApplyApp();
+  const realLark = app.lark.bind(app);
+  let issuesFetches = 0;
+  app.lark = async (args) => {
+    if (args[0] === "base" && args[1] === "+record-list" && args.includes("tbllcm6oBbdMKnkN")) { issuesFetches += 1; if (issuesFetches >= 2) state.issues.length = 0; }
+    return realLark(args);
+  };
+  await assert.rejects(app.apply({ month: "2026-09", documentToken: "doc-1", revisionId: 1, changes: [{ issueId: "IQ-0001", fields: { "研究状态": "暂缓研究" } }], events: [] }), /解析期间被删除/);
+  assert.equal(state.ledger[0]["流程状态"], "需处理");
 });

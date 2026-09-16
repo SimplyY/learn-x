@@ -5,6 +5,7 @@ import MarkdownIt from "markdown-it";
 import createDOMPurify from "dompurify";
 import { JSDOM } from "jsdom";
 import { buildUsageView, readLocalUsageStore, readUsageBaseline } from "./chatpack-usage.mjs";
+import { readPromptAssets, verifyPromptAssets } from "./prompt-assets.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../..");
@@ -60,7 +61,7 @@ const CUSTOM_CONTEXT_IGNORED_DIRS = new Set([".git", ".test-tmp", "node_modules"
 const CUSTOM_CONTEXT_IGNORED_FILES = new Set(["AGENTS.md", "CONTEXT_MASTER.md"]);
 const PROMPT_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
 const CHATPACK_PROMPT_ROOT = "02_prompts/chatpack";
-const PUBLIC_PRIVATE_PREFIXES = ["03_input/", ".agents/skills/learn-x-process/", "04_output/_dist/", "01_core/memory/", "01_core/memory-archive/"];
+const PUBLIC_PRIVATE_PREFIXES = ["03_input/", ".agents/skills/learn-x-process/", ".agents/skills/learn-x-periodic-insight/", "04_output/_dist/", "01_core/memory/", "01_core/memory-archive/", "02_prompts/chatpack/insight/"];
 const PERIOD_OUTPUT_SUBTYPE_IDS = new Set([
   "reflective-decision.weekly-output",
   "reflective-decision.monthly-output",
@@ -72,7 +73,8 @@ const PUBLIC_PRIVATE_FILES = new Set([
   "02_prompts/chatpack/reflective-decision/weekly-output.md",
   "02_prompts/chatpack/reflective-decision/monthly-output.md",
   "02_prompts/chatpack/reflective-decision/yearly-output.md",
-  "02_prompts/chatpack/reflective-decision/voice-insight.md"
+  "02_prompts/chatpack/reflective-decision/voice-insight.md",
+  "docs/PERIODIC_INSIGHTS.md"
 ]);
 const TOOLTIP_MAX_CHARS = 200;
 
@@ -255,21 +257,51 @@ export async function buildChatPackPromptPayload({ target = "public" } = {}) {
   const config = target === "public" ? publicChatPackConfig(sourceChatPackConfig) : sourceChatPackConfig;
   const subtypes = {};
   const enhancers = {};
+  const manifest = await readPromptAssets(repoRoot);
+  const managed = await verifyPromptAssets(repoRoot, manifest);
+  const assets = {};
 
   await Promise.all(
     (config.dialogueTypes || []).flatMap((type) =>
       (type.subtypes || []).map(async (subtype) => {
         subtypes[subtype.id] = await readChatPackPrompt(type.id, subtype.id);
+        const promptId = managedPromptIdForPath(manifest, subtypePromptRelativePath(type.id, subtype.id));
+        if (promptId && managed[promptId] && (target === "local" || !isPublicPrivatePath(manifest.assets[promptId].local_path))) {
+          assets[subtype.id] = publicManagedAsset(managed[promptId]);
+        }
       })
     )
   );
   await Promise.all(
     (config.enhancers || []).map(async (enhancer) => {
       enhancers[enhancer.id] = await readEnhancerPrompt(enhancer);
+      const promptPath = enhancer.promptPath || `${CHATPACK_PROMPT_ROOT}/enhancers/${enhancer.id}.md`;
+      const promptId = managedPromptIdForPath(manifest, promptPath);
+      if (promptId && managed[promptId] && (target === "local" || !isPublicPrivatePath(manifest.assets[promptId].local_path))) {
+        assets[enhancer.id] = publicManagedAsset(managed[promptId]);
+      }
     })
   );
 
-  return { subtypes, enhancers };
+  return { subtypes, enhancers, assets };
+}
+
+function subtypePromptRelativePath(typeId, subtypeId) {
+  return `${CHATPACK_PROMPT_ROOT}/${typeId}/${subtypeId.slice(typeId.length + 1)}.md`;
+}
+
+function managedPromptIdForPath(manifest, promptPath) {
+  const clean = promptPath.replaceAll("\\", "/");
+  return Object.entries(manifest.assets || {}).find(([, asset]) => asset.local_path === clean)?.[0] || null;
+}
+
+function publicManagedAsset(asset) {
+  return {
+    prompt_id: asset.prompt_id,
+    revision: asset.revision,
+    sha256: asset.sha256,
+    synced_at: asset.synced_at
+  };
 }
 
 function contentEntries(files) {
@@ -323,7 +355,7 @@ export function isPublicPrivatePath(filePath) {
 function publicChatPackConfig(config) {
   return {
     ...config,
-    dialogueTypes: (config.dialogueTypes || []).map((type) => ({
+    dialogueTypes: (config.dialogueTypes || []).filter((type) => !type.localOnly).map((type) => ({
       ...type,
       subtypes: (type.subtypes || [])
         .filter((subtype) => !PERIOD_OUTPUT_SUBTYPE_IDS.has(subtype.id))

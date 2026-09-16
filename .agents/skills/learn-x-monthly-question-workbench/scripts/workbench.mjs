@@ -4,22 +4,25 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { readConfig, renderIndex, sortNodes, wikiUrl } from "../../../lib/inquiry-wiki.mjs";
 
 const execFileAsync = promisify(execFile);
 export const BASE_TOKEN = "W6NLbDh1YahvZ9sbjIccEirBnae";
 export const ISSUE_TABLE = "tbllcm6oBbdMKnkN";
 export const EVENT_TABLE = "tblIE9FK9mWGv7GE";
-export const LEDGER_NAME = "月度核心议题研究";
-export const AUDIT_VIEW_NAME = "月度核心议题审计";
+export const LEDGER_NAME = "月度议题研究";
+export const AUDIT_VIEW_NAME = "月度议题审计";
 export const ISSUE_FIELDS = ["议题编号", "议题", "类型", "状态", "阶段", "议题周期", "优先级", "研究状态", "当前判断", "判断置信度", "最大未知", "改变判断的条件", "下一步", "决策截止时间", "创建时间", "更新时间"];
 export const EVENT_FIELDS = ["事件编号", "关联议题", "事件类型", "内容摘要", "详细内容", "认知增量", "变更前", "变更后", "变化后置信度", "来源系统", "来源标识", "来源链接", "有效性", "来源月度研究", "创建时间", "更新时间"];
 export const MUTABLE_FIELDS = new Set(["议题周期", "优先级", "研究状态", "阶段", "当前判断", "判断置信度", "最大未知", "改变判断的条件", "下一步"]);
 export const EVENT_TYPES = new Set(["证据", "判断更新", "问题重构", "决策", "行动或实验", "现实结果", "校准"]);
 const PRIORITIES = ["P0", "P1", "P2"];
-const HORIZONS = ["短期核心问题", "中期核心问题", "长期核心问题"];
+const HORIZONS = ["短期", "中期", "长期"];
+const LEGACY_HORIZONS = ["短期核心问题", "中期核心问题", "长期核心问题"];
+const HORIZON_ALIASES = Object.fromEntries(LEGACY_HORIZONS.map((value, index) => [value, HORIZONS[index]]));
 const RESEARCH_STATES = ["继续研究", "暂缓研究", "关闭研究"];
 const STAGES = ["探索", "形成判断", "待决策", "行动中", "等待结果", "校准"];
-const LEDGER_FIELDS = ["研究月份", "候选议题", "选定议题", "候选顺序", "研究文档", "流程状态", "当前提交标识", "当前文档哈希", "审计历史", "解析摘要", "创建时间", "更新时间"];
+const LEDGER_FIELDS = ["研究月份", "候选议题", "选定议题", "候选顺序", "研究文档", "Wiki 节点", "流程状态", "当前提交标识", "当前文档哈希", "审计历史", "解析摘要", "创建时间", "更新时间"];
 
 export const text = (value) => String(Array.isArray(value) ? value[0] ?? "" : value?.name ?? value?.text ?? value ?? "").trim();
 export const linkIds = (value) => (Array.isArray(value) ? value : [value]).map((item) => String(item?.id ?? item?.record_id ?? item ?? "")).filter(Boolean);
@@ -28,15 +31,15 @@ const iso = (value) => { const date = value && new Date(value); return date && !
 const xml = (value) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const sha = (value) => createHash("sha256").update(value).digest("hex");
 const effectivePriority = (issue) => PRIORITIES.includes(text(issue["优先级"])) ? text(issue["优先级"]) : "P1";
-const effectiveHorizon = (issue) => HORIZONS.includes(text(issue["议题周期"])) ? text(issue["议题周期"]) : "未分类";
+const normalizeHorizon = (value) => HORIZONS.includes(text(value)) ? text(value) : HORIZON_ALIASES[text(value)] || null;
+const effectiveHorizon = (issue) => normalizeHorizon(issue["议题周期"]) || "未分类";
 const effectiveResearchState = (issue) => RESEARCH_STATES.includes(text(issue["研究状态"])) ? text(issue["研究状态"]) : "继续研究";
 const priorityIndex = (issue) => PRIORITIES.indexOf(effectivePriority(issue));
-const horizonIndex = (issue) => { const index = HORIZONS.indexOf(effectiveHorizon(issue)); return index < 0 ? HORIZONS.length : index; };
 const same = (a, b) => text(a) === text(b);
 const escaped = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 function monthEnd(month) {
-  if (!/^\d{4}-\d{2}$/.test(month)) throw new Error("月份必须是 YYYY-MM");
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new Error("月份必须是 YYYY-MM，且月份为 01-12");
   const [year, number] = month.split("-").map(Number);
   return new Date(Date.UTC(year, number, 1, 2)); // next month, 10:00 Asia/Shanghai
 }
@@ -54,6 +57,8 @@ function acquireLock(month) {
   }
 }
 
+export const LAYER_LIMIT = 2;
+
 export function rankIssues(issues, events, month, ledgers = []) {
   const deadline = monthEnd(month);
   const lastAttention = new Map();
@@ -67,14 +72,13 @@ export function rankIssues(issues, events, month, ledgers = []) {
     const at = iso(ledger["更新时间"]) || iso(ledger["创建时间"]);
     for (const id of linkIds(ledger["选定议题"])) if (at && (!lastAttention.has(id) || lastAttention.get(id) < at)) lastAttention.set(id, at);
   }
-  return issues.filter((issue) => text(issue["状态"]) === "活跃" && effectiveResearchState(issue) === "继续研究").sort((a, b) => {
-    const urgent = (issue) => text(issue["类型"]) === "重大决策" && iso(issue["决策截止时间"]) && iso(issue["决策截止时间"]) >= new Date() && iso(issue["决策截止时间"]) < deadline;
-    const au = urgent(a); const bu = urgent(b);
-    if (au !== bu) return au ? -1 : 1;
-    if (au) return iso(a["决策截止时间"]) - iso(b["决策截止时间"]) || priorityIndex(a) - priorityIndex(b);
-    const attention = (issue) => lastAttention.get(issue.recordId) || iso(issue["创建时间"]) || new Date(0);
-    return horizonIndex(a) - horizonIndex(b) || priorityIndex(a) - priorityIndex(b) || attention(a) - attention(b) || text(a["议题编号"]).localeCompare(text(b["议题编号"]));
-  }).slice(0, 5).map((issue, index) => ({ ...issue, position: index + 1 }));
+  const urgent = (issue) => text(issue["类型"]) === "重大决策" && iso(issue["决策截止时间"]) && iso(issue["决策截止时间"]) >= new Date() && iso(issue["决策截止时间"]) < deadline;
+  const attention = (issue) => lastAttention.get(issue.recordId) || iso(issue["创建时间"]) || new Date(0);
+  const compare = (a, b) => priorityIndex(a) - priorityIndex(b) || attention(a) - attention(b) || text(a["议题编号"]).localeCompare(text(b["议题编号"]));
+  const eligible = issues.filter((issue) => text(issue["状态"]) === "活跃" && effectiveResearchState(issue) === "继续研究");
+  const due = eligible.filter(urgent).sort((a, b) => iso(a["决策截止时间"]) - iso(b["决策截止时间"]) || priorityIndex(a) - priorityIndex(b));
+  const ordinary = [...HORIZONS, "未分类"].flatMap((horizon) => eligible.filter((issue) => !urgent(issue) && effectiveHorizon(issue) === horizon).sort(compare).slice(0, LAYER_LIMIT));
+  return [...due, ...ordinary].map((issue, index) => ({ ...issue, position: index + 1 }));
 }
 
 export function recommendationReason(issue, month) {
@@ -120,8 +124,8 @@ export function parseSelection(input, candidates, allIssues) {
 
 export function renderWorkbench(month, issues) {
   const field = (label, value) => `<p><b>${label}：</b>${xml(value || "")}</p>`;
-  const section = (issue) => `<h2>[${xml(issue["议题编号"])}] ${xml(issue["议题"])}</h2>${field("议题周期", text(issue["议题周期"]) || "未分类（请按短期／中期／长期核心问题维护）")}${field("优先级", text(issue["优先级"]) || "P1（默认）")}${field("研究状态", text(issue["研究状态"]) || "继续研究（默认）")}${field("阶段", issue["阶段"])}${field("当前判断", issue["当前判断"])}${field("判断置信度", issue["判断置信度"])}${field("最大未知", issue["最大未知"])}${field("最强反证", "")}${field("改变判断的条件", issue["改变判断的条件"])}${field("下一步", issue["下一步"])}${field("本轮新增认识", "")}${field("来源与引用", "")}<p><b>自由研究区：</b></p><p></p>`;
-  return `<title>月度核心议题研究工作台｜${month}</title><h1>月度核心议题研究工作台｜${month}</h1><callout emoji="💡" background-color="light-blue" border-color="blue"><p>这是一份研究现场，不是月报。提交只解析当前版本；未发生变化可以留空，提交不等于完成。</p></callout>${issues.map(section).join("")}`;
+  const section = (issue) => `<h2>[${xml(issue["议题编号"])}] ${xml(issue["议题"])}</h2>${field("议题周期", effectiveHorizon(issue) === "未分类" ? "未分类（请按短期／中期／长期维护）" : effectiveHorizon(issue))}${field("优先级", text(issue["优先级"]) || "P1（默认）")}${field("研究状态", text(issue["研究状态"]) || "继续研究（默认）")}${field("阶段", issue["阶段"])}${field("当前判断", issue["当前判断"])}${field("判断置信度", issue["判断置信度"])}${field("最大未知", issue["最大未知"])}${field("最强反证", "")}${field("改变判断的条件", issue["改变判断的条件"])}${field("下一步", issue["下一步"])}${field("本轮新增认识", "")}${field("来源与引用", "")}<p><b>自由研究区：</b></p><p></p>`;
+  return `<title>月度议题研究工作台｜${month}</title><h1>月度议题研究工作台｜${month}</h1><callout emoji="💡" background-color="light-blue" border-color="blue"><p>议题是本工作台的原子对象：议题可以是问题，也可以是目标。问题与目标相关，但不要求一一对应；目标通常更接近中期和短期，长期问题可以不设目标。</p><p>这是一份研究现场，不是月报。提交只解析当前版本；未发生变化可以留空，提交不等于完成。</p></callout>${issues.map(section).join("")}`;
 }
 
 export function headingBlockId(outline, issueId) {
@@ -138,19 +142,30 @@ function blankBaseDoc(content, name) {
   return String(content || "").replace(/<[^>]+>/g, "").replace(name, "").trim() === "";
 }
 
-export function validateProposal(proposal, selected, document) {
+export function validateProposal(proposal, selected, document, sections = null) {
   if (!proposal || typeof proposal !== "object") throw new Error("proposal 必须是 JSON 对象");
   const selectedById = new Map(selected.map((issue) => [text(issue["议题编号"]), issue]));
-  const changes = proposal.changes || [];
+  const changes = (proposal.changes || []).map((change) => {
+    const fields = { ...(change.fields || {}) };
+    if (has(fields, "议题周期") && fields["议题周期"] !== "清空") fields["议题周期"] = normalizeHorizon(fields["议题周期"]);
+    return { ...change, fields };
+  });
   const events = proposal.events || [];
   if (!Array.isArray(changes) || !Array.isArray(events)) throw new Error("changes 和 events 必须为数组");
+  const unprocessed = proposal.unprocessed || [];
+  if (!Array.isArray(unprocessed)) throw new Error("unprocessed 必须为数组");
+  for (const item of unprocessed) {
+    if (!selectedById.has(item?.issueId)) throw new Error(`unprocessed 议题不在本月选定范围：${item?.issueId}`);
+    if (!text(item?.reason)) throw new Error(`unprocessed 缺少原因：${item?.issueId}`);
+  }
+  const sectionByIssue = sections ? new Map(sections.map((section) => [section.issueId, section.content])) : null;
   const judgmentChanges = new Map();
   for (const change of changes) {
     if (!selectedById.has(change.issueId)) throw new Error(`不是本月选定议题：${change.issueId}`);
     for (const field of change.clear || []) if (!MUTABLE_FIELDS.has(field)) throw new Error(`不允许清空字段：${field}`);
     for (const [name, value] of Object.entries(change.fields || {})) {
       if (!MUTABLE_FIELDS.has(name)) throw new Error(`不允许更新字段：${name}`);
-      if (name === "议题周期" && value !== "清空" && !HORIZONS.includes(value)) throw new Error(`议题周期无效：${value}`);
+      if (name === "议题周期" && value !== "清空" && !normalizeHorizon(value)) throw new Error(`议题周期无效：${value}`);
       if (name === "优先级" && value !== "清空" && !PRIORITIES.includes(value)) throw new Error(`优先级无效：${value}`);
       if (name === "研究状态" && value !== "清空" && !RESEARCH_STATES.includes(value)) throw new Error(`研究状态无效：${value}`);
       if (name === "阶段" && value !== "清空" && !STAGES.includes(value)) throw new Error(`阶段无效：${value}`);
@@ -166,9 +181,12 @@ export function validateProposal(proposal, selected, document) {
   for (const event of events) {
     if (!selectedById.has(event.issueId) || !EVENT_TYPES.has(event.type)) throw new Error(`事件议题或类型无效：${event.issueId}/${event.type}`);
     if (!text(event.summary) || !text(event.detail) || !text(event.increment) || !text(event.evidence) || !text(event.blockId)) throw new Error("事件缺少摘要、详细内容、认知增量、证据或 block ID");
-    if (!document.includes(event.evidence) || !new RegExp(`id=["']${escaped(event.blockId)}["']`).test(document)) throw new Error(`事件证据无法在当前文档定位：${event.issueId}`);
+    if (event.confidence != null && (!Number.isInteger(event.confidence) || event.confidence < 0 || event.confidence > 10)) throw new Error("事件变化后置信度必须为 0-10 整数");
+    const scope = sectionByIssue ? sectionByIssue.get(event.issueId) : document;
+    if (scope === undefined) throw new Error(`事件议题缺少当前文档小节：${event.issueId}`);
+    if (!scope.includes(event.evidence) || !new RegExp(`id=["']${escaped(event.blockId)}["']`).test(scope)) throw new Error(`事件证据无法在当前文档定位：${event.issueId}`);
     if (event.sourceSystem && !["Learn-X", "Voice-X", "Research-X", "Read-X", "Doing-X", "现实经历", "其他"].includes(event.sourceSystem)) throw new Error(`来源系统无效：${event.sourceSystem}`);
-    if (event.sourceLink && !document.includes(event.sourceLink)) throw new Error("事件来源链接不在当前文档中");
+    if (event.sourceLink && !scope.includes(event.sourceLink)) throw new Error("事件来源链接不在当前文档中");
     if (event.type === "判断更新" && (!has(event, "before") || !has(event, "after"))) throw new Error("判断更新必须包含前后判断");
   }
   for (const [issueId, judgment] of judgmentChanges) {
@@ -186,11 +204,11 @@ export async function defaultRunner(args) {
 }
 
 export class Workbench {
-  constructor(run = defaultRunner) { this.run = run; }
+  constructor(run = defaultRunner, config = run === defaultRunner ? readConfig() : null) { this.run = run; this.config = config; }
   async lark(args) { return this.run([...args, "--as", "user", "--format", "json"]); }
   async fields(tableId) { return (await this.lark(["base", "+field-list", "--base-token", BASE_TOKEN, "--table-id", tableId, "--limit", "100"])).data.fields || []; }
   async blocks() { return (await this.lark(["base", "+base-block-list", "--base-token", BASE_TOKEN])).data.blocks || []; }
-  async ledgerTable() { const table = (await this.blocks()).find((block) => block.type === "table" && block.name === LEDGER_NAME); if (!table) throw new Error(`缺少机器表：${LEDGER_NAME}；先运行 setup`); return table.id; }
+  async ledgerTable() { const tables = (await this.blocks()).filter((block) => block.type === "table" && [LEDGER_NAME, "月度核心议题研究"].includes(block.name)); if (tables.length > 1) throw new Error("议题账本存在多个同名兼容表"); const table = tables[0]; if (!table) throw new Error(`缺少机器表：${LEDGER_NAME}；先运行 setup`); return table.id; }
   async list(tableId, fields) {
     const rows = []; let offset = 0;
     while (true) {
@@ -204,15 +222,17 @@ export class Workbench {
   }
   async issues() { return this.list(ISSUE_TABLE, ISSUE_FIELDS); }
   async events() { return this.list(EVENT_TABLE, EVENT_FIELDS); }
-  async ledger(month) { const table = await this.ledgerTable(); const rows = await this.list(table, LEDGER_FIELDS); const matches = rows.filter((row) => text(row["研究月份"]) === month); if (matches.length > 1) throw new Error(`同月存在重复账本：${month}`); return { table, row: matches[0] || null }; }
-  async write(table, recordId, values) { return this.lark(["base", "+record-upsert", "--base-token", BASE_TOKEN, "--table-id", table, ...(recordId ? ["--record-id", recordId] : []), "--json", JSON.stringify(values)]); }
+  async ledger(month) { if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new Error("月份必须是 YYYY-MM，且月份为 01-12"); const table = await this.ledgerTable(); const rows = await this.list(table, LEDGER_FIELDS); const matches = rows.filter((row) => text(row["研究月份"]) === month); if (matches.length > 1) throw new Error(`同月存在重复账本：${month}`); return { table, row: matches[0] || null }; }
+  async write(table, recordId, values) { const result = await this.lark(["base", "+record-upsert", "--base-token", BASE_TOKEN, "--table-id", table, ...(recordId ? ["--record-id", recordId] : []), "--json", JSON.stringify(values)]); const record = result.data?.record; if (record && !record.record_id && Array.isArray(record.record_id_list)) record.record_id = record.record_id_list[0]; return result; }
   async assertSchema() {
     const exact = (fields, expected) => { const map = new Map(fields.map((field) => [field.name, field])); for (const [name, type, options] of expected) { const field = map.get(name); if (!field || field.type !== type) throw new Error(`字段结构漂移：${name}`); if (options && options.some((option) => !(field.options || []).some((actual) => actual.name === option))) throw new Error(`字段选项漂移：${name}`); } };
-    exact(await this.fields(ISSUE_TABLE), [["议题周期", "select", HORIZONS], ["优先级", "select", PRIORITIES], ["研究状态", "select", RESEARCH_STATES]]);
+    const issueFields = await this.fields(ISSUE_TABLE); const horizon = issueFields.find((field) => field.name === "议题周期"); const horizonOptions = new Set((horizon?.options || []).map((option) => option.name)); if (!horizon || horizon.type !== "select" || ![HORIZONS, LEGACY_HORIZONS].some((options) => options.every((option) => horizonOptions.has(option)))) throw new Error("字段结构漂移：议题周期");
+    exact(issueFields, [["优先级", "select", PRIORITIES], ["研究状态", "select", RESEARCH_STATES]]);
     exact(await this.fields(EVENT_TABLE), [["有效性", "select", ["有效", "待生效", "已撤回"]], ["来源月度研究", "link"]]);
     exact(await this.fields(await this.ledgerTable()), [["研究月份", "text"], ["流程状态", "select", ["待选择", "研究中", "需处理", "已提交", "已撤回"]]]);
   }
   async setup() {
+    if (this.config) await this.assertWikiRoots();
     const select = (name, options, description, defaultValue) => ({ name, type: "select", multiple: false, default_value: [defaultValue], options: options.map((option) => ({ name: option })), description });
     const ensure = async (table, spec) => { const current = await this.fields(table); const found = current.find((field) => field.name === spec.name); if (found) return found; return (await this.lark(["base", "+field-create", "--base-token", BASE_TOKEN, "--table-id", table, "--json", JSON.stringify(spec)])).data.field; };
     await ensure(ISSUE_TABLE, select("优先级", PRIORITIES, "议题整体有多重要，不代表本月一定研究。", "P1"));
@@ -224,12 +244,13 @@ export class Workbench {
       await this.lark(["base", "+table-create", "--base-token", BASE_TOKEN, "--name", LEDGER_NAME, "--fields", JSON.stringify(fields)]);
       ledger = (await this.blocks()).find((block) => block.type === "table" && block.name === LEDGER_NAME);
     }
+    await ensure(ledger.id, { name: "Wiki 节点", type: "text", description: "研究文档在核心议题 Wiki 中的 node token。" });
     await ensure(ledger.id, { name: "创建时间", type: "created_at" });
     await ensure(ledger.id, { name: "更新时间", type: "updated_at" });
     await ensure(EVENT_TABLE, select("有效性", ["有效", "待生效", "已撤回"], "追加历史的当前有效性；撤回不删除事件。", "有效"));
     await ensure(EVENT_TABLE, { name: "来源月度研究", type: "link", link_table: ledger.id, bidirectional: false, description: "本事件来自的月度工作台审计记录。" });
     const views = (await this.lark(["base", "+view-list", "--base-token", BASE_TOKEN, "--table-id", ISSUE_TABLE, "--limit", "100"])).data.views || [];
-    let view = views.find((item) => item.name === AUDIT_VIEW_NAME);
+    let view = views.find((item) => [AUDIT_VIEW_NAME, "月度核心议题审计"].includes(item.name));
     if (!view) { await this.lark(["base", "+view-create", "--base-token", BASE_TOKEN, "--table-id", ISSUE_TABLE, "--json", JSON.stringify({ name: AUDIT_VIEW_NAME, type: "grid" })]); view = ((await this.lark(["base", "+view-list", "--base-token", BASE_TOKEN, "--table-id", ISSUE_TABLE, "--limit", "100"])).data.views || []).find((item) => item.name === AUDIT_VIEW_NAME); }
     await this.lark(["base", "+view-set-visible-fields", "--base-token", BASE_TOKEN, "--table-id", ISSUE_TABLE, "--view-id", view.id, "--json", JSON.stringify({ visible_fields: ["议题编号", "议题", "议题周期", "优先级", "研究状态", "类型", "状态", "阶段", "当前判断", "最大未知", "下一步", "决策截止时间", "更新时间"] })]);
     await this.lark(["base", "+view-set-filter", "--base-token", BASE_TOKEN, "--table-id", ISSUE_TABLE, "--view-id", view.id, "--json", JSON.stringify({ logic: "and", conditions: [["状态", "!=", "关闭"]] })]);
@@ -247,8 +268,8 @@ export class Workbench {
     const values = { "研究月份": month, "候选议题": candidates.map((candidate) => ({ id: candidate.recordId })), "候选顺序": JSON.stringify(candidates.map((candidate) => candidate.recordId)), "流程状态": text(row?.["流程状态"]) || "待选择" };
     const saved = await this.write(table, row?.recordId, values); const ledgerId = row?.recordId || saved.data?.record?.record_id;
     const views = (await this.lark(["base", "+view-list", "--base-token", BASE_TOKEN, "--table-id", ISSUE_TABLE, "--limit", "100"])).data.views || [];
-    const view = views.find((item) => item.name === AUDIT_VIEW_NAME);
-    const counts = issues.reduce((all, issue) => { all[effectiveHorizon(issue)]++; all[effectivePriority(issue)]++; all[effectiveResearchState(issue)]++; if (!text(issue["议题周期"]) || !text(issue["优先级"]) || !text(issue["研究状态"])) all.未显式维护++; return all; }, { 短期核心问题: 0, 中期核心问题: 0, 长期核心问题: 0, 未分类: 0, P0: 0, P1: 0, P2: 0, 继续研究: 0, 暂缓研究: 0, 关闭研究: 0, 未显式维护: 0 });
+    const view = views.find((item) => [AUDIT_VIEW_NAME, "月度核心议题审计"].includes(item.name));
+    const counts = issues.reduce((all, issue) => { all[effectiveHorizon(issue)]++; all[effectivePriority(issue)]++; all[effectiveResearchState(issue)]++; if (!text(issue["议题周期"]) || !text(issue["优先级"]) || !text(issue["研究状态"])) all.未显式维护++; return all; }, { 短期: 0, 中期: 0, 长期: 0, 未分类: 0, P0: 0, P1: 0, P2: 0, 继续研究: 0, 暂缓研究: 0, 关闭研究: 0, 未显式维护: 0 });
     return { ledgerId, counts, auditUrl: `https://ywhome.feishu.cn/base/${BASE_TOKEN}?table=${ISSUE_TABLE}&view=${view?.id || ""}`, candidates: candidates.map((candidate) => ({ position: candidate.position, horizon: effectiveHorizon(candidate), id: candidate["议题编号"], question: candidate["议题"], reason: recommendationReason(candidate, month) })), reply: "回复 123、前三个、都研究，或 1 和 3，再加“候选外议题标题”。" };
   }
   async select(month, input) {
@@ -258,9 +279,11 @@ export class Workbench {
   }
   async create(month, selection) {
     await this.assertSchema(); const { table, row } = await this.ledger(month); if (!row) throw new Error("请先运行 recommend");
-    if (text(row["研究文档"])) return { document: row["研究文档"], reused: true };
+    if (this.config) await this.assertWikiRoots();
+    if (text(row["研究文档"])) { if (this.config && text(row["Wiki 节点"])) await this.assertWikiChild(text(row["Wiki 节点"]), [`月度议题研究工作台｜${month}`, `月度核心议题研究工作台｜${month}`]); return { document: row["研究文档"], wikiToken: text(row["Wiki 节点"]), reused: true }; }
     const issues = await this.issues(); const selected = selection.map((recordId) => issues.find((issue) => issue.recordId === recordId)).filter(Boolean); if (!selected.length || selected.length !== selection.length) throw new Error("选定议题不存在");
-    const name = `月度核心议题研究工作台｜${month}`; const allBlocks = await this.blocks(); const duplicates = allBlocks.filter((block) => block.type === "docx" && block.name === name); if (duplicates.length > 1) throw new Error("同月存在多个同名工作台文档");
+    if (this.config) return this.createWiki(month, selection, selected, table, row);
+    const name = `月度议题研究工作台｜${month}`; const legacyName = `月度核心议题研究工作台｜${month}`; const allBlocks = await this.blocks(); const duplicates = allBlocks.filter((block) => block.type === "docx" && [name, legacyName].includes(block.name)); if (duplicates.length > 1) throw new Error("同月存在多个同名工作台文档");
     let doc = duplicates[0]; let created = false;
     if (!doc) { await this.lark(["base", "+base-block-create", "--base-token", BASE_TOKEN, "--type", "docx", "--name", name]); doc = (await this.blocks()).find((block) => block.type === "docx" && block.name === name); created = true; }
     if (!doc) throw new Error("工作台 Docx 创建后无法定位");
@@ -272,13 +295,48 @@ export class Workbench {
     }
     if (!created && !blankBaseDoc(existing, name)) throw new Error("同名工作台文档已有非模板内容，拒绝覆盖");
     await this.lark(["docs", "+update", "--doc", doc.id, "--command", "overwrite", "--content", renderWorkbench(month, selected)]);
-    const readback = await this.lark(["docs", "+fetch", "--doc", doc.id, "--detail", "with-ids"]); const written = text(readback.data?.document?.content); if (!written.includes(`月度核心议题研究工作台｜${month}`) || !expectedMarkers.every((marker) => written.includes(marker))) throw new Error("工作台文档回读失败");
+    const readback = await this.lark(["docs", "+fetch", "--doc", doc.id, "--detail", "with-ids"]); const written = text(readback.data?.document?.content); if (!written.includes(`月度议题研究工作台｜${month}`) || !expectedMarkers.every((marker) => written.includes(marker))) throw new Error("工作台文档回读失败");
     const document = `https://ywhome.feishu.cn/base/${BASE_TOKEN}?block=${doc.id}`;
     await this.write(table, row.recordId, { "选定议题": selected.map((issue) => ({ id: issue.recordId })), "研究文档": doc.id, "流程状态": "研究中" });
     return { document, token: doc.id, selected: selected.map((issue) => ({ id: issue["议题编号"], question: issue["议题"] })) };
   }
+  async wiki(args) { return this.lark(["wiki", ...args]); }
+  async wikiChildren() { const nodes = []; let pageToken = ""; while (true) { const args = ["+node-list", "--space-id", this.config.space_id, "--parent-node-token", this.config.research_node_token, "--page-size", "50"]; if (pageToken) args.push("--page-token", pageToken); const data = (await this.wiki(args)).data || {}; nodes.push(...(data.nodes || [])); if (!data.has_more) return nodes; if (!data.page_token || data.page_token === pageToken) throw new Error("Wiki 子节点分页异常：has_more=true 但无新 page_token"); pageToken = data.page_token; } }
+  async assertWikiRoots() {
+    const spaces = (await this.wiki(["+space-list", "--page-all"])).data?.spaces || []; const matches = spaces.filter((space) => String(space.space_id) === String(this.config.space_id)); if (matches.length !== 1 || matches[0].name !== this.config.space_name || matches[0].visibility !== "private" || matches[0].open_sharing === "open") throw new Error("核心议题 Wiki 空间名称或私有权限漂移");
+    const get = async (token) => { const data = (await this.wiki(["+node-get", "--node-token", token])).data || {}; return data.node || data; };
+    const [overview, research] = await Promise.all([get(this.config.overview_node_token), get(this.config.research_node_token)]);
+    if (overview.title !== "总览" || research.title !== "细项研究") throw new Error("核心议题 Wiki 目录漂移");
+    if (text(overview.parent_node_token) || text(research.parent_node_token)) throw new Error("核心议题 Wiki 目录父节点漂移");
+    if ((overview.space_id && String(overview.space_id) !== String(this.config.space_id)) || (research.space_id && String(research.space_id) !== String(this.config.space_id))) throw new Error("核心议题 Wiki 空间漂移");
+  }
+  async assertWikiChild(token, titles) { const data = (await this.wiki(["+node-get", "--node-token", token])).data || {}; const node = data.node || data; if (!titles.includes(node.title) || text(node.parent_node_token) !== String(this.config.research_node_token) || (node.space_id && String(node.space_id) !== String(this.config.space_id))) throw new Error(`Wiki 月度子节点漂移：${titles.join("/")}`); return node; }
+  async rebuildWikiIndex() {
+    await this.assertWikiRoots();
+    const nodes = sortNodes((await this.wikiChildren()).filter((node) => /^月度议题研究工作台｜\d{4}-(?:0[1-9]|1[0-2])$/.test(node.title) || /^月度核心议题研究工作台｜\d{4}-(?:0[1-9]|1[0-2])$/.test(node.title)));
+    const content = renderIndex("细项研究", "月度核心议题研究目录；研究正文位于子节点。", nodes, "当前暂无月度研究。");
+    await this.lark(["docs", "+update", "--doc", this.config.research_node_token, "--command", "overwrite", "--content", content]);
+  }
+  async createWiki(month, selection, selected, table, row) {
+    const name = `月度议题研究工作台｜${month}`; const legacyName = `月度核心议题研究工作台｜${month}`;
+    await this.assertWikiRoots();
+    const baseDuplicates = (await this.blocks()).filter((block) => block.type === "docx" && [name, legacyName].includes(block.name));
+    if (baseDuplicates.length) throw new Error("同月已有 Base Docx 同名工作台，拒绝与 Wiki 产生双端副本");
+    const children = await this.wikiChildren(); const matches = children.filter((node) => [name, legacyName].includes(node.title));
+    if (matches.length > 1) throw new Error("同月存在多个同名工作台文档");
+    let node = matches[0]; let created = false;
+    if (!node) { const createdResult = await this.wiki(["+node-create", "--space-id", this.config.space_id, "--parent-node-token", this.config.research_node_token, "--title", name, "--obj-type", "docx"]); node = createdResult.data?.node || createdResult.data; created = true; }
+    if (!node?.node_token) throw new Error("月度 Wiki 节点创建后无法定位"); await this.assertWikiChild(node.node_token, [name, legacyName]);
+    const token = node.obj_token || node.objToken || node.node_token; const existing = created ? "" : text((await this.lark(["docs", "+fetch", "--doc", token, "--detail", "with-ids"])).data?.document?.content); const expectedMarkers = selected.map((issue) => `[${text(issue["议题编号"])}]`);
+    if (!created && expectedMarkers.every((marker) => existing.includes(marker))) { await this.rebuildWikiIndex(); await this.write(table, row.recordId, { "选定议题": selected.map((issue) => ({ id: issue.recordId })), "研究文档": token, "Wiki 节点": node.node_token, "流程状态": "研究中" }); return { document: wikiUrl(node.node_token), token, wikiToken: node.node_token, selected: selected.map((issue) => ({ id: issue["议题编号"], question: issue["议题"] })), recovered: true }; }
+    if (!created && existing.replace(/<[^>]+>/g, "").replace(name, "").trim()) throw new Error("同名工作台文档已有非模板内容，拒绝覆盖");
+    await this.lark(["docs", "+update", "--doc", token, "--command", "overwrite", "--content", renderWorkbench(month, selected)]);
+    const readback = await this.lark(["docs", "+fetch", "--doc", token, "--detail", "with-ids"]); const written = text(readback.data?.document?.content); if (!written.includes(`月度议题研究工作台｜${month}`) || !expectedMarkers.every((marker) => written.includes(marker))) throw new Error("月度 Wiki 文档回读失败");
+    await this.rebuildWikiIndex(); await this.write(table, row.recordId, { "选定议题": selected.map((issue) => ({ id: issue.recordId })), "研究文档": token, "Wiki 节点": node.node_token, "流程状态": "研究中" });
+    return { document: wikiUrl(node.node_token), token, wikiToken: node.node_token, selected: selected.map((issue) => ({ id: issue["议题编号"], question: issue["议题"] })) };
+  }
   async snapshot(month) {
-    await this.assertSchema(); const { row } = await this.ledger(month); if (!row || !text(row["研究文档"])) throw new Error("本月尚未创建工作台");
+    await this.assertSchema(); const { row } = await this.ledger(month); if (!row || !text(row["研究文档"])) throw new Error("本月尚未创建工作台"); if (this.config && text(row["Wiki 节点"])) await this.assertWikiChild(text(row["Wiki 节点"]), [`月度议题研究工作台｜${month}`, `月度核心议题研究工作台｜${month}`]);
     const token = text(row["研究文档"]); const outline = await this.lark(["docs", "+fetch", "--doc", token, "--scope", "outline", "--max-depth", "3", "--detail", "with-ids"]); const revision = outline.data?.document?.revision_id; if (!Number.isInteger(revision)) throw new Error("文档缺少稳定 revision"); const outlineText = text(outline.data?.document?.content); const issues = await this.issues(); const selected = linkIds(row["选定议题"]).map((recordId) => issues.find((issue) => issue.recordId === recordId)).filter(Boolean); if (!selected.length) throw new Error("账本缺少选定议题");
     const sections = []; for (const issue of selected) { const id = text(issue["议题编号"]); const blockId = headingBlockId(outlineText, id); if (!blockId) throw new Error(`文档缺少稳定议题区域：[${id}]`); const section = await this.lark(["docs", "+fetch", "--doc", token, "--revision-id", String(revision), "--scope", "section", "--start-block-id", blockId, "--detail", "with-ids"]); sections.push({ issueId: id, blockId, content: text(section.data?.document?.content) }); }
     const content = sections.map((section) => section.content).join("\n"); return { month, documentToken: token, revisionId: revision, hash: sha(content), selected, sections, content };
@@ -289,14 +347,14 @@ export class Workbench {
   }
   async apply(proposal) {
     const snapshot = await this.snapshot(proposal.month); if (proposal.documentToken !== snapshot.documentToken || Number(proposal.revisionId) !== Number(snapshot.revisionId)) throw new Error("proposal 不是当前文档 revision");
-    const checked = validateProposal(proposal, snapshot.selected, snapshot.content); const { table, row } = await this.ledger(proposal.month); if (text(row["流程状态"]) === "已提交" && text(row["当前文档哈希"]) === snapshot.hash) return JSON.parse(text(row["解析摘要"]) || "{}");
+    const checked = validateProposal(proposal, snapshot.selected, snapshot.content, snapshot.sections); const { table, row } = await this.ledger(proposal.month); if (text(row["流程状态"]) === "已提交" && text(row["当前文档哈希"]) === snapshot.hash) return JSON.parse(text(row["解析摘要"]) || "{}");
     const { fd, lock } = acquireLock(proposal.month); // single-host lock with stale-owner detection; use a leased Base lock only if real multi-host contention appears.
     try {
       await this.assertCurrentRevision(snapshot);
       const history = JSON.parse(text(row["审计历史"]) || "[]"); const previous = [...history].reverse().find((entry) => entry.status === "已提交");
       if (previous) await this.restorePrevious(table, row, previous);
       const issues = await this.issues(); const byId = new Map(issues.map((issue) => [text(issue["议题编号"]), issue])); const before = {};
-      for (const change of checked.changes) before[change.issueId] = Object.fromEntries([...MUTABLE_FIELDS].map((field) => [field, byId.get(change.issueId)[field]]));
+      for (const change of checked.changes) { if (!byId.has(change.issueId)) throw new Error(`议题在解析期间被删除：${change.issueId}`); before[change.issueId] = Object.fromEntries([...MUTABLE_FIELDS].map((field) => [field, byId.get(change.issueId)[field]])); }
       const submissionId = `${proposal.month}:${snapshot.documentToken}:${snapshot.hash}`; const sourceIds = checked.events.map((event) => `MWQW:${submissionId}:${event.issueId}:${sha(`${event.type}\n${event.summary}\n${event.detail}\n${event.evidence}\n${event.before ?? ""}\n${event.after ?? ""}`).slice(0, 16)}`); const pending = history.find((entry) => entry.submissionId === submissionId && entry.status === "需处理"); const previousSourceIds = pending ? [...(pending.eventSourceIds || [])] : []; const audit = pending || { submissionId, revisionId: snapshot.revisionId, hash: snapshot.hash, before, after: checked.changes, eventSourceIds: sourceIds, status: "需处理" }; if (pending) audit.eventSourceIds = sourceIds; const auditHistory = pending ? history : [...history, audit];
       await this.write(table, row.recordId, { "流程状态": "需处理", "当前提交标识": submissionId, "当前文档哈希": snapshot.hash, "审计历史": JSON.stringify(auditHistory) });
       const knownEvents = await this.events(); for (const staleId of previousSourceIds.filter((id) => !sourceIds.includes(id))) { const stale = knownEvents.find((item) => text(item["来源标识"]) === staleId); if (stale && text(stale["有效性"]) === "待生效") await this.write(EVENT_TABLE, stale.recordId, { "有效性": "已撤回" }); }
@@ -308,7 +366,7 @@ export class Workbench {
     } catch (error) { await this.write(table, row.recordId, { "流程状态": "需处理" }); throw error; } finally { fs.closeSync(fd); fs.unlinkSync(lock); }
   }
   async restorePrevious(table, row, previous) {
-    const issues = await this.issues(); for (const change of previous.after || []) { const current = issues.find((issue) => text(issue["议题编号"]) === change.issueId); for (const field of new Set([...Object.keys(change.fields || {}), ...(change.clear || [])])) { const value = (change.fields || {})[field]; const after = value === "清空" || (change.clear || []).includes(field) ? "" : value; const before = previous.before?.[change.issueId]?.[field]; if (!same(current[field], after) && !same(current[field], before)) throw new Error(`人工并发修改，无法替换：${change.issueId}/${field}`); } }
+    const issues = await this.issues(); for (const change of previous.after || []) { const current = issues.find((issue) => text(issue["议题编号"]) === change.issueId); if (!current) throw new Error(`议题已不存在，无法恢复：${change.issueId}`); for (const field of new Set([...Object.keys(change.fields || {}), ...(change.clear || [])])) { const value = (change.fields || {})[field]; const after = value === "清空" || (change.clear || []).includes(field) ? "" : value; const before = previous.before?.[change.issueId]?.[field]; if (!same(current[field], after) && !same(current[field], before)) throw new Error(`人工并发修改，无法替换：${change.issueId}/${field}`); } }
     for (const sourceId of previous.eventSourceIds || []) { const event = (await this.events()).find((item) => text(item["来源标识"]) === sourceId); if (event && text(event["有效性"]) !== "已撤回") await this.write(EVENT_TABLE, event.recordId, { "有效性": "已撤回" }); }
     const patches = new Map((previous.after || []).map((change) => { const fields = new Set([...Object.keys(change.fields || {}), ...(change.clear || [])]); return [change.issueId, Object.fromEntries([...fields].map((field) => [field, previous.before?.[change.issueId]?.[field] ?? null]))]; }));
     for (const [issueId, values] of patches) { const issue = issues.find((item) => text(item["议题编号"]) === issueId); if (issue) await this.write(ISSUE_TABLE, issue.recordId, values); }

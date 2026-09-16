@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { validateChatPackConfig } from "./static-graph.mjs";
+import { readPromptAssets } from "./prompt-assets.mjs";
 
 const EDITABLE_TYPE_FIELDS = ["name", "useCases", "outputGoal", "behaviorDirections", "avoid"];
 const EDITABLE_SUBTYPE_FIELDS = ["name", "summary", "currentQuestion", "recommendedSources", "includeBaseRecommendedSources"];
@@ -9,16 +10,41 @@ const EDITABLE_ENHANCER_FIELDS = ["name", "summary", "applicationNote"];
 export async function prepareChatPackEdits({ repoRoot, payload }) {
   const configPath = path.join(repoRoot, "00_config/chatpack.config.json");
   const sourceConfig = JSON.parse(await readFile(configPath, "utf8"));
+  const manifest = await readPromptAssets(repoRoot);
   const config = mergeEditableConfig(sourceConfig, payload, repoRoot);
   validateChatPackConfig(config);
+  assertManagedPromptStructure(sourceConfig, config, manifest);
 
   const writes = [{ path: configPath, content: `${JSON.stringify(config, null, 2)}\n` }];
   writes.push(...(await prepareSubtypePromptWrites(repoRoot, sourceConfig, config, payload)));
   if (payload.prompt) {
     const promptPath = resolvePromptPath(config, payload.prompt);
+    if (Object.values(manifest.assets || {}).some((asset) => asset.local_path === promptPath)) {
+      throw new Error("受治理 Prompt 正文只读，请在飞书修改后执行 sync");
+    }
     writes.push({ path: path.join(repoRoot, promptPath), content: normalizePrompt(payload.prompt.content) });
   }
   return writes;
+}
+
+function assertManagedPromptStructure(sourceConfig, nextConfig, manifest) {
+  const sourcePaths = promptTargetPaths(sourceConfig);
+  const nextPaths = promptTargetPaths(nextConfig);
+  for (const asset of Object.values(manifest.assets || {})) {
+    const sourcePath = sourcePaths.get(asset.local_path);
+    if (!sourcePath) throw new Error(`受治理 Prompt 未映射到当前 Chat Pack 配置：${asset.local_path}`);
+    const nextPath = nextPaths.get(asset.local_path);
+    if (!nextPath || nextPath !== sourcePath) throw new Error(`受治理 Prompt 不可移动、改 ID 或删除：${asset.local_path}`);
+  }
+}
+
+function promptTargetPaths(config) {
+  const paths = new Map();
+  for (const type of config.dialogueTypes || []) {
+    for (const subtype of type.subtypes || []) paths.set(`02_prompts/chatpack/${type.id}/${subtype.id.slice(type.id.length + 1)}.md`, subtype.id);
+  }
+  for (const enhancer of config.enhancers || []) paths.set(enhancer.promptPath || `02_prompts/chatpack/enhancers/${enhancer.id}.md`, enhancer.id);
+  return paths;
 }
 
 export async function writePreparedEdits(writes) {

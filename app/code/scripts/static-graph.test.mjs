@@ -19,6 +19,9 @@ const fixtureRoot = path.join(repoRoot, "app/code/.test-tmp/chatpack-editor");
 
 test("public graph excludes private workflow material and local graph retains capabilities", async () => {
   assert.equal(isPublicPrivatePath("01_core/memory-archive/2026-Q2.memory.md"), true);
+  assert.equal(isPublicPrivatePath("02_prompts/chatpack/insight/munger-soul.md"), true);
+  assert.equal(isPublicPrivatePath(".agents/skills/learn-x-periodic-insight/SKILL.md"), true);
+  assert.equal(isPublicPrivatePath("docs/PERIODIC_INSIGHTS.md"), true);
   const [publicGraph, localGraph] = await Promise.all([
     buildGraphPayload({ includeContent: false, target: "public" }),
     buildGraphPayload({ includeContent: false, target: "local" })
@@ -43,6 +46,7 @@ test("public graph excludes private workflow material and local graph retains ca
     ...publicGraph.contextFiles.map((file) => file.path)
   ];
   assert.equal(publicPaths.some((filePath) => isPublicPrivatePath(filePath)), false);
+  assert.equal(publicPaths.some((filePath) => filePath.startsWith("02_prompts/chatpack/insight/")), false);
 });
 
 test("Chat Pack payload keeps local period prompts out of public builds", async () => {
@@ -230,6 +234,38 @@ test("editor deletes categories only when explicitly allowed and keeps prompt fi
   config = JSON.parse(await readFile(path.join(fixtureRoot, "00_config/chatpack.config.json"), "utf8"));
   assert.deepEqual(config.dialogueTypes.map((type) => type.id), ["beta"]);
   assert.equal(await readFile(path.join(fixtureRoot, "02_prompts/chatpack/alpha/one.md"), "utf8"), "# Original prompt\n");
+});
+
+test("editor protects managed prompts and still allows editable fields", async (context) => {
+  await rm(fixtureRoot, { recursive: true, force: true });
+  context.after(() => rm(fixtureRoot, { recursive: true, force: true }));
+  await mkdir(path.join(fixtureRoot, "00_config"), { recursive: true });
+  await mkdir(path.join(fixtureRoot, "02_prompts/chatpack/alpha"), { recursive: true });
+  await writeFile(path.join(fixtureRoot, "00_config/chatpack.config.json"), `${JSON.stringify(fixtureConfig(), null, 2)}\n`);
+  await writeFile(path.join(fixtureRoot, "02_prompts/chatpack/alpha/one.md"), "# Managed prompt\n");
+  await writeFile(
+    path.join(fixtureRoot, "00_config/prompt-assets.json"),
+    `${JSON.stringify({ schema_version: "learn-x-prompt-assets/v1", assets: { "learn-x.demo": { tier: "P0", local_path: "02_prompts/chatpack/alpha/one.md", synced: { document_id: "doc", revision: 1, sha256: "0".repeat(64), at: "2026-09-16T00:00:00.000Z" } } } }, null, 2)}\n`
+  );
+  const source = fixtureConfig();
+  const base = { dialogueTypes: source.dialogueTypes, enhancers: source.enhancers };
+
+  await assert.rejects(
+    () => prepareChatPackEdits({ repoRoot: fixtureRoot, payload: { ...base, prompt: { kind: "subtype", id: "alpha.one", content: "# tampered" } } }),
+    /受治理 Prompt 正文只读/
+  );
+
+  const renamed = structuredClone(base);
+  renamed.dialogueTypes[0].subtypes[0] = { ...renamed.dialogueTypes[0].subtypes[0], previousId: "alpha.one", id: "alpha.renamed" };
+  await assert.rejects(() => prepareChatPackEdits({ repoRoot: fixtureRoot, payload: renamed }), /不可移动、改 ID 或删除/);
+
+  const deleted = { dialogueTypes: [{ ...source.dialogueTypes[0], subtypes: [] }, source.dialogueTypes[1]], enhancers: source.enhancers, editorMode: "category" };
+  await assert.rejects(() => prepareChatPackEdits({ repoRoot: fixtureRoot, payload: deleted }), /不可移动、改 ID 或删除/);
+
+  const renamedField = structuredClone(base);
+  renamedField.dialogueTypes[0].subtypes[0] = { ...renamedField.dialogueTypes[0].subtypes[0], name: "新名字" };
+  const writes = await prepareChatPackEdits({ repoRoot: fixtureRoot, payload: renamedField });
+  assert.equal(writes.some((item) => item.path.endsWith("02_prompts/chatpack/alpha/one.md")), false);
 });
 
 function fixtureConfig() {

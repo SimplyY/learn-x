@@ -23,7 +23,7 @@ async function fixture() {
   return root;
 }
 
-const validReview = "# Learn-X 周回顾\n\n## 具体的人和事（独立主线，优先保留）\n\n本周未发现可可靠提炼的具体人/事。\n\n## 本周反复思考的核心问题\n\n真实判断\n\n## 精华问题摘要\n\n真实答案";
+const validReview = "# Learn-X 周回顾\n\n## 具体的人和事（独立主线，优先保留）\n\n本周未发现可可靠提炼的具体人/事。\n\n## 本周议题\n\n真实判断\n\n## 精华议题摘要\n\n真实答案";
 
 test("bridge adapter timeout covers the Bridge protocol budget", () => {
   assert.ok(DEFAULT_BRIDGE_TIMEOUT_MS >= 210_000);
@@ -45,10 +45,16 @@ test("template keeps people-and-events as an independent evidence-first axis", a
 test("builds target-week prompt and strips only the outer markdown fence", () => {
   const prompt = buildReviewPrompt("# 原有提示词", "2026-W27");
   assert.match(prompt, /2026-W27/);
-  assert.match(prompt, /## 具体的人和事（独立主线，优先保留）/);
+  assert.match(prompt, /## 本周议题/);
+  assert.match(prompt, /## 精华议题摘要/);
   assert.equal(stripOuterMarkdownFence("```markdown\n正文\n```"), "正文");
   assert.equal(stripOuterMarkdownFence("正文\n```代码```"), "正文\n```代码```");
-  assert.match(normalizeAiReviewText("具体的人和事（独立主线，优先保留）\n\n本周反复思考的核心问题\n\n真实判断\n\n精华问题摘要\n\n真实答案"), /^## 具体的人和事/m);
+  const normalized = normalizeAiReviewText("具体的人和事（独立主线，优先保留）\n\n本周反复思考的核心问题\n\n真实判断\n\n精华问题摘要\n\n真实答案");
+  assert.match(normalized, /^## 具体的人和事/m);
+  assert.match(normalized, /## 本周议题/);
+  assert.match(normalized, /## 精华议题摘要/);
+  assert.doesNotMatch(normalized, /核心问题|精华问题摘要/);
+  assert.match(normalizeAiReviewText("精华议题摘要\n\n真实判断"), /^## 精华议题摘要/m);
 });
 
 test("auto-confirms a valid generated draft into formal ai.md", async () => {

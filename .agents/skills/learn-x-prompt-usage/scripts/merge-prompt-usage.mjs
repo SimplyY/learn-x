@@ -153,8 +153,8 @@ export function planMerge({ baseline, localStore, remote, ids }) {
       errors.push(`${month} 手机/电脑总量差异超过 20 倍（${remoteTotal} vs ${localTotal}）`);
     }
     if (errors.length === errorsBeforeMonth) {
-      mergeMonthCounts(nextBaseline, remoteCounts);
-      mergeMonthCounts(nextBaseline, localCounts);
+      mergeMonthCounts(nextBaseline, { ...remoteCounts, month });
+      mergeMonthCounts(nextBaseline, { ...localCounts, month });
       nextBaseline.mergedThrough = month;
       delete nextLocal.months[month];
       for (const [eventId, event] of Object.entries(nextLocal.events)) {
@@ -188,6 +188,18 @@ export function validateMonth(value, ids, label, errors) {
       if (!allowed.has(id)) errors.push(`${label} 出现未知 ID: ${id}`);
       else if (!Number.isSafeInteger(count) || count < 0) errors.push(`${label} 出现非法次数: ${id}`);
       else counts[kind][id] = count;
+    }
+  }
+  if (value.managedVersions !== undefined) {
+    if (!value.managedVersions || typeof value.managedVersions !== "object" || Array.isArray(value.managedVersions)) errors.push(`${label}.managedVersions 数据无效`);
+    else {
+      const versions = {};
+      for (const [id, version] of Object.entries(value.managedVersions)) {
+        if (!/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(id) || !version || (version.month !== undefined && !isValidUsageMonth(version.month)) || !Number.isInteger(version.revision) || version.revision < 0 || !/^[a-f0-9]{64}$/.test(version.sha256)) {
+          errors.push(`${label} 出现非法 Prompt 版本: ${id}`);
+        } else versions[id] = { month: version.month || label.match(/(\d{4}-\d{2})/)?.[1], revision: version.revision, sha256: version.sha256, ...(version.synced_at ? { synced_at: version.synced_at } : {}) };
+      }
+      counts.managedVersions = versions;
     }
   }
   return counts;

@@ -472,7 +472,7 @@ export function isValidAiReview(content) {
 export function validateAiReview(content) {
   const text = String(content);
   const sectionCount = [...text.matchAll(/^##\s+.+$/gm)].length;
-  const hasReviewContent = /(本周反复思考的核心问题|核心洞察|精华问题摘要|最值得沉淀)/.test(text);
+  const hasReviewContent = /(本周议题|本周反复思考的核心问题|核心洞察|精华议题摘要|精华问题摘要|最值得沉淀)/.test(text);
   const hasPeopleAndEvents = /^##\s+具体的人和事/m.test(text);
   const looksLikePrompt = /(请基于本次回顾周期|请输出\s*500|按当前日期生成一下文件名)/.test(text) && sectionCount < 2;
   const reasons = [];

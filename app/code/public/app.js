@@ -15,12 +15,13 @@ import {
   isValidUsageMonth,
   isLowFrequencyUsage,
   normalizeUsageStore,
-  sortUsageItems
+  sortUsageItems,
+  usageFrequencyLabel
 } from "./chatpack-usage.js";
 
 const STORAGE_PREFIX = "learn-x";
 const MUNGER_SOUL_ENHANCER_ID = "munger-soul";
-const MUNGER_SOUL_SUBTYPE_ID = "other-prompts.munger-soul";
+const MUNGER_SOUL_SUBTYPE_ID = "insight.munger-soul";
 const MUNGER_SOUL_QUESTION = "使用芒格之魂的提示词来解析上面我们对话的内容。";
 const MUNGER_SOUL_PERIOD_QUESTIONS = {
   weekly: "不要输出 Weekly Output，使用芒格之魂的提示词来解析上面我们对话的内容。",
@@ -113,6 +114,8 @@ let contentIndexPromise;
 let promptPayloadPromise;
 let promptProtocolsLoaded = false;
 let lastAutoAssembledPrompt = "";
+let periodicInsightRequestId = 0;
+const periodicInsightContextApi = window.LEARN_X_PERIODIC_INSIGHT_CONTEXT_API || "";
 
 async function boot() {
   const graph = await loadGraph();
@@ -207,7 +210,8 @@ function applyBrowserUsage() {
     if (!isValidUsageMonth(month) || compareMonths(month, usage.mergedThrough || "0000-00") <= 0) continue;
     if (compareMonths(month, currentShanghaiMonth()) >= 0) continue;
     for (const [id, count] of Object.entries(counts?.subtypes || {})) {
-      if (allowedSubtypes.has(id) && Number.isSafeInteger(count) && count >= 0) addUsageCount(usage, "subtypes", id, count);
+      const migratedId = id === "learning-insight.munger-soul" ? "insight.munger-soul" : id;
+      if (allowedSubtypes.has(migratedId) && Number.isSafeInteger(count) && count >= 0) addUsageCount(usage, "subtypes", migratedId, count);
     }
     for (const [id, count] of Object.entries(counts?.enhancers || {})) {
       if (allowedEnhancers.has(id) && Number.isSafeInteger(count) && count >= 0) addUsageCount(usage, "enhancers", id, count);
@@ -297,13 +301,16 @@ export async function ensurePromptProtocols() {
     });
   }
   const payload = await promptPayloadPromise;
+  state.managedAssets = payload.assets || {};
   for (const type of DIALOGUE_TYPES) {
     for (const subtype of type.subtypes || []) {
       subtype.protocol = payload.subtypes?.[subtype.id] || subtype.protocol || "";
+      subtype.managedAsset = state.managedAssets[subtype.id] || null;
     }
   }
   for (const enhancer of ENHANCERS) {
     enhancer.protocol = payload.enhancers?.[enhancer.id] || enhancer.protocol || "";
+    enhancer.managedAsset = state.managedAssets[enhancer.id] || null;
   }
   promptProtocolsLoaded = true;
   if (els.metaPrompt.value === lastAutoAssembledPrompt) setAutoAssembledPrompt();
@@ -394,6 +401,16 @@ function bindEvents() {
     renderSourceChecklist();
     resetGeneratedContext(count ? `已选择${PERIOD_OUTPUTS[mode].label}：${selectedPeriodLabel(mode)}。` : "未找到对应周期过程包。");
   });
+  els.insightTargetSelect?.addEventListener("change", () => {
+    state.periodicInsight.target = els.insightTargetSelect.value;
+    loadPeriodicInsightContext().catch((error) => { els.learningStatus.textContent = `洞察 Context 失败：${error.message}`; });
+  });
+  els.insightRangeSelect?.addEventListener("change", () => {
+    state.periodicInsight.range = els.insightRangeSelect.value;
+    els.insightCustomRange.hidden = els.insightRangeSelect.value !== "custom";
+    loadPeriodicInsightContext().catch((error) => { els.learningStatus.textContent = `洞察 Context 失败：${error.message}`; });
+  });
+  for (const input of [els.insightFromDate, els.insightToDate]) input?.addEventListener("change", () => loadPeriodicInsightContext().catch((error) => { els.learningStatus.textContent = `洞察 Context 失败：${error.message}`; }));
 
   els.currentQuestion.addEventListener("input", () => {
     state.currentQuestionTouched = true;
@@ -597,6 +614,12 @@ export function renderDialogueTypes() {
   renderDialogueSubtypes();
 }
 
+// 无上下文构建不记录使用次数，任何次数都只是构建时的冻结基线，
+// 因此名称后只显示频率档位而不是具体次数。
+function usageBadge(count) {
+  return `（${chatPackContextEnabled() ? count : usageFrequencyLabel(count)}）`;
+}
+
 export function renderDialogueSubtypes() {
   els.dialogueSubtypeList.innerHTML = "";
   const type = activeDialogueType();
@@ -605,17 +628,17 @@ export function renderDialogueSubtypes() {
 
   const usage = CHATPACK_CONFIG.usage;
   const ordered = usage ? sortUsageItems(subtypes, usage) : subtypes;
-  const visible = usage
+  const visible = usage && type.id !== "insight"
     ? ordered.filter((subtype, index) => !isLowFrequencyUsage(subtype.usageCount, index, ordered.length))
     : ordered;
-  const hidden = usage ? ordered.filter((subtype) => !visible.some((item) => item.id === subtype.id)) : [];
+  const hidden = usage && type.id !== "insight" ? ordered.filter((subtype) => !visible.some((item) => item.id === subtype.id)) : [];
 
   for (const subtype of visible) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `dialogue-subtype-btn${subtype.id === state.activeDialogueSubtypeId ? " active" : ""}`;
     bindPromptTooltip(button, subtype.tooltip || subtype.summary || subtype.protocol || subtype.name);
-    button.textContent = usage ? `${subtype.name}（${subtype.usageCount}）` : subtype.name;
+    button.textContent = usage ? `${subtype.name}${usageBadge(subtype.usageCount)}` : subtype.name;
     button.addEventListener("click", () => {
       if (subtype.id === state.activeDialogueSubtypeId) {
         if (activePeriodOutputMode()) applyChatPackSelection(`已恢复「${subtype.name}」推荐上下文。`);
@@ -636,7 +659,7 @@ export function renderDialogueSubtypes() {
     const select = document.createElement("select");
     select.setAttribute("aria-label", "其他提示词");
     select.innerHTML = `<option value="">选择低频提示词</option>${hidden
-      .map((subtype) => `<option value="${escapeHtml(subtype.id)}"${subtype.id === state.activeDialogueSubtypeId ? " selected" : ""}>${escapeHtml(subtype.name)}（${subtype.usageCount}）</option>`)
+      .map((subtype) => `<option value="${escapeHtml(subtype.id)}"${subtype.id === state.activeDialogueSubtypeId ? " selected" : ""}>${escapeHtml(subtype.name)}${usageBadge(subtype.usageCount)}</option>`)
       .join("")}`;
     select.addEventListener("change", () => {
       const subtype = hidden.find((item) => item.id === select.value);
@@ -663,7 +686,7 @@ export function renderEnhancers() {
     button.type = "button";
     button.className = `dialogue-subtype-btn${state.activeEnhancerIds.has(enhancer.id) ? " active" : ""}`;
     bindPromptTooltip(button, enhancer.tooltip || enhancer.summary || enhancer.protocol || enhancer.name);
-    button.textContent = usage ? `${enhancer.name}（${enhancer.usageCount}）` : enhancer.name;
+    button.textContent = usage ? `${enhancer.name}${usageBadge(enhancer.usageCount)}` : enhancer.name;
     button.addEventListener("click", () => {
       const enhancerWasActive = state.activeEnhancerIds.has(enhancer.id);
       if (state.activeEnhancerIds.has(enhancer.id)) {
@@ -770,6 +793,7 @@ export function applyChatPackSelection(message) {
   } else {
     state.contextSelections = new Map();
     els.periodPicker.hidden = true;
+    els.insightManifestDetails.hidden = true;
   }
   resetGeneratedContext(message);
 }
@@ -813,6 +837,25 @@ function activePeriodOutputMode() {
 }
 
 function renderPeriodPicker() {
+  if (activeDialogueType()?.id === "insight") {
+    els.periodPicker.hidden = false;
+    els.periodPickerLabel.textContent = "周期洞察";
+    els.periodSelect.hidden = true;
+    els.insightControls.hidden = false;
+    state.periodicInsight.contextStats = null;
+    els.insightManifestDetails.hidden = true;
+    els.insightManifestList.textContent = "";
+    renderInsightTargets();
+    els.insightTargetSelect.value = state.periodicInsight.target || "auto";
+    els.insightRangeSelect.value = state.periodicInsight.range || "1y";
+    els.insightCustomRange.hidden = state.periodicInsight.range !== "custom";
+    loadPeriodicInsightContext().catch((error) => { els.learningStatus.textContent = `洞察 Context 失败：${error.message}`; });
+    return;
+  }
+  periodicInsightRequestId += 1;
+  els.periodSelect.hidden = false;
+  els.insightControls.hidden = true;
+  els.insightManifestDetails.hidden = true;
   const mode = activePeriodOutputMode();
   if (!mode) {
     els.periodPicker.hidden = true;
@@ -836,6 +879,48 @@ function renderPeriodPicker() {
   els.periodSelect.value = selectedValue;
   applyPeriodContextSelection(mode, selectedValue);
   resetExpandedContextDirs();
+}
+
+async function loadPeriodicInsightContext() {
+  if (activeDialogueType()?.id !== "insight" || state.runtime.target !== "local" || !periodicInsightContextApi) return;
+  const requestId = ++periodicInsightRequestId;
+  const taskId = activeDialogueSubtype()?.id?.replace(/^insight\./, "") || "munger-soul";
+  const params = new URLSearchParams({ taskId, target: state.periodicInsight.target || "auto", range: state.periodicInsight.range || "1y" });
+  if (state.periodicInsight.range === "custom") { if (els.insightFromDate.value) params.set("from", els.insightFromDate.value); if (els.insightToDate.value) params.set("to", els.insightToDate.value); }
+  els.insightContextSummary.textContent = "正在按日期和预算装配 Context…";
+  const response = await fetch(`${periodicInsightContextApi}?${params}`);
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+  if (requestId !== periodicInsightRequestId) return payload;
+  if (!payload.target) { state.context = ""; state.periodicInsight.contextStats = null; els.insightManifestDetails.hidden = true; els.insightManifestList.textContent = ""; els.insightContextSummary.textContent = "没有合格的目标月/周，本轮不会调用 ChatGPT。"; renderChatPackPreview(); return payload; }
+  state.context = payload.content || "";
+  const budget = payload.budget || {};
+  state.periodicInsight.contextStats = { chars: payload.chars, budget };
+  els.insightContextSummary.textContent = `目标 ${payload.target.id} · 历史 ${payload.range.id} · Context ${formatNumber(payload.chars)}/${formatNumber(budget.contextChars || 0)} 字符 · 纳入 ${payload.included.length} 项 · 排除 ${payload.excluded.length} 项`;
+  els.insightManifestList.textContent = [
+    `纳入（${payload.included.length}）`,
+    ...payload.included.map((item) => `- ${item.path}${item.section ? ` · ${item.section}` : ""} · ${item.chars} 字 · ${item.dateBasis || "日期未标注"}`),
+    "",
+    `排除（${payload.excluded.length}）`,
+    ...payload.excluded.map((item) => `- ${item.path || "（未定位材料）"}${item.section ? ` · ${item.section}` : ""} · ${item.reason || "未说明原因"}`)
+  ].join("\n");
+  els.insightManifestDetails.hidden = false;
+  els.learningStatus.textContent = "周期洞察 Context 已就绪。";
+  renderChatPackPreview();
+  return payload;
+}
+
+function renderInsightTargets() {
+  const options = [{ value: "auto", label: "自动选择（最近完整月，缺失则周）" }];
+  const seen = new Set(["auto"]);
+  for (const file of state.customContextFiles) {
+    const month = file.path.match(/^04_output\/monthly\/(\d{4}-\d{2})\.md$/);
+    const week = file.path.match(/^04_output\/weekly\/(\d{4})-W?(\d{2})\.md$/);
+    const value = month?.[1] || (week ? `${week[1]}-W${week[2]}` : "");
+    if (!value || seen.has(value)) continue;
+    seen.add(value); options.push({ value, label: value });
+  }
+  els.insightTargetSelect.innerHTML = options.map((option) => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>`).join("");
 }
 
 function periodOptions(mode) {
@@ -937,11 +1022,13 @@ function normalizedSubtypes(type) {
       id: subtype.id || slugify(subtype.name) || `subtype-${index}`,
       name: subtype.name || subtype.id || `小类 ${index + 1}`,
       summary: subtype.summary || "",
+      currentQuestion: subtype.currentQuestion || "",
       needsDomain: Boolean(subtype.needsDomain),
       includeBaseRecommendedSources: subtype.includeBaseRecommendedSources !== false,
       recommendedSources: subtype.recommendedSources || [],
       defaultEnhancerIds: subtype.defaultEnhancerIds || [],
-      protocol: subtype.protocol || ""
+      protocol: subtype.protocol || "",
+      managedAsset: subtype.managedAsset || null
     };
   });
 }
@@ -1374,6 +1461,12 @@ function strategyTooltip(strategy, scope = "file") {
 }
 
 async function generateContext() {
+  if (activeDialogueType()?.id === "insight") {
+    const payload = await loadPeriodicInsightContext();
+    if (!payload?.content) return;
+    setProgress(100);
+    return;
+  }
   const selectedFiles = selectedContextFiles();
   if (!selectedFiles.length) {
     els.learningStatus.textContent = "建议选择一个上下文来源。";
@@ -1401,6 +1494,12 @@ function resetGeneratedContext(message) {
 }
 
 function refreshSelectedContextStats(assembledText) {
+  if (activeDialogueType()?.id === "insight") {
+    const stats = state.periodicInsight.contextStats;
+    const summary = stats ? `自动 Context · ${formatNumber(stats.chars)}/${formatNumber(stats.budget?.contextChars || 0)} 字符` : "自动 Context 尚未生成";
+    if (els.selectedContextSummary) { els.selectedContextSummary.textContent = summary; els.selectedContextSummary.className = stats && stats.chars > (stats.budget?.contextChars || Infinity) ? "danger" : ""; }
+    return;
+  }
   const files = selectedContextFiles();
   const fileCount = files.length;
   const totalChars = estimateTextStats(assembledText).visibleChars;
@@ -1479,9 +1578,18 @@ async function recordGeneratedUsage() {
     .filter((enhancer) => enhancer.group !== "length")
     .map((enhancer) => enhancer.id);
   const month = currentShanghaiMonth();
+  const managedVersions = Object.fromEntries([
+    subtype.managedAsset,
+    ...selectedEnhancers().filter((enhancer) => enhancer.group !== "length").map((enhancer) => enhancer.managedAsset)
+  ].filter(Boolean).map((asset) => [asset.prompt_id, {
+    month,
+    revision: asset.revision,
+    sha256: asset.sha256,
+    synced_at: asset.synced_at
+  }]));
 
   if (state.runtime.target === "local") {
-    const payload = { eventId: createUsageEventId(), month, subtypeId: subtype.id, enhancerIds };
+    const payload = { eventId: createUsageEventId(), month, subtypeId: subtype.id, enhancerIds, ...(Object.keys(managedVersions).length ? { managedVersions } : {}) };
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         const response = await fetch("api/chatpack/usage", {
@@ -1506,6 +1614,7 @@ async function recordGeneratedUsage() {
     const monthCounts = store.months[month] || emptyMonthCounts();
     addUsageCount(monthCounts, "subtypes", subtype.id);
     for (const enhancerId of enhancerIds) addUsageCount(monthCounts, "enhancers", enhancerId);
+    if (Object.keys(managedVersions).length) monthCounts.managedVersions = { ...(monthCounts.managedVersions || {}), ...managedVersions };
     store.months[month] = monthCounts;
     localStorage.setItem(USAGE_STORAGE_KEY, JSON.stringify(store));
     incrementUsageView(subtype.id, enhancerIds);
@@ -1877,7 +1986,10 @@ function renderFramePreview() {
     `子类型：${emptyPrompt ? "无" : subtype?.summary || subtype?.name || "-"}`,
     `增强器：${enhancers.length ? enhancers.map((item) => item.summary || item.name).join("；") : "无"}`
   ];
-  if (contextEnabled) {
+  if (contextEnabled && type?.id === "insight") {
+    const stats = state.periodicInsight.contextStats;
+    summary.push("", stats ? `自动 Context：${formatNumber(stats.chars)}/${formatNumber(stats.budget?.contextChars || 0)} 字符` : "自动 Context 尚未生成");
+  } else if (contextEnabled) {
     summary.push("", `上下文文件：${selectedFiles.length}`, ...selectedFiles.slice(0, 12).map((file) => `- [${strategyLabel(file.strategy)}] ${file.path}`));
     if (selectedFiles.length > 12) summary.push(`- ... 另 ${selectedFiles.length - 12} 个文件`);
   }

@@ -52,6 +52,12 @@ test("异步 Prompt 装载后刷新自动装配，切换与失败重试不丢失
     },
     chatPackConfig: {
       contextBudget: { models: [] },
+      usage: {
+        schemaVersion: 1,
+        mergedThrough: "2026-08",
+        subtypes: { "test-type.example": 200, "test-type.second": 10 },
+        enhancers: { "munger-soul": 50 }
+      },
       dialogueTypes: [{
         id: "test-type",
         name: "测试",
@@ -60,7 +66,7 @@ test("异步 Prompt 装载后刷新自动装配，切换与失败重试不丢失
           { id: "test-type.second", name: "第二" }
         ]
       }],
-      enhancers: []
+      enhancers: [{ id: "munger-soul", name: "芒格之魂" }]
     },
     files: [],
     sources: [],
@@ -117,7 +123,17 @@ test("异步 Prompt 装载后刷新自动装配，切换与失败重试不丢失
     await promptFetchStartedPromise;
     assert.doesNotMatch(document.querySelector("#metaPrompt").value, /PROTOCOL/);
 
-    document.querySelectorAll("#dialogueSubtypeList button")[1].click();
+    assert.equal(document.querySelectorAll("#dialogueSubtypeList button")[0].textContent, "示例（高）");
+    const hiddenOption = [...document.querySelectorAll("#dialogueSubtypeList select option")]
+      .map((option) => option.textContent)
+      .find((text) => text.includes("第二"));
+    assert.equal(hiddenOption, "第二（低）");
+    assert.equal(document.querySelector("#enhancerList .dialogue-subtype-btn").textContent, "芒格之魂（中）");
+    assert.doesNotMatch(document.querySelector("#dialogueSubtypeList").textContent, /（\d+）$/);
+
+    const hiddenSelect = document.querySelector('#dialogueSubtypeList select[aria-label="其他提示词"]');
+    hiddenSelect.value = "test-type.second";
+    hiddenSelect.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
     assert.match(document.querySelector("#metaPrompt").value, /第二/);
     releasePromptPayload();
 

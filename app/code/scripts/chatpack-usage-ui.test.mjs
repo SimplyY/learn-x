@@ -46,6 +46,8 @@ test("有上下文生成后记录子类型和普通增强器，并提供复制�
     assert.equal(document.querySelector(".budget-summary"), null);
     assert.equal(document.querySelector("#chatPackMetrics"), null);
     assert.equal(document.querySelector("#contextBudgetList"), null);
+    assert.equal(document.querySelector("#dialogueSubtypeList button").textContent, "示例（20）");
+    assert.equal(document.querySelector("#enhancerList .dialogue-subtype-btn").textContent, "芒格之魂（20）");
     document.querySelector("#enhancerList .dialogue-subtype-btn").click();
     const lengthSelect = document.querySelector('#enhancerList select[aria-label="输出字数"]');
     lengthSelect.value = "length-100";

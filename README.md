@@ -4,10 +4,8 @@
 ## 核心资产
 
 - [研究&学习](https://ywhome.feishu.cn/wiki/KcTcwG90OiZh3rksu0ucvwx5nFe)
+- [人生核心议题](https://ywhome.feishu.cn/wiki/QIaQwXf07iMvqokKQf3cp3XmnMC)
 - [learn-x](https://simplyy.github.io/learn-x/index.html#learning)
-- [长期认知议题系统](docs/LONG_TERM_COGNITION.md)
-
-> Learn-X 是我的个人 AI native 的知行进化系统：以「道」校准方向，以「法」形成判断，以「术」推动行动，以「器」降低成本，让 AI 成为我的剑，而不是我的茧。
 
 ## 核心目标
 

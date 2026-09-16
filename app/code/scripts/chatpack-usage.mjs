@@ -13,6 +13,7 @@ import {
 
 export const USAGE_BASELINE_RELATIVE_PATH = "00_config/chatpack-usage.json";
 export const LOCAL_USAGE_RELATIVE_PATH = "app/code/.local/chatpack-usage.json";
+const USAGE_ID_MIGRATIONS = { "learning-insight.munger-soul": "insight.munger-soul" };
 
 export function usagePaths(repoRoot) {
   return {
@@ -48,12 +49,15 @@ export async function readUsageBaseline(repoRoot) {
       if (!Number.isSafeInteger(count) || count < 0) throw new Error(`Invalid usage count: ${kind}.${id}`);
     }
   }
-  return {
+  const result = {
     schemaVersion: USAGE_SCHEMA_VERSION,
     mergedThrough: parsed.mergedThrough,
     subtypes: { ...(parsed.subtypes || {}) },
     enhancers: { ...(parsed.enhancers || {}) }
   };
+  if (parsed.lastUsedMonth !== undefined) { validateLastUsedMonth(parsed.lastUsedMonth); result.lastUsedMonth = parsed.lastUsedMonth; }
+  if (parsed.managedVersions !== undefined) { validateManagedVersions(parsed.managedVersions); result.managedVersions = parsed.managedVersions; }
+  return result;
 }
 
 export async function readLocalUsageStore(repoRoot) {
@@ -71,6 +75,7 @@ export async function readLocalUsageStore(repoRoot) {
           if (!Number.isSafeInteger(count) || count < 0) throw new Error("Invalid local Chat Pack usage count");
         }
       }
+      if (counts.managedVersions !== undefined) validateManagedVersions(counts.managedVersions);
     }
     return {
       schemaVersion: USAGE_SCHEMA_VERSION,
@@ -95,7 +100,9 @@ export function validateUsageEvent(payload, config, now = new Date()) {
   if (!Array.isArray(payload.enhancerIds)) throw new Error("enhancerIds must be an array");
   const enhancerIds = [...new Set(payload.enhancerIds)];
   if (enhancerIds.some((id) => !ids.enhancers.has(id))) throw new Error("Unknown enhancer usage id");
-  return { eventId: payload.eventId, month: payload.month, subtypeId: payload.subtypeId, enhancerIds };
+  if (payload.managedVersions !== undefined) validateManagedVersions(payload.managedVersions);
+  const managedVersions = normalizeManagedVersions(payload.managedVersions, payload.month);
+  return { eventId: payload.eventId, month: payload.month, subtypeId: payload.subtypeId, enhancerIds, ...(Object.keys(managedVersions).length ? { managedVersions } : {}) };
 }
 
 export async function recordLocalUsage({ repoRoot, payload, config, now = new Date() }) {
@@ -106,6 +113,7 @@ export async function recordLocalUsage({ repoRoot, payload, config, now = new Da
     const month = store.months[event.month] || emptyMonthCounts();
     addUsageCount(month, "subtypes", event.subtypeId);
     for (const enhancerId of event.enhancerIds) addUsageCount(month, "enhancers", enhancerId);
+    if (event.managedVersions) month.managedVersions = { ...(month.managedVersions || {}), ...event.managedVersions };
     store.months[event.month] = month;
     store.events[event.eventId] = event;
     await writeLocalUsageStore(repoRoot, store);
@@ -152,8 +160,9 @@ export function buildUsageView(baseline, localStore = null) {
   if (!localStore) return usage;
   for (const [month, counts] of Object.entries(localStore.months || {})) {
     if (!isValidUsageMonth(month) || compareMonths(month, usage.mergedThrough) <= 0) continue;
-    for (const [id, count] of Object.entries(counts.subtypes || {})) addUsageCount(usage, "subtypes", id, count);
+    for (const [id, count] of Object.entries(counts.subtypes || {})) addUsageCount(usage, "subtypes", USAGE_ID_MIGRATIONS[id] || id, count);
     for (const [id, count] of Object.entries(counts.enhancers || {})) addUsageCount(usage, "enhancers", id, count);
+    updateUsageMonth(usage, month, counts);
   }
   return usage;
 }
@@ -161,6 +170,46 @@ export function buildUsageView(baseline, localStore = null) {
 export function mergeMonthCounts(target, counts) {
   for (const kind of ["subtypes", "enhancers"]) {
     for (const [id, count] of Object.entries(counts?.[kind] || {})) addUsageCount(target, kind, id, count);
+  }
+  updateUsageMonth(target, counts?.month, counts);
+}
+
+function normalizeManagedVersions(values, month) {
+  if (!values || typeof values !== "object" || Array.isArray(values)) return {};
+  return Object.fromEntries(Object.entries(values).filter(([id, value]) =>
+    /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(id) && value && Number.isInteger(value.revision) && value.revision >= 0 && /^[a-f0-9]{64}$/.test(value.sha256)
+  ).map(([id, value]) => [id, { month: value.month || month, revision: value.revision, sha256: value.sha256, ...(value.synced_at ? { synced_at: value.synced_at } : {}) }]));
+}
+
+function validateManagedVersions(values) {
+  if (!values || typeof values !== "object" || Array.isArray(values)) throw new Error("Invalid managed prompt versions");
+  for (const [id, value] of Object.entries(values)) {
+    if (!/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(id) || !value || !isValidUsageMonth(value.month) || !Number.isInteger(value.revision) || value.revision < 0 || !/^[a-f0-9]{64}$/.test(value.sha256)) throw new Error(`Invalid managed prompt version: ${id}`);
+  }
+}
+
+function validateLastUsedMonth(values) {
+  if (!values || typeof values !== "object" || Array.isArray(values)) throw new Error("Invalid last-used month metadata");
+  for (const kind of ["subtypes", "enhancers"]) {
+    if (values[kind] === undefined) continue;
+    if (!values[kind] || typeof values[kind] !== "object" || Array.isArray(values[kind])) throw new Error(`Invalid last-used month metadata: ${kind}`);
+    for (const month of Object.values(values[kind])) if (!isValidUsageMonth(month)) throw new Error("Invalid last-used month value");
+  }
+}
+
+function updateUsageMonth(usage, month, counts) {
+  if (!isValidUsageMonth(month)) return;
+  usage.lastUsedMonth ||= { subtypes: {}, enhancers: {} };
+  for (const kind of ["subtypes", "enhancers"]) {
+    for (const id of Object.keys(counts?.[kind] || {})) {
+      usage.lastUsedMonth[kind] ||= {};
+      if (!usage.lastUsedMonth[kind][id] || compareMonths(month, usage.lastUsedMonth[kind][id]) > 0) usage.lastUsedMonth[kind][id] = month;
+    }
+  }
+  for (const [id, value] of Object.entries(counts?.managedVersions || {})) {
+    if (!isValidUsageMonth(value?.month) || !Number.isInteger(value.revision) || !/^[a-f0-9]{64}$/.test(value.sha256)) continue;
+    usage.managedVersions ||= {};
+    if (!usage.managedVersions[id] || compareMonths(value.month, usage.managedVersions[id].month) >= 0) usage.managedVersions[id] = { ...value };
   }
 }
 

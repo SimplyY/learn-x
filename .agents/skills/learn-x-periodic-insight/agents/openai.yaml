@@ -1,0 +1,4 @@
+interface:
+  display_name: "Learn-X 周期洞察"
+  short_description: "按周期装配 Context，生成并归档候选洞察"
+  default_prompt: "运行 Learn-X 周期洞察预览；确认目标周期、材料清单和预算后再发送。"
