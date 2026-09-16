@@ -43,12 +43,19 @@ test("有上下文生成后记录子类型和普通增强器，并提供复制�
     for (let attempt = 0; attempt < 100 && document.querySelector("#learningStatus").textContent !== "已加载 Chat Pack 类型体系。"; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
+    assert.equal(document.querySelector(".budget-summary"), null);
+    assert.equal(document.querySelector("#chatPackMetrics"), null);
+    assert.equal(document.querySelector("#contextBudgetList"), null);
     document.querySelector("#enhancerList .dialogue-subtype-btn").click();
     const lengthSelect = document.querySelector('#enhancerList select[aria-label="输出字数"]');
     lengthSelect.value = "length-100";
     lengthSelect.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
     document.querySelector("#generateChatPackBtn").click();
     for (let attempt = 0; attempt < 100 && !copied.includes("# Chat Pack"); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+    const assembledText = document.querySelector("#chatPackPreview").value;
+    const summary = document.querySelector("#selectedContextSummary").textContent;
+    const totalChars = Number(summary.match(/总计约 ([\d,]+) 字/)?.[1]?.replaceAll(",", ""));
+    assert.equal(totalChars, assembledText.replace(/\s/g, "").length);
     const stored = JSON.parse(localStorage.getItem("learn-x:chatpack-usage"));
     assert.ok(stored);
     const month = Object.keys(stored.months)[0];

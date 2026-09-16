@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { consistencyWarnings, deliveryPatch, nextReviewDate, renderChatPack, selectDueIssues, validateDeliveryReadback, validateFieldContract, validateIssue } from "./review-questions.mjs";
+import { consistencyWarnings, daysUntilDeadline, deliveryPatch, eventCursorDate, nextReviewDate, renderChatPack, resolveRelatedIssues, selectDueIssues, validateDeliveryReadback, validateFieldContract, validateIssue } from "./review-questions.mjs";
 
 const now = new Date("2026-09-14T01:30:00.000Z");
 const issue = (overrides = {}) => ({
@@ -58,6 +58,25 @@ test("validateDeliveryReadback accepts normalized Base datetimes and rejects dri
   assert.throws(() => validateDeliveryReadback({ "上次复盘推送时间": "2026-09-14T10:01:00.000+08:00", "下次复盘日期": "2026-10-14T10:00:00.000+08:00" }, patch), /读回不一致/);
 });
 
+test("event increment uses ingestion/update time so late backfilled events are not lost", () => {
+  const cursor = eventCursorDate({ "事件时间": "2026-09-01T09:00:00.000+08:00", "创建时间": "2026-09-15T09:00:00.000+08:00", "更新时间": "2026-09-15T09:00:00.000+08:00" });
+  assert.equal(cursor.toISOString(), "2026-09-15T01:00:00.000Z");
+});
+
+test("deadline context exposes a calendar-day countdown", () => {
+  const issueWithDeadline = { "决策截止时间": "2026-09-20T09:00:00.000+08:00" };
+  assert.equal(daysUntilDeadline(issueWithDeadline, new Date("2026-09-14T09:00:00.000+08:00")), 6);
+  assert.equal(daysUntilDeadline({ "决策截止时间": "" }), null);
+});
+
+test("related issues resolve to stable ids and questions without inventing facts", () => {
+  const resolved = resolveRelatedIssues({ "相关议题": [{ id: "rec-2" }, { id: "rec-missing" }] }, [
+    { recordId: "rec-1", "议题编号": "IQ-0001", "议题": "主问题" },
+    { recordId: "rec-2", "议题编号": "IQ-0002", "议题": "相关问题" },
+  ]);
+  assert.deepEqual(resolved, [{ id: "IQ-0002", question: "相关问题" }, { id: "rec-missing", question: "未知议题" }]);
+});
+
 test("consistencyWarnings detects manual judgment and stale change events without writing", () => {
   assert.deepEqual(consistencyWarnings({ "当前判断": "现在的判断", "类型": "长期问题", "状态": "活跃" }, []), ["当前判断已有内容，但没有对应的“判断更新”事件"]);
   assert.deepEqual(consistencyWarnings({ "当前判断": "现在的判断", "类型": "年度重点", "状态": "活跃" }, [
@@ -90,14 +109,37 @@ test("renderChatPack preserves blank facts and only renders event provenance", (
   const output = renderChatPack({ dossiers: [{
     issue: {
       id: "IQ-0001", question: "测试问题", type: "长期问题", stage: "探索", importance: "", judgment: "", confidence: null,
-      unknown: "", changeConditions: "", nextStep: "", deadline: "", reversibility: "", recentEvents: [],
+      unknown: "", changeConditions: "", nextStep: "", deadline: "", reversibility: "", relatedIssues: [], recentEvents: [],
     },
     recentEvents: [],
   }] });
   assert.match(output, /为什么重要：未填写/);
   assert.match(output, /当前判断：未填写|判断：未填写/);
   assert.match(output, /其他现实约束：未记录/);
+  assert.match(output, /关联议题：未记录/);
   assert.doesNotMatch(output, /个人上下文|价值投资|健康优先/);
+});
+
+test("renderChatPack includes only resolved related issue context", () => {
+  const output = renderChatPack({ dossiers: [{
+    issue: {
+      id: "IQ-0001", question: "测试问题", type: "长期问题", stage: "探索", importance: "", judgment: "", confidence: null,
+      unknown: "", changeConditions: "", nextStep: "", deadline: "", reversibility: "", relatedIssues: [{ id: "IQ-0002", question: "相关问题" }], recentEvents: [],
+    },
+    recentEvents: [],
+  }] });
+  assert.match(output, /关联议题：IQ-0002 相关问题/);
+});
+
+test("renderChatPack exposes a decision deadline countdown when present", () => {
+  const output = renderChatPack({ dossiers: [{
+    issue: {
+      id: "IQ-0003", question: "是否行动", type: "重大决策", stage: "待决策", importance: "", judgment: "", confidence: null,
+      unknown: "", changeConditions: "", nextStep: "", deadline: "2026-09-20 09:00", deadlineDays: 6, reversibility: "可逆", relatedIssues: [], recentEvents: [],
+    },
+    recentEvents: [],
+  }] });
+  assert.match(output, /决策截止时间：2026-09-20 09:00（剩余 6 天）/);
 });
 
 test("renderChatPack uses the minimal human event fields", () => {

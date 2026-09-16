@@ -21,7 +21,8 @@
 | `learn-x-process` | 从指定周期 Input 生成可追溯的 Process Pack、Output 最小壳和 Memory 候选。 |
 | `learn-x-monthly-automation` | 编排月记、周度与月度原始输入、Codex 事件压缩、Monthly Process 与审核后 Memory。 |
 | `learn-x-prompt-review` | 评审和优化 `02_prompts/` 与 Chat Pack Prompt，要求先定义契约和代表性评测案例。 |
-| `learn-x-question-review` | 从「议题」与「认知事件」Base 表生成周/月思考卡和按需 Chat Pack，只在送达读回后更新复盘调度字段。 |
+| `learn-x-question-review` | 已停用的旧周/月复盘 Skill；保留代码与未提交改动，未来周机制会独立重做。 |
+| `learn-x-monthly-question-workbench` | 月度核心议题工作台：确定性推荐、选择、Base 内 Docx 研究现场、提案校验、可审计回写与撤回。 |
 
 第三方 Skill 的筛选来源、固定版本和许可证归属见 `THIRD_PARTY_NOTICES.md`。项目内适配只保留与 Learn-X 边界一致的原则，不引入原仓库的 Python、LangChain、多 Agent 或外部服务依赖。
 
@@ -78,16 +79,15 @@ Chat Pack 编辑器只在本地桌面端显示。排序、大类增删改、子�
 ## 长期认知议题
 
 - 业务真值源是飞书「研究&学习」Base：`议题`=`tbllcm6oBbdMKnkN`，`认知事件`=`tblIE9FK9mWGv7GE`；议题实例和事件不得落盘为 Markdown。
-- 复盘 Workflow 已启用：周复盘=`wkfHoGP5FHaFHE32`（每周一 09:30），月复盘=`wkfrXZKX31rlwAAy`（每月 1 日 10:00）。发送身份已在 Base UI 配置为 bridge 已订阅用户，并通过 `sender_type=user` 的真实消息验收；修改发送身份后必须重新做一次真实读回验收。
-- `.agents/skills/learn-x-question-review/` 只读问题、判断和事件，输出增量思考卡或当前会话 Chat Pack；成功送达并读回后才回写 `上次复盘推送时间`、`下次复盘日期`。
-- `weekly` 覆盖复盘频率为每周的年度重点、每周、按截止时间和临近 14 天重大决策；`monthly` 覆盖每月、每季度；`single` 与 `chat-pack` 需要明确议题编号。
-- `按截止时间` 议题只自动复盘至截止日；截止后停止周审，避免过期日期造成重复推送。
-- `复盘频率=按截止时间` 必须同时有有效的 `决策截止时间`，否则复盘失败关闭。
-- 字段契约：`议题`保存问题身份、类型/状态/阶段、当前判断与未知、决策约束、复盘频率和温故调度；`认知事件`以`内容摘要`、`详细内容`和`关联议题`作为最小人工录入，另保留事件类型、证据方向、发生了什么、认知增量、判断前后、来源标识/链接等可选结构化字段。
-- 月复盘 JSON 另含轻量 `portfolio` 摘要（活跃总数、按类型/阶段计数），只用于发现组合失衡，不自动调整议题。
-- 触发词：`执行议题周复盘`、`执行议题月复盘`、`复盘 IQ-0001`、`为 IQ-0001 生成 Chat Pack`。Learn-X 组装上下文，ChatGPT 负责当前时刻推理；Voice-X、Research-X、Read-X、Doing-X 保留各自原始材料和现实结果。
-- Chat Pack 的事实段由 `review-questions.mjs --mode chat-pack --format markdown` 确定性渲染，必须原样发送；Base 字段为空就保持“未填写”，不得用 Bridge 环境上下文、记忆或模型常识补全个人事实；跨系统事实仅来自认知事件的来源标识/链接或按规则打开的最多 3 个关键来源。
-- 复盘 JSON 的 `consistencyWarnings` 只报告当前判断/类型/状态与最近事件的潜在不一致，人工在 Base 追加事件；脚本不自动补写认知内容。
+- 月度 Workflow=`wkfrXZKX31rlwAAy`，每月 1 日 10:00，名称为「月度核心议题研究工作台」，向 learn-x 群发送「启动月度核心议题研究工作台」。周 Workflow=`wkfHoGP5FHaFHE32` 当前停用；发送身份保持既有用户身份，修改后必须重新读回验收。
+- `.agents/skills/learn-x-monthly-question-workbench/scripts/workbench.mjs` 是唯一运行入口：`recommend`、`select`、`create`、`snapshot`、`apply`、`rollback`、`status`。`setup` 仅用于一次性建字段、账本表与审计视图。
+- Base 真实主表：`核心议题=tbllcm6oBbdMKnkN`，`认知事件=tblIE9FK9mWGv7GE`。新增字段的名字与选项由脚本 Schema 校验；月度账本表 ID 在运行时按名称解析，避免将不稳定的 Base 资源 ID 硬编码。
+- 排序：先下次月度运行前到期的重大决策（截止日、优先级），再按议题周期的短期/中期/长期/未分类分层，层内依 P0/P1/P2、最久未获得有效月度提交或有效事件注意力、议题编号排序。空优先级和研究状态分别按 P1、继续研究解释；议题周期空值保留为未分类。
+- `apply` 只接收已经从同一文档 revision 读出的 proposal。它只可更新议题周期、优先级、研究状态、阶段、当前判断、判断置信度、最大未知、改变判断的条件、下一步；事件必须有同版本原文证据和 block ID。相同文档 hash 不重复写；新版本先预检、撤回旧事件、恢复旧字段，再完整应用。
+- 账本状态是 `待选择/研究中/需处理/已提交/已撤回`。事件以确定性来源标识去重，先 `待生效` 后 `有效`；撤回只改有效性，不删除历史。写入后必须读回，冲突或不一致失败关闭。
+- 字段契约：`核心议题`保存问题身份、生命周期/阶段、议题周期/优先级/研究状态和当前判断；议题周期是短期/中期/长期注意力窗口，优先级是整体重要性，研究状态是当前是否继续研究。`认知事件`保存真正的认知增量，并以有效性与来源月度研究保留可撤回的追加历史。账本仅保存流程和版本审计，不保存研究原文。
+- 新触发词是「启动月度核心议题研究工作台」「重新推荐」「提交这份月度研究文档」「重新解析这份文档」「撤回上次解析」。旧触发词、旧 JSON、旧 Chat Pack 复盘路径均不再是运行契约。
+- Voice-X、Research-X、Read-X 与现实经历继续保留原始材料；只有文档明确引用的内容才能被写入事件来源。周机制待独立重做，P0 不从旧调度字段推导月度工作台行为。
 - 任何字段、选项或表 ID 不一致都失败关闭；快照变化拒绝回写。Research-X 的 `wisdom-review` 仅把活跃议题作为第五个温故来源，共享既有配额，不进入删除候选。
 
 ## 维护边界
@@ -107,7 +107,7 @@ node --check app/code/server.mjs
 node --check app/code/public/app.js
 node --check app/code/scripts/static-graph.mjs
 npm run test:app
-node --test .agents/skills/learn-x-question-review/scripts/*.test.mjs
+node --test .agents/skills/learn-x-monthly-question-workbench/scripts/*.test.mjs
 npm run build:public
 npm run build:local
 ```

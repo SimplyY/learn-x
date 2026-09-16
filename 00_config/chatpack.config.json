@@ -1,17 +1,4 @@
 {
-  "contextBudget": {
-    "recommendedRatio": 0.6666666667,
-    "recommendedChineseChars": 30000,
-    "tokensPerChineseChar": 1.8,
-    "latinCharsPerToken": 4,
-    "models": [
-      {
-        "id": "chatgpt-gemini",
-        "label": "ChatGPT Thinking / Gemini Pro",
-        "contextTokens": 1000000
-      }
-    ]
-  },
   "dialogueTypes": [
     {
       "id": "learning-insight",

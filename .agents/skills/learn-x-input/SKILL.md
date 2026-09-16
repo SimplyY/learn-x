@@ -43,9 +43,11 @@ Render all seven days from the weekly `readTimes` buckets, including zero-minute
 
 ## Time-X Calendar Input
 
-Run `npm run input:calendar -- --week YYYY-Www` once to collect the target ISO week's fixed `Time-X｜随时记` shared calendar through `lark-cli --as bot`.
+Run `npm run input:calendar -- --week YYYY-Www` once to collect the target ISO week's fixed `Time-X｜随时记` shared calendar and the user's readable primary/shared calendars through the existing `lark-cli` identity routes.
 
-- Write calendar aggregates plus every block's date, start/end, title, and description to `calendar.md`. Do not fall back to the user identity or primary calendar.
+- The detailed time-allocation contract is documented in `docs/calendar-time-allocation.md`.
+- The collector reads the fixed `Time-X｜随时记` shared calendar and the user's readable primary/shared calendars through their existing identities, then performs a read-only effective-minute allocation across the merged timeline.
+- Write calendar aggregates plus every block's date, start/end, title, description, and effective allocated minutes to `calendar.md`. Cross-day timed events may appear once per natural day with their original interval retained for audit.
 - Never write calendar people, locations, IDs, links, or system metadata.
 - Treat the calendar as planning context, never as completion evidence.
 

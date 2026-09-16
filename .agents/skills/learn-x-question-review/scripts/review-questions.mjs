@@ -14,7 +14,7 @@ export const ZONE = "Asia/Shanghai";
 export const ISSUE_FIELDS = [
   "议题", "议题编号", "类型", "状态", "阶段", "年度", "为什么重要", "当前判断", "判断置信度",
   "最大未知", "改变判断的条件", "下一步", "决策截止时间", "可逆性", "复盘频率", "下次复盘日期",
-  "上次复盘推送时间", "智慧时效性", "回顾状态", "已推送轮次", "上次推送时间", "创建时间", "更新时间"
+  "上次复盘推送时间", "智慧时效性", "回顾状态", "已推送轮次", "上次推送时间", "相关议题", "创建时间", "更新时间"
 ];
 export const EVENT_FIELDS = [
   "内容摘要", "详细内容", "事件摘要", "事件编号", "关联议题", "事件时间", "事件类型", "证据方向", "发生了什么", "认知增量",
@@ -55,6 +55,14 @@ function scalar(value) {
 
 function text(value) {
   return String(scalar(value) || "").trim();
+}
+
+function linkIds(value) {
+  const values = Array.isArray(value) ? value : [value];
+  return values.map((item) => {
+    if (item && typeof item === "object") return item.id || item.record_id || item.text || item.name || "";
+    return item;
+  }).map((item) => String(item || "").trim()).filter(Boolean);
 }
 
 function parseDate(value, label) {
@@ -165,6 +173,23 @@ export function validateIssue(raw) {
   return { ...issue, recordId: raw.recordId, confidence };
 }
 
+export function eventCursorDate(event) {
+  return parseDate(event["更新时间"], "更新时间") || parseDate(event["创建时间"], "创建时间") || parseDate(event["事件时间"], "事件时间");
+}
+
+export function daysUntilDeadline(issue, now = new Date()) {
+  const deadline = parseDate(issue["决策截止时间"], "决策截止时间");
+  return deadline ? Math.ceil((deadline.getTime() - now.getTime()) / 86400000) : null;
+}
+
+export function resolveRelatedIssues(issue, issues) {
+  const byRecordId = new Map(issues.map((item) => [item.recordId, item]));
+  return linkIds(issue["相关议题"]).map((recordId) => {
+    const related = byRecordId.get(recordId);
+    return related ? { id: text(related["议题编号"]), question: text(related["议题"]) } : { id: recordId, question: "未知议题" };
+  });
+}
+
 function dueDate(issue) {
   const explicit = parseDate(issue["下次复盘日期"], `${text(issue["议题编号"])} 下次复盘日期`);
   if (explicit) return explicit;
@@ -273,6 +298,7 @@ export function renderChatPack(review) {
     `- 问题：${display(issue.question)}`,
     `- 类型 / 阶段：${display(issue.type)} / ${display(issue.stage)}`,
     `- 为什么重要：${display(issue.importance)}`,
+    `- 关联议题：${issue.relatedIssues?.length ? issue.relatedIssues.map((related) => `${display(related.id)} ${display(related.question)}`).join("；") : "未记录"}`,
     "",
     "## 当前判断",
     `- 判断：${display(issue.judgment)}`,
@@ -290,7 +316,7 @@ export function renderChatPack(review) {
     `- 改变判断的条件：${display(issue.changeConditions)}`,
     "",
     "## 期限、可逆性与现实约束",
-    `- 决策截止时间：${display(issue.deadline)}`,
+    `- 决策截止时间：${display(issue.deadline)}${issue.deadlineDays == null ? "" : `（剩余 ${issue.deadlineDays} 天）`}`,
     `- 可逆性：${display(issue.reversibility)}`,
     "- 其他现实约束：未记录（不从环境上下文推断）",
     "",
@@ -312,6 +338,7 @@ export async function buildReview(mode, { now = new Date(), id = null } = {}) {
   await assertSchema(EVENT_TABLE, EVENT_FIELDS);
   const rawIssues = await listRecords(ISSUE_TABLE, ISSUE_FIELDS);
   const issues = rawIssues.map(validateIssue);
+  const relatedIssues = new Map(issues.map((issue) => [issue.recordId, resolveRelatedIssues(issue, issues)]));
   const selected = selectDueIssues(issues, mode, now, id);
   const dossiers = [];
   for (const issue of selected) {
@@ -319,7 +346,7 @@ export async function buildReview(mode, { now = new Date(), id = null } = {}) {
     const events = rawEvents.map(eventPayload).sort((a, b) => (parseDate(a["事件时间"], "事件时间")?.getTime() || 0) - (parseDate(b["事件时间"], "事件时间")?.getTime() || 0));
     const lastReview = parseDate(issue["上次复盘推送时间"], `${text(issue["议题编号"])} 上次复盘推送时间`);
     const incremental = events.filter((event) => {
-      const at = parseDate(event["事件时间"], "事件时间");
+      const at = eventCursorDate(event);
       return at && (!lastReview || at > lastReview);
     });
     dossiers.push({
@@ -337,9 +364,11 @@ export async function buildReview(mode, { now = new Date(), id = null } = {}) {
         changeConditions: text(issue["改变判断的条件"]),
         nextStep: text(issue["下一步"]),
         deadline: text(issue["决策截止时间"]),
+        deadlineDays: daysUntilDeadline(issue, now),
         reversibility: text(issue["可逆性"]),
         frequency: text(issue["复盘频率"]),
         lastReview: issue["上次复盘推送时间"] || "",
+        relatedIssues: relatedIssues.get(issue.recordId) || [],
       },
       incrementalEvents: incremental,
       recentEvents: events.slice(-5),

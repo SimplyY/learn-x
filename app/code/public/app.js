@@ -41,13 +41,6 @@ let APP_CONFIG = {
   ]
 };
 let CHATPACK_CONFIG = {
-  contextBudget: {
-    recommendedRatio: 2 / 3,
-    recommendedChineseChars: 30000,
-    tokensPerChineseChar: 1.8,
-    latinCharsPerToken: 4,
-    models: [{ id: "chatgpt-gemini", label: "ChatGPT Thinking / Gemini Pro", contextTokens: 1000000 }]
-  },
   dialogueTypes: [],
   enhancers: []
 };
@@ -1170,7 +1163,6 @@ function renderSourceChecklist() {
   els.sourceChecklist.innerHTML = "";
   const tree = buildContextTree(sourceTreeFiles());
   for (const node of tree.children) renderContextNode(node, els.sourceChecklist, 0);
-  refreshSelectedContextStats();
 }
 
 function resetExpandedContextDirs() {
@@ -1396,7 +1388,6 @@ async function generateContext() {
   setProgress(82);
   const weighted = buildWeightedContext(filesWithContent);
   state.context = weighted;
-  refreshSelectedContextStats(filesWithContent);
   setProgress(100);
   els.learningStatus.textContent = `已编排 ${filesWithContent.length} 个文件的上下文。`;
   renderChatPackPreview();
@@ -1404,17 +1395,17 @@ async function generateContext() {
 
 function resetGeneratedContext(message) {
   state.context = "";
-  refreshSelectedContextStats();
   setProgress(0);
   els.learningStatus.textContent = message;
   renderChatPackPreview();
 }
 
-function refreshSelectedContextStats(files = selectedContextFiles()) {
+function refreshSelectedContextStats(assembledText) {
+  const files = selectedContextFiles();
   const fileCount = files.length;
-  const totalChars = files.reduce((sum, file) => sum + contextFileCharCount(file), 0);
+  const totalChars = estimateTextStats(assembledText).visibleChars;
   const warning = fileCount > 20 ? " · 过多，建议强烈收缩" : fileCount > 10 ? " · 建议 10 个以内" : "";
-  const summary = `已选 ${formatNumber(fileCount)} 个文件 · 约 ${formatNumber(totalChars)} 字${warning}`;
+  const summary = `已选 ${formatNumber(fileCount)} 个文件 · 总计约 ${formatNumber(totalChars)} 字${warning}`;
 
   if (els.selectedContextSummary) {
     els.selectedContextSummary.textContent = summary;
@@ -1852,7 +1843,8 @@ function renderChatPackPreview() {
   const chatPack = buildChatPack();
   renderFramePreview();
   els.chatPackPreview.value = chatPack;
-  renderContextBudget(chatPack);
+  refreshSelectedContextStats(chatPack);
+  renderChatPackWarning();
 }
 
 function renderFramePreview() {
@@ -1892,53 +1884,9 @@ function renderFramePreview() {
   els.chatPackContextSummary.value = summary.join("\n");
 }
 
-function renderContextBudget(text) {
-  const stats = estimateTextStats(text);
-  const budget = CHATPACK_CONFIG.contextBudget || {};
-  const recommendedRatio = budget.recommendedRatio || 2 / 3;
-  const tokensPerChineseChar = budget.tokensPerChineseChar || 1.8;
-  const recommendedChineseChars = budget.recommendedChineseChars || 30000;
-  const recommendedSoftTokens = Math.floor(recommendedChineseChars * tokensPerChineseChar);
-  const models = budget.models || [];
-
-  els.chatPackMetrics.textContent = `约 ${formatNumber(stats.visibleChars)} 字`;
-  renderChatPackWarning();
-  els.contextBudgetList.innerHTML = "";
-
-  for (const model of models) {
-    const maxTokens = Math.floor(model.contextTokens * recommendedRatio);
-    const maxChars = Math.floor(maxTokens / tokensPerChineseChar);
-    const recommendedPercent = Math.ceil((stats.estimatedTokens / recommendedSoftTokens) * 100);
-    const maxPercent = Math.ceil((stats.estimatedTokens / maxTokens) * 100);
-    const overRecommended = stats.estimatedTokens > recommendedSoftTokens;
-    const overMax = stats.estimatedTokens > maxTokens;
-    const item = document.createElement("div");
-    item.className = `budget-pill${overMax ? " over" : overRecommended ? " warn" : ""}`;
-    item.title = `单次推荐不超过 ${formatNumber(recommendedChineseChars)} 字；模型 2/3 上限约 ${formatNumber(maxChars)} 字。`;
-    item.innerHTML = `
-      <span>${escapeHtml(model.label)} · ${overMax ? "超上限" : overRecommended ? "偏长" : "OK"}</span>
-      <div class="budget-row">
-        <em>推荐 ${formatPercent(recommendedPercent)}</em>
-        <i><b style="width: ${Math.min(recommendedPercent, 100)}%"></b></i>
-      </div>
-      <em>推荐≤${formatCompact(recommendedChineseChars)}字 · 上限≤${formatCompact(maxChars)}字（${formatPercent(maxPercent)}）</em>
-    `;
-    els.contextBudgetList.append(item);
-  }
-}
-
 function estimateTextStats(text) {
-  const budget = CHATPACK_CONFIG.contextBudget || {};
-  const tokensPerChineseChar = budget.tokensPerChineseChar || 1.8;
-  const latinCharsPerToken = budget.latinCharsPerToken || 4;
   const compact = text.replace(/\s/g, "");
-  const cjkChars = [...compact.matchAll(/[\u3400-\u9fff\uf900-\ufaff]/g)].length;
-  const otherChars = Math.max(compact.length - cjkChars, 0);
-
-  return {
-    visibleChars: compact.length,
-    estimatedTokens: Math.ceil(cjkChars * tokensPerChineseChar + otherChars / latinCharsPerToken)
-  };
+  return { visibleChars: compact.length };
 }
 
 function renderChatPackWarning() {
@@ -1953,16 +1901,6 @@ function renderChatPackWarning() {
 
 function formatNumber(value) {
   return new Intl.NumberFormat("zh-CN").format(value);
-}
-
-function formatCompact(value) {
-  if (value >= 10000) return `${(value / 10000).toFixed(value >= 100000 ? 0 : 1)}万`;
-  return formatNumber(value);
-}
-
-function formatPercent(value) {
-  if (!Number.isFinite(value)) return "0%";
-  return `${Math.max(value, 0)}%`;
 }
 
 async function copyText(text, message) {
