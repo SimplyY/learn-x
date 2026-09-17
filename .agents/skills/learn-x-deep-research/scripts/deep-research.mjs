@@ -119,11 +119,12 @@ export class DeepResearch {
     return nodes.map((node) => node.title);
   }
   async create({ topic, question = "", issueIds = [], date = today() }) {
-    if (!String(topic || "").trim()) throw new Error("请提供研究主题 --title");
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("日期必须是 YYYY-MM-DD");
+    topic = String(topic || "").trim();
+    if (!topic) throw new Error("请提供研究主题 --title");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || iso(`${date}T00:00:00Z`)?.toISOString().slice(0, 10) !== date) throw new Error("日期必须是有效的 YYYY-MM-DD");
     await this.assertWikiRoots();
     const allIssues = await this.issues();
-    const issues = issueIds.map((id) => { const issue = allIssues.find((item) => text(item["议题编号"]) === id); if (!issue) throw new Error(`未找到议题：${id}`); return issue; });
+    const issues = [...new Set(issueIds)].map((id) => { const issue = allIssues.find((item) => text(item["议题编号"]) === id); if (!issue) throw new Error(`未找到议题：${id}`); return issue; });
     const events = issues.length ? await this.events() : [];
     const name = researchTitle(date, topic);
     const children = await this.wikiChildren();

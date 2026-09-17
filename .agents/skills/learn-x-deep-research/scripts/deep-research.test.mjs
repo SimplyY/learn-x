@@ -155,6 +155,25 @@ test("create rejects unknown issue ids", async () => {
   await assert.rejects(app.create({ topic: "主题", issueIds: ["IQ-9999"] }), /未找到议题/);
 });
 
+test("create rejects calendar-invalid dates and trims the topic", async () => {
+  const { app } = fakeApp();
+  await assert.rejects(app.create({ topic: "主题", date: "2026-13-40" }), /有效的 YYYY-MM-DD/);
+  await assert.rejects(app.create({ topic: "主题", date: "2026-02-30" }), /有效的 YYYY-MM-DD/);
+  await assert.rejects(app.create({ topic: "  ", date: "2026-09-17" }), /请提供研究主题/);
+  const { app: trimApp, state: trimState } = fakeApp();
+  const result = await trimApp.create({ topic: "  主题  ", date: "2026-09-17" });
+  assert.equal(result.topic, "主题");
+  assert.ok(Object.keys(trimState.docs).some((token) => trimState.docs[token].includes("深度研究｜2026-09-17｜主题")));
+});
+
+test("create dedupes repeated issue ids", async () => {
+  const { app, state } = fakeApp();
+  const result = await app.create({ topic: "主题", issueIds: ["IQ-0001", "IQ-0001"], date: "2026-09-17" });
+  assert.equal(result.issues.length, 1);
+  const doc = state.docs[result.wikiToken];
+  assert.equal(doc.split("[IQ-0001]").length - 1, 2); // 标题行 + 认知区块各一次，不重复渲染
+});
+
 test("context pack without issue ids covers all active issues", async () => {
   const { app, state } = fakeApp({ issues: [issue("0001"), issue("0002", { "状态": "关闭" })], events: [event(1)] });
   const pack = await app.contextPack({});
