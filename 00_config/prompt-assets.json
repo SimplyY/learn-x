@@ -8,7 +8,7 @@
         "document_id": "CfgGdKke4orF30xkBhFcuQ3bnke",
         "revision": 6,
         "sha256": "613c0e55c9fd55aeb6f26963f7f9fa94a37c8474b1e53fb711df9cc9c7448e10",
-        "at": "2026-09-17T02:36:57.095Z"
+        "at": "2026-09-17T06:36:06.494Z"
       }
     },
     "chatpack.book-decode": {
@@ -18,7 +18,7 @@
         "document_id": "LTqfdSwmFoZnqbxhLa1c63P3nZb",
         "revision": 5,
         "sha256": "f7c1be3290d030b34f9595ed929d8fd809954f00dc12e79aa6e40925696dc5c8",
-        "at": "2026-09-17T02:36:57.624Z"
+        "at": "2026-09-17T06:36:07.290Z"
       }
     },
     "chatpack.weekly-output": {
@@ -29,7 +29,7 @@
         "document_id": "KRShd91W2oY352xSB4kciB0hnrf",
         "revision": 3,
         "sha256": "e4c7261f08eb8a35797cd1ba71c7faf78ecd3050adde6f55fedf62acdd019a8b",
-        "at": "2026-09-17T02:36:58.184Z"
+        "at": "2026-09-17T06:36:07.910Z"
       }
     },
     "chatpack.monthly-output": {
@@ -40,7 +40,7 @@
         "document_id": "ABjzdez4joY0PUxdlaicIKkwnwh",
         "revision": 3,
         "sha256": "3aa3ae282610051273ed0eba82f2374765b70dd50603e488294e30b9f3362f11",
-        "at": "2026-09-17T02:36:58.699Z"
+        "at": "2026-09-17T06:36:08.484Z"
       }
     },
     "chatpack.yearly-output": {
@@ -50,7 +50,7 @@
         "document_id": "KZ0WdBeHioqolrxmWQmc1rOTnZe",
         "revision": 3,
         "sha256": "64ec8829bc32b5282a351d6aaad72088276ae1ba66695862aadb69b90c416816",
-        "at": "2026-09-17T02:36:59.253Z"
+        "at": "2026-09-17T06:36:09.083Z"
       }
     },
     "chatpack.insight-weekly-review": {
@@ -58,9 +58,9 @@
       "local_path": "02_prompts/chatpack/insight/weekly-review.md",
       "synced": {
         "document_id": "WY8hdEPKroFeUtxemxrcoX57nwg",
-        "revision": 5,
-        "sha256": "59daf695bbccbb8689d047a2affac0b5565d83638ad05f64117ba53c85045442",
-        "at": "2026-09-17T02:36:59.841Z"
+        "revision": 7,
+        "sha256": "ed374b62bd34984182660021acb2e8d6c654a823341af3dfd7abdcab28c6c92a",
+        "at": "2026-09-17T06:36:09.789Z"
       }
     },
     "chatpack.insight-inner-question": {
@@ -68,9 +68,9 @@
       "local_path": "02_prompts/chatpack/insight/inner-question.md",
       "synced": {
         "document_id": "JtbcdE6AuoadikxTJ38cdf7gnWf",
-        "revision": 10,
-        "sha256": "3eade3a63313f78ec7ed54633350c0d7196aed944ff3a44a4b5178af29ef3008",
-        "at": "2026-09-17T02:37:00.488Z"
+        "revision": 30,
+        "sha256": "14eb547ca3b1649b5efe894e26da79ad5b90d7f1d9f791f5e375a3bc608e6208",
+        "at": "2026-09-17T06:36:10.398Z"
       }
     },
     "chatpack.insight-director-view": {
@@ -78,9 +78,9 @@
       "local_path": "02_prompts/chatpack/insight/director-view.md",
       "synced": {
         "document_id": "D7CmdZYf8otKu2xAySfcUtbknPf",
-        "revision": 10,
-        "sha256": "c20bd07d8833ab112d89ba1ee47172450b92438a06b44b97a5cd707c93fdb5b1",
-        "at": "2026-09-17T02:37:01.085Z"
+        "revision": 14,
+        "sha256": "3bf660b86096a64872251a7496f85a5f09615eb8c8bb49a894b1ffcfbe111c4f",
+        "at": "2026-09-17T06:36:11.055Z"
       }
     },
     "chatpack.insight-friend-view": {
@@ -88,9 +88,9 @@
       "local_path": "02_prompts/chatpack/insight/friend-view.md",
       "synced": {
         "document_id": "SgW9dkrcLo8SzVxwbidcQOr6nFb",
-        "revision": 10,
-        "sha256": "c54c57a18cd020a9b7b18eb65aa5738ac8340defe0ee029032ec6324257463d1",
-        "at": "2026-09-17T02:37:01.592Z"
+        "revision": 12,
+        "sha256": "d7af181cd6c7fc2940fe6277b5912b84b1f7ef740a0908e6e2251ba8dc87b755",
+        "at": "2026-09-17T06:36:11.735Z"
       }
     },
     "chatpack.insight-blind-spot": {
@@ -98,9 +98,9 @@
       "local_path": "02_prompts/chatpack/insight/blind-spot.md",
       "synced": {
         "document_id": "PtVYdwGgaoisOaxeIChcExwan75",
-        "revision": 17,
-        "sha256": "fce67c286119a54d9ea03695229e90991a394cf7345733a2c730a9829f44dca3",
-        "at": "2026-09-17T02:37:02.112Z"
+        "revision": 19,
+        "sha256": "f9f2a9babb4db16872925a1660b157a4e0ffd0005d08eecb6e7ea5ed7e3c75d5",
+        "at": "2026-09-17T06:36:12.321Z"
       }
     },
     "chatpack.munger-soul": {
@@ -111,7 +111,7 @@
         "document_id": "WOtXdvxiAoCTP0x3bgNcL0swnNf",
         "revision": 3,
         "sha256": "f6972b31ba1b7ca5483639fd20a2991ae996b942d00ee1e23142ba3d5a40925e",
-        "at": "2026-09-17T02:46:54.564Z"
+        "at": "2026-09-17T06:36:12.914Z"
       }
     },
     "chatpack.first-principles": {
@@ -121,7 +121,7 @@
         "document_id": "GCuIdQ97NoxzfAx7Gbxc7mRPnmP",
         "revision": 3,
         "sha256": "ad560288ca5411dc3262192bca44bd613ab64873ed787d41b8253a14783eb593",
-        "at": "2026-09-17T02:46:55.203Z"
+        "at": "2026-09-17T06:36:13.455Z"
       }
     }
   }

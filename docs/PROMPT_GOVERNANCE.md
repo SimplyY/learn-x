@@ -21,6 +21,12 @@ flowchart LR
   U --> D
 ```
 
+## 使用时校准（Snapshot 新鲜度）
+
+不建后台监听。Snapshot 只在真正被在线消费时校准：`run-periodic-insight` 等在线入口在组装 Prompt 前执行 governance `check --live`；远端有新版本且本地干净时自动 `pull`，本地脏或漂移时保留旧版本并显式告警；离线（lark-cli 失败）继续使用本地副本并告警。距上次同步超过 7 天（`freshness: stale`）强告警但不阻塞运行。所有告警随运行状态落盘（`snapshot_preflight` 字段），不允许旧 Snapshot 静默存在。普通构建（`npm run build`）保持只验本地 manifest，不新增网络依赖。
+
+Codex 在线组装 Chat Pack 或读取 `02_prompts/` 受治理正文时同样先跑 `status --live`（别名 `check`）再使用。
+
 ## 操作与失败
 
 ```bash
