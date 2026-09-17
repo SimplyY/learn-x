@@ -29,13 +29,17 @@ description: "Use this skill to run a structured truth-seeking roundtable debate
 ## Usage
 
 <example>
+
 User: 圆桌讨论 人工智能是否拥有真正的创造力？
 Assistant: [Launches roundtable with moderator and representative figures]
+
 </example>
 
 <example>
+
 User: 圆桌 自由意志是否存在？
 Assistant: [Launches roundtable discussion on free will]
+
 </example>
 
 ## Instructions

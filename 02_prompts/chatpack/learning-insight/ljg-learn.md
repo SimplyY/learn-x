@@ -29,8 +29,10 @@ description: "Use this skill to dissect a concept through eight dimensions and c
 ## Usage
 
 <example>
+
 User: /ljg-learn 熵
 Assistant: [对"熵"进行八维解剖，生成 markdown 报告]
+
 </example>
 
 ## Instructions
