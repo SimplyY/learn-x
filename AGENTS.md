@@ -30,6 +30,7 @@
 | Input 流程 | `03_input/README.md`、`03_input/usage.md`、`.agents/skills/learn-x-input/` | 采集、校验或生成 `03_input/` |
 | 月度议题工作台 | `docs/MONTHLY_CORE_QUESTION_WORKBENCH.md`、`docs/TECH.md`、`.agents/skills/learn-x-monthly-question-workbench/` | 运行或修改工作台脚本、处理月度研究文档 |
 | 核心议题知识库 | `docs/CORE_QUESTION_LIBRARY.md`、`.agents/skills/learn-x-quarterly-question-overview/`、`.agents/skills/learn-x-monthly-question-workbench/` | 维护季度总览、月度研究 Wiki、倒序目录索引及 learn-x 群快捷标签 |
+| 一键深度研究 | `docs/DEEP_RESEARCH.md`、`.agents/skills/learn-x-deep-research/` | 发起深度研究、维护深度研究 Wiki 目录、组装 ChatGPT 研究上下文 |
 | 安全与提交 | `docs/SECURITY.md` | 提交、扫描、处理隐私材料或敏感文件 |
 | 防幻觉规则 | `.agents/ANTI_HALLUCINATION.md` | 涉及外部内容抓取、飞书文档创建、跨系统数据搬运 |
 | 命令策略 | `RTK.md` | 运行 git、diff、搜索、测试等可能高噪声命令 |

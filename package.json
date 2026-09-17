@@ -10,7 +10,7 @@
     "build:public:no-context": "LEARN_X_CHATPACK_CONTEXT=off node app/code/scripts/build-static-data.mjs --target=public --out-dir=dist/no-context",
     "build:local": "node app/code/scripts/build-static-data.mjs --target=local",
     "dev": "npm run build:local && node app/code/server.mjs",
-    "test": "node --test app/code/scripts/*.test.mjs .agents/skills/learn-x-input/scripts/*.test.mjs .agents/skills/learn-x-process/scripts/*.test.mjs .agents/skills/wechat-weekly-input/scripts/*.test.mjs .agents/skills/learn-x-prompt-usage/scripts/*.test.mjs .agents/skills/learn-x-question-review/scripts/*.test.mjs .agents/skills/learn-x-monthly-question-workbench/scripts/*.test.mjs .agents/skills/learn-x-quarterly-question-overview/scripts/*.test.mjs .agents/skills/learn-x-periodic-insight/scripts/*.test.mjs",
+    "test": "node --test app/code/scripts/*.test.mjs .agents/skills/learn-x-input/scripts/*.test.mjs .agents/skills/learn-x-process/scripts/*.test.mjs .agents/skills/wechat-weekly-input/scripts/*.test.mjs .agents/skills/learn-x-prompt-usage/scripts/*.test.mjs .agents/skills/learn-x-question-review/scripts/*.test.mjs .agents/skills/learn-x-monthly-question-workbench/scripts/*.test.mjs .agents/skills/learn-x-quarterly-question-overview/scripts/*.test.mjs .agents/skills/learn-x-deep-research/scripts/*.test.mjs .agents/skills/learn-x-periodic-insight/scripts/*.test.mjs",
     "snapshot": "npm run build",
     "security:scan": "node scripts/security-scan.mjs",
     "security:scan:staged": "node scripts/security-scan.mjs --staged",
@@ -43,6 +43,7 @@
     "input:source-status": "node .agents/skills/learn-x-input/scripts/update-weekly-source-status.mjs",
     "inquiry:monthly-workbench": "node .agents/skills/learn-x-monthly-question-workbench/scripts/workbench.mjs",
     "inquiry:quarterly-overview": "node .agents/skills/learn-x-quarterly-question-overview/scripts/overview.mjs",
+    "inquiry:deep-research": "node .agents/skills/learn-x-deep-research/scripts/deep-research.mjs",
     "insight:periodic": "node .agents/skills/learn-x-periodic-insight/scripts/run-periodic-insight.mjs"
   },
   "dependencies": {

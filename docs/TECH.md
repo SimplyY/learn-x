@@ -24,6 +24,7 @@
 | `learn-x-question-review` | 已停用的旧周/月复盘 Skill；保留代码与未提交改动，未来周机制会独立重做。 |
 | `learn-x-monthly-question-workbench` | 月度议题工作台：确定性推荐、选择、Wiki 研究现场、提案校验、可审计回写与撤回。 |
 | `learn-x-quarterly-question-overview` | 季度核心议题总览：读取全部议题、生成 Wiki 总览、校验提案、审计回写与撤回。 |
+| `learn-x-deep-research` | 一键深度研究：创建「深度研究」Wiki 文档、注入议题上下文、维护倒序目录、组装 ChatGPT 上下文包；对 Base 只读。 |
 | `learn-x-periodic-insight` | 按目标周期和历史范围装配 Context，调用 Bridge 生成候选洞察并可恢复归档。 |
 
 第三方 Skill 的筛选来源、固定版本和许可证归属见 `THIRD_PARTY_NOTICES.md`。项目内适配只保留与 Learn-X 边界一致的原则，不引入原仓库的 Python、LangChain、多 Agent 或外部服务依赖。
