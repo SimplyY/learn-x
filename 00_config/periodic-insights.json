@@ -1,13 +1,12 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "contextPolicies": {
     "periodic-v1": {
       "defaultRange": "1y",
       "maxContextChars": 100000,
       "maxPromptChars": 120000,
-      "historicalBudgetChars": 30000,
       "timezone": "Asia/Shanghai",
-      "materialTypes": ["target-output", "process-pack", "confirmed-output", "quarterly-memory"]
+      "defaultMaterialTypes": ["life-core", "target-journal", "history-backbone", "flomo"]
     }
   },
   "tasks": [

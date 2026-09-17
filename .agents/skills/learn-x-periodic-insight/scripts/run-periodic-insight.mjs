@@ -5,7 +5,7 @@ import { mkdir, open as openFile, readdir, readFile, rename, stat, unlink, write
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { buildInsightContext, buildInsightPrompt, buildPromptAssets, findTask, isSubstantive, readPeriodicConfig } from "./periodic-insight-core.mjs";
+import { buildInsightContext, buildInsightPrompt, buildPromptAssets, findTask, isSubstantive, preflightSnapshotFreshness, readPeriodicConfig } from "./periodic-insight-core.mjs";
 import { runBridgeCli } from "../../learn-x-weekly-automation/scripts/generate-ai-review.mjs";
 
 const execFile = promisify(execFileCallback);
@@ -33,6 +33,8 @@ export async function runPeriodicInsight(options = {}) {
     if (["submitted", "needs_review"].includes(previous?.status) && !options.force) return { ...previous, paths };
     await writeFile(paths.context, context.content, "utf8"); await writeJson(paths.manifest, context.manifest);
     const prompt = await buildInsightPrompt({ repoRoot, context: context.content, task, target: context.target, maxPromptChars: policy.maxPromptChars || 120000 });
+    // 在线消费 Snapshot 前的使用时校准：远端有新版本自动 pull，失败与过期都显式告警，不阻塞运行。
+    const snapshotPreflight = options.skipSnapshotPreflight ? { checked: false, pulled: false, stale_ids: [], remote_changed_ids: [], warnings: [] } : await (options.runSnapshotPreflight || preflightSnapshotFreshness)({ repoRoot, log: (line) => console.error(`[snapshot-preflight] ${line}`) });
     const prompt_assets = await buildPromptAssets({ repoRoot, task });
     const inputChanged = previous && (previous.contextSha256 !== context.sha256 || previous.promptSha256 !== sha256(prompt));
     if (["completed", "generated", "archive_pending"].includes(previous?.status) && inputChanged && !options.force) {
@@ -43,9 +45,9 @@ export async function runPeriodicInsight(options = {}) {
       if (await exists(paths.generated)) return options.archive ? archiveIfRequested({ ...options, repoRoot, task, context, paths, state: previous }) : { ...previous, paths };
       if (!options.force) { const review = { ...previous, status: "needs_review", reason: "generated-output-missing", updatedAt: new Date().toISOString() }; await writeJson(paths.state, review); return { ...review, paths }; }
     }
-    if (!task.prompt.productionReady || !options.send) { const preview = { schemaVersion: 1, taskId, runKey, target: context.target, status: "preview", contextSha256: context.sha256, promptSha256: sha256(prompt), prompt_assets, ...(task.prompt.productionReady ? { prompt } : { reason: "production-not-ready" }), updatedAt: new Date().toISOString() }; await writeJson(paths.state, preview); return { ...preview, paths }; }
+    if (!task.prompt.productionReady || !options.send) { const preview = { schemaVersion: 1, taskId, runKey, target: context.target, status: "preview", contextSha256: context.sha256, promptSha256: sha256(prompt), prompt_assets, snapshot_preflight: snapshotPreflight, ...(task.prompt.productionReady ? { prompt } : { reason: "production-not-ready" }), updatedAt: new Date().toISOString() }; await writeJson(paths.state, preview); return { ...preview, paths }; }
     if (!options.confirm) throw new Error("send-requires-confirm");
-    const submitted = { schemaVersion: 1, taskId, runKey, target: context.target, status: "submitted", contextSha256: context.sha256, promptSha256: sha256(prompt), prompt_assets, submittedAt: new Date().toISOString() }; await writeJson(paths.state, submitted);
+    const submitted = { schemaVersion: 1, taskId, runKey, target: context.target, status: "submitted", contextSha256: context.sha256, promptSha256: sha256(prompt), prompt_assets, snapshot_preflight: snapshotPreflight, submittedAt: new Date().toISOString() }; await writeJson(paths.state, submitted);
     let bridge;
     try { bridge = await (options.runBridge || runBridgeCli)(prompt, { ...options, bridgePath: options.bridgePath || defaultBridge }); } catch (error) { const review = { ...submitted, status: "needs_review", reason: String(error?.message || error), updatedAt: new Date().toISOString() }; await writeJson(paths.state, review); return { ...review, paths }; }
     const result = bridge?.result || bridge;
