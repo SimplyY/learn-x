@@ -12,13 +12,11 @@ export const EVENT_FIELDS = ["事件编号", "关联议题", "事件类型", "�
 // 深度研究是按需发生的一等对象：Base 零写入（事件由人在认知事件表记录，来源链接指向本文档）。
 export const HORIZONS = ["短期", "中期", "长期", "未分类"];
 const PRIORITIES = ["P0", "P1", "P2"];
-const RESEARCH_STATES = ["继续研究", "暂缓研究", "关闭研究"];
 
 export const text = (value) => String(Array.isArray(value) ? value[0] ?? "" : value?.name ?? value?.text ?? value ?? "").trim();
 export const linkIds = (value) => (Array.isArray(value) ? value : [value]).map((item) => String(item?.id ?? item?.record_id ?? item ?? "")).filter(Boolean);
 const xml = (value) => escapeXml(String(value ?? "").trim());
 const iso = (value) => { const date = value && new Date(value); return date && !Number.isNaN(date.getTime()) ? date : null; };
-const day = (value) => iso(value)?.toISOString().slice(0, 10) || "";
 
 export const today = () => new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Shanghai" });
 export const researchTitle = (date, topic) => `深度研究｜${date}｜${topic}`;
@@ -62,8 +60,6 @@ export function renderContextPack(issues, events, researchNodes) {
   }
   return lines.join("\n");
 }
-
-async function stdin() { const chunks = []; for await (const chunk of process.stdin) chunks.push(chunk); return Buffer.concat(chunks).toString("utf8"); }
 
 export async function defaultRunner(args) {
   const { stdout } = await execFileAsync("lark-cli", args, { env: { ...process.env, LARKSUITE_CLI_NO_UPDATE_NOTIFIER: "1", LARKSUITE_CLI_NO_SKILLS_NOTIFIER: "1" }, maxBuffer: 16 * 1024 * 1024 });
