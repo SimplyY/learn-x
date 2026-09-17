@@ -53,7 +53,7 @@ Chat Pack 是 Learn-X 的对话启动器。它把一个具体场景所需的 Pro
 
 ## 周期洞察
 
-本地桌面端另有私有「洞察」大类，包含芒格之魂、每周复盘、心底之问、导演视角、朋友视角和盲区探索。芒格之魂复用现有增强器的六层正文；其余子类型在 Prompt 反推完成前明确显示占位。洞察任务与自动化共用 `00_config/periodic-insights.json`，目标周期和历史 Context 范围分开，默认历史范围为最近一年。详情见 [PERIODIC_INSIGHTS.md](PERIODIC_INSIGHTS.md)。
+本地桌面端另有私有「洞察」大类，包含芒格之魂、每周复盘、心底之问、导演视角、朋友视角和盲区探索。芒格之魂复用现有增强器的六层正文，其余五个子类型使用各自的周期洞察 Prompt。洞察任务与自动化共用 `00_config/periodic-insights.json`，目标周期和历史 Context 范围分开，默认历史范围为最近一年。详情见 [PERIODIC_INSIGHTS.md](PERIODIC_INSIGHTS.md)。
 
 ## 编辑与发布边界
 

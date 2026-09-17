@@ -76,11 +76,11 @@
       "outputGoal": "把周期材料压缩为可阅读、可验证的候选洞察。",
       "subtypes": [
         { "id": "insight.munger-soul", "name": "芒格之魂", "summary": "使用现有芒格之魂增强器生成周期洞察。", "currentQuestion": "围绕目标周期生成芒格之魂洞察。", "defaultEnhancerIds": ["munger-soul"], "includeBaseRecommendedSources": false },
-        { "id": "insight.weekly-review", "name": "每周复盘", "summary": "TODO：后续通过 Flomo 历史样本反推与评测后替换。", "currentQuestion": "TODO：每周复盘 Prompt 待历史样本反推。" },
-        { "id": "insight.inner-question", "name": "心底之问", "summary": "TODO：后续通过 Flomo 历史样本反推与评测后替换。", "currentQuestion": "TODO：心底之问 Prompt 待历史样本反推。" },
-        { "id": "insight.director-view", "name": "导演视角", "summary": "TODO：后续通过 Flomo 历史样本反推与评测后替换。", "currentQuestion": "TODO：导演视角 Prompt 待历史样本反推。" },
-        { "id": "insight.friend-view", "name": "朋友视角", "summary": "TODO：后续通过 Flomo 历史样本反推与评测后替换。", "currentQuestion": "TODO：朋友视角 Prompt 待历史样本反推。" },
-        { "id": "insight.blind-spot", "name": "盲区探索", "summary": "TODO：后续通过 Flomo 历史样本反推与评测后替换。", "currentQuestion": "TODO：盲区探索 Prompt 待历史样本反推。" }
+        { "id": "insight.weekly-review", "name": "每周复盘", "summary": "复盘目标周的事实、变化、代价与下一步验证。", "currentQuestion": "围绕目标周，复盘发生了什么、哪些模式在变化，以及下一步最值得验证的一个判断。" },
+        { "id": "insight.inner-question", "name": "心底之问", "summary": "从周期材料中追问一个真正值得面对的底层问题。", "currentQuestion": "从目标周期材料中追问一个真正值得面对、但不替我回答的底层问题。" },
+        { "id": "insight.director-view", "name": "导演视角", "summary": "从更长叙事中观察反复场景、角色张力与转场。", "currentQuestion": "把目标周期放进更长时间的个人叙事中，识别反复场景、角色张力和正在转向的段落。" },
+        { "id": "insight.friend-view", "name": "朋友视角", "summary": "像长期了解我的朋友一样，勾勒有证据的人物画像。", "currentQuestion": "像长期了解我的朋友一样，从证据中勾勒我当前较稳定的人物画像与内在张力。" },
+        { "id": "insight.blind-spot", "name": "盲区探索", "summary": "寻找材料中的遗漏、未检验假设与可核验反例。", "currentQuestion": "寻找材料中的遗漏、未检验假设和自我叙事盲点，给出可核验的反例。" }
       ],
       "avoid": ["把候选洞察当成已确认事实", "自动写入长期认知", "混淆目标周期与历史范围"]
     },

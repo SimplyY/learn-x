@@ -1421,6 +1421,21 @@ button:disabled {
     transform 180ms ease;
 }
 
+#insightManifestList {
+  max-height: min(48vh, 420px);
+  overflow: auto;
+  margin: 8px 0 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 9px 11px;
+  background: #fbfcff;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .toast-message.visible {
   opacity: 1;
   transform: translate(-50%, 0);

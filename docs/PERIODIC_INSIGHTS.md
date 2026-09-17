@@ -4,7 +4,8 @@
 
 ## v1 范围
 
-- 本地 Chat Pack 新增私有「洞察」一级大类：芒格之魂可运行，其余五个子类型为占位。
+- 本地 Chat Pack 新增私有「洞察」一级大类：芒格之魂与其余五个子类型均可运行。
+- 五个独立子类型 Prompt 已纳入 Prompt Governance，飞书文档是人工正文真源，本地 Markdown 是经哈希校验的运行副本。
 - 手动和自动入口共用 `00_config/periodic-insights.json` 与 Context Builder。
 - 默认历史范围为最近一年；芒格之魂目标月优先、缺失时回退最近完整周，其他任务按配置声明的目标类型选择，无合格对象则跳过。
 - Context 固定白名单为目标 Output、同周期 Process Pack、范围内已确认 Output 的关键章节和相交季度 Memory；不重复读取 `03_input/`。
@@ -18,6 +19,4 @@
 
 自动化可用 CLI 退出码识别未完成状态：只有 `preview`、`skipped`、`completed` 返回成功；`needs_review`、`archive_pending` 返回非零。
 
-## 第二阶段 TODO
-
-使用 Flomo 历史输入、输出和人工评价反推每种洞察的任务协议，做同 Context 对照实验后再替换五个占位 Prompt；本期不建设 Prompt 版本平台、自动评测平台或通用低代码系统。
+真实模型对照评测仍未运行；后续可用相同 Context 比较五种 Prompt 的证据保留、视角区分和过度推断情况。本期不建设 Prompt 版本平台、自动评测平台或通用低代码系统。

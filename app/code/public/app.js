@@ -898,16 +898,26 @@ async function loadPeriodicInsightContext() {
   state.periodicInsight.contextStats = { chars: payload.chars, budget };
   els.insightContextSummary.textContent = `目标 ${payload.target.id} · 历史 ${payload.range.id} · Context ${formatNumber(payload.chars)}/${formatNumber(budget.contextChars || 0)} 字符 · 纳入 ${payload.included.length} 项 · 排除 ${payload.excluded.length} 项`;
   els.insightManifestList.textContent = [
+    "文件来源类型当前按固定规则装配，不在本次界面中切换。",
     `纳入（${payload.included.length}）`,
-    ...payload.included.map((item) => `- ${item.path}${item.section ? ` · ${item.section}` : ""} · ${item.chars} 字 · ${item.dateBasis || "日期未标注"}`),
+    ...payload.included.map((item) => `- [${periodicMaterialTypeLabel(item.role)}] ${item.path}${item.section ? ` · ${item.section}` : ""} · ${formatNumber(item.chars)} 字 · ${item.dateBasis || "日期未标注"}`),
     "",
     `排除（${payload.excluded.length}）`,
-    ...payload.excluded.map((item) => `- ${item.path || "（未定位材料）"}${item.section ? ` · ${item.section}` : ""} · ${item.reason || "未说明原因"}`)
+    ...payload.excluded.map((item) => `- [${periodicMaterialTypeLabel(item.role)}] ${item.path || "（未定位材料）"}${item.section ? ` · ${item.section}` : ""} · ${item.reason || "未说明原因"}`)
   ].join("\n");
   els.insightManifestDetails.hidden = false;
   els.learningStatus.textContent = "周期洞察 Context 已就绪。";
   renderChatPackPreview();
   return payload;
+}
+
+function periodicMaterialTypeLabel(role) {
+  return {
+    "target-output": "目标周期输出",
+    "process-pack": "Process Pack",
+    "confirmed-output": "历史已确认输出",
+    "quarterly-memory": "季度 Memory"
+  }[role] || role || "系统判定";
 }
 
 function renderInsightTargets() {
@@ -1562,14 +1572,6 @@ function readBrowserUsageStore() {
   return emptyUsageStore("browser");
 }
 
-function incrementUsageView(subtypeId, enhancerIds) {
-  const usage = usageView();
-  addUsageCount(usage, "subtypes", subtypeId);
-  for (const enhancerId of enhancerIds) addUsageCount(usage, "enhancers", enhancerId);
-  renderDialogueSubtypes();
-  renderEnhancers();
-}
-
 async function recordGeneratedUsage() {
   if (!chatPackContextEnabled()) return { recorded: false };
   const subtype = activeDialogueSubtype();
@@ -1598,10 +1600,6 @@ async function recordGeneratedUsage() {
           body: JSON.stringify(payload)
         });
         if (response.ok) {
-          const result = await response.json();
-          // A retry can receive a duplicate after the first write succeeded but its response was lost.
-          // Refresh the in-memory view for that generation as well.
-          incrementUsageView(subtype.id, enhancerIds);
           return { recorded: true };
         }
       } catch {}
@@ -1617,7 +1615,6 @@ async function recordGeneratedUsage() {
     if (Object.keys(managedVersions).length) monthCounts.managedVersions = { ...(monthCounts.managedVersions || {}), ...managedVersions };
     store.months[month] = monthCounts;
     localStorage.setItem(USAGE_STORAGE_KEY, JSON.stringify(store));
-    incrementUsageView(subtype.id, enhancerIds);
     return { recorded: true };
   };
   try {

@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { JSDOM } from "jsdom";
 
-test("有上下文生成后记录子类型和普通增强器，并提供复制入口", async () => {
+test("有上下文生成后只记录使用次数，不重绘选择器，并提供复制入口", async () => {
   const html = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
   const dom = new JSDOM(html, { url: "https://example.test/#learning" });
   const graph = {
@@ -48,6 +48,8 @@ test("有上下文生成后记录子类型和普通增强器，并提供复制�
     assert.equal(document.querySelector("#contextBudgetList"), null);
     assert.equal(document.querySelector("#dialogueSubtypeList button").textContent, "示例（20）");
     assert.equal(document.querySelector("#enhancerList .dialogue-subtype-btn").textContent, "芒格之魂（20）");
+    const subtypeList = document.querySelector("#dialogueSubtypeList");
+    const subtypeButton = document.querySelector("#dialogueSubtypeList button");
     document.querySelector("#enhancerList .dialogue-subtype-btn").click();
     const lengthSelect = document.querySelector('#enhancerList select[aria-label="输出字数"]');
     lengthSelect.value = "length-100";
@@ -64,6 +66,9 @@ test("有上下文生成后记录子类型和普通增强器，并提供复制�
     assert.equal(stored.months[month].subtypes["test-type.example"], 1);
     assert.equal(stored.months[month].enhancers["munger-soul"], 1);
     assert.equal(stored.months[month].enhancers["length-100"], undefined);
+    assert.equal(document.querySelector("#dialogueSubtypeList"), subtypeList);
+    assert.equal(document.querySelector("#dialogueSubtypeList button"), subtypeButton);
+    assert.equal(document.querySelector("#dialogueSubtypeList button").textContent, "示例（20）");
     assert.equal(document.querySelector("#copyChatPackUsageBtn").hidden, false);
     document.querySelector("#copyChatPackUsageBtn").click();
     await new Promise((resolve) => setTimeout(resolve, 0));
