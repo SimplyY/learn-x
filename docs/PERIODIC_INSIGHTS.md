@@ -2,25 +2,56 @@
 
 周期洞察把本地已确认材料按目标周期和历史范围装配成 Context，调用 ChatGPT 产生候选判断，再由人工阅读、内化。它是阅读和归档层，不是 Memory、道、法、核心议题或 Flomo 的自动写入器。
 
-## v2（2026-09 起生效）
+## Context 装配（schemaVersion 2）
 
-- `00_config/periodic-insights.json` 升级到 schemaVersion 2：默认材料类型收敛为 `life-core`、`target-journal`、`history-backbone`、`flomo` 四类，替代旧 `materialTypes` 全量列表；`historicalBudgetChars` 移除，历史预算由各任务按目标类型自行声明。
-- 任务可声明 `includeTypes` 过滤参与装配的材料类型；`target-output` 恒参与，不随过滤移除。
-- 执行前新增 `snapshot_preflight`：远端快照有新版本时自动拉取，拉取失败或快照过期时显式告警，不阻塞运行；`run-periodic-insight.mjs` 已接入。
-- 新增 `sync-life-core.mjs`：每周经 `lark-cli docs +fetch` 把飞书 Wiki 的「人生核心议题」同步为本地镜像 `01_core/道/人生核心议题.md`，并保持其作为 `life-core` 材料参与周期洞察。
+配置在 `00_config/periodic-insights.json`，`contextPolicies` 声明 `defaultRange`、`maxContextChars`（100,000）、`maxPromptChars`（120,000）、`timezone` 和 `defaultMaterialTypes`。材料分五类，`target-output` 恒参与且不可关闭，其余四类可按任务或界面勾选关闭：
 
-## v1 历史基线（schemaVersion 1）
+| 类型 | 来源 | 说明 |
+| --- | --- | --- |
+| `target-output` | `04_output/monthly/YYYY-MM.md` 或 `04_output/weekly/YYYY-Www.md`（兼容 `2026-Ww`） | 唯一洞察对象，人工确认后的 Output；`isSubstantive`（≥120 字且非占位）才合格 |
+| `life-core` | `01_core/道/人生核心议题.md` | 飞书《人生核心议题》的本地镜像，长期背景，不受历史范围约束；带同步状态 |
+| `target-journal` | `03_input/weekly/<id>/weekly.md` | 周目标取对应周记；月目标优先 `_dist/monthly/<id>/input.json` 的 `selection.weeklyPaths`，缺失时按日期相交回退 |
+| `history-backbone` | `01_core/memory/YYYY-QN.memory.md`、`03_input/monthly/*/monthly-journal.md`、周记 | 历史骨架，按周期逐月补位，只取日期标题切片 |
+| `flomo` | `03_input/{weekly,weekly-history,monthly}/*/flomo.md` | memo 级精选，见下节过滤规则 |
 
-- 本地 Chat Pack 新增私有「洞察」一级大类：芒格之魂与其余五个子类型均可运行。
-- 五个独立子类型 Prompt 已纳入 Prompt Governance，飞书文档是人工正文真源，本地 Markdown 是经哈希校验的运行副本。
-- 手动和自动入口共用 `00_config/periodic-insights.json` 与 Context Builder。
-- 默认历史范围为最近一年；芒格之魂目标月优先、缺失时回退最近完整周，其他任务按配置声明的目标类型选择，无合格对象则跳过。
-- Context 固定白名单为目标 Output、同周期 Process Pack、范围内已确认 Output 的关键章节和相交季度 Memory；不重复读取 `03_input/`。
-- 本地状态和 Manifest 位于被 Git 忽略的 `04_output/_dist/periodic-insights/`。
+### 历史骨架优先级
 
-## 边界与恢复
+每个历史周期只取一层，不重复加入：
 
-目标周期（例如 `2026-08`）只决定洞察对象；历史范围只提供背景。Context 不超过 100,000 字符，最终 Bridge Prompt 不超过 120,000 字符，超限失败关闭。Manifest 逐项记录纳入和排除原因；同一目标由本地运行锁串行。`preview → submitted → generated → archive_pending → completed` 的状态保存哈希、Bridge runId、会话 URL、飞书节点和失败原因；提交不确定时不得自动重发。
+1. 月级 Memory 段（`## Monthly｜YYYY-MM`）存在 → 该月只用它；与其相交的周 Memory 段（`## 2026-Www`）标记 `superseded-by-month-memory` 排除，对应周记也不再兜底。
+2. 无月级 → 用该月的周级 Memory 段。
+3. 无 Memory → 用 `03_input/monthly/YYYY-M/monthly-journal.md`（目录月份不补零）。
+4. 无月记 → 用该月相交且已结束的周记（跨月去重，同一周只加入一次）。
+5. 全缺 → 记 `history-gap` 排除项。
+
+只按日期标题切片，不读无关章节；未注明日期的 `候选观察池` 段落记 `undated-candidate-pool` 排除；`## 2026-21` 简写周段自动补零；与目标周期重叠或晚于目标的内容一律 `overlaps-target` / `after-target` 排除，杜绝未来泄漏。非 `YYYY-QN.memory.md` 命名的 Memory 文件记 `invalid-period`。
+
+### Flomo 过滤
+
+- 标题格式：`## YYYY-MM-DD HH:MM(:SS)`、`# Flomo` 容器下的同格式标题，以及 `## YYYY-MM-DD` + 连续 `### HH:MM:SS`（月度导入）。
+- 清洗来源 URL、附件、图片行；按 memo 创建时间（`policy.timezone`）判定归属。
+- 排除：`#learn-x/` 反向同步标签、`#ai洞察`（含前缀）、`#不洞察`、`#不回顾`，以及 `Learn-X 周记｜` 等生成标题开头的 memo；正文仅提到 Learn-X 不受影响。
+- 去重：全局按（创建时间 + 规范化正文）去重，后见者记 `duplicate-of:<文件>`。
+- 取材：近 6 个自然月（以目标周期起始月为锚）全量；更早仅保留高信号标签（`回顾`、`需回顾`、`常用`、`自我认知`、`重大决策`、`规划`、`第一性原理`、`语音日记`、`旅行` 等前缀，`写作/文章`、`记录/思考` 精确，或标签含「问题」），其余 `older-low-signal` 排除。
+- 诗歌：`#写诗` 且清洗后 ≤300 字，进入第一优先级。
+
+### 预算与组装
+
+预算顺序：目标 Output（强制，保留）→ 人生核心议题 → 目标周记 → 有效诗歌 → 历史骨架（近→远）→ 近 6 个月 Flomo（新→旧）→ 更早高信号 Flomo（手动标签优先）。所有材料按完整 memo、Memory 段或文件加入，不从中间截断；放不下的整项记 `context-budget` 排除。`target-output` 自身超过 100,000 字符时整个构建失败关闭（`Context 超过 N 字符上限`）。
+
+组装顺序固定：人生核心议题 → 目标输出 → 目标周记 → 历史骨架 → Flomo（同文件 memo 聚合为一个块）。
+
+## Manifest
+
+`buildInsightContext` 返回 `manifest`（schemaVersion 2）：`taskId`、`target`、`range`、`budget`、`availableTypes`、`selectedTypes`、`chars`、`included`（路径、类型、tier、项数、字符、日期区间、`life-core` 的同步状态）、`excluded`（逐项原因聚合）和 `internal.flomo`（memo 级决策证据）。预览、生成和归档产物都带同一 Manifest；`04_output/_dist/periodic-insights/` 本地状态被 Git 忽略。
+
+## 目标与状态机
+
+目标周期（例如 `2026-08`）只决定洞察对象；历史范围只提供背景。最终 Bridge Prompt 不超过 120,000 字符，超限失败关闭。同一目标由本地运行锁串行。`preview → submitted → generated → archive_pending → completed` 的状态保存哈希、Bridge runId、会话 URL、飞书节点和失败原因；提交不确定时不得自动重发。
+
+执行前 `snapshot_preflight` 校验受治理 Prompt 快照：远端有新版本自动拉取，offline 或拉取被拒时显式告警、继续用本地副本，不静默。
+
+## 飞书归档与恢复
 
 飞书知识库固定为独立私有空间 `Learn-X 周期洞察`，按年份和单篇文档归档，幂等键为 `taskId + targetKind + targetId`。写入后必须读回标题、运行键、实质正文和规范化哈希。失败时保留节点并续跑，不删除、不新建副本。
 

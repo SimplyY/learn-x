@@ -174,7 +174,7 @@ export async function buildInsightContext({ repoRoot, taskId, target = "auto", r
   let total = charCount(header) + renderUnit(targetUnit).length + 7;
   if (total > budget.contextChars) throw new Error(`Context 超过 ${budget.contextChars} 字符上限`);
   const chargedFiles = new Set();
-  for (const unit of units.filter((item) => item !== targetUnit).sort((a, b) => a.phase - b.phase || a.order - b.order)) {
+  for (const unit of units.filter((item) => item !== targetUnit).sort((a, b) => a.tier - b.tier || a.order - b.order)) {
     let size = renderUnit(unit).length + (unit.type === "flomo" ? 2 : 7);
     if (unit.type === "flomo" && !chargedFiles.has(unit.path)) { chargedFiles.add(unit.path); size += `## Flomo · ${unit.path}\n\n`.length + 7; }
     if (total + size <= budget.contextChars) { total += size; chosen.push(unit); }
@@ -286,7 +286,9 @@ async function collectHistoryBackbone({ repoRoot, resolved, historyRange, tz, ta
       const text = segment.content.trim();
       // 未注明日期的候选观察池不作为历史骨架，但保留排除证据。
       if (segment.kind === "undated") { if (text) excluded.push({ path: memory.path, role: "history-backbone", kind: "memory-undated", chars: text.length, reason: "undated-candidate-pool" }); continue; }
-      const basis = { path: memory.path, heading: segment.heading, kind: segment.kind, id: segment.id, period: segment.kind === "month" ? parseMonth(segment.id) : parseIsoWeek(segment.id), content: segment.content };
+      let period;
+      try { period = segment.kind === "month" ? parseMonth(segment.id) : parseIsoWeek(segment.id); } catch { excluded.push({ path: memory.path, role: "history-backbone", kind: "memory-invalid", chars: text.length, dateBasis: segment.id, reason: "invalid-period" }); continue; }
+      const basis = { path: memory.path, heading: segment.heading, kind: segment.kind, id: segment.id, period, content: segment.content };
       if (overlapsTarget(basis.period)) excluded.push({ path: memory.path, role: "history-backbone", kind: "memory-overlap", chars: text.length, dateBasis: segment.id, reason: "overlaps-target" });
       else if (basis.period.end > resolved.start) excluded.push({ path: memory.path, role: "history-backbone", kind: "memory-overlap", chars: text.length, dateBasis: segment.id, reason: "after-target" });
       else if (basis.period.end <= historyRange.start || basis.period.start > historyRange.end) excluded.push({ path: memory.path, role: "history-backbone", kind: basis.kind === "month" ? "memory-month" : "memory-week", chars: text.length, dateBasis: segment.id, reason: "outside-range" });
@@ -294,6 +296,7 @@ async function collectHistoryBackbone({ repoRoot, resolved, historyRange, tz, ta
       else candidates.push(basis);
     }
   }
+  const memoryWeekIds = new Set(candidates.filter((item) => item.kind === "week").map((item) => item.id));
   const monthByStart = new Map();
   // 月级 Memory 覆盖与其相交的周 Memory（按周期相交判断，而非仅按起始月分组）。
   const monthMemoryPeriods = candidates.filter((item) => item.kind === "month").map((item) => item.period);
@@ -308,10 +311,14 @@ async function collectHistoryBackbone({ repoRoot, resolved, historyRange, tz, ta
     if (!monthByStart.has(monthId)) monthByStart.set(monthId, []);
     monthByStart.get(monthId).push(candidate);
   }
-  const memoryWeekIds = new Set(backbone.filter((item) => item.kind === "week").map((item) => item.id));
   const monthDirsWithJournal = new Set();
   for (const monthId of inventory.months) if (await readOptional(path.join(repoRoot, "03_input/monthly", unpaddedMonthDir(monthId), "monthly-journal.md")) !== null) monthDirsWithJournal.add(monthId);
-  const weekDirMonths = new Set([...inventory.weeks.keys()].map((weekId) => monthIdOfDateStr(zonedDateStr(parseIsoWeek(weekId).start, tz))));
+  const weekDirMonths = new Set();
+  for (const weekId of inventory.weeks.keys()) {
+    let week;
+    try { week = parseIsoWeek(weekId); } catch { excluded.push({ path: inventory.weeks.get(weekId), role: "history-backbone", kind: "weekly-directory", dateBasis: weekId, reason: "invalid-period" }); continue; }
+    weekDirMonths.add(monthIdOfDateStr(zonedDateStr(week.start, tz)));
+  }
   const rangeStartMonth = monthIdOfDateStr(zonedDateStr(historyRange.start, tz));
   const potential = [...new Set([...monthByStart.keys(), ...monthDirsWithJournal, ...weekDirMonths])].filter((monthId) => monthId >= rangeStartMonth && monthId <= targetStartMonth).sort();
   let order = 100;
@@ -397,12 +404,14 @@ async function collectFlomo({ repoRoot, historyRange, tz, targetStartMonth, inve
       const tags = extractFlomoTags(cleaned);
       const monthId = monthIdOfDateStr(memo.dateStr);
       const isPoem = tags.includes("写诗") && cleaned.length <= 300;
-      let tier; let phase; let kind; let order;
-      if (isPoem) { tier = 1; phase = 0; kind = "flomo-poem"; order = 1000 + (Number.MAX_SAFE_INTEGER / 2 - created.getTime()); }
-      else if (monthId >= recentFrom && monthId <= targetStartMonth) { tier = 3; phase = 4; kind = "flomo-recent"; order = -created.getTime(); }
-      else if (olderKeepReason(tags)) { const manual = tags.some((tag) => OLDER_FLOMO_TAG_PREFIXES.slice(0, 3).includes(tag.split("/")[0])); tier = 4; phase = 4; kind = "flomo-older"; order = (manual ? -1 : 1) * (Number.MAX_SAFE_INTEGER / 2 - created.getTime()); }
+      // tier + order 决定预算顺序；phase 决定组装区段（全部 Flomo 在末段）。
+      let tier; let kind; let order;
+      const newestFirst = 1e15 - created.getTime();
+      if (isPoem) { tier = 1; kind = "flomo-poem"; order = newestFirst; }
+      else if (monthId >= recentFrom && monthId <= targetStartMonth) { tier = 3; kind = "flomo-recent"; order = newestFirst; }
+      else if (olderKeepReason(tags)) { const manual = tags.some((tag) => OLDER_FLOMO_TAG_PREFIXES.slice(0, 3).includes(tag.split("/")[0])); tier = 4; kind = "flomo-older"; order = (manual ? 0 : 1e15) + newestFirst; }
       else { pushExcluded(filePath, "older-low-signal", memo, cleaned.length); record("excluded", "older-low-signal", { tags }); continue; }
-      units.push({ id: `flomo:${key}`, type: "flomo", kind, tier, phase, order, path: filePath, dateBasis: memo.dateStr, memo: { label: `${memo.dateStr} ${memo.timeStr}`.trim(), body: cleaned } });
+      units.push({ id: `flomo:${key}`, type: "flomo", kind, tier, phase: 4, order, path: filePath, dateBasis: memo.dateStr, memo: { label: `${memo.dateStr} ${memo.timeStr}`.trim(), body: cleaned } });
       record("included", null, { tier, kind, tags });
     }
   }
@@ -460,7 +469,8 @@ const FLOMO_NOISE_LINE_RE = [
   /^https?:\/\/\S+\s*$/,
   /^!\[[^\]]*\]\([^)]*\)\s*$/,
   /^<img\b/i,
-  /^(?:附件|Attachment|图片)\s*[：:]/i
+  /^(?:附件|Attachment|图片)\s*[：:]/i,
+  /^\*{0,2}(?:附件|图片)\*{0,2}$/
 ];
 export function cleanFlomoMemoBody(body) {
   return String(body || "").split(/\r?\n/).filter((line) => { const trimmed = line.trim(); return !trimmed || !FLOMO_NOISE_LINE_RE.some((pattern) => pattern.test(trimmed)); }).join("\n").replace(/\n{3,}/g, "\n\n").trim();

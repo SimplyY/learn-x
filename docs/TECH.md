@@ -24,7 +24,7 @@
 | `learn-x-question-review` | 已停用的旧周/月复盘 Skill；保留代码与未提交改动，未来周机制会独立重做。 |
 | `learn-x-monthly-question-workbench` | 月度议题工作台：确定性推荐、选择、Wiki 研究现场、提案校验、可审计回写与撤回。 |
 | `learn-x-quarterly-question-overview` | 季度核心议题总览：读取全部议题、生成 Wiki 总览、校验提案、审计回写与撤回。 |
-| `learn-x-deep-research` | 一键深度研究：创建「深度研究」Wiki 文档、注入议题上下文、维护倒序目录、组装 ChatGPT 上下文包；对 Base 只读。 |
+| `learn-x-deep-research` | 一键深度研究：创建 `深度研究-YYYY` 年目录下的 Wiki 文档、注入议题上下文、维护年度索引、组装 ChatGPT 上下文包；对 Base 只读。 |
 | `learn-x-periodic-insight` | 按目标周期和历史范围装配 Context，调用 Bridge 生成候选洞察并可恢复归档。 |
 
 第三方 Skill 的筛选来源、固定版本和许可证归属见 `THIRD_PARTY_NOTICES.md`。项目内适配只保留与 Learn-X 边界一致的原则，不引入原仓库的 Python、LangChain、多 Agent 或外部服务依赖。
@@ -77,7 +77,7 @@ Chat Pack 编辑器只在本地桌面端显示。排序、大类增删改、子�
 - `/api/context?scene=<场景>&include=<路径>`：按文件或目录切片生成上下文包。
 - `PUT /api/chatpack/editor`：仅本地回环地址和同源页面可用，校验并保存 Chat Pack 排序、文案、推荐上下文及单个 Prompt，然后重建本地静态数据。
 - `GET/POST /api/chatpack/usage`：仅本地回环地址和同源页面可用；读取本机统计视图或以幂等事件记录当前月份的使用次数。公开 Pages 不提供该接口。
-- `GET /api/periodic-insights/context?taskId=&target=&range=&from=&to=`：仅本地回环同源请求；返回目标对象、范围、纳入/排除清单、字符数、哈希和预算化 Context。
+- `GET /api/periodic-insights/context?taskId=&target=&range=&from=&to=&includeTypes=`：仅本地回环同源请求；`includeTypes` 逗号分隔覆盖默认材料类型（`target-output` 恒参与）；返回目标对象、范围、纳入/排除清单、字符数、哈希和预算化 Context。
 - Chat Pack 在前端组装，Context 来源统一来自 `/api/context`。
 
 提示词使用基线位于 `00_config/chatpack-usage.json`，缺失时本地构建和合并均失败关闭。本地端的未合并月度记录写入被 Git 忽略的 `app/code/.local/chatpack-usage.json`；公开版只在浏览器保存自己的月度记录。`learn-x-prompt-usage` Skill 接收公开版复制的 JSON，拒绝未知 ID、非法月份、异常次数或已有基线改动，正常时只提交统计基线。

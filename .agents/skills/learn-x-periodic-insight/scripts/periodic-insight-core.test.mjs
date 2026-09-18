@@ -64,7 +64,7 @@ test("月级 Memory 存在时覆盖该月周 Memory 与月记周记", async (t) 
   const included = result.included.filter((item) => item.role === "history-backbone");
   assert.deepEqual(included.map((item) => item.kind), ["memory-month"]);
   assert.ok(result.excluded.some((item) => item.kind === "memory-week" && item.reason === "superseded-by-month-memory"));
-  assert.ok(!result.content.includes("四月月记")); assert.ok(!result.content.includes("W14 周记"));
+  assert.ok(!result.content.includes("# 四月月记")); assert.ok(!result.content.includes("# W14 周记"));
 });
 
 test("目标之后与范围之外的 Memory 不泄漏进 Context", async (t) => {
@@ -80,6 +80,38 @@ test("目标之后与范围之外的 Memory 不泄漏进 Context", async (t) => 
   assert.ok(leak); assert.match(String(leak.dateBasis), /2026-09/); assert.match(String(leak.dateBasis), /2026-W38/);
   assert.ok(!result.content.includes("九月记忆") && !result.content.includes("九月周记忆"));
   assert.ok(result.excluded.some((item) => item.path.endsWith("ChatGPT-AI记忆版.md") && item.reason === "invalid-period"));
+});
+
+test("畸形周标题与周目录按 invalid-period 排除，不再中断构建", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-periodic-invalid-")); t.after(() => rm(root, { recursive: true, force: true }));
+  await prepare(root, { files: {
+    "04_output/monthly/2026-08.md": body("Target"),
+    "01_core/memory/2026-Q2.memory.md": memoryFile([seg("2026-W99", "畸形周段"), seg("Monthly｜2026-04", "正常月记忆")]),
+    "03_input/weekly/2026-W99/weekly.md": body("畸形周目录周记"),
+    "03_input/weekly/2026-W14/weekly.md": body("W14 周记")
+  } });
+  const result = await buildInsightContext({ repoRoot: root, taskId: "munger-soul", target: "2026-08", range: "1y", now: NOW });
+  assert.ok(result.excluded.some((item) => item.kind === "memory-invalid" && item.dateBasis === "2026-W99" && item.reason === "invalid-period"));
+  assert.ok(result.excluded.some((item) => item.kind === "weekly-directory" && item.dateBasis === "2026-W99" && item.reason === "invalid-period"));
+  assert.ok(result.included.some((item) => item.kind === "memory-month" && item.dateBasis === "2026-04"));
+  assert.ok(result.included.some((item) => item.kind === "weekly-journal" && item.dateBasis === "2026-W14"));
+  assert.ok(!result.content.includes("畸形周段") && !result.content.includes("畸形周目录周记"));
+});
+
+test("目标月的月记与周记不进历史骨架，范围起点边界的 Flomo 保留", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-periodic-boundary-")); t.after(() => rm(root, { recursive: true, force: true }));
+  await prepare(root, { files: {
+    "04_output/monthly/2026-08.md": body("Target"),
+    "03_input/monthly/2026-8/monthly-journal.md": body("目标月月记"),
+    "03_input/weekly/2026-W31/weekly.md": body("目标月周记"),
+    "03_input/weekly/2026-W31/flomo.md": "## 2026-08-01 00:00\n\n范围起点当天的记录 #日记"
+  } });
+  const result = await buildInsightContext({ repoRoot: root, taskId: "munger-soul", target: "2026-08", range: "1y", now: NOW });
+  const backbone = result.included.filter((item) => item.role === "history-backbone");
+  assert.ok(!backbone.some((item) => item.kind === "monthly-journal"));
+  assert.ok(!backbone.some((item) => item.kind === "weekly-journal"));
+  assert.ok(result.content.includes("范围起点当天的记录"));
+  assert.ok(!result.manifest.internal.flomo.some((item) => item.reason === "outside-range" && item.created?.startsWith("2026-08-01")));
 });
 
 test("月目标优先 input.json.weeklyPaths，缺失回退日期相交周", async (t) => {
@@ -120,12 +152,12 @@ test("Flomo 过滤：Learn-X 标签命中但正文提及放行，AI 与否定标
 test("Flomo 诗歌 300 字边界、近 6 个月全量与更早低信号过滤、全局去重", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-periodic-flomo-")); t.after(() => rm(root, { recursive: true, force: true }));
   const poemShort = `## 2026-08-01 09:30\n\n${"诗".repeat(295)} #写诗`;
-  const poemLong = `## 2026-08-02 09:30\n\n${"诗".repeat(296)} #写诗`;
+  const poemLong = `## 2026-08-02 09:30\n\n${"诗".repeat(297)} #写诗`;
   const dedupMemo = "## 2026-08-03 10:00\n\n这是需要全局去重的重复内容。";
   await prepare(root, { files: {
     "04_output/monthly/2026-08.md": body("Target"),
     "03_input/weekly/2026-W31/flomo.md": [poemShort, poemLong, dedupMemo].join("\n\n"),
-    "03_input/monthly/2026-8/flomo.md": `${dedupMemo}\n\n## 2026-05-01 08:00\n\n没有高信号标签的旧内容`,
+    "03_input/monthly/2026-8/flomo.md": `${dedupMemo}\n\n## 2026-02-01 08:00\n\n没有高信号标签的旧内容`,
     "03_input/monthly/2026-1/flomo.md": `## 2026-01-05 08:00\n\n${text(30, "旧事")} #回顾/一月`
   } });
   const result = await buildInsightContext({ repoRoot: root, taskId: "munger-soul", target: "2026-08", range: "1y", now: NOW });
@@ -134,11 +166,13 @@ test("Flomo 诗歌 300 字边界、近 6 个月全量与更早低信号过滤、
   assert.equal(poems.length, 1);
   assert.ok(included.some((item) => item.tier === 3 && item.created.startsWith("2026-08-02")));
   const weeklyFile = "03_input/weekly/2026-W31/flomo.md";
-  assert.equal(included.filter((item) => item.path === weeklyFile && item.created.startsWith("2026-08-03")).length, 1);
+  assert.equal(included.filter((item) => item.path === weeklyFile).length, 2);
+  assert.ok(!included.some((item) => item.path === weeklyFile && item.created.startsWith("2026-08-03")));
+  assert.ok(result.content.indexOf("## 目标输出") < result.content.indexOf(`## Flomo · ${weeklyFile}`));
   assert.ok(included.some((item) => item.tier === 4 && item.created.startsWith("2026-01-05")));
   const excluded = result.manifest.internal.flomo.filter((item) => item.decision === "excluded");
   assert.ok(excluded.some((item) => item.reason.startsWith("duplicate-of:")));
-  assert.ok(excluded.some((item) => item.reason === "older-low-signal" && item.created.startsWith("2026-05-01")));
+  assert.ok(excluded.some((item) => item.reason === "older-low-signal" && item.created.startsWith("2026-02-01")));
 });
 
 test("includeTypes：默认四类、锁定目标输出、非法与重复值失败、禁用留痕", async (t) => {

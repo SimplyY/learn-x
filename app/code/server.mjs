@@ -181,7 +181,8 @@ async function handlePeriodicInsightContext(req, res, url) {
       target: url.searchParams.get("target") || "auto",
       range: url.searchParams.get("range") || undefined,
       from: url.searchParams.get("from") || undefined,
-      to: url.searchParams.get("to") || undefined
+      to: url.searchParams.get("to") || undefined,
+      includeTypes: url.searchParams.get("includeTypes") || undefined
     });
     sendJson(res, 200, payload);
   } catch (error) { sendJson(res, 400, { error: error.message || "Unable to build periodic insight context" }); }

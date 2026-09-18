@@ -16,6 +16,7 @@ const sensitivePathPatterns = [
   { name: "private core memory", pattern: /^01_core\/memory\/(?!\.gitkeep$)/ },
   { name: "private ChatGPT self-understanding", pattern: /^01_core\/ChatGPT-自我阅读版\.md$/ },
   { name: "private flomo digest", pattern: /^01_core\/\u9053\/flomo-top\.md$/ },
+  { name: "private life-core mirror", pattern: /^01_core\/\u9053\/\u4eba\u751f\u6838\u5fc3\u8bae\u9898\.md$/ },
   { name: "private personal image", pattern: /^01_core\/good-images\/me\// },
   { name: "private generated output", pattern: /^04_output\/(?!README\.md$|usage\.md$|(monthly|weekly|yearly)\/\.gitkeep$)/ },
   { name: "private legacy output", pattern: /^output\// },

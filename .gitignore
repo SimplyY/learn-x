@@ -53,6 +53,7 @@ AGENTS.md.backup-*
 !01_core/memory-archive/.gitkeep
 01_core/ChatGPT-自我阅读版.md
 01_core/道/flomo-top.md
+01_core/道/人生核心议题.md
 01_core/good-images/me/*
 .agents/skills/build-bot-log/scripts/build-bot-memory.json
 .agents/skills/long-article-research/scripts/research-memory.json

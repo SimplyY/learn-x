@@ -19,6 +19,8 @@ npm run insight:periodic -- setup-wiki --confirm
 
 Context 默认最近一年，目标对象与历史范围分开；芒格之魂目标月没有实质 Monthly Output 时使用最近完整周，其他任务按配置声明的目标类型选择，仍没有则 `skipped`。默认材料类型为 `life-core`、`target-journal`、`history-backbone`、`flomo`，任务可用 `includeTypes` 过滤，`target-output` 恒参与。Context 上限 100,000 字符，Bridge Prompt 上限 120,000 字符。清单写入 `04_output/_dist/periodic-insights/` 并列出排除原因。
 
+装配规则（来源优先级、历史骨架去重、Flomo 过滤、预算顺序、Manifest 结构、失败恢复）以 `docs/PERIODIC_INSIGHTS.md` 为准；`life-core` 依赖每周 `npm run sync:life-core` 维护 `01_core/道/人生核心议题.md` 镜像，镜像缺失或 stale 时 Context 仍可运行，但 Manifest 会显式标记。
+
 同一目标由本地运行锁串行，锁异常时失败关闭；`submitted`、`needs_review` 或结果归属不确定时只读状态，不重发。Bridge 只走已登录 Ego Lite；飞书只使用用户身份，写入后必须读回；洞察是候选阅读材料，不自动修改 Memory、道、法、核心议题或 Flomo。
 
 CLI 仅将 `preview`、`skipped`、`completed` 作为成功退出；`needs_review` 和 `archive_pending` 返回非零，便于自动化发现未完成状态。

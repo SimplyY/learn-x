@@ -70,6 +70,8 @@ const PERIOD_OUTPUT_SUBTYPE_IDS = new Set([
 ]);
 const PUBLIC_PRIVATE_FILES = new Set([
   "01_core/ChatGPT-自我阅读版.md",
+  "01_core/道/人生核心议题.md",
+  "01_core/道/flomo-top.md",
   "02_prompts/chatpack/reflective-decision/weekly-output.md",
   "02_prompts/chatpack/reflective-decision/monthly-output.md",
   "02_prompts/chatpack/reflective-decision/yearly-output.md",

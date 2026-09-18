@@ -67,6 +67,7 @@ export const els = {
   insightTargetSelect: document.querySelector("#insightTargetSelect"),
   insightRangeSelect: document.querySelector("#insightRangeSelect"),
   insightCustomRange: document.querySelector("#insightCustomRange"),
+  insightMaterialTypes: document.querySelector("#insightMaterialTypes"),
   insightFromDate: document.querySelector("#insightFromDate"),
   insightToDate: document.querySelector("#insightToDate"),
   insightContextSummary: document.querySelector("#insightContextSummary"),

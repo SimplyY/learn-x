@@ -411,6 +411,7 @@ function bindEvents() {
     loadPeriodicInsightContext().catch((error) => { els.learningStatus.textContent = `洞察 Context 失败：${error.message}`; });
   });
   for (const input of [els.insightFromDate, els.insightToDate]) input?.addEventListener("change", () => loadPeriodicInsightContext().catch((error) => { els.learningStatus.textContent = `洞察 Context 失败：${error.message}`; }));
+  els.insightMaterialTypes?.addEventListener("change", () => loadPeriodicInsightContext().catch((error) => { els.learningStatus.textContent = `洞察 Context 失败：${error.message}`; }));
 
   els.currentQuestion.addEventListener("input", () => {
     state.currentQuestionTouched = true;
@@ -887,6 +888,9 @@ async function loadPeriodicInsightContext() {
   const taskId = activeDialogueSubtype()?.id?.replace(/^insight\./, "") || "munger-soul";
   const params = new URLSearchParams({ taskId, target: state.periodicInsight.target || "auto", range: state.periodicInsight.range || "1y" });
   if (state.periodicInsight.range === "custom") { if (els.insightFromDate.value) params.set("from", els.insightFromDate.value); if (els.insightToDate.value) params.set("to", els.insightToDate.value); }
+  const checkedTypes = [...(els.insightMaterialTypes?.querySelectorAll(".insight-type-toggle:checked") || [])].map((input) => input.value);
+  const allTypesSelected = checkedTypes.length === els.insightMaterialTypes?.querySelectorAll(".insight-type-toggle").length;
+  if (els.insightMaterialTypes && !allTypesSelected) params.set("includeTypes", ["target-output", ...checkedTypes].join(","));
   els.insightContextSummary.textContent = "正在按日期和预算装配 Context…";
   const response = await fetch(`${periodicInsightContextApi}?${params}`);
   const payload = await response.json();
@@ -897,23 +901,38 @@ async function loadPeriodicInsightContext() {
   const budget = payload.budget || {};
   state.periodicInsight.contextStats = { chars: payload.chars, budget };
   els.insightContextSummary.textContent = `目标 ${payload.target.id} · 历史 ${payload.range.id} · Context ${formatNumber(payload.chars)}/${formatNumber(budget.contextChars || 0)} 字符 · 纳入 ${payload.included.length} 项 · 排除 ${payload.excluded.length} 项`;
-  els.insightManifestList.textContent = [
-    "文件来源类型当前按固定规则装配，不在本次界面中切换。",
-    `纳入（${payload.included.length}）`,
-    ...payload.included.map((item) => `- [${periodicMaterialTypeLabel(item.role)}] ${item.path}${item.section ? ` · ${item.section}` : ""} · ${formatNumber(item.chars)} 字 · ${item.dateBasis || "日期未标注"}`),
-    "",
-    `排除（${payload.excluded.length}）`,
-    ...payload.excluded.map((item) => `- [${periodicMaterialTypeLabel(item.role)}] ${item.path || "（未定位材料）"}${item.section ? ` · ${item.section}` : ""} · ${item.reason || "未说明原因"}`)
-  ].join("\n");
+  els.insightManifestList.textContent = renderPeriodicManifest(payload);
   els.insightManifestDetails.hidden = false;
   els.learningStatus.textContent = "周期洞察 Context 已就绪。";
   renderChatPackPreview();
   return payload;
 }
 
+function renderPeriodicManifest(payload) {
+  const lines = [`材料类型：${(payload.selectedTypes || []).map((type) => periodicMaterialTypeLabel(type)).join("、")}`];
+  if ((payload.availableTypes || []).length !== (payload.selectedTypes || []).length) {
+    const disabled = (payload.availableTypes || []).filter((type) => type !== "target-output" && !payload.selectedTypes.includes(type));
+    if (disabled.length) lines.push(`已取消勾选：${disabled.map((type) => periodicMaterialTypeLabel(type)).join("、")}`);
+  }
+  lines.push("", `纳入（${payload.included.length}）`);
+  for (const item of payload.included) {
+    lines.push(`- [${periodicMaterialTypeLabel(item.role)}] ${item.path} · ${formatNumber(item.chars)} 字${item.items > 1 ? ` · ${item.items} 项` : ""}${item.dateRange || item.dateBasis ? ` · ${item.dateRange || item.dateBasis}` : ""}${item.sync ? ` · 同步 ${item.sync.status}${item.sync.syncedAt ? `（${item.sync.syncedAt}）` : ""}` : ""}`);
+  }
+  lines.push("", `排除（${payload.excluded.length}）`);
+  for (const item of payload.excluded) {
+    const reason = item.reason === "user-disabled" ? "界面取消勾选" : item.reason || "未说明原因";
+    lines.push(`- [${periodicMaterialTypeLabel(item.role)}] ${item.path || "（未定位材料）"}${item.items > 1 ? ` · ${item.items} 项` : ""}${item.chars ? ` · ${formatNumber(item.chars)} 字` : ""}${item.dateBasis ? ` · ${item.dateBasis}` : ""} · ${reason}`);
+  }
+  return lines.join("\n");
+}
+
 function periodicMaterialTypeLabel(role) {
   return {
     "target-output": "目标周期输出",
+    "life-core": "人生核心议题",
+    "target-journal": "目标周期周记",
+    "history-backbone": "历史骨架",
+    "flomo": "Flomo",
     "process-pack": "Process Pack",
     "confirmed-output": "历史已确认输出",
     "quarterly-memory": "季度 Memory"
