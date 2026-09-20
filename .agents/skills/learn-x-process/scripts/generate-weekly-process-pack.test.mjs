@@ -1,6 +1,22 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildInputAuditRows, compressWeeklyProcessItems, renderInputAuditTable } from "./generate-weekly-process-pack.mjs";
+import { buildInputAuditRows, compressWeeklyProcessItems, renderInputAuditTable, renderProcessPack } from "./generate-weekly-process-pack.mjs";
+
+test("weekly Process Pack 明确把独立 Action Feedback 一并交给 AI Chat", () => {
+  const pack = renderProcessPack({
+    week: "2026-W37",
+    range: { start: "2026-09-14T00:00:00.000Z", end: "2026-09-20T23:59:59.999Z" },
+    selection: { path: "03_input/weekly/2026-W37", mode: "iso" },
+    generatedAt: "2026-09-19T00:00:00.000Z",
+    stats: { fileCount: 0, itemCount: 0, uniqueItemCount: 0, duplicateCount: 0, excludedFileCount: 0 },
+    sourceStatuses: {},
+    files: [],
+    excludedFiles: []
+  }, [], [], [], { sourceCount: 0, files: [] });
+
+  assert.match(pack, /与同目录 `action-feedback\.md` 一并交给 AI Chat/);
+  assert.doesNotMatch(pack, /常规只把本文件交给 AI Chat/);
+});
 
 test("compresses Voice-X once at Process Pack time and reports the overall ratio", () => {
   const source = [

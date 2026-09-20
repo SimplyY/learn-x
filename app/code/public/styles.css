@@ -442,6 +442,7 @@ button:disabled {
   display: grid;
   grid-template-columns: minmax(420px, 0.95fr) minmax(420px, 1.05fr);
   gap: 14px;
+  align-items: start;
 }
 
 .control-section,
@@ -506,8 +507,52 @@ button:disabled {
 }
 
 .source-box {
+  display: contents;
+}
+
+.context-section-title {
+  order: 1;
+  align-items: flex-start;
+  min-height: 46px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfcff;
+}
+
+.context-heading {
   display: grid;
-  gap: 8px;
+  gap: 3px;
+  min-width: 0;
+}
+
+.context-heading h4 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.context-heading em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+#learningStatus {
+  order: 2;
+  min-height: 32px;
+  margin: 0;
+  border: 1px solid #d7e3ff;
+  border-radius: 6px;
+  padding: 7px 10px;
+  background: #f4f7ff;
+  color: var(--accent-dark);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .dialogue-type-box {
@@ -586,6 +631,12 @@ button:disabled {
 
 .section-title.compact {
   justify-content: flex-start;
+}
+
+.prompt-section .section-title.compact > span {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 650;
 }
 
 .section-title button {
@@ -1037,9 +1088,11 @@ button:disabled {
 }
 
 .source-checklist {
+  order: 3;
   display: grid;
   gap: 2px;
-  max-height: 460px;
+  height: auto;
+  max-height: clamp(460px, calc(100dvh - 360px), 640px);
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -1171,6 +1224,7 @@ button:disabled {
 }
 
 .progress-track {
+  order: 4;
   height: 8px;
   overflow: hidden;
   border-radius: 999px;
@@ -1500,6 +1554,27 @@ button:disabled {
   .prompt-section {
     order: -1;
   }
+
+  .source-checklist {
+    height: auto;
+    max-height: 460px;
+  }
+}
+
+@media (min-width: 1081px) and (max-width: 1120px) {
+  .context-section-title {
+    flex-wrap: wrap;
+  }
+
+  .context-section-title .section-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .context-section-title .section-actions button {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
 }
 
 @media (max-width: 640px) {
@@ -1587,6 +1662,7 @@ button:disabled {
   }
 
   .source-checklist {
+    height: auto;
     max-height: 320px;
   }
 

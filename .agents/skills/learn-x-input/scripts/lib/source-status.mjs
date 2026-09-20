@@ -6,12 +6,13 @@ export const SOURCE_STATUS_FILE = "_source-status.json";
 export const SOURCE_STATUSES = new Set(["ready", "empty", "failed", "unavailable"]);
 export const SOURCE_NAMES = new Set([
   "daily", "flomo", "weread", "calendar", "voice", "coach", "wisdom",
-  "wechat", "build", "build-bot", "health"
+  "wechat", "build", "build-bot", "health", "open-actions"
 ]);
 export const SOURCE_FILES = {
   daily: "daily.md", flomo: "flomo.md", weread: "weread.md", calendar: "calendar.md",
   voice: "voice.md", coach: "coach.md", wisdom: "wisdom.md", wechat: "wechat.md",
-  build: "build.md", "build-bot": "build-bot.md", health: "health.md"
+  build: "build.md", "build-bot": "build-bot.md", health: "health.md",
+  "open-actions": "open-actions.md"
 };
 
 function assertWeek(week) {

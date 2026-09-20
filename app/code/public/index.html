@@ -88,8 +88,11 @@
                 </label>
 
                 <div id="contextControls" class="source-box">
-                  <div class="section-title">
-                    <span>上下文编排 <em id="selectedContextSummary">已选 0 个文件 · 总计约 0 字</em></span>
+                  <div class="section-title context-section-title">
+                    <div class="context-heading">
+                      <h4>上下文编排</h4>
+                      <em id="selectedContextSummary">已选 0 个文件 · 总计约 0 字</em>
+                    </div>
                     <div class="section-actions">
                       <button id="selectAllSourcesBtn" type="button">全选</button>
                       <button id="invertSourcesBtn" type="button">全反选</button>
@@ -103,7 +106,7 @@
                 <div class="progress-track" aria-label="生成进度">
                   <span id="progressBar"></span>
                 </div>
-                <p id="learningStatus" class="status">选择场景后生成学习上下文。</p>
+                <p id="learningStatus" class="status" role="status" aria-live="polite">选择场景后生成学习上下文。</p>
               </section>
 
               <section class="prompt-section">

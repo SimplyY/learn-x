@@ -32,6 +32,9 @@ test("extracts only substantive system-confirmed weekly output sections", () => 
   assert.deepEqual(sections.map((entry) => entry.source), ["weekly-core"]);
   assert.match(sections[0].text, /核心判断/);
   assert.doesNotMatch(sections[0].text, /芒格|其它/);
+  const renumbered = extractWeeklyConfirmedSections("# 周报\n\n## 11. 全文核心重点纪要\n\n1. 新编号判断\n\n## 12. 芒格之魂的洞察\n\n1. 新洞察\n\n## 13. 其它\n\n不读取");
+  assert.deepEqual(renumbered.map((entry) => entry.source), ["weekly-core", "weekly-munger"]);
+  assert.match(renumbered[1].text, /新洞察/);
 });
 
 test("reviews the monthly aggregate by type instead of individual file size", () => {

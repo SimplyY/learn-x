@@ -31,7 +31,7 @@ npm run memory:compress -- --as-of 2026-08-30
 2. 月度输入目录使用 `03_input/monthly/YYYY-M/`，例如 `03_input/monthly/2026-6/`。不要按文件 mtime 推断范围。
 3. 月度报告流程只生成 `_dist` 和 `04_output/monthly/YYYY-MM.md` 最小壳；不要在自动化中代写 Monthly Output 正文。
 4. 不读取、打印或保存凭据。不修改 `README.md`、`01_core/道/`、`01_core/法/` 或无关长期资产；本流程专用的两个 ChatGPT 导出提示词和两个本地私有导出文件除外。
-5. 月度原始输入同时来自 `03_input/weekly/YYYY-Www/` 和 `03_input/monthly/YYYY-M/`；后者保存月记及其他月度独有来源。读取周目录时复用 `_source-status.json`：只有 `ready` 自动来源进入月度输入，`empty/failed/unavailable` 的旧文件保留但排除；缺失侧车兼容历史周，非法侧车失败关闭。另读取各周 `04_output/weekly/YYYY-WW.md` 中系统确认的标题 10「全文核心重点纪要」和标题 11「芒格之魂的洞察」，空项或 `todo` 跳过；不得读取其它周报正文代替原始输入。
+5. 月度原始输入同时来自 `03_input/weekly/YYYY-Www/` 和 `03_input/monthly/YYYY-M/`；后者保存月记及其他月度独有来源。读取周目录时复用 `_source-status.json`：只有 `ready` 自动来源进入月度输入，`empty/failed/unavailable` 的旧文件保留但排除；缺失侧车兼容历史周，非法侧车失败关闭。另读取各周 `04_output/weekly/YYYY-WW.md` 中系统确认的标题 11「全文核心重点纪要」和标题 12「芒格之魂的洞察」，空项或 `todo` 跳过；不得读取其它周报正文代替原始输入。
    - `ai.generated.md` 是中间生成物，不是确认后的 Input；保留来源状态和排除原因，但不得作为有效材料进入月度 `input.json`、Process Pack 或 Chat Pack。
    - 月份首尾仅部分落入目标月的 ISO 周是边界周（例如 2026-08 的 W31、W36）。边界周缺失或未确认只在汇报正文中作醒目提示，不写入飞书月记，不要求补齐，也不构成阶段门槛；月内完整周仍按确认规则处理。
    - 月度 Voice 不整包搬运：每月一律由 Codex 只提炼最核心事件，优先保留原文约 5%–10% 的可核查核心内容，最终累计不超过 10,000 字符。

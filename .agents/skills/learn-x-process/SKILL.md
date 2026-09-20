@@ -53,6 +53,9 @@ Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 刷新 YW Next �
 - 语义压缩可以合并重复判断，但必须保留重要、反复出现且承载证据或行动的具象锚点，例如 `出门`、`读书会`、`写诗`、`运动`、人物、地点、项目和方法名；抽象标签不能替代全部具体词。
 - 压缩候选必须人工修改并显式 `--promote ... --confirm` 后才可晋级；定时任务不得替换正式 Memory。详细规则见 `resources/memory-compression-rules.md`。
 - Weekly Output 默认不固定输出图谱、第一性原理、Prompt、Skill、写作或 Demo 候选；必要时才可在做中学复盘或下周行动中简短提及。
+- 可以运行 `npm run action:feedback -- sync --week YYYY-Www`，读取独立的 `04_output/_dist/weekly/YYYY-Www/action-feedback.md`，把已勾选三列表格行按「目标周 + 短期核心议题 + 行动」幂等写入 Base 事件表，并读回校验。
+- `collect` 仅保留旧版 `open-actions.md` 兼容能力，不再是默认周流程；Base 的 `continue/done/stopped` 不驱动新报告。
+- 已有旧 Base 需要新增事件字段时，显式运行 `npm run action:feedback -- migrate`；周流程不自动改 Base 结构。
 - 可以维护 `03_input/README.md`、`04_output/README.md` 和 `03_input/weekly/00_template/` 下划线模板。
 - 不要自动修改 `README.md`、`01_core/道/`、`01_core/法/`、`02_prompts/` 或 `.agents/skills/` 的正式资产。
 - 不要引入数据库、RAG、自动抓取、多 Agent 或全自动价值判断。
@@ -89,9 +92,9 @@ Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 刷新 YW Next �
    node .agents/skills/learn-x-process/scripts/generate-monthly-process-pack.mjs --month 2026-01
    ```
 
-   该脚本先读取相交周、月度独有输入，以及各周 Weekly Output 中系统确认的标题 10「全文核心重点纪要」和标题 11「芒格之魂的洞察」，执行日期过滤、空值过滤、Daily 元数据合并和去重；不读取 Weekly Output 的其它正文代替原始 Input。周目录存在 `_source-status.json` 时，只有 `ready` 文件进入 `input.json`、Process Pack 和月度输入；`empty/failed/unavailable` 的旧文件保留但被排除，状态表仍展示 0 条或失败原因。侧车缺失保持历史周兼容，格式非法则失败关闭。`ai`、`research`、`weread`、`build`、`build-bot`、`voice` 和 `calendar` 必须按价值策略语义整理；AI 必须先排除提示词/模板，再逐周保留核心事件，不能跨周压成一个段落；月度 `ai` 保留比例控制在 10%–30%，`build` 与 `build-bot` 各控制在 2%–8%；Voice 每月一律只保留最核心事件，月度累计不超过 10,000 字符，并优先保留原文约 5%–10% 的可核查核心内容。月记、周记、Daily、Flomo、Health 和 Time 默认只做确定性清洗。脚本写出 `compression-requests.json` 并停止；Codex 按 `learn-x-monthly-automation/references/monthly-compression.md` 生成结构化 `compressed-events.json` 后重跑。最终写入 metadata-only `input.json`、不超过 100 KB 的按 Input 文件类型分组的 `process-pack.md`，以及可点击的 `compression-review/` 临时原文审阅文件。
+   该脚本先读取相交周、月度独有输入，以及各周 Weekly Output 中系统确认的标题 11「全文核心重点纪要」和标题 12「芒格之魂的洞察」，执行日期过滤、空值过滤、Daily 元数据合并和去重；不读取 Weekly Output 的其它正文代替原始 Input。周目录存在 `_source-status.json` 时，只有 `ready` 文件进入 `input.json`、Process Pack 和月度输入；`empty/failed/unavailable` 的旧文件保留但被排除，状态表仍展示 0 条或失败原因。侧车缺失保持历史周兼容，格式非法则失败关闭。`ai`、`research`、`weread`、`build`、`build-bot`、`voice` 和 `calendar` 必须按价值策略语义整理；AI 必须先排除提示词/模板，再逐周保留核心事件，不能跨周压成一个段落；月度 `ai` 保留比例控制在 10%–30%，`build` 与 `build-bot` 各控制在 2%–8%；Voice 每月一律只保留最核心事件，月度累计不超过 10,000 字符，并优先保留原文约 5%–10% 的可核查核心内容。月记、周记、Daily、Flomo、Health 和 Time 默认只做确定性清洗。脚本写出 `compression-requests.json` 并停止；Codex 按 `learn-x-monthly-automation/references/monthly-compression.md` 生成结构化 `compressed-events.json` 后重跑。最终写入 metadata-only `input.json`、不超过 100 KB 的按 Input 文件类型分组的 `process-pack.md`，以及可点击的 `compression-review/` 临时原文审阅文件。
 6. Codex 报告 `_dist` 路径、Output 最小壳路径和输入缺口，不生成 Weekly Output 正文。
-7. 用户按 `04_output/usage.md`，把 `process-pack.md` 与需要的规则文件交给 AI Chat，自行生成并写入 Weekly Output 正文。
+7. 用户按 `04_output/usage.md`，把每周同目录的 `process-pack.md`、`action-feedback.md` 与需要的规则文件交给 AI Chat，自行生成并写入 Weekly Output 正文。
 8. 人工审核候选，不要直接写入正式 core 文件。
 9. 如果用户要求 Memorize，由 Codex 判断周期并内部调用候选抽取脚本；用户不需要手动执行命令。Weekly 可调用：
 
@@ -109,6 +112,8 @@ Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 刷新 YW Next �
    ```
 
    然后读取 `resources/memory-rules.md` 和对应 `memory-candidates.md`，把已确认内容无损迁移到 Memory，并按来源周期排序；候选不足时报告不建议写入。
+
+   Weekly Memorize 完成后执行 `npm run action:feedback -- sync --week YYYY-Www`，把独立 Action Feedback 周报中已勾选的行动反馈事件写入 Action Feedback Base；格式与写入规则见 `docs/ACTION_FEEDBACK.md`。
    Weekly 自动化将此作为阶段 3：标题「全文核心重点纪要」「芒格之魂的洞察」和“本周最值得思考的问题与回答”是系统确认内容，无需 checkbox；前者和问题与回答进入当周 Memory，芒格洞察进入季度芒格洞察候选池。问题与回答必须成对保留，不只记问题或只记答案。其余内容只接受候选区内已勾选 checkbox 或用户当场明确确认；禁止扫描普通正文，禁止把“继续追踪”“重要”“保留”“确认”等词语当作确认。道 / 法 / 术候选即使已勾选，也只进入季度顶部对应候选观察池，不进入普通 Memory。重复执行时不得重复追加同一条目。
 
 10. 如需维护历史 Memory，先读取 `resources/memory-compression-rules.md`，运行压缩规划并由 Codex 生成候选；对候选目录运行 `--validate`。只向用户报告 `ready`、`needs_review` 或 `stale`，不把校验结果描述为语义无损证明。只有用户另行明确确认晋级，才运行 `--promote --confirm`。
@@ -125,7 +130,7 @@ Weekly Output 要综合三类输入：
 - 哪些行动产生了现实反馈；
 - 哪些判断被验证、修正或暴露问题。
 
-Weekly Output 默认围绕议题、做中学复盘、下周 3 件事、道 / 法 / 术和处理信息；行动闭环检查并入做中学复盘，不单独成节。
+Weekly Output 默认围绕议题、做中学复盘、行动闭环摘要、下周 3 件事、道 / 法 / 术和处理信息；行动闭环检查并入做中学复盘。它优先消费独立 Action Feedback 周报，不复制完整三列表格。
 
 Memory 必须遵守 `resources/memory-rules.md`。标题「全文核心重点纪要」「芒格之魂的洞察」和“本周最值得思考的问题与回答”可作为系统确认章节；允许轻度去重压缩，但不得丢失独立判断、问题、回答及其对应关系。其余只处理候选区内已勾选内容或用户当场明确确认内容。已勾选道 / 法 / 术候选观察进入季度 Memory 文件顶部对应候选池，并保留来源，不进入普通 Memory；普通正文和未勾选内容默认不写入。具体用法见 `04_output/usage.md`。
 

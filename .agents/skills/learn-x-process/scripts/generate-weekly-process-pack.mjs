@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { compressVoiceForProcessPack, voiceCompressionMetrics } from "../../learn-x-input/scripts/collect-voice-weekly.mjs";
 import { inputSize, MAX_VOICE_WEEKLY_INPUT_CHARS, VOICE_TARGET_RETAINED_RATIO } from "../../learn-x-input/scripts/lib/input-limits.mjs";
 import { SOURCE_FILES } from "../../learn-x-input/scripts/lib/source-status.mjs";
+import { ensureActionFeedbackDraft } from "./action-feedback.mjs";
 import { defaultWeeklyReviewWeek, writeWeeklyInput } from "./collect-weekly-input.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -35,6 +36,7 @@ export async function generateWeeklyProcessPack(options = {}) {
   const shellPath = await ensureWeeklyOutputShell(payload.week);
 
   await mkdir(outputRoot, { recursive: true });
+  const actionFeedback = await ensureActionFeedbackDraft({ week: payload.week, outputRoot });
   const outputPath = path.join(outputRoot, "process-pack.md");
   await writeFile(outputPath, processPack, "utf8");
 
@@ -43,22 +45,23 @@ export async function generateWeeklyProcessPack(options = {}) {
     sourceSummaries,
     fileSummaries,
     compression,
+    actionFeedback,
     outputPath,
     shellPath
   };
 }
 
-function renderProcessPack(payload, sourceSummaries, fileSummaries, items, compression) {
+export function renderProcessPack(payload, sourceSummaries, fileSummaries, items, compression) {
   return [
     `# Learn-X Process Pack｜${payload.week}`,
     "",
-    "> 这是给 AI Chat 生成 Weekly Output 的上下文材料包，不是最终 Weekly Output。",
+    "> 这是给 AI Chat 生成最终 Weekly Output 的上下文材料包；Action Feedback 是同周期独立的中间产物。",
     "> 本文件只保留必要来源索引和清洗正文；不要在这里做道 / 法 / 术 / Prompt / Skill 判断。",
     "",
     "## 0. 使用方式",
     "",
-    "1. 常规只把本文件交给 AI Chat；`input.json` 是脚本中间态，仅在排错或核查来源时使用。",
-    "2. 如需生成 Weekly Output 正文，由用户自己在 AI Chat 中使用本文件，并按需读取 `.agents/skills/learn-x-process/resources/weekly-output-rules.md` 和 `layer-rules.md`。",
+    "1. 把本文件与同目录 `action-feedback.md` 一并交给 AI Chat；`input.json` 是脚本中间态，仅在排错或核查来源时使用。",
+    "2. 先审核并确认 `action-feedback.md` 的三列表格，再由用户在 AI Chat 中使用两份材料生成最终 Weekly Output；按需读取 `weekly-output-rules.md` 和 `layer-rules.md`。",
     "3. Codex / 脚本只生成 `_dist` 和 `04_output/weekly/YYYY-WW.md` 最小壳；如果 Output 文件已有内容，不覆盖。",
     "4. 人再决定是否把正文写入 `04_output/weekly/YYYY-WW.md`，以及是否进入 Memory、正式 `道/`、`法/`、`术`、Prompt 或 Skill。",
     "",
@@ -453,6 +456,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 
   console.log(`Weekly input pack generated: 04_output/_dist/weekly/${distWeekId(result.payload.week)}/input.json`);
   console.log(`Weekly process pack generated: ${path.relative(repoRoot, result.outputPath)}`);
+  console.log(`Action Feedback report: ${path.relative(repoRoot, result.actionFeedback.path)} (${result.actionFeedback.status})`);
   console.log(`Weekly output shell ready: ${path.relative(repoRoot, result.shellPath)}`);
   console.log(`Input files: ${result.payload.stats.fileCount}`);
   console.log(`Unique items: ${result.payload.stats.uniqueItemCount}`);

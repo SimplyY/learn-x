@@ -27,6 +27,7 @@
 | Prompt 治理 | `docs/PROMPT_GOVERNANCE.md`、全局 `prompt-governance` Skill | 受治理 Prompt 的身份、飞书真源、本地副本、纳入、同步和使用证据 |
 | Prompt 使用统计 | `docs/CHAT_PACK.md`、`.agents/skills/learn-x-prompt-usage/` | 合并或校验两端 Chat Pack 使用记录 |
 | Process / Output / Memory | `docs/LEARN_X_PROCESS.md`、`.agents/skills/learn-x-process/` | 处理周/月/年 Output、Process Pack、Memory 候选 |
+| 行动反馈周报 / Action Feedback Base | `docs/ACTION_FEEDBACK.md` | 运行或修改行动反馈回捞、周报输出项 7、Base 写入 |
 | Input 流程 | `03_input/README.md`、`03_input/usage.md`、`.agents/skills/learn-x-input/` | 采集、校验或生成 `03_input/` |
 | 月度议题工作台 | `docs/MONTHLY_CORE_QUESTION_WORKBENCH.md`、`docs/TECH.md`、`.agents/skills/learn-x-monthly-question-workbench/` | 运行或修改工作台脚本、处理月度研究文档 |
 | 核心议题知识库 | `docs/CORE_QUESTION_LIBRARY.md`、`.agents/skills/learn-x-quarterly-question-overview/`、`.agents/skills/learn-x-monthly-question-workbench/` | 维护季度总览、月度研究 Wiki、倒序目录索引及 learn-x 群快捷标签 |

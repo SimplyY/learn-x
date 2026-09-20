@@ -42,7 +42,7 @@ _dist/yearly/YYYY/process-pack.md
 
 ## 核心文件
 
-- `process-pack.md`：默认给 AI Chat 读取的材料包，保留来源索引和清洗后的正文。
+- `process-pack.md`：给 AI Chat 读取的材料包，保留来源索引和清洗后的正文；生成 Weekly Output 时需与同目录 `action-feedback.md` 一并读取。
 - `input.json`：metadata-only 审计清单，记录来源路径、哈希、过滤、去重和压缩统计，不保存正文，也不放进 AI Chat。
 - `memory-candidates.md`：从 Output 中抽取的已确认内容候选，供 Memorize 使用。
 - `ywnext/runtime/`：每周 Memory 完成后生成的可追溯证据索引与三档核心上下文。`evidence/YYYY-Www.md` 列出实际使用的 Memory 路径、范围、权重判断、全文阅读状态与缺口；`core-context/full.md`、`weighted.md`、`core.md` 是消费者按相关性读取的静态上下文。私有 `full-full.md` 只供 YW Next 生成滚动候选清单，不供其他仓库读取；不生成或读取 `current.md`，也不存在六仓库切片。

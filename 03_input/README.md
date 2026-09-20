@@ -29,6 +29,7 @@ Weekly 输入由周目录决定，不依赖 weekly index 或文件修改时间�
       build.md
       build-bot.md
       research.md
+      open-actions.md
       _source-status.json
       README.md
     2026-W24/
@@ -69,6 +70,7 @@ Weekly 输入由周目录决定，不依赖 weekly index 或文件修改时间�
 - `calendar.md`：`Time-X｜随时记` 共享日历与用户个人日历（主日历及自有共享日历，用户手动建日程）合并后的每日与全周有效时间汇总，以及每个日历块的日期、起止、原始区间、标题、描述和有效投入分钟；重叠时间按同时日程数均分，不保存人员、地点、ID、链接或系统元数据。详见 [`docs/calendar-time-allocation.md`](../docs/calendar-time-allocation.md)。
 - `health.md`：Health-X 周报摘要，由 Health-X 在飞书周报同步成功后生成。
 - `coach.md`：按表字段保留新增记录，在采集器内排除回顾、复看和推送状态更新；本周 0 条新增记录时不生成文件，但每周自动化必须报告 0 条记录。
+- `open-actions.md`：由 `npm run action:feedback -- collect` 从 Action Feedback Base 回捞的全部未闭环核心行动，是周报输出项 7 的回捞源；0 条未闭环行动时不生成文件。
 - `wisdom.md`：智慧之门创建时间落在目标周内的新记录；既有记录的回顾、复看或状态更新不采集；本周 0 条时不生成文件，但每周自动化必须报告 0 条记录。
 - `build.md`：Codex / Code X 构建、调试、上线记录。
 - `build-bot.md`：飞书机器人 / Code X Bot 周度执行复盘，由飞书机器人侧 `build-bot-log` 生成；本地周自动化只提示自查。

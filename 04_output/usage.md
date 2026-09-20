@@ -7,7 +7,7 @@
 ## 流程
 
 ```text
-阶段 1 采集输入 -> 人工完成 ai.md -> 自动生成并人工确认周/ 月记草稿 -> 阶段 2 生成 _dist -> Chat Pack 生成 Output -> 芒格之魂补充洞察与核心纪要 -> 阶段 3 Memorize
+阶段 1 采集输入并同步核心议题 -> 人工完成 ai.md -> 自动生成并人工确认周/ 月记草稿 -> 阶段 2 生成 _dist 与独立 Action Feedback 草稿 -> 用户确认行动反馈 -> Chat Pack 生成最终 Weekly Output -> 芒格之魂补充洞察与核心纪要 -> 阶段 3 Memorize + Action Feedback 事件写入
 ```
 
 ## 1. 确认材料包
@@ -16,11 +16,12 @@
 
 ```text
 04_output/_dist/weekly/YYYY-Www/process-pack.md
+04_output/_dist/weekly/YYYY-Www/action-feedback.md
 04_output/_dist/monthly/YYYY-MM/process-pack.md
 04_output/_dist/yearly/YYYY/process-pack.md
 ```
 
-常规只把 `process-pack.md` 交给 AI Chat。`input.json` 不含正文，只在核查来源、日期过滤、缺口、重复、哈希和压缩结果时使用。
+每周生成 Weekly Output 时，把同目录的 `process-pack.md` 与 `action-feedback.md` 一并交给 AI Chat；`input.json` 不含正文，只在核查来源、日期过滤、缺口、重复、哈希和压缩结果时使用。
 
 ## 2. 生成并写入 Output
 
@@ -49,12 +50,15 @@ Output 正文应服务于审稿：哪些输入改变了理解，哪些判断值�
 - 推荐上下文保留周期 `process-pack.md`、`01_core/道/` 和 `01_core/memory/`，移除 Output 生成规则与说明文件；
 - 洞察由用户人工确认后写入 Output 的“芒格之魂手动洞察”区，Memorize 时作为独立候选进入 Memory 顶部候选观察池，不自动升级为正式道 / 法 / 术。
 
-在 Learn-X 每周自动化中，以下 1—4 项属于同一个人工 Chat Pack 完成门槛；自动化汇报不得把 Weekly Output 与芒格之魂拆成两个“下一步”。阶段 2 完成后按顺序处理：
+在 Learn-X 每周自动化中，以下 1—5 项属于同一个人工 Chat Pack 完成门槛；自动化汇报不得把 Weekly Output 与芒格之魂拆成两个“下一步”。阶段 2 完成后按顺序处理：
 
 1. 使用 Learn-X Chat Pack 的 Weekly Output 功能生成并审核周报正文。
 2. 继续在 Chat Pack 启用“芒格之魂”，生成独立洞察。
 3. 在 `04_output/weekly/YYYY-WW.md` 底部完善“芒格之魂的洞察 & 全文核心重点纪要”，并补充“本周最值得思考的 3 个问题”的回答。
-4. 审核并勾选 Memory 候选，最后回复“继续记忆”。
+4. 先在独立 `action-feedback.md` 中按当前季度短期核心议题填写和核对三列：议题、行动、反馈；直接增、删、改并将要写入 Base 的行勾选为 `[x]`。这不是任务状态，也不要求回捞旧 `continue` 行动。
+5. 审核并勾选 Memory 候选，最后回复“继续记忆”。
+
+Action Feedback 的规格见 `docs/ACTION_FEEDBACK.md`；它按当前季度短期核心议题生成，与最终 Weekly Output 分离。Weekly Output 优先读取已确认行动反馈，但不复制完整表格。勾选确认的行在阶段 3 写入按时间保存的 Action Feedback Base 事件。
 
 自动化不得代替用户访问 AI Chat 或编写洞察。
 
@@ -74,7 +78,7 @@ Output 正文应服务于审稿：哪些输入改变了理解，哪些判断值�
 
 Memorize 交给 Codex 执行，不需要用户手动跑脚本。
 
-在每周自动化线程中，完成 Weekly Output、补充芒格洞察与核心纪要、回答本周 3 个问题、勾选候选后，回复“继续生成记忆”或同义表达，即进入阶段 3。阶段 3 必须先确认 Output 非空、芒格洞察和问题与回答非空且存在已勾选或用户明确确认的内容；任一条件未满足时停止，不硬凑 Memory。
+在每周自动化线程中，完成 Action Feedback、Weekly Output、芒格洞察与核心纪要、回答本周 3 个问题、勾选候选后，回复“继续生成记忆”或同义表达，即进入阶段 3。阶段 3 必须先确认 Output 非空、芒格洞察和问题与回答非空且存在已勾选或用户明确确认的内容；任一条件未满足时停止，不硬凑 Memory。Memory 写入后执行 `npm run action:feedback -- sync --week YYYY-Www`，把独立报告已勾选行幂等写入 Action Feedback Base 事件表并读回校验。
 
 可以直接说：
 

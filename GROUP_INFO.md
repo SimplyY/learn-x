@@ -7,10 +7,10 @@ repo_path: "/Users/yuwei/code/learn-x"
 repo_url: null
 group_info_path: "/Users/yuwei/code/learn-x/GROUP_INFO.md"
 registry_source: "live"
-registry_fetched_at: "2026-09-17T21:07:26.520Z"
+registry_fetched_at: "2026-09-20T21:02:29.498Z"
 registry_age_seconds: 0
 registry_degraded: false
-updated_at: "2026-09-17T21:07:30.950Z"
+updated_at: "2026-09-20T21:02:29.502Z"
 icon: "🧠"
 name_zh: "learn-x"
 summary: "认知进化系统。核心功能 chat pack（chat 上下文提示词） + 定期（周、月、年）复盘 IPO (输入、处理、输出)"
@@ -36,7 +36,7 @@ priority: 1
 
 ## 可用 Skill
 1. build-bot-log：生成每周飞书机器人 Build 复盘报告
-2. learn-x-deep-research：创建「人生核心议题/深度研究」Wiki 文档、注入
+2. learn-x-deep-research：创建「人生核心议题/深度研究-年份」Wiki 文档
 3. learn-x-input：采集外部每周证据（微信读书阅读、划线和想法等）写入
 4. learn-x-monthly-automation：月度自动化中文工作流
 5. learn-x-monthly-journal：从 Learn-X 本地周输入和已确认周记生成安全
@@ -62,7 +62,7 @@ priority: 1
 - README.md：[研究&学习](https://ywhome.feishu.cn/wiki/KcTcwG90OiZh3rksu0ucvwx5nFe)
 - README.md：[人生核心议题](https://ywhome.feishu.cn/wiki/QIaQwXf07iMvqokKQf3cp3XmnMC)
 - README.md：| 器 | tool，工具实现层 | flomo、飞书、Codex、脚本、书籍 |
-- docs/TECH.md：| `learn-x-deep-research` | 一键深度研究：创建「深度研究」Wiki 文档、注入议题上下文、维护倒序目录、组装 ChatGPT 上下文包；对 Base 只读。 |
+- docs/TECH.md：| `learn-x-deep-research` | 一键深度研究：创建 `深度研究-YYYY` 年目录下的 Wiki 文档、注入议题上下文、维护年度索引、组装 ChatGPT 上下文包；对 Base 只读。 |
 - docs/TECH.md：受治理 Prompt 的飞书正文由全局 `prompt-governance` Skill 管理，本地构建在使用副本前校验清单中的 SHA-256；静态载荷只暴露 `prompt_id/revision/hash`，不暴露飞书 URL、文档 ID 或绝对路径。详见 `docs/PROMPT_GOVERNANCE.md`。
 - docs/TECH.md：业务真值源是飞书「研究&学习」Base：`议题`=`tbllcm6oBbdMKnkN`，`认知事件`=`tblIE9FK9mWGv7GE`；议题实例和事件不得落盘为 Markdown。
 - docs/TECH.md：Base 真实主表：`议题=tbllcm6oBbdMKnkN`，`认知事件=tblIE9FK9mWGv7GE`。`议题`是唯一原子对象，可以是问题或目标；新增字段的名字与选项由脚本 Schema 校验；`议题周期`的规范值为短期/中期/长期，历史含“核心问题”的旧选项只在迁移期间兼容；月度账本表 ID 在运行时按名称解析，避免将不稳定的 Base 资源 ID 硬编码。
@@ -73,4 +73,4 @@ priority: 1
 - 链接数：3
 - Skill 扫描：正常
 - 注册表新鲜度：可用
-- 最近更新时间：2026-09-17T21:07:30.950Z
+- 最近更新时间：2026-09-20T21:02:29.502Z

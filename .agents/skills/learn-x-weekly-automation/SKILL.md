@@ -44,6 +44,8 @@ npm run memory:weekly -- --week 2026-W27
 
 阶段 1 默认执行本 Skill 所列的全部自动来源：Flomo（含 Flomo 需回顾增量导入）、微信读书、Time-X 日历、Voice-X、飞书日记与 AI Coach、智慧之门；同时检查独立产物 `build.md`、`build-bot.md`、`health.md`。不得因为历史自动化 prompt、旧运行记忆或上一次的临时选择，缩减本轮来源，也不要逐项询问是否采集。用户明确说“本轮只采集……”时才临时缩小范围，该选择仅对当前目标周、当前运行有效；下一次自动恢复全量。
 
+Action Feedback 不再做 `continue` 行动回捞。阶段 1 先同步最新核心议题镜像，阶段 2 由 `process:weekly` 在 `_dist` 生成独立 `action-feedback.md` 模板；旧 `collect` 只保留兼容，不进入默认链路。
+
 `input:daily-coach` 是一个物理上的联合采集入口，但逻辑上必须分别记录 `daily` 和 `coach` 状态：`coach` 为 0 条只表示成功空结果，不得把它解释为 `daily` 不可用；只有日记查询本身失败或无法取得有效日记记录时，才将 `daily` 标为 `failed/unavailable`。
 
 ### Code X 周日 Voice-X 自动化
@@ -111,6 +113,7 @@ Deep Code X 另有一个独立的周日调度（`learn-x-voice-insight`，20:00�
    - Voice-X：按 `learn-x-input` 执行 `npm run input:voice -- --week YYYY-Www`，只读取目标 ISO 周已归档的新版 AI 洞察文档，将完整结构化洞察写入 `voice.md`。缺失/占位计入 `pending`，旧格式计入 `legacy`，不回退到处理后原文；30,000 字符只是强提示线，不是采集门槛。统一生成 Process Pack 时仅压缩一次，目标保留约 20%，并报告整体及各文件的原始字符、压缩字符和保留比例。周日 `npm run voice:insight -- --week YYYY-Www` 是独立阶段，不由周一流程隐式触发；0 条、查询或文档失败均按来源状态处理并保留旧文件。
    - 飞书日记与 AI Coach：执行 `npm run input:daily-coach -- --week YYYY-Www`。采集器先用 `--as bot` 现场核验 Base、表和字段，再按各表边界筛选并遍历全部分页；各来源状态写入 `_source-status.json`。日记与 Coach 分别判定：Coach 0 条时记录 `coach=empty` 且不生成 `coach.md`，不影响有记录的 `daily.md`；日记 0 条时记录 `daily=empty`，查询或字段失败才记录 `daily=failed/unavailable`。旧文件可保留但标记过期；失败时保留旧文件但标记失败。
    - 智慧之门：执行 `npm run input:wisdom -- --week YYYY-Www`。通过 `collect-base-weekly.mjs` 按创建时间筛目标周并遍历全部分页；0 条时报告“0 条记录，文件未生成”，失败不得伪装成空结果。
+   - Action Feedback：先执行 `npm run sync:life-core` 同步核心议题镜像；不读取 Base 的 `continue` 行动，不生成 `open-actions.md`。
    - 飞书机器人 Build 复盘：本流程不执行 `build-bot-log`，不生成或追加 `build-bot.md`。必须提示用户：`build-bot-log 需要在飞书机器人上完成，请自查`。
      - 如果目标周是提前写当周，提示用户去飞书上手动执行，并输出自动化链接：https://ywhome.feishu.cn/wiki/KcTcwG90OiZh3rksu0ucvwx5nFe?table=wkfVC125gMp3snTX
      - 如果不是提前执行，提示用户周日飞书自动化理论上已提前执行，只需自查 `build-bot.md` 是否已由飞书侧写入。
@@ -123,7 +126,7 @@ Deep Code X 另有一个独立的周日调度（`learn-x-voice-insight`，20:00�
 4. 阶段 1 不采集飞书周记，不生成 `weekly.md`、`_dist` 或 Weekly Output。
 5. ChatGPT 输入只读取 `03_input/weekly/00_template/ai.md` 提示词，并附加目标周范围；不主动发送 `daily.md`、`flomo.md` 或其它本地周材料。桥接失败时报告原因、`ai.md` 手动空壳路径和完整人工 fallback prompt；成功结果先落为 `ai.generated.md`，完整性校验通过后自动成为正式 `ai.md`，并保留审计副本。回复未通过结构验收时写入 `_ai-invalid.generated.md` 和验证原因；后续代码修复能确定性恢复时优先本地恢复，不重复外发，否则只有用户显式 `--retry` 才能重新提交。
 
-阶段 1 汇报必须先给出一张固定顺序的「输入与压缩总表」，并在表格上方写出“本轮需关注”；不要让用户从多张表自行拼接失败项。固定行依次覆盖 `daily.md`、`weekly.md`、`flomo.md`、`weread.md`、`wechat.md`、`voice.md`、`calendar.md`、`health.md`、`coach.md`、`wisdom.md`、`ai.md`、`build.md`、`build-bot.md`，另有持续出现的其他文件才追加一行。表列固定为：输入类型、来源、文件（可点击核查）、状态、记录/材料数、字符链路（原始 → 纳入）、结果；只有实际发生语义压缩时才在字符链路后标注压缩信息。阶段 1 尚未生成 `_dist` 时，字符链路填 `—`；阶段 2 直接复用 `process-pack.md` 第 2 节的同一张表。`weekly.md` / `ai.md` 是人工或可选文件，不能伪装成自动来源。
+阶段 1 汇报必须先给出一张固定顺序的「输入与压缩总表」，并在表格上方写出“本轮需关注”；不要让用户从多张表自行拼接失败项。固定行依次覆盖 `daily.md`、`weekly.md`、`flomo.md`、`weread.md`、`wechat.md`、`voice.md`、`calendar.md`、`health.md`、`coach.md`、`wisdom.md`、`ai.md`、`build.md`、`build-bot.md`，另有持续出现的其他文件才追加一行。Action Feedback 是 `_dist` 独立产物，不作为输入来源行。表列固定为：输入类型、来源、文件（可点击核查）、状态、记录/材料数、字符链路（原始 → 纳入）、结果；只有实际发生语义压缩时才在字符链路后标注压缩信息。阶段 1 尚未生成 `_dist` 时，字符链路填 `—`；阶段 2 直接复用 `process-pack.md` 第 2 节的同一张表。`weekly.md` / `ai.md` 是人工或可选文件，不能伪装成自动来源。
 来源状态必须区分 `ready`、`empty`、`failed`、`unavailable`，并明确旧文件是否保留但不计入本轮；成功空结果单独报告“0 条记录，文件未生成”，失败/不可用不得写成 0 条。`ready` 才能填入纳入字符并计入下游；失败、不可用、空结果和过期旧文件的字符列填 `—`，处理结果列必须直接写出原因。人生核心议题镜像必须在汇报中单独给出 `fresh/stale` 状态、revision 与同步时间；`stale` 时列为“本轮需关注”。
 每个非空来源还必须给出可点击核查文件链接；不可用但保留旧文件的来源也要给链接并标注“过期、不计入”。
 飞书周记草稿链接必须是周记 Skill 在写入后回读确认的目标段落锚点链接：优先使用实际 `#share-...` 锚点，CLI 未返回时使用最新目标标题 block id 的 `#<target-block-id>` 直达链接；不得汇报固定文档首页、旧周锚点或未带 fragment 的 URL。
@@ -145,7 +148,7 @@ Deep Code X 另有一个独立的周日调度（`learn-x-voice-insight`，20:00�
 
 1. 按“周记日期映射”计算写作日，通过飞书 CLI 从已登录的线上飞书周记文档采集该写作日对应的目标周周记。不能把写作日当天所在的 ISO 周当作覆盖周。只截取目标覆盖范围的段落；`weekly.md` 必须同时保留来源 URL、写作日标题、目标覆盖范围、定位依据和采集时间。目标段落主标题仍含 `【待优化】AI 基础草稿` 时视为未确认，停止，不得用旧本地内容替代。
    - 采集前如果发现缺少飞书周记所需授权，先一次性列出并请求全部缺失 scopes，再继续，不要一项一项分开打断用户。
-2. 在阶段 2 读取本周 `weekly.md` 前，按目标周计算上一 ISO 周，并完整读取上一周的 `04_output/weekly/YYYY-WW.md` 与 `03_input/weekly/YYYY-Www/weekly.md` 的全部既有章节和用户补充内容（包括空壳，不只看标题、摘要或只提取标题 10/11）。尤其要保留问题与回答、芒格之魂洞察、全文核心重点纪要及其他原有信息，供本周对比；它们只作对比上下文，不得当作本周事实或输入。文件缺失、为空或只是 Output 空壳时，报告准确状态并继续，不得用更早周替代。
+2. 在阶段 2 读取本周 `weekly.md` 前，按目标周计算上一 ISO 周，并完整读取上一周的 `04_output/weekly/YYYY-WW.md` 与 `03_input/weekly/YYYY-Www/weekly.md` 的全部既有章节和用户补充内容（包括空壳，不只看标题、摘要或只提取标题 11/12）。尤其要保留问题与回答、芒格之魂洞察、全文核心重点纪要及其他原有信息，供本周对比；它们只作对比上下文，不得当作本周事实或输入。文件缺失、为空或只是 Output 空壳时，报告准确状态并继续，不得用更早周替代。
    - 阶段 2 汇报必须单列「上周对比入口」，给出上一周完整 Output 和周记的绝对可点击文件链接，并标注 `ready`、`empty/shell` 或 `missing`；存在时说明已读取全文，问题与回答必须按完整问答保留，便于用户直接对比。
 3. 生成 `_dist` 前，验证这些当前周输入：
    - `daily.md`
@@ -155,6 +158,7 @@ Deep Code X 另有一个独立的周日调度（`learn-x-voice-insight`，20:00�
    - `calendar.md`（仅在状态为 `ready` 时读取；只作计划上下文，`empty/unavailable` 时报告但不将其当作行动证据）
    - `coach.md`（本次采集有新增记录时才存在；包含新增记录并标注采集器排除的回顾更新；0 条时按来源状态记录，不阻塞）
    - `wisdom.md`（本次采集有新增记录时才存在；采集器按创建时间生成；0 条时按来源状态记录，不阻塞）
+   - `04_output/_dist/weekly/YYYY-Www/action-feedback.md`（独立中间产物；只按当前季度短期核心议题聚合，用户确认后才进入阶段 3）
    - `health.md`（可选；缺失不阻断，但汇报必须先用一级大标题显著提示，并附 Health-X 生成命令）
    - `build-bot.md`（只验证是否已由飞书侧完成；不存在时报告缺口，但本流程不生成）
    - `weekly.md`
@@ -172,22 +176,23 @@ Deep Code X 另有一个独立的周日调度（`learn-x-voice-insight`，20:00�
 9. 汇报：
    - `04_output/_dist/weekly/YYYY-Www/input.json`
    - `04_output/_dist/weekly/YYYY-Www/process-pack.md`
+   - `04_output/_dist/weekly/YYYY-Www/action-feedback.md`
    - `04_output/weekly/YYYY-WW.md`
    - 已完成来源、缺口、验证结果
-10. 停止，等待用户完成一个人工 / Chat Pack 步骤：结合 `process-pack.md` 生成并审核 Weekly Output；在同一次操作中启用 `芒格之魂` 生成独立洞察，补全 `芒格之魂的洞察 & 全文核心重点纪要`，回答「本周最值得思考的 3 个问题」，并审核 Memory 候选。按需读取 `.agents/skills/learn-x-process/resources/weekly-output-rules.md` 和 `layer-rules.md`。全部完成后回复 `继续`、`继续下一步` 或 `继续记忆`，进入阶段 3。
+10. 停止，等待用户完成一个人工 / Chat Pack 步骤：先审核并填写独立 `action-feedback.md` 三列表格，再结合 `process-pack.md` 生成并审核最终 Weekly Output（只写行动闭环摘要，不复制整表）；在同一次操作中启用 `芒格之魂` 生成独立洞察，补全 `芒格之魂的洞察 & 全文核心重点纪要`，回答「本周最值得思考的 3 个问题」，并审核 Memory 候选。按需读取 `.agents/skills/learn-x-process/resources/weekly-output-rules.md` 和 `layer-rules.md`。全部完成后回复 `继续`、`继续下一步` 或 `继续记忆`，进入阶段 3。
 
-阶段 2 汇报必须包含完整全局流程，并标记：当前位置 = 阶段 2 完成；下一步 = 在 Chat Pack 一次完成并审核 Weekly Output、芒格之魂、核心纪要、问题与回答和 Memory 候选；再下一步 = 展示一张仅针对当前目标周的阶段 3 最后确认卡。确认卡必须在执行前一次性写清本周 Memory 写入目标、备份载荷（`01_core/`、`03_input/`、`04_output/`）及飞书云盘 / `Snapshots` 目的地、YW Next 刷新范围、Flomo 载荷（`weekly.md` 与季度 Memory）及目的地、留存清理和读回校验；用户只需确认一次。不得把备份、Full Access、YW Next 或 Flomo 再拆成多个确认点。
+阶段 2 汇报必须包含完整全局流程，并标记：当前位置 = 阶段 2 完成；下一步 = 审核独立 Action Feedback、在 Chat Pack 生成并审核最终 Weekly Output、芒格之魂、核心纪要、问题与回答和 Memory 候选；再下一步 = 展示一张仅针对当前目标周的阶段 3 最后确认卡。确认卡必须在执行前一次性写清本周 Memory 写入目标、行动反馈 Base 写入目标（新增 / 更新事件数与目的地）、备份载荷（`01_core/`、`03_input/`、`04_output/`）及飞书云盘 / `Snapshots` 目的地、YW Next 刷新范围、Flomo 载荷（`weekly.md` 与季度 Memory）及目的地、留存清理和读回校验；用户只需确认一次。不得把备份、Full Access、YW Next 或 Flomo 再拆成多个确认点。
 阶段 2 的来源表直接使用 `process-pack.md` 第 2 节的固定总表，逐行展示状态、原始 → 纳入字符链路和结果；只有 Voice-X 等实际发生语义压缩的来源才显示压缩比例，文件名本身就是可点击核查入口。不能只报告来源数量和产物路径。失败或不可用行必须在表内可见，不得只藏在末尾缺口列表。
 若 `health.md` 缺失，阶段 1 / 阶段 2 汇报的第一段必须是一级大标题 `# ⚠️ 缺失输入：health.md`，并同时给出目标周、报告结束日和 Health-X 的 `validate` / `sync` 命令；不能把缺失藏在普通缺口列表中。
 
 ## 阶段 3：已审核记忆
 
-目标：生成和迁移已确认的 Memory 候选，并刷新下一周“找事”离线索引。
+目标：生成和迁移已确认的 Memory 候选，把已确认的行动反馈写入 Base，并刷新下一周“找事”离线索引。
 
 1. 验证 `04_output/weekly/YYYY-WW.md` 是目标周的实质性周报，不是空壳或模板。
 2. 验证同一周报包含非空、实质性的 `芒格之魂的洞察 & 全文核心重点纪要` 区域，以及非空、实质性的本周问题与回答区域。缺失问题或回答时停止，不生成或迁移 Memory。
-3. 用户从阶段 2 完成状态回复 `继续`、`继续下一步` 或 `继续记忆`，视为确认本周 Weekly Output、芒格之魂、核心纪要、问题与回答和 Memory 候选已人工审核；先展示“最后确认卡”，不执行写入。用户对卡片确认后，一次性执行卡内列出的本地写入、私有备份、YW Next 刷新和 Flomo 同步。确认词必须覆盖卡片列出的载荷与目的地，例如：`确认执行 W34 阶段 3：写入已确认 Memory；将 01_core、03_input、04_output 备份到 Learn-X 专用飞书云盘并维护 Snapshots；刷新 YW Next；将 W34 周记与 2026-Q3 Memory 同步到 Flomo。` 此后不得按备份、Full Access、YW Next、Flomo 分别再次请求确认；同一目标周、同一事务范围内因网络、Ego Lite、读回或工具环境失败而进行的安全重试沿用这次授权。只有新增目标、扩大数据范围、改变写入对象或新增删除动作时才重新确认。除本阶段末尾的 Flomo 同步外，不得访问、验证或发布任何外部内容。若当前并非阶段 2 完成状态，`继续`按前序阶段规则解释，不得直接进入这里。
-   - 标题 10「全文核心重点纪要」、标题 11「芒格之魂的洞察」和标题 12 的问题与回答是系统确认内容，不要求 checkbox。标题 10 和标题 12 写入当周 Memory；标题 11 写入季度芒格洞察候选池。允许轻度去重压缩，但不得丢失独立判断、限定、反转、隐喻、问题、回答或行动边界。
+3. 用户从阶段 2 完成状态回复 `继续`、`继续下一步` 或 `继续记忆`，视为确认本周 Weekly Output、芒格之魂、核心纪要、问题与回答和 Memory 候选已人工审核；先展示“最后确认卡”，不执行写入。用户对卡片确认后，一次性执行卡内列出的本地写入、行动反馈 Base 写入、私有备份、YW Next 刷新和 Flomo 同步。确认词必须覆盖卡片列出的载荷与目的地，例如：`确认执行 W34 阶段 3：写入已确认 Memory；将行动反馈周报已确认条目写入 Action Feedback Base；将 01_core、03_input、04_output 备份到 Learn-X 专用飞书云盘并维护 Snapshots；刷新 YW Next；将 W34 周记与 2026-Q3 Memory 同步到 Flomo。` 此后不得按备份、Full Access、YW Next、Flomo 分别再次请求确认；同一目标周、同一事务范围内因网络、Ego Lite、读回或工具环境失败而进行的安全重试沿用这次授权。只有新增目标、扩大数据范围、改变写入对象或新增删除动作时才重新确认。除本阶段末尾的 Flomo 同步外，不得访问、验证或发布任何外部内容。若当前并非阶段 2 完成状态，`继续`按前序阶段规则解释，不得直接进入这里。
+   - 标题 11「全文核心重点纪要」、标题 12「芒格之魂的洞察」和标题 13 的问题与回答是系统确认内容，不要求 checkbox。标题 11 和标题 13 写入当周 Memory；标题 12 写入季度芒格洞察候选池。允许轻度去重压缩，但不得丢失独立判断、限定、反转、隐喻、问题、回答或行动边界。
 4. 生成或刷新候选：
 
    ```bash
@@ -203,7 +208,18 @@ Deep Code X 另有一个独立的周日调度（`learn-x-voice-insight`，20:00�
 7. 不迁移未勾选条目。普通未勾选正文中的 `重要`、`保留`、`确认`、`继续追踪` 等关键词不构成确认。
 8. 将获准条目写入正确的季度 Memory 目标。「全文核心重点纪要」和问题与回答进入对应周的 `Memory`；「芒格之魂的洞察」进入顶部芒格洞察候选池。已勾选的 `法候选` / `术候选` 进入对应候选池；任何内容都不自动升级为正式 `道 / 法 / 术`。
 9. 保持幂等。重复运行不得追加完全重复条目。
-10. 如果标题 10/11/12 均无实质内容，且没有其他获准条目，停止并要求用户补充、勾选或明确确认候选，不要编造 Memory。
+9a. Memory 迁移完成后、备份之前，把独立 `action-feedback.md` 中已勾选（`[x]`）行写入 / 更新 Action Feedback Base 事件表。阶段 3 事务卡已覆盖该写入，不再单独请求确认：
+
+   ```bash
+   npm run action:feedback -- sync --week YYYY-Www
+   ```
+
+   - 脚本按「目标周 + 短期核心议题 + 行动」生成事件键幂等：同周同行动更新反馈，不同周创建新事件；不依赖 `continue/done/stopped`。
+   - 写入后必须读回校验；读回失败按 `Action Feedback Base: failed` 处理。
+   - 缺少议题基线、出现未知主题、缺少行动或超过 1000 字时停止写入，并在 JSON 报告中给出原因；必须把失败原因原样汇报给用户，不得代用户改写或猜测。
+   - 同步失败不回滚已写入的 Memory，继续备份、YW Next 和 Flomo，但最终汇报必须标记 `Overall: partial`，明确列出 `Action Feedback Base: failed`。
+   - 同步成功后，Base 是该批事件的时间真值；周报保留为历史快照，后续修改同一周报告可安全重跑，不覆盖其他周事件。
+10. 如果标题 11/12/13 均无实质内容，且没有其他获准条目，停止并要求用户补充、勾选或明确确认候选，不要编造 Memory。
 11. Memory 写入成功后，立即执行 Learn-X 数据备份。阶段 3 事务卡已覆盖该目标周的备份写入和留存清理，不再单独请求确认：
    ```bash
    npm run backup:weekly -- --week YYYY-Www
@@ -240,7 +256,7 @@ Deep Code X 另有一个独立的周日调度（`learn-x-voice-insight`，20:00�
    - Linux 定时任务不得调用 Ego Lite。只在 Flomo 官方非 GUI 通道同时支持“按同步键检索、读回、创建和更新”且认证方式获准用于无人值守时，才启用定时同步；仅能创建的 incoming webhook/API 不满足季度 memo 更新与去重要求，保持不同步并报告缺口。
    - 定时同步以 `目标键 + 源内容哈希` 为幂等键，固定执行“远端检索 → 写入 → 读回核验 → 原子落盘状态”。任何网络或进程异常后，下一次仅先检索和读回同一幂等键；状态不能证明写入未发生时停止人工裁决，绝不盲目重发写请求。
 
-阶段 3 汇报必须包含候选数量、实际迁移数量、目标文件、去重结果、找事索引路径和状态、Flomo 同步状态（创建 / 更新 / 跳过 / 失败）、验证结果、当前位置、下一步和下次运行。
+阶段 3 汇报必须包含候选数量、实际迁移数量、行动反馈 Base 同步结果（新增 / 更新 / 跳过 / 失败及原因）、目标文件、去重结果、找事索引路径和状态、Flomo 同步状态（创建 / 更新 / 跳过 / 失败）、验证结果、当前位置、下一步和下次运行。
 
 ## 边界
 
@@ -250,6 +266,7 @@ Deep Code X 另有一个独立的周日调度（`learn-x-voice-insight`，20:00�
 - 不读取 `coach.md` 中 URL 指向的页面正文，不下载 AI Coach 附件，不把联系方式或访谈原文写入仓库。
 - 不自动生成或升级正式 `道/`、`法/`、`术` 内容；用户明确授权的 `01_core/道/flomo-top.md` 仅作为 Flomo 单向镜像例外，成功采集时允许覆盖更新。
 - 不按关键词迁移未勾选 Memory 候选。
+- 不自动确认行动反馈条目；只有独立 `action-feedback.md` 中已勾选（`[x]`）且有行动正文的行才写入 Action Feedback Base，未勾选或格式非法的行不写入并报告。
 - 未经用户明确给出路径并确认范围，不读取项目外私人导出。
 - 不混入目标周以外的数据。
 - 线上采集阻塞时，不降级使用过期本地文件。

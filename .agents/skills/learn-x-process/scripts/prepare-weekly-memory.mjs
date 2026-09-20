@@ -99,7 +99,7 @@ function renderCandidatePack(week, quarter, weeklyPath, candidates) {
     `# Learn-X Memory Candidates｜${memoryWeekSectionId(week)}`,
     "",
     "> 这是给 Codex 生成 Weekly Memory 的候选材料，不是最终 Memory。",
-  "> 标题 10/11/12 是系统确认内容；脚本只抽取候选区内已勾选内容。最终由 Codex 按 `memory-rules.md` 整理并写入。",
+  "> 标题 11/12/13 是系统确认内容；脚本只抽取候选区内已勾选内容。最终由 Codex 按 `memory-rules.md` 整理并写入。",
     "",
     "## 处理信息",
     "",

@@ -243,7 +243,8 @@ async function collectWeeklyConfirmedOutput(month, sources) {
 }
 
 export function extractWeeklyConfirmedSections(content) {
-  const headings = [...String(content).matchAll(/^##\s+(10|11)\.\s+([^\n]+)$/gm)];
+  // 兼容历史周（10/11）与新周（11/12）编号，按标题文本识别，不按编号。
+  const headings = [...String(content).matchAll(/^##\s+\d+\.\s*([^\n]+)$/gm)].filter((heading) => ["全文核心重点纪要", "芒格之魂的洞察"].includes(heading[1].trim()));
   return headings.flatMap((heading) => {
     const nextHeading = String(content).slice(heading.index + heading[0].length).match(/^##\s+/m);
     const end = nextHeading ? heading.index + heading[0].length + nextHeading.index : String(content).length;
@@ -255,8 +256,8 @@ export function extractWeeklyConfirmedSections(content) {
     const normalized = text.replace(/[#>*_`|\s-]/g, "").trim();
     if (!normalized || /^(x+|待补充|暂无|无|todo|placeholder)$/i.test(normalized)) return [];
     return [{
-      title: heading[1] === "10" ? "全文核心重点纪要" : "芒格之魂的洞察",
-      source: heading[1] === "10" ? "weekly-core" : "weekly-munger",
+      title: heading[1].trim() === "全文核心重点纪要" ? "全文核心重点纪要" : "芒格之魂的洞察",
+      source: heading[1].trim() === "全文核心重点纪要" ? "weekly-core" : "weekly-munger",
       text
     }];
   });

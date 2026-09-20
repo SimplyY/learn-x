@@ -287,6 +287,11 @@
           "name": "空提示词",
           "summary": "不加入大类或子类型约束，只装配问题、上下文和可选增强器。",
           "emptyPrompt": true
+        },
+        {
+          "id": "other-prompts.travel-rpg",
+          "name": "旅游 RPG 冒险",
+          "summary": "把历史场所设计成沉浸式开放世界 RPG 冒险。"
         }
       ],
       "avoid": [

@@ -23,6 +23,7 @@
     "test:input:weread": "node --test .agents/skills/learn-x-input/scripts/collect-weread-weekly.test.mjs",
     "test:flomo:sync": "node --test .agents/skills/learn-x-process/scripts/flomo-sync-core.test.mjs",
     "process:weekly": "node .agents/skills/learn-x-process/scripts/generate-weekly-process-pack.mjs",
+    "action:feedback": "node .agents/skills/learn-x-process/scripts/action-feedback.mjs",
     "ai:weekly": "node .agents/skills/learn-x-weekly-automation/scripts/generate-ai-review.mjs",
     "process:monthly": "node .agents/skills/learn-x-process/scripts/generate-monthly-process-pack.mjs",
     "chatgpt:monthly-understanding": "node .agents/skills/learn-x-monthly-automation/scripts/export-chatgpt-understanding.mjs",

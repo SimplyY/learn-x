@@ -4,6 +4,7 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { JSDOM } from "jsdom";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
@@ -53,6 +54,17 @@ test("no-context build has a route entry page", async () => {
   const index = await readFile(path.join(repoRoot, "dist/no-context/index.html"), "utf8");
   assert.match(index, /id="chatPackPreview"/);
   assert.match(index, /id="contextControls" class="source-box" hidden/);
+});
+
+test("context status stays available outside the hidden context controls", async () => {
+  const index = await readFile(path.join(repoRoot, "app/code/public/index.html"), "utf8");
+  const document = new JSDOM(index).window.document;
+  const status = document.querySelector("#learningStatus");
+
+  assert.ok(status);
+  assert.equal(status.closest("#contextControls"), null);
+  assert.equal(status.getAttribute("role"), "status");
+  assert.equal(status.getAttribute("aria-live"), "polite");
 });
 
 test("local-only external links are hidden by default and use the published URLs", async () => {

@@ -22,6 +22,7 @@
 | AI 对话摘要 | `ai.generated.md` → `ai.md` | 阶段 1 自动生成，用户确认后转正；失败时使用 fallback prompt 手动生成 |
 | Codex / Code X 构建复盘 | `build.md` | 专项自动化或人工补充 |
 | 飞书机器人 Build 复盘 | `build-bot.md` | 飞书机器人侧生成；本地周自动化只提示自查 |
+| 行动反馈回捞 | `open-actions.md`（有未闭环行动时） | `npm run action:feedback -- collect --week YYYY-Www`；从 Action Feedback Base 确定性读取全部 continue 状态核心行动，0 条时不生成文件并写入状态侧车 |
 | 调研等其他重要输入 | `research.md` 或语义清楚的 `<source>.md` | 按需补充 |
 
 `learn-x-process` 不联网采集，也不判断材料价值；它只读取指定周目录，生成 `04_output/_dist/weekly/YYYY-Www/input.json` 和 `process-pack.md`。
@@ -47,7 +48,7 @@ rm 03_input/weekly/YYYY-Www/README.md
 2. 自动化读取 `03_input/weekly/00_template/ai.md`，通过全局 ChatGPT Web Bridge 在已登录 ChatGPT 新聊天中生成 `ai.generated.md`；不发送本地周输入材料。失败时报告可手动复制的 fallback prompt。
 3. AI 草稿生成后立即生成飞书周记草稿；用户回复“AI 周回顾已确认”后，自动把 `ai.generated.md` 转为正式 `ai.md`。用户再确认周记，回复“周记已确认”后，自动采集 `weekly.md` 并生成 `_dist`。
 4. 用户在飞书编辑确认周记、移除主标题中的 `【待优化】AI 基础草稿` 标记后，回复“周记已确认”或“继续生成周报材料”。自动化采集 `weekly.md` 定稿，并生成 `_dist`。
-5. 用户完成 `04_output/weekly/YYYY-WW.md`、审核行动反馈变更并勾选 Memory 候选后再次回复继续。自动化先把已确认变更写入行动反馈 Base，再生成 `memory-candidates.md`，只把已勾选或用户明确确认的内容无损迁移到 `01_core/memory/YYYY-QN.memory.md`；未勾选内容不写入。
+5. 用户完成 `04_output/weekly/YYYY-WW.md`（含输出项 7「行动反馈周报」的增删改与勾选）、勾选 Memory 候选后再次回复继续。自动化先执行 `npm run action:feedback -- sync --week YYYY-Www`，把行动反馈周报中已勾选条目幂等写入 Action Feedback Base，再生成 `memory-candidates.md`，只把已勾选或用户明确确认的内容无损迁移到 `01_core/memory/YYYY-QN.memory.md`；未勾选内容不写入。
 
 要求：
 
