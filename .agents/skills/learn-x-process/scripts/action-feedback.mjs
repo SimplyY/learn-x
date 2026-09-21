@@ -3,7 +3,7 @@
 // collect 保留为旧流程兼容命令，新流程只读取独立的 action-feedback.md。
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -105,6 +105,29 @@ function recordsFromData(data, requestedFields = REQUIRED_FIELDS) {
   }).filter((record) => record.id);
 }
 
+function recordFromData(data, requestedFields = REQUIRED_FIELDS, fallbackId = "") {
+  const row = (Array.isArray(data.data) ? data.data[0] : null)
+    || data.record
+    || (Array.isArray(data.records) ? data.records[0] : data.records)
+    || data;
+  if (!row || typeof row !== "object") return null;
+  if (Array.isArray(row)) {
+    const fields = data.fields || requestedFields;
+    return { id: String(fallbackId || data.record_id_list?.[0] || ""), values: Object.fromEntries(fields.map((field, index) => [field, cellText(row[index])])) };
+  }
+  const values = row.fields || row.values || row;
+  return {
+    id: String(row.record_id || row.id || fallbackId || data.record_id_list?.[0] || ""),
+    values: Object.fromEntries(Object.entries(values).map(([field, value]) => [field, cellText(value)])),
+  };
+}
+
+function recordIdFromUpsert(result) {
+  const data = result.data || {};
+  const record = data.record || (Array.isArray(data.records) ? data.records[0] : null) || {};
+  return String(record.record_id || record.id || data.record_id || data.record_id_list?.[0] || "");
+}
+
 async function listRecords(config, fields = REQUIRED_FIELDS) {
   const records = [];
   let offset = 0;
@@ -116,6 +139,15 @@ async function listRecords(config, fields = REQUIRED_FIELDS) {
     if (!page.length) throw new Error("Base 分页声明 has_more，但没有返回新记录。");
     offset += page.length;
   }
+}
+
+export async function findEventByKey(eventKey, readRecords, pause = sleep) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const found = (await readRecords()).find((record) => String(record.values["事件键"] || "") === String(eventKey));
+    if (found) return found;
+    if (attempt < 4) await pause(250 * (attempt + 1));
+  }
+  return null;
 }
 
 function driveItems(result) {
@@ -152,6 +184,8 @@ export function schemaIssues(fields, schema) {
     }
     if (typeof expected !== "string" && expected.type && actual.type !== expected.type) {
       mismatched.push(`${name}（实际类型 ${actual.type || "unknown"}，预期 ${expected.type}）`);
+    } else if (typeof expected !== "string" && expected.type === "formula" && actual.expression !== expected.expression) {
+      mismatched.push(`${name}（公式表达式与预期不一致）`);
     }
   }
   return { missing, mismatched };
@@ -222,8 +256,8 @@ async function writePin(config) {
 }
 
 // 解析顺序：显式 env → 本地 pin；两者都必须通过字段校验才算可用。collect 与 sync 共用；collect 绝不创建。
-async function resolvePinned(config, schema = BASE_FIELD_SCHEMA) {
-  const pin = await readPin();
+async function resolvePinned(config, schema = BASE_FIELD_SCHEMA, pinOverride = undefined) {
+  const pin = pinOverride === undefined ? await readPin() : pinOverride;
   const candidates = [{ baseToken: config.baseToken, tableId: config.tableId }, { baseToken: pin?.baseToken, tableId: pin?.tableId }].filter((item) => item.baseToken);
   for (const candidate of candidates) {
     const tableId = candidate.tableId || (await findTableId(candidate.baseToken).catch(() => ""));
@@ -236,9 +270,19 @@ async function resolvePinned(config, schema = BASE_FIELD_SCHEMA) {
   return null;
 }
 
+export function actionFeedbackTargetMode(config, pin) {
+  return config?.baseToken || pin?.baseToken ? "configured" : "discover";
+}
+
 async function ensureResources(config) {
-  const pinned = await resolvePinned(config, ACTION_FEEDBACK_FIELD_SCHEMA);
+  const pin = await readPin();
+  const mode = actionFeedbackTargetMode(config, pin);
+  const pinned = await resolvePinned(config, ACTION_FEEDBACK_FIELD_SCHEMA, pin);
   if (pinned) return pinned;
+  if (mode === "configured") {
+    const target = config.baseToken ? "显式配置的" : "已固定的";
+    throw new Error(`${target} Action Feedback Base 不可访问或缺少/不匹配事件字段；拒绝按名称切换目标。请先核对目标，必要时显式运行 migrate。`);
+  }
   config.baseToken = "";
   config.tableId = "";
   let tokens = [];
@@ -323,15 +367,30 @@ async function upsertRecord(config, fields, recordId, actionId) {
 async function upsertEvent(config, fields, recordId, eventKey) {
   const args = ["base", "+record-upsert", "--base-token", config.baseToken, "--table-id", config.tableId, "--json", JSON.stringify(fields)];
   if (recordId) args.push("--record-id", recordId);
-  await runLarkCli(args);
+  const writeResult = await runLarkCli(args);
+  let targetRecordId = recordId || recordIdFromUpsert(writeResult);
+  if (!targetRecordId) {
+    targetRecordId = (await findEventByKey(eventKey, () => listRecords(config)))?.id || "";
+  }
+  if (!targetRecordId) throw new Error(`Base 写入未返回记录 ID，且无法按事件键定位：${eventKey}`);
   for (let attempt = 0; attempt < 5; attempt += 1) {
-    const found = (await listRecords(config)).find((record) => String(record.values["事件键"] || "") === String(eventKey));
+    let found = null;
+    let readError = null;
+    try {
+      const result = await runLarkCli([
+        "base", "+record-get", "--base-token", config.baseToken, "--table-id", config.tableId, "--record-id", targetRecordId,
+        ...REQUIRED_FIELDS.flatMap((field) => ["--field-id", field]),
+      ]);
+      found = recordFromData(result.data || {}, REQUIRED_FIELDS, targetRecordId);
+    } catch (error) {
+      readError = error;
+    }
     if (found) {
       const mismatch = Object.entries(fields).filter(([field, value]) => !sameReadbackValue(field, value, found.values[field]));
       if (!mismatch.length) return found;
       if (attempt === 4) throw new Error(`Base 读回事件字段不一致：${eventKey}（${mismatch.map(([field]) => field).join("、")}）`);
     } else if (attempt === 4) {
-      throw new Error(`Base 写入后未读回事件键：${eventKey}`);
+      throw new Error(`Base 写入后无法按记录 ID 读回事件 ${eventKey}${readError ? `：${readError.message}` : ""}`);
     }
     await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
   }
@@ -417,7 +476,7 @@ export async function readShortTermTopics(file = path.join(repoRoot, CORE_TOPICS
   const topics = parseShortTermTopics(markdown);
   if (!topics.length) throw new Error(`核心议题镜像缺少「短期核心议题」：${path.relative(repoRoot, file)}`);
   const metadata = coreTopicMetadata(markdown);
-  if (metadata.status === "stale") throw new Error(`核心议题镜像已过期（revision ${metadata.revision}），请先同步：${path.relative(repoRoot, file)}`);
+  if (metadata.status !== "fresh") throw new Error(`核心议题镜像未验证为最新（status ${metadata.status}，revision ${metadata.revision}），请先同步：${path.relative(repoRoot, file)}`);
   return { topics, ...metadata, file };
 }
 
@@ -430,49 +489,127 @@ export function renderActionFeedbackDraft({ week, topics, revision = "unknown" }
       "",
     ].join("\n");
   }
+  const snapshot = Buffer.from(JSON.stringify({ revision, topics }), "utf8").toString("base64");
   return [
     `# Action Feedback 周报｜${week}`,
+    `<!-- action-feedback-baseline:${snapshot} -->`,
     "",
     `> 议题基线：核心议题总览（revision ${revision}）`,
-    "> 本周没有行动或反馈的议题保留为空。",
+    "> 阶段 1 初稿：依据本周可用材料填写；“—”只表示核对后没有实际行动或反馈。",
     `> 总字数不超过 ${MAX_REPORT_CHARS} 字。`,
     "",
     "| 短期核心议题 | 行动 | 反馈 |",
     "|---|---|---|",
-    ...topics.map((topic) => `| ${topic} | — | 本周无新事项 |`),
+    ...topics.map((topic) => `| ${topic} | 待核对 | 待核对 |`),
     "",
   ].join("\n");
 }
 
 export function visibleCharCount(value) {
-  return Array.from(String(value || "")).length;
+  return Array.from(String(value || "").replace(/<!--[\s\S]*?-->/g, "")).length;
 }
 
-export async function ensureActionFeedbackDraft({ week, outputRoot, coreTopicsFile } = {}) {
+function isUnfilledActionFeedbackDraft(markdown, week) {
+  try {
+    const text = String(markdown || "").trim();
+    const rows = parseActionFeedbackTable(text);
+    const revision = text.match(/^>\s*议题基线：核心议题总览（revision\s+([^）]+)）\s*$/m)?.[1] || "unknown";
+    return revision !== "unknown"
+      && rows.length > 0
+      && text === renderActionFeedbackDraft({ week, topics: rows.map((row) => row.topic), revision }).trim();
+  } catch {
+    return false;
+  }
+}
+
+export async function ensureActionFeedbackDraft({ week, outputRoot, coreTopicsFile, weeklyInputFile } = {}) {
   const target = path.join(outputRoot, ACTION_FEEDBACK_REPORT);
-  if (await fileExists(target)) return { path: target, status: "preserved" };
+  let previousContent;
+  let previousTargetMtime = 0;
+  if (await fileExists(target)) {
+    previousContent = await readFile(target, "utf8");
+    const inputPath = weeklyInputFile || path.join(repoRoot, "03_input/weekly", week, "weekly.md");
+    try {
+      const [targetInfo, inputInfo] = await Promise.all([stat(target), stat(inputPath)]);
+      previousTargetMtime = targetInfo.mtimeMs;
+      if (!isUnfilledActionFeedbackDraft(previousContent, week) || inputInfo.mtimeMs <= targetInfo.mtimeMs) {
+        return { path: target, status: "preserved" };
+      }
+    } catch {
+      return { path: target, status: "preserved" };
+    }
+  }
   let content;
   let metadata = { topics: [], revision: "unknown", source: "" };
   try {
     metadata = await readShortTermTopics(coreTopicsFile || path.join(repoRoot, CORE_TOPICS_FILE));
     content = renderActionFeedbackDraft({ week, ...metadata });
   } catch (error) {
+    if (previousContent !== undefined) return { path: target, status: "needs_review", error: error.message };
     content = renderActionFeedbackDraft({ week, topics: [] });
     metadata.error = error.message;
   }
   if (visibleCharCount(content) > MAX_REPORT_CHARS) throw new Error(`Action Feedback 模板超过 ${MAX_REPORT_CHARS} 字：${visibleCharCount(content)}`);
   await mkdir(outputRoot, { recursive: true });
-  await writeFile(target, content, "utf8");
+  if (previousContent !== undefined) {
+    const currentContent = await readFile(target, "utf8");
+    const currentInfo = await stat(target);
+    if (currentContent !== previousContent || currentInfo.mtimeMs !== previousTargetMtime) return { path: target, status: "preserved" };
+    await writeFile(target, content, "utf8");
+    return { ...metadata, path: target, status: "refreshed" };
+  }
+  try {
+    await writeFile(target, content, { encoding: "utf8", flag: "wx" });
+  } catch (error) {
+    if (error.code === "EEXIST") return { path: target, status: "preserved" };
+    throw error;
+  }
   return { ...metadata, path: target, status: metadata.error ? "needs_review" : "created" };
+}
+
+function splitMarkdownTableRow(line) {
+  const text = String(line || "").trim().replace(/^\|/, "").replace(/\|$/, "");
+  const cells = [];
+  let cell = "";
+  let slashes = 0;
+  for (const character of text) {
+    if (character === "\\") {
+      slashes += 1;
+      continue;
+    }
+    if (character === "|") {
+      cell += "\\".repeat(Math.floor(slashes / 2));
+      if (slashes % 2) cell += "|";
+      else {
+        cells.push(cell.trim());
+        cell = "";
+      }
+      slashes = 0;
+      continue;
+    }
+    cell += "\\".repeat(slashes) + character;
+    slashes = 0;
+  }
+  cell += "\\".repeat(slashes);
+  cells.push(cell.trim());
+  return cells;
 }
 
 export function parseActionFeedbackTable(markdown) {
   const rows = [];
   let currentTopic = "";
-  for (const line of String(markdown || "").split("\n")) {
-    if (!/^\s*\|/.test(line)) continue;
-    const cells = line.trim().replace(/^\||\|$/g, "").split("|").map((cell) => cell.trim());
-    if (cells.length < 3 || cells[0] === "短期核心议题" || cells.every((cell) => /^[-:]+$/.test(cell))) continue;
+  const lines = String(markdown || "").split("\n");
+  const header = lines.findIndex((line) => {
+    if (!/^\s*\|/.test(line)) return false;
+    return splitMarkdownTableRow(line).join("|") === "短期核心议题|行动|反馈";
+  });
+  if (header < 0) return rows;
+  for (let index = header + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!/^\s*\|/.test(line)) break;
+    const cells = splitMarkdownTableRow(line);
+    if (cells.length !== 3) throw new Error(`Action Feedback 表格必须为三列：${line.trim()}`);
+    if (cells.every((cell) => /^[-:]+$/.test(cell))) continue;
     const topic = cells[0] || currentTopic;
     if (topic) currentTopic = topic;
     const actionCell = cells[1] || "";
@@ -493,6 +630,12 @@ export function normalizeAction(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
+function isWritableConfirmedActionFeedback(entry) {
+  const action = normalizeAction(entry?.action);
+  const feedback = String(entry?.feedback || "").trim();
+  return Boolean(entry?.confirmed && action && !["—", "待核对"].includes(action) && feedback !== "待核对");
+}
+
 export function actionFeedbackEventKey(week, topic, action) {
   return createHash("sha256").update([week, topic, normalizeAction(action)].map((value) => String(value || "").trim()).join("\n"), "utf8").digest("hex");
 }
@@ -502,16 +645,41 @@ function weekStartDatetime(week) {
   if (!match) throw new Error(`无效周格式：${week}`);
   const year = Number(match[1]);
   const weekNumber = Number(match[2]);
+  if (weekNumber < 1 || weekNumber > 53) throw new Error(`无效 ISO 周：${week}`);
   const januaryFour = new Date(Date.UTC(year, 0, 4));
   const monday = new Date(januaryFour.getTime() - ((januaryFour.getUTCDay() || 7) - 1) * 86400000 + (weekNumber - 1) * 7 * 86400000);
+  const thursday = new Date(monday.getTime() + 3 * 86400000);
+  if (thursday.getUTCFullYear() !== year) throw new Error(`ISO 年 ${year} 不存在第 ${weekNumber} 周`);
   return `${monday.toISOString().slice(0, 10)} 00:00:00`;
 }
 
-export function validateActionFeedbackReport(markdown, topics, week) {
+function topicSnapshot(markdown) {
+  const encoded = String(markdown || "").match(/<!--\s*action-feedback-baseline:([A-Za-z0-9+/=]+)\s*-->/)?.[1];
+  if (!encoded) return null;
+  try {
+    const value = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
+    if (!value || !Array.isArray(value.topics) || !value.topics.length || !value.revision) throw new Error("invalid snapshot");
+    return { revision: String(value.revision), topics: value.topics.map((topic) => String(topic).trim()).filter(Boolean) };
+  } catch {
+    throw new Error("Action Feedback 的议题基线快照损坏，请重新生成或人工核对。");
+  }
+}
+
+export function validateActionFeedbackReport(markdown, topics, week, currentRevision = "") {
   const text = String(markdown || "");
   if (!new RegExp(`^# Action Feedback 周报｜${week}$`, "m").test(text)) throw new Error(`Action Feedback 缺少目标周标题：${week}`);
   if (visibleCharCount(text) > MAX_REPORT_CHARS) throw new Error(`Action Feedback 超过 ${MAX_REPORT_CHARS} 字：${visibleCharCount(text)}`);
-  const expected = [...new Set((topics || []).map((topic) => String(topic).trim()).filter(Boolean))];
+  const revision = text.match(/^>\s*议题基线：核心议题总览（revision\s+([^）]+)）\s*$/m)?.[1]?.trim() || "";
+  if (!revision) throw new Error("Action Feedback 缺少可校验的议题基线 revision。");
+  const snapshot = topicSnapshot(text);
+  let baselineTopics = topics || [];
+  if (snapshot) {
+    if (snapshot.revision !== revision) throw new Error("Action Feedback 的议题基线 revision 与快照不一致。");
+    baselineTopics = snapshot.topics;
+  } else if (currentRevision && revision !== currentRevision) {
+    throw new Error(`历史 Action Feedback 使用 revision ${revision}，当前镜像为 ${currentRevision}，且报告没有议题快照；请人工核对后重建基线。`);
+  }
+  const expected = [...new Set(baselineTopics.map((topic) => String(topic).trim()).filter(Boolean))];
   if (!expected.length) throw new Error("没有可用的短期核心议题，拒绝同步。");
   const rows = parseActionFeedbackTable(markdown);
   const expectedSet = new Set(expected);
@@ -520,6 +688,8 @@ export function validateActionFeedbackReport(markdown, topics, week) {
   const unknown = [...present].filter((topic) => !expectedSet.has(topic));
   if (missing.length) throw new Error(`Action Feedback 缺少短期核心议题：${missing.join("、")}`);
   if (unknown.length) throw new Error(`Action Feedback 出现未在议题基线中的主题：${unknown.join("、")}`);
+  const incompleteConfirmed = rows.find((row) => row.confirmed && !isWritableConfirmedActionFeedback(row));
+  if (incompleteConfirmed) throw new Error(`已确认的 Action Feedback 行必须填写真实行动和非占位反馈：${incompleteConfirmed.topic}`);
   return rows.map((row) => ({ ...row, week, period: weekStartDatetime(week) }));
 }
 
@@ -529,7 +699,10 @@ export function routeConfirmedEvents(entries, existingRecords = []) {
   for (const entry of entries.filter((item) => item.confirmed)) {
     const topic = String(entry.topic || "").trim();
     const action = normalizeAction(entry.action);
-    if (!topic || !action || action === "—") continue;
+    if (!topic || !isWritableConfirmedActionFeedback(entry)) {
+      plan.skipped.push({ topic, action, reason: "已确认行缺少真实行动或非占位反馈" });
+      continue;
+    }
     const key = `${entry.week}\n${topic}\n${action}`;
     const current = grouped.get(key) || { ...entry, topic, action, feedback: "", week: entry.week, period: entry.period || weekStartDatetime(entry.week) };
     const feedback = String(entry.feedback || "").trim();
@@ -742,7 +915,7 @@ async function cmdSync({ week }) {
   let entries;
   try {
     topicConfig = await readShortTermTopics();
-    entries = validateActionFeedbackReport(markdown, topicConfig.topics, week);
+    entries = validateActionFeedbackReport(markdown, topicConfig.topics, week, topicConfig.revision);
   } catch (error) {
     const report = { ok: false, command: "sync", week, output: path.relative(repoRoot, outputFile), reason: error.message };
     await appendSyncLog(report);
@@ -750,7 +923,7 @@ async function cmdSync({ week }) {
   }
   const report = {
     ok: true, command: "sync", week, output: path.relative(repoRoot, outputFile),
-    topics: topicConfig.topics, candidates: entries.length, confirmed: entries.filter((entry) => entry.confirmed && entry.action && entry.action !== "—").length,
+    topics: topicConfig.topics, candidates: entries.length, confirmed: entries.filter(isWritableConfirmedActionFeedback).length,
     created: [], updated: [], skipped: [], failed: [],
   };
   if (!report.confirmed) report.reason = "没有已勾选（[x]）且包含行动的行动反馈条目";
@@ -790,6 +963,7 @@ async function appendSyncLog(report) {
 function usage() {
   return [
     "用法：",
+    "  npm run action:feedback -- draft --week YYYY-Www     # 创建独立 Action Feedback 草稿",
     "  npm run action:feedback -- sync --week YYYY-Www      # 独立 Action Feedback 周报 -> Base 事件",
     "  npm run action:feedback -- migrate                  # 只新增缺失的事件字段（需明确执行）",
     "  npm run action:feedback -- collect --week YYYY-Www  # 旧流程兼容，不再是默认周流程",
@@ -800,7 +974,7 @@ function usage() {
 
 async function main(argv) {
   const [command] = argv;
-  if (command !== "collect" && command !== "sync" && command !== "migrate") {
+  if (command !== "collect" && command !== "sync" && command !== "migrate" && command !== "draft") {
     console.error(usage());
     process.exitCode = 1;
     return;
@@ -808,6 +982,14 @@ async function main(argv) {
   let week = "";
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === "--week") week = argv[index + 1] || "";
+  }
+  if (command === "draft") {
+    week = normalizeWeek(week || defaultWeeklyReviewWeek());
+    const outputRoot = path.join(repoRoot, "04_output/_dist/weekly", week);
+    const report = await ensureActionFeedbackDraft({ week, outputRoot });
+    console.log(JSON.stringify(report, null, 2));
+    if (report.status === "needs_review") process.exitCode = 1;
+    return;
   }
   if (command === "migrate") {
     const report = await cmdMigrate();

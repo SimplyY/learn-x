@@ -62,6 +62,18 @@ Run `npm run input:voice -- --week YYYY-Www` to read the fixed Voice-X Base with
 - Never fetch or copy `原始文字稿`; Voice-X Base remains the index and Docx remains the only正文 authority.
 - Each written record retains the title, recording time, processed-original character count, AI-insight character count, and the complete structured insight sections; it does not copy `原始文字稿`. A successful zero-result query records `empty` and does not create a new file. Any Base/schema/document failure preserves the previous `voice.md` byte-for-byte and records `failed/unavailable`.
 
+## Personal Feishu Docs Weekly Input
+
+`npm run input:feishu-docs -- --week YYYY-Www` collects Docx/Wiki documents created or edited by the user during the target Asia/Shanghai ISO week. Run it only after the AI Docx/Wiki writer identity cutover and the required live canaries pass.
+
+- The collector searches the user identity for both `--created-by-me` and `--edited-since/--edited-until`; it does not filter by owner. Wiki nodes are resolved to their underlying Docx token and deduplicated with direct Docx results.
+- Set `LEARNX_FEISHU_HUMAN_EDITOR_ID` only to the editor ID verified from the dedicated test document. Every run checks `lark-cli auth status --json --verify` and requires the current user's `openId` to match it; the ID type is not inferred from its prefix. Missing or inconsistent identity evidence fails closed.
+- Do not activate while any AI Docx/Wiki writer still uses the user identity: Feishu editor IDs cannot distinguish that automation from manual edits. A present `feishu-docs.md` without this week's source-status entry is also rejected by Weekly Process.
+- The default run is a shadow run: it writes a complete review snapshot but records `needs_review`, so Weekly Process cannot consume it. During the first complete ISO week after writer cutover, compare the document list, latest user versions, and every diff manually. `--activate` is accepted only after a successful shadow result exists for the same week; invoking it attests that the manual comparison and external writer/canary gates passed, which the local collector cannot independently verify.
+- The collector paginates every search/history result, reads each required snapshot with `docs +fetch --revision-id`, and checks the returned `document.revision_id`. Missing pages, mixed editor IDs, unavailable revisions, or CLI/schema changes record `needs_review` or `failed`; an old `feishu-docs.md` is preserved but excluded.
+- The history endpoint has no verified public stability or completeness guarantee. The output represents only returned, validated history; it is not an authoritative complete audit log. Hand-pasted AI text is attributed to the Feishu account that saved the revision.
+- Keep one `feishu-docs.md`. Markdown content and source links stay in text form; non-text assets retain their links/placeholders without binary downloads. If it exceeds 15,000 Unicode characters, keep the full source and let the existing human compression gate stop Process; do not truncate or split it.
+
 ## Weekly input size contract
 
 - Every ordinary `03_input/weekly/YYYY-Www/*` input file remains at most 15,000 Unicode characters. Voice-X is a special source: `voice.md` may be up to 30,000 characters before a strong warning, and this is not a collection or write gate.

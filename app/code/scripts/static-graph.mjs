@@ -580,6 +580,7 @@ function buildContextFiles(files, weightConfig, appConfig, options = {}) {
         label: file.path,
         title: file.title,
         size: file.size,
+        visibleChars: Array.from(file.content.replace(/\s/gu, "")).length,
         ...resolveContextWeight(file.path, weightConfig, appConfig)
       };
       if (options.includeContent) payload.content = file.content;

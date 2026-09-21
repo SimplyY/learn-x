@@ -5,7 +5,7 @@ description: 从 Learn-X 已落盘的周输入生成安全的飞书周记草稿�
 
 # Learn-X 周记草稿
 
-从 `03_input/weekly/YYYY-Www/` 的已落盘材料生成飞书周记模板草稿。`03_input` 是事实快照；飞书仅提供模板、目标段落和草稿写入位置。草稿不是已确认周记，也不得触发 `_dist`、Weekly Output 或 Memory。
+从 `03_input/weekly/YYYY-Www/` 的已落盘材料生成飞书周记模板草稿。`03_input` 是事实快照；飞书仅提供模板、目标段落和草稿写入位置。草稿不是已确认周记，也不得触发 Input Pack、Process Pack、Weekly Output 或 Memory。由 `learn-x-weekly-automation` 在同一阶段另行生成配套的 `action-feedback.md` 草稿，并与周记一起交给用户审核。
 
 ## 前置条件
 
@@ -59,4 +59,4 @@ description: 从 Learn-X 已落盘的周输入生成安全的飞书周记草稿�
 
 - 用户编辑并确认飞书周记时，应移除主标题中的 `【待优化】AI 基础草稿` 标记；标题标记仍存在即视为未确认，不能进入 Weekly Process。
 - 汇报必须包含目标周、事实来源、生成/跳过的字段（明确列出 `回顾最近笔记 & flomo 洞察` 由用户填写）、本次回读确认的飞书目标段落锚点链接、阻塞项、当前位置、下一步和再下一步。
-- 成功后只提示用户在飞书编辑确认，然后回复“周记已确认”或“继续生成周报材料”；不得自动采集 `weekly.md` 或生成 `_dist`。
+- 成功后提示用户在飞书编辑周记，并与同阶段生成的本地 Action Feedback 草稿一起审核；回复“周记已确认”或“继续生成周报材料”表示两份草稿都已通过。此 Skill 本身不采集 `weekly.md` 或生成 Process Pack。

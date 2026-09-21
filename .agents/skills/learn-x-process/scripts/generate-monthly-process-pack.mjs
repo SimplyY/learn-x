@@ -14,6 +14,7 @@ export async function generateMonthlyProcessPack(options = {}) {
 
   for (const monthId of months) {
     const payload = await collectMonthlyProcessInput(monthId);
+    const previousOutput = await readPreviousMonthlyOutput(payload.month);
     const outputRoot = path.join(repoRoot, "04_output/_dist/monthly", payload.month);
     await mkdir(outputRoot, { recursive: true });
     const requestsPath = path.join(outputRoot, "compression-requests.json");
@@ -30,21 +31,87 @@ export async function generateMonthlyProcessPack(options = {}) {
 
     const compression = await loadCompression(compressedPath, payload);
     const items = [...payload.items, ...compression.items];
-    const processPack = renderProcessPack(payload, compression, items);
-    const processPackBytes = Buffer.byteLength(processPack);
-    if (processPackBytes > maxPackBytes) {
-      throw new Error(`Monthly Process Pack is ${processPackBytes} bytes; compress supporting/minor events below ${maxPackBytes} bytes before retrying.`);
-    }
+    const processPack = renderProcessPack(payload, compression, items, previousOutput);
+    const processPackBytes = assertMonthlyProcessPackSize(processPack);
 
     const manifest = renderManifest(payload, compression, items, processPackBytes);
     await writeFile(inputPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
     await writeFile(processPackPath, processPack, "utf8");
     const compressionReviewDir = await writeCompressionReviewFiles(outputRoot, payload, compression, items);
     const shellPath = await ensureMonthlyOutputShell(payload.month);
-    results.push({ payload, compression, inputPath, processPackPath, requestsPath, compressedPath, compressionReviewDir, shellPath, processPackBytes });
+    results.push({ payload, compression, inputPath, processPackPath, requestsPath, compressedPath, compressionReviewDir, shellPath, previousOutput, processPackBytes });
   }
 
   return results;
+}
+
+export function previousMonthId(month) {
+  const normalized = normalizeMonthId(month);
+  const [year, monthNumber] = normalized.split("-").map(Number);
+  return monthNumber === 1
+    ? `${String(year - 1).padStart(4, "0")}-12`
+    : `${String(year).padStart(4, "0")}-${String(monthNumber - 1).padStart(2, "0")}`;
+}
+
+export function classifyPreviousMonthlyOutput(month, content, error) {
+  const previousMonth = previousMonthId(month);
+  const sourcePath = `04_output/monthly/${previousMonth}.md`;
+  if (error?.code === "ENOENT") {
+    return { previousMonth, sourcePath, status: "missing", content: "" };
+  }
+  if (error) throw error;
+
+  const text = String(content ?? "");
+  if (!text.trim()) {
+    return { previousMonth, sourcePath, status: "empty", content: "" };
+  }
+  if (isMonthlyOutputShell(text)) {
+    return { previousMonth, sourcePath, status: "shell", content: "" };
+  }
+  return { previousMonth, sourcePath, status: "ready", content: text.trim() };
+}
+
+export async function readPreviousMonthlyOutput(month, root = repoRoot) {
+  const previousMonth = previousMonthId(month);
+  const sourcePath = path.join(root, "04_output/monthly", `${previousMonth}.md`);
+  try {
+    const content = await readFile(sourcePath, "utf8");
+    return classifyPreviousMonthlyOutput(month, content);
+  } catch (error) {
+    if (error.code === "ENOENT") return classifyPreviousMonthlyOutput(month, "", error);
+    throw error;
+  }
+}
+
+function isMonthlyOutputShell(content) {
+  const shellNote = /^> 基于 `04_output\/_dist\/monthly\/\d{4}-\d{2}\/process-pack\.md` 由用户使用 AI Chat 生成正文后填入。$/;
+  const meaningfulLines = String(content)
+    .replace(/^\uFEFF/, "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/^# Learn-X Monthly Output(?:｜|\|)\d{4}-\d{2}$/.test(line))
+    .filter((line) => !shellNote.test(line))
+    .filter((line) => !/^#{1,6}\s/.test(line))
+    .filter((line) => !isMonthlyOutputPlaceholderLine(line));
+  return meaningfulLines.length === 0;
+}
+
+function isMonthlyOutputPlaceholderLine(line) {
+  const placeholder = line.trim()
+    .replace(/^\d+[.)]\s*/, "")
+    .replace(/^[-*]\s*/, "")
+    .replace(/^\[[ xX]\]\s*/, "")
+    .replace(/^(?:问题|背景补充|回答)[：:]\s*/, "");
+  return /^(?:xx+|todo|待补充|待填写|…+|\.\.\.)[。.!！?？]?$/i.test(placeholder);
+}
+
+export function assertMonthlyProcessPackSize(processPack) {
+  const bytes = Buffer.byteLength(processPack);
+  if (bytes > maxPackBytes) {
+    throw new Error(`Monthly Process Pack is ${bytes} bytes; reduce eligible supporting/minor input material below ${maxPackBytes} bytes before retrying. The previous Monthly Output comparison source is never truncated.`);
+  }
+  return bytes;
 }
 
 async function loadCompression(compressedPath, payload) {
@@ -381,14 +448,14 @@ function allocateCompressionBySource(events, requests) {
   return totals;
 }
 
-export function renderProcessPack(payload, compression, items) {
+export function renderProcessPack(payload, compression, items, previousOutput = classifyPreviousMonthlyOutput(payload.month, "")) {
   const rawChars = payload.sources.reduce((sum, source) => sum + source.chars, 0);
   const finalChars = items.reduce((sum, item) => sum + item.outputChars, 0);
   const lines = [
     `# Learn-X Monthly Process Pack｜${payload.month}`,
     "",
     "> 这是给 AI Chat 生成 Monthly Output 的自包含上下文，不是原始 Input，也不是最终月报。",
-    "> 已移除越界时间、空占位、重复采集元数据和重复材料；压缩事件保留来源路径，完整原文仍在 `03_input/`。",
+    "> 已移除越界时间、空占位、重复采集元数据和重复材料；压缩事件保留来源路径，完整原文仍在各自来源文件。",
     "",
     "## 0. 完整性与缺口",
     "",
@@ -399,11 +466,24 @@ export function renderProcessPack(payload, compression, items) {
     `- 原始来源：${payload.stats.sourceCount} 个，${rawChars} 字符`,
     `- 确定性材料：${payload.items.length} 个，${payload.stats.deterministicOutputChars} 字符`,
     `- 压缩来源：${compression.stats.sourceCount} 个 → ${compression.stats.eventCount} 个事件，${compression.stats.originalChars} → ${compression.stats.outputChars} 字符`,
-    `- 最终上下文正文：${items.length} 个事件，${finalChars} 字符`,
+    `- 本月最终上下文正文：${items.length} 个事件，${finalChars} 字符`,
     "",
     `- 缺口与排除：${payload.stats.excludedSourceCount} 个来源；逐项原因见同目录 \`input.json\``,
     ""
   ];
+
+  lines.push(
+    `## 上月 Monthly Output 对照材料｜${previousOutput.previousMonth}`,
+    "",
+    "> 对比专用：只用于识别上月到本月的变化，不是本月事实；本月事实以本 Process Pack 当前月份材料为准；缺失时不回退到更早月份。",
+    `- 状态：${previousOutput.status}`,
+    `- 来源：\`${previousOutput.sourcePath}\``,
+    "- 本节全文不计入 `input.json`，也不计入下面按本月材料计算的来源、事件和字符统计。",
+    ""
+  );
+  if (previousOutput.status === "ready") {
+    lines.push("### 上月 Monthly Output 全文", "", demoteEmbeddedHeadings(previousOutput.content), "");
+  }
 
   lines.push("## 1. 按 Input 文件类型组织的材料", "");
   let itemIndex = 0;
@@ -512,13 +592,15 @@ function renderSourcePolicySummary(sourceGroup) {
 }
 
 export function demoteEmbeddedHeadings(text) {
-  let inFence = false;
+  let fence = "";
   return String(text).split("\n").map((line) => {
-    if (/^\s*```/.test(line)) {
-      inFence = !inFence;
+    const marker = line.match(/^\s*(`{3,}|~{3,})/)?.[1] || "";
+    if (marker) {
+      if (!fence) fence = marker;
+      else if (marker[0] === fence[0] && marker.length >= fence.length) fence = "";
       return line;
     }
-    return inFence ? line : line.replace(/^#{1,6}\s+/, "#### ");
+    return fence ? line : line.replace(/^#{1,6}\s+/, "#### ");
   }).join("\n");
 }
 
@@ -578,6 +660,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     for (const result of results) {
       console.log(`Monthly process pack generated: ${path.relative(repoRoot, result.processPackPath)}`);
       console.log(`Monthly audit manifest generated: ${path.relative(repoRoot, result.inputPath)}`);
+      console.log(`Previous Monthly Output: ${result.previousOutput.status} ${path.relative(repoRoot, path.join(repoRoot, result.previousOutput.sourcePath))}`);
       console.log(`Process Pack: ${result.processPackBytes} bytes`);
       console.log(`Compression: ${result.compression.stats.originalChars} -> ${result.compression.stats.outputChars} characters`);
     }

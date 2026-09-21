@@ -14,7 +14,7 @@ test("recommendation prioritizes urgent decisions, then priority and stale atten
     issue("0002", { "优先级": "P0", "创建时间": "2026-09-01T10:00:00+08:00" }),
     issue("0003", { "优先级": "P0", "创建时间": "2026-01-01T10:00:00+08:00" }),
     issue("0004", { "优先级": "P0", "研究状态": "暂缓研究" }),
-  ], [], "2026-09");
+  ], [], "2026-09", [], new Date("2026-09-15T00:00:00+08:00"));
   assert.deepEqual(ranked.map((item) => item["议题编号"]), ["IQ-0001", "IQ-0003", "IQ-0002"]);
 });
 
@@ -38,7 +38,7 @@ test("each horizon layer recommends at most two ordinary candidates", () => {
     issue("0002", { "议题周期": "短期核心问题" }),
     issue("0003", { "议题周期": "短期核心问题" }),
     issue("0004", { "议题周期": "中期核心问题" }),
-  ], [], "2026-09");
+  ], [], "2026-09", [], new Date("2026-09-15T00:00:00+08:00"));
   assert.deepEqual(ranked.map((item) => item["议题编号"]), ["IQ-0001", "IQ-0002", "IQ-0004"]);
 });
 

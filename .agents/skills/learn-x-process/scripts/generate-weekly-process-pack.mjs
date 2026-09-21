@@ -4,14 +4,15 @@ import { fileURLToPath } from "node:url";
 import { compressVoiceForProcessPack, voiceCompressionMetrics } from "../../learn-x-input/scripts/collect-voice-weekly.mjs";
 import { inputSize, MAX_VOICE_WEEKLY_INPUT_CHARS, VOICE_TARGET_RETAINED_RATIO } from "../../learn-x-input/scripts/lib/input-limits.mjs";
 import { SOURCE_FILES } from "../../learn-x-input/scripts/lib/source-status.mjs";
-import { ensureActionFeedbackDraft } from "./action-feedback.mjs";
-import { defaultWeeklyReviewWeek, writeWeeklyInput } from "./collect-weekly-input.mjs";
+import { ensureActionFeedbackDraft, readShortTermTopics, validateActionFeedbackReport } from "./action-feedback.mjs";
+import { defaultWeeklyReviewWeek, isoWeekRange, writeWeeklyInput } from "./collect-weekly-input.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
 const FIXED_WEEKLY_INPUTS = [
   { file: SOURCE_FILES.daily, type: "日志", source: "飞书日记", statusSource: "daily" },
   { file: "weekly.md", type: "日志", source: "飞书周记", mode: "manual", note: "阶段 2 采回的人工确认周记" },
+  { file: SOURCE_FILES["feishu-docs"], type: "输入", source: "个人飞书文档", statusSource: "feishu-docs", note: "本人创建或编辑；按历史 editor ID 归因" },
   { file: SOURCE_FILES.flomo, type: "输入", source: "Flomo", statusSource: "flomo" },
   { file: SOURCE_FILES.weread, type: "输入", source: "微信读书", statusSource: "weread" },
   { file: SOURCE_FILES.wechat, type: "输入", source: "微信聊天", statusSource: "wechat", optional: true, note: "按需手工采集" },
@@ -31,12 +32,36 @@ export async function generateWeeklyProcessPack(options = {}) {
   const sourceSummaries = buildSourceSummaries(payload);
   const { items, compression } = compressWeeklyProcessItems(payload.items, payload.files);
   const fileSummaries = buildFileSummaries(payload, items);
-  const processPack = renderProcessPack(payload, sourceSummaries, fileSummaries, items, compression);
   const outputRoot = path.join(repoRoot, "04_output/_dist/weekly", distWeekId(payload.week));
+  const previousOutput = await readPreviousWeeklyOutput(payload.week);
   const shellPath = await ensureWeeklyOutputShell(payload.week);
 
   await mkdir(outputRoot, { recursive: true });
   const actionFeedback = await ensureActionFeedbackDraft({ week: payload.week, outputRoot });
+  let actionFeedbackSummary;
+  let actionFeedbackContent = "";
+  try {
+    const report = await readFile(actionFeedback.path, "utf8");
+    actionFeedbackContent = report;
+    const baseline = await readShortTermTopics();
+    actionFeedbackSummary = summarizeActionFeedbackReport({
+      report,
+      week: payload.week,
+      topics: baseline.topics,
+      currentRevision: baseline.revision,
+      filePath: actionFeedback.path,
+      ensureStatus: actionFeedback.status,
+      ensureError: actionFeedback.error
+    });
+  } catch (error) {
+    actionFeedbackSummary = {
+      path: actionFeedback.path,
+      status: "needs_review",
+      count: "无法解析",
+      result: `独立产物，不计入 input.json；候选表需核对：${error.message}`
+    };
+  }
+  const processPack = renderProcessPack(payload, sourceSummaries, fileSummaries, items, compression, actionFeedbackSummary, actionFeedbackContent, previousOutput);
   const outputPath = path.join(outputRoot, "process-pack.md");
   await writeFile(outputPath, processPack, "utf8");
 
@@ -46,22 +71,49 @@ export async function generateWeeklyProcessPack(options = {}) {
     fileSummaries,
     compression,
     actionFeedback,
+    previousOutput,
     outputPath,
     shellPath
   };
 }
 
-export function renderProcessPack(payload, sourceSummaries, fileSummaries, items, compression) {
+export function summarizeActionFeedbackReport({ report, week, topics, currentRevision = "", filePath = "", ensureStatus = "preserved", ensureError = "" }) {
+  try {
+    const rows = validateActionFeedbackReport(report, topics, week, currentRevision);
+    const candidates = rows.filter((row) => row.action && row.action !== "—" && row.action !== "待核对");
+    const unreviewed = rows.some((row) => !row.action || !row.feedback || row.action === "待核对" || row.feedback === "待核对");
+    const needsReview = ensureStatus === "needs_review" || !rows.length || unreviewed;
+    return {
+      path: filePath,
+      status: needsReview ? "needs_review" : "ready（默认通过）",
+      count: `${rows.length} 议题 / ${candidates.length} 条候选`,
+      result: ensureStatus === "needs_review"
+        ? `独立产物，不计入 input.json；生成门禁需复核${ensureError ? `：${ensureError}` : "。"}`
+        : unreviewed
+          ? "独立产物，不计入 input.json；候选初稿尚待证据核对。"
+          : `独立产物，不计入 input.json；随用户确认周记一并通过；${candidates.length} 条候选，${candidates.filter((row) => row.confirmed).length} 条将写入 Base。`
+    };
+  } catch (error) {
+    return {
+      path: filePath,
+      status: "needs_review",
+      count: "无法解析",
+      result: `独立产物，不计入 input.json；候选表需核对：${error.message}`
+    };
+  }
+}
+
+export function renderProcessPack(payload, sourceSummaries, fileSummaries, items, compression, actionFeedbackSummary = {}, actionFeedbackContent = "", previousOutput = {}) {
   return [
     `# Learn-X Process Pack｜${payload.week}`,
     "",
-    "> 这是给 AI Chat 生成最终 Weekly Output 的上下文材料包；Action Feedback 是同周期独立的中间产物。",
+    "> 这是给 AI Chat 生成最终 Weekly Output 的上下文材料包；Action Feedback 是核心行动 / 反馈输入，完整快照见第 8 节。",
     "> 本文件只保留必要来源索引和清洗正文；不要在这里做道 / 法 / 术 / Prompt / Skill 判断。",
     "",
     "## 0. 使用方式",
     "",
-    "1. 把本文件与同目录 `action-feedback.md` 一并交给 AI Chat；`input.json` 是脚本中间态，仅在排错或核查来源时使用。",
-    "2. 先审核并确认 `action-feedback.md` 的三列表格，再由用户在 AI Chat 中使用两份材料生成最终 Weekly Output；按需读取 `weekly-output-rules.md` 和 `layer-rules.md`。",
+    "1. 第 8 节嵌入了同目录 `action-feedback.md` 的完整快照；它已与阶段 1 周记草稿一并审核，有效行动默认 `[x]` 并在阶段 3 写入 Base。若此后再修改独立文件，重跑 `process:weekly` 刷新快照。",
+    "2. 第 9 节若含上周 Output，只能用于跨周对照；本周事实以本文件第 1–8 节为准。使用本文件和需要的规则文件生成最终 Weekly Output；`input.json` 是脚本中间态，仅在排错或核查来源时使用。",
     "3. Codex / 脚本只生成 `_dist` 和 `04_output/weekly/YYYY-WW.md` 最小壳；如果 Output 文件已有内容，不覆盖。",
     "4. 人再决定是否把正文写入 `04_output/weekly/YYYY-WW.md`，以及是否进入 Memory、正式 `道/`、`法/`、`术`、Prompt 或 Skill。",
     "",
@@ -80,7 +132,7 @@ export function renderProcessPack(payload, sourceSummaries, fileSummaries, items
     "",
     "## 2. 输入与压缩总表",
     "",
-    renderInputAuditTable(payload, fileSummaries, compression),
+    renderInputAuditTable(payload, fileSummaries, compression, actionFeedbackSummary),
     "",
     "## 3. 来源状态",
     "",
@@ -100,7 +152,100 @@ export function renderProcessPack(payload, sourceSummaries, fileSummaries, items
     "",
     "## 7. 材料正文",
     "",
-    renderFileMaterials(items, fileSummaries)
+    renderFileMaterials(items, fileSummaries),
+    "",
+    "## 8. Action Feedback（核心内容）",
+    "",
+    renderActionFeedbackSnapshot(actionFeedbackContent, actionFeedbackSummary),
+    "",
+    "## 9. 上周 Weekly Output（仅作对照）",
+    "",
+    renderPreviousWeeklyOutput(previousOutput)
+  ].join("\n");
+}
+
+export async function readPreviousWeeklyOutput(weekId, root = repoRoot) {
+  const week = previousWeeklyPeriod(weekId);
+  const relativePath = `04_output/weekly/${outputWeekId(week)}.md`;
+  try {
+    const content = await readFile(path.join(root, relativePath), "utf8");
+    return { week, relativePath, status: classifyWeeklyOutput(content), content };
+  } catch (error) {
+    if (error.code === "ENOENT") return { week, relativePath, status: "missing", content: "" };
+    throw error;
+  }
+}
+
+export function previousWeeklyPeriod(weekId) {
+  const { start } = isoWeekRange(weekId);
+  start.setUTCDate(start.getUTCDate() - 7);
+  const thursday = new Date(start);
+  thursday.setUTCDate(thursday.getUTCDate() + 3);
+  const year = thursday.getUTCFullYear();
+  const jan4 = new Date(Date.UTC(year, 0, 4));
+  const jan4Weekday = jan4.getUTCDay() || 7;
+  const firstMonday = new Date(jan4);
+  firstMonday.setUTCDate(jan4.getUTCDate() - jan4Weekday + 1);
+  const week = Math.floor((start.getTime() - firstMonday.getTime()) / (7 * 86400000)) + 1;
+  return `${year}-W${String(week).padStart(2, "0")}`;
+}
+
+export function classifyWeeklyOutput(content) {
+  const text = String(content || "").trim();
+  if (!text) return "empty";
+  const bodyLines = text.split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !/^# Learn-X Weekly Output(?:｜|\|)/.test(line))
+    .filter((line) => !/^> 基于 `04_output\/_dist\/weekly\/[^`]+` 由用户使用 AI Chat 生成正文后填入。?$/.test(line));
+  const substantive = bodyLines.filter((line) => !/^#{1,6}\s/.test(line) && !isWeeklyOutputPlaceholderLine(line));
+  return substantive.length ? "ready" : "shell";
+}
+
+function isWeeklyOutputPlaceholderLine(line) {
+  const placeholder = line.trim()
+    .replace(/^\d+[.)]\s*/, "")
+    .replace(/^[-*]\s*/, "")
+    .replace(/^\[[ xX]\]\s*/, "")
+    .replace(/^(?:问题|背景补充|回答)[：:]\s*/, "");
+  return /^(?:xx+|todo|待补充|待填写|…+|\.\.\.)[。.!！?？]?$/i.test(placeholder);
+}
+
+function renderPreviousWeeklyOutput(previousOutput) {
+  const week = previousOutput.week || "未知";
+  const status = previousOutput.status || "missing";
+  const pathNote = previousOutput.relativePath ? `；路径：\`${previousOutput.relativePath}\`` : "";
+  if (status !== "ready") {
+    return `- 基线：${week}，${status === "missing" ? "missing" : status === "empty" ? "empty" : "shell"}；不可比较${pathNote}。不回退到更早周。`;
+  }
+  const content = String(previousOutput.content || "").trim();
+  const fenceLength = Math.max(3, ...[...content.matchAll(/`+/g)].map((match) => match[0].length + 1));
+  const fence = "`".repeat(fenceLength);
+  return [
+    `- 基线：${week}，ready${pathNote}。`,
+    "> 以下是上周完整 Weekly Output，只作对照，不是本周事实；本周事实以 Process Pack 当前周材料为准。",
+    "",
+    `${fence}markdown`,
+    content,
+    fence
+  ].join("\n");
+}
+
+function renderActionFeedbackSnapshot(content, summary = {}) {
+  if (!content.trim()) {
+    return [
+      `> 报告正文未能嵌入；状态：${summary.status || "needs_review"}。`,
+      `> ${summary.result || "请核查 action-feedback.md，修复后重跑 process:weekly。"}`
+    ].join("\n");
+  }
+
+  const reviewNote = summary.status === "needs_review"
+    ? "> 报告仍有 needs_review 项；核实并与周记一起审核通过前，不作为已确认行动反馈使用。"
+    : "> 阶段 1 与周记草稿共同审核通过后，本表全部有效行均可供 Weekly Output 使用；有证据且填写完整的行动默认 `[x]` 并在阶段 3 写入 Base，`[ ]` 表示仅用于 Weekly Output。`待核对` 项仍须核实。";
+  return [
+    "> 以下为同目录 `action-feedback.md` 的完整快照，修改独立文件后须重跑 `process:weekly` 刷新。",
+    `${reviewNote} 此独立产物不计入 \`input.json\`。`,
+    "",
+    content.trim().replace(/^# (.+)$/m, "### $1")
   ].join("\n");
 }
 
@@ -169,18 +314,37 @@ function buildInputAuditRow({ payload, definition, fileSummary, statusInfo }) {
   };
 }
 
-export function renderInputAuditTable(payload, fileSummaries, compression) {
-  const rows = buildInputAuditRows(payload, fileSummaries, compression);
+export function renderInputAuditTable(payload, fileSummaries, compression, actionFeedbackSummary = {}) {
+  const sourceRows = buildInputAuditRows(payload, fileSummaries, compression);
+  const flomoRow = sourceRows.find((row) => row.file === "flomo.md");
+  const actionFeedbackRow = {
+    type: "独立产物",
+    source: "Action Feedback",
+    file: "action-feedback.md",
+    status: actionFeedbackSummary.status || "needs_review",
+    count: actionFeedbackSummary.count || "—",
+    rawChars: "—",
+    effectiveChars: "—",
+    processChars: "—",
+    result: actionFeedbackSummary.result || "独立产物，不计入 input.json；请审核候选稿。",
+    link: localFileLink(actionFeedbackSummary.path || `04_output/_dist/weekly/${distWeekId(payload.week)}/action-feedback.md`, "action-feedback.md"),
+    optional: false
+  };
+  const rows = [
+    ...(flomoRow ? [flomoRow] : []),
+    actionFeedbackRow,
+    ...sourceRows.filter((row) => row !== flomoRow)
+  ];
   return [
-    "> 固定顺序：文件类型 / 来源 → 状态 → 记录/材料 → 字符链路（原始 → 纳入）→ 结果；只有发生实际语义压缩时才在字符链路后标注。`ready` 才计入，`empty/failed/unavailable` 和过期旧文件均不计入。",
+    "> 固定顺序：Flomo → Action Feedback 独立产物 → 其余输入；Action Feedback 不计入 `input.json`，完整正文快照另见第 8 节。输入行展示文件类型 / 来源 → 状态 → 记录/材料 → 字符链路（文件原始 → 解析清洗后有效〔去重前〕→ Process Pack 最终纳入）→ 结果；只有发生实际语义压缩时才在字符链路后标注。`ready` 才计入，`empty/failed/unavailable` 和过期旧文件均不计入。",
     `> 本轮需关注：${renderInputAttention(rows)}`,
     "",
-    "| 输入类型 | 来源 | 文件 | 状态 | 记录/材料 | 字符链路（原始 → 纳入） | 结果 |",
+    "| 类型 / 产物 | 来源 | 文件 | 状态 | 记录/材料 | 字符链路（文件原始 → 清洗有效〔去重前〕→ 最终纳入） | 结果 |",
     "| --- | --- | --- | --- | ---: | ---: | --- |",
     ...rows.map((row) => {
       const detail = compression.files?.find((item) => item.path.endsWith(`/${row.file}`));
       const compressionNote = detail ? `（Voice-X 压缩，保留 ${Math.round(detail.retainedRatio * 100)}%）` : "";
-      const characterChain = row.rawChars === "—" ? "—" : `${row.rawChars} → ${row.processChars}${compressionNote}`;
+      const characterChain = row.rawChars === "—" ? "—" : `${row.rawChars} → ${row.effectiveChars} → ${row.processChars}${compressionNote}`;
       const fileCell = row.link === "—" ? row.file : row.link;
       return `| ${row.type} | ${row.source} | ${fileCell} | ${row.status} | ${row.count} | ${characterChain} | ${escapeTableCell(row.result)} |`;
     })
@@ -189,7 +353,7 @@ export function renderInputAuditTable(payload, fileSummaries, compression) {
 
 function renderInputAttention(rows) {
   const attention = rows
-    .filter((row) => !row.optional && (/^(empty|failed|unavailable|未发现)$/.test(row.status) || row.result.startsWith("异常")))
+    .filter((row) => !row.optional && (/^(empty|failed|unavailable|未发现|needs_review|待人工审核)$/.test(row.status) || row.result.startsWith("异常")))
     .map((row) => `${row.source}（${row.file}：${row.status}）`);
   return attention.length ? attention.join("；") : "无";
 }
@@ -457,6 +621,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   console.log(`Weekly input pack generated: 04_output/_dist/weekly/${distWeekId(result.payload.week)}/input.json`);
   console.log(`Weekly process pack generated: ${path.relative(repoRoot, result.outputPath)}`);
   console.log(`Action Feedback report: ${path.relative(repoRoot, result.actionFeedback.path)} (${result.actionFeedback.status})`);
+  console.log(`Previous Weekly Output baseline: ${result.previousOutput.week} (${result.previousOutput.status}) at ${result.previousOutput.relativePath}`);
   console.log(`Weekly output shell ready: ${path.relative(repoRoot, result.shellPath)}`);
   console.log(`Input files: ${result.payload.stats.fileCount}`);
   console.log(`Unique items: ${result.payload.stats.uniqueItemCount}`);

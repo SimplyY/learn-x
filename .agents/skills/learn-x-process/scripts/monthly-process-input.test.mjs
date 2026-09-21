@@ -1,10 +1,144 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
-import { demoteEmbeddedHeadings, renderProcessPack, validateCompressionDocument } from "./generate-monthly-process-pack.mjs";
+import { assertMonthlyProcessPackSize, classifyPreviousMonthlyOutput, demoteEmbeddedHeadings, previousMonthId, readPreviousMonthlyOutput, renderProcessPack, validateCompressionDocument } from "./generate-monthly-process-pack.mjs";
 import { datedSections, extractWeeklyConfirmedSections, filterBoundaryContent, isPlaceholder, isValidAiReview, monthlyCompressionPolicies, monthlyCompressionRatioRules, monthlyVoiceMaxChars, monthlyVoiceMaxRatio, monthlyVoiceMinRatio, requiresCompressionReview, reviewMonthlyTypes, wereadMatchesDeclaredWeek, weeksIntersectingMonth } from "./monthly-process-input.mjs";
 
 test("selects all ISO weeks intersecting a month", () => {
   assert.deepEqual(weeksIntersectingMonth("2026-06"), ["2026-W23", "2026-W24", "2026-W25", "2026-W26", "2026-W27"]);
+});
+
+test("selects the previous calendar month, including year rollover", () => {
+  assert.equal(previousMonthId("2026-01"), "2025-12");
+  assert.equal(previousMonthId("2026-06"), "2026-05");
+});
+
+test("classifies prior Monthly Output as missing, empty, shell, or full text", () => {
+  assert.deepEqual(classifyPreviousMonthlyOutput("2026-06", "", { code: "ENOENT" }), {
+    previousMonth: "2026-05", sourcePath: "04_output/monthly/2026-05.md", status: "missing", content: ""
+  });
+  assert.equal(classifyPreviousMonthlyOutput("2026-06", " \n\t").status, "empty");
+  assert.equal(classifyPreviousMonthlyOutput("2026-06", "# Learn-X Monthly Output｜2026-05\n\n> 基于 `04_output/_dist/monthly/2026-05/process-pack.md` 由用户使用 AI Chat 生成正文后填入。\n").status, "shell");
+  assert.equal(classifyPreviousMonthlyOutput("2026-06", "# Learn-X Monthly Output｜2026-05\n\n## 月度总判断\n\n1. xx\n\n## 本月问题与回答\n\n1. 问题：todo\n   回答：待补充").status, "shell");
+  assert.deepEqual(classifyPreviousMonthlyOutput("2026-06", "# 2026-05 月报\n\n## 核心洞察\n实质内容\n"), {
+    previousMonth: "2026-05", sourcePath: "04_output/monthly/2026-05.md", status: "ready", content: "# 2026-05 月报\n\n## 核心洞察\n实质内容"
+  });
+  assert.throws(() => classifyPreviousMonthlyOutput("2026-06", "", Object.assign(new Error("permission denied"), { code: "EACCES" })), /permission denied/);
+});
+
+test("monthly loader reads only the direct calendar predecessor across year rollover", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-monthly-compare-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const outputDir = path.join(root, "04_output/monthly");
+  await mkdir(outputDir, { recursive: true });
+  await writeFile(path.join(outputDir, "2025-11.md"), "OLDER_MONTH_SENTINEL", "utf8");
+
+  const missing = await readPreviousMonthlyOutput("2026-01", root);
+  assert.equal(missing.previousMonth, "2025-12");
+  assert.equal(missing.status, "missing");
+  assert.doesNotMatch(missing.content, /OLDER_MONTH_SENTINEL/);
+
+  const priorOutput = "# Learn-X Monthly Output｜2025-12\n\n## 月度总判断\n\n跨年基线正文";
+  await writeFile(path.join(outputDir, "2025-12.md"), priorOutput, "utf8");
+  const ready = await readPreviousMonthlyOutput("2026-01", root);
+  assert.equal(ready.status, "ready");
+  assert.equal(ready.sourcePath, "04_output/monthly/2025-12.md");
+  assert.equal(ready.content, priorOutput);
+});
+
+test("preserves headings inside backtick and tilde fences in the prior Monthly Output", () => {
+  const source = "```markdown\n## backtick heading\n```\n\n~~~markdown\n## tilde heading\n~~~~\n\n## regular heading";
+  assert.equal(demoteEmbeddedHeadings(source), "```markdown\n## backtick heading\n```\n\n~~~markdown\n## tilde heading\n~~~~\n\n#### regular heading");
+});
+
+test("adds the full prior Monthly Output as comparison-only material without changing item stats", () => {
+  const payload = {
+    month: "2026-06",
+    selection: { weeklyPaths: [], missingWeeklyPaths: [], monthlyPath: "03_input/monthly/2026-6" },
+    sources: [],
+    items: [],
+    stats: { sourceCount: 0, excludedSourceCount: 0, deterministicOutputChars: 0 }
+  };
+  const compression = { stats: { sourceCount: 0, eventCount: 0, originalChars: 0, outputChars: 0 } };
+  const previous = classifyPreviousMonthlyOutput("2026-06", "# 上月月报\n\n## 月度判断\n上月正文的末尾锚点");
+  const pack = renderProcessPack(payload, compression, [], previous);
+  assert.match(pack, /## 上月 Monthly Output 对照材料｜2026-05/);
+  assert.match(pack, /对比专用：只用于识别上月到本月的变化/);
+  assert.match(pack, /本月事实以本 Process Pack 当前月份材料为准/);
+  assert.match(pack, /- 来源：`04_output\/monthly\/2026-05\.md`/);
+  assert.match(pack, /不计入 `input\.json`，也不计入下面按本月材料计算的来源、事件和字符统计/);
+  assert.match(pack, /### 上月 Monthly Output 全文\n\n#### 上月月报/);
+  assert.match(pack, /上月正文的末尾锚点/);
+  assert.equal(payload.sources.length, 0);
+  assert.equal(payload.items.length, 0);
+  assert.equal(payload.stats.sourceCount, 0);
+});
+
+test("reports unavailable comparison states and does not substitute an older month", () => {
+  const payload = {
+    month: "2026-01",
+    selection: { weeklyPaths: [], missingWeeklyPaths: [], monthlyPath: "03_input/monthly/2026-1" },
+    sources: [],
+    items: [],
+    stats: { sourceCount: 0, excludedSourceCount: 0, deterministicOutputChars: 0 }
+  };
+  const compression = { stats: { sourceCount: 0, eventCount: 0, originalChars: 0, outputChars: 0 } };
+  for (const status of ["missing", "empty", "shell"]) {
+    const previous = classifyPreviousMonthlyOutput("2026-01", status === "missing" ? "" : status === "empty" ? "" : "# Learn-X Monthly Output｜2025-12", status === "missing" ? { code: "ENOENT" } : undefined);
+    const pack = renderProcessPack(payload, compression, [], previous);
+    assert.match(pack, /## 上月 Monthly Output 对照材料｜2025-12/);
+    assert.match(pack, new RegExp(`- 状态：${status}`));
+    assert.match(pack, /来源：`04_output\/monthly\/2025-12\.md`/);
+    assert.doesNotMatch(pack, /04_output\/monthly\/2025-11\.md/);
+    assert.doesNotMatch(pack, /### 上月 Monthly Output 全文/);
+  }
+});
+
+test("rejects an oversized full comparison source instead of truncating it", () => {
+  const payload = {
+    month: "2026-06",
+    selection: { weeklyPaths: [], missingWeeklyPaths: [], monthlyPath: "03_input/monthly/2026-6" },
+    sources: [],
+    items: [],
+    stats: { sourceCount: 0, excludedSourceCount: 0, deterministicOutputChars: 0 }
+  };
+  const compression = { stats: { sourceCount: 0, eventCount: 0, originalChars: 0, outputChars: 0 } };
+  const previous = classifyPreviousMonthlyOutput("2026-06", `# 上月月报\n\n${"月".repeat(40_000)}`);
+  const pack = renderProcessPack(payload, compression, [], previous);
+  assert.ok(pack.includes("月".repeat(40_000)));
+  assert.throws(() => assertMonthlyProcessPackSize(pack), /previous Monthly Output comparison source is never truncated/);
+});
+
+test("monthly prompt contract covers bounded comparison and separate user-answer root questions", async () => {
+  const [rules, prompt, automation] = await Promise.all([
+    readFile(new URL("../resources/monthly-output-rules.md", import.meta.url), "utf8"),
+    readFile(new URL("../../../../02_prompts/chatpack/reflective-decision/monthly-output.md", import.meta.url), "utf8"),
+    readFile(new URL("../../learn-x-monthly-automation/SKILL.md", import.meta.url), "utf8")
+  ]);
+
+  assert.match(rules, /上月与本月对照/);
+  assert.match(rules, /1200.{0,8}(?:字符|字)/);
+  assert.match(rules, /月度总判断、月度核心洞察、全文核心重点纪要、芒格之魂洞察和月度问题与回答/);
+  assert.match(rules, /只作次级参照/);
+  assert.match(rules, /不显示百分比、不机械打分/);
+  assert.match(rules, /本月事实以当前 Process Pack 的本月材料为准/);
+  assert.match(rules, /本月最值得思考的 3 个问题与回答/);
+  assert.match(rules, /问题核心以 10–20 字为目标，最多 50 字/);
+  assert.match(rules, /问题核心与背景补充合计不超过 100 字/);
+  assert.match(rules, /背景补充（选填）/);
+  assert.match(rules, /本月议题[\s\S]*?阶段性答案[\s\S]*?不得/);
+  assert.match(rules, /不构成新的 Memory 来源|不作为.*Memory.*来源/);
+  assert.match(prompt, /上月 Monthly Output/);
+  assert.match(prompt, /问题核心以 10–20 字为目标、最多 50 字/);
+  assert.match(prompt, /单题合计最多 100 字/);
+  assert.match(automation, /上月对比入口/);
+  assert.match(automation, /不得用更早月份替代/);
+  assert.match(automation, /1200/);
+  assert.match(automation, /本月最值得思考的 3 个问题与回答/);
+  assert.match(automation, /最多 50 字.*最多 100 字/s);
+  assert.match(automation, /精确标题为「全文核心重点纪要」和「芒格之魂的洞察」/);
 });
 
 test("extracts dated daily or flomo sections", () => {

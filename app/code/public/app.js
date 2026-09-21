@@ -115,6 +115,8 @@ let promptPayloadPromise;
 let promptProtocolsLoaded = false;
 let lastAutoAssembledPrompt = "";
 let periodicInsightRequestId = 0;
+let selectedContextStatsRequestId = 0;
+const contextFileContentPromises = new Map();
 const periodicInsightContextApi = window.LEARN_X_PERIODIC_INSIGHT_CONTEXT_API || "";
 
 async function boot() {
@@ -1406,7 +1408,9 @@ function renderContextNode(node, container, depth) {
   label.type = "button";
   label.className = "context-label";
   label.title = node.path;
-  label.innerHTML = `<strong>${escapeHtml(node.name)}</strong><span>${escapeHtml(node.path)} · 约 ${formatNumber(contextFileCharCount(node.file))} 字</span>`;
+  const charCount = contextFileCharCount(node.file);
+  const charCountLabel = charCount === null ? "字数待读取" : `${formatNumber(charCount)} 字`;
+  label.innerHTML = `<strong>${escapeHtml(node.name)}</strong><span>${escapeHtml(node.path)} · ${charCountLabel}</span>`;
   label.addEventListener("click", () => {
     if (previewText) toggleContextFilePreview(node.path);
   });
@@ -1437,9 +1441,9 @@ function contextFilePreview(file) {
 }
 
 function contextFileCharCount(file) {
-  const content = contextFileContent(file);
-  if (content) return estimateTextStats(content).visibleChars;
-  return Math.max(1, Math.round((file.size || 0) / 2));
+  if (Number.isInteger(file.visibleChars) && file.visibleChars >= 0) return file.visibleChars;
+  const content = state.contextFileMap.get(file.path)?.content ?? file.content;
+  return typeof content === "string" ? estimateTextStats(content).visibleChars : null;
 }
 
 function compactPreviewText(content, maxChars) {
@@ -1522,7 +1526,8 @@ function resetGeneratedContext(message) {
   renderChatPackPreview();
 }
 
-function refreshSelectedContextStats(assembledText) {
+function refreshSelectedContextStats() {
+  const requestId = ++selectedContextStatsRequestId;
   if (activeDialogueType()?.id === "insight") {
     const stats = state.periodicInsight.contextStats;
     const summary = stats ? `自动 Context · ${formatNumber(stats.chars)}/${formatNumber(stats.budget?.contextChars || 0)} 字符` : "自动 Context 尚未生成";
@@ -1531,14 +1536,25 @@ function refreshSelectedContextStats(assembledText) {
   }
   const files = selectedContextFiles();
   const fileCount = files.length;
-  const totalChars = estimateTextStats(assembledText).visibleChars;
-  const warning = fileCount > 20 ? " · 过多，建议强烈收缩" : fileCount > 10 ? " · 建议 10 个以内" : "";
-  const summary = `已选 ${formatNumber(fileCount)} 个文件 · 总计约 ${formatNumber(totalChars)} 字${warning}`;
+  const missing = files.filter((file) => contextFileCharCount(file) === null);
+  const totalChars = missing.length ? null : files.reduce((total, file) => total + contextFileCharCount(file), 0);
+  renderSelectedContextStats(fileCount, totalChars, missing.length ? "正在统计字数" : "");
 
-  if (els.selectedContextSummary) {
-    els.selectedContextSummary.textContent = summary;
-    els.selectedContextSummary.className = fileCount > 20 ? "danger" : fileCount > 10 ? "warn" : "";
+  if (missing.length) {
+    loadContextContents(missing).then(() => {
+      if (requestId === selectedContextStatsRequestId) refreshSelectedContextStats();
+    }).catch(() => {
+      if (requestId === selectedContextStatsRequestId) renderSelectedContextStats(fileCount, null, "字数读取失败");
+    });
   }
+}
+
+function renderSelectedContextStats(fileCount, totalChars, status = "") {
+  const warning = fileCount > 20 ? " · 过多，建议 20 个以内" : "";
+  const count = status || `总计 ${formatNumber(totalChars)} 字`;
+  if (!els.selectedContextSummary) return;
+  els.selectedContextSummary.textContent = `已选 ${formatNumber(fileCount)} 个文件 · ${count}${warning}`;
+  els.selectedContextSummary.className = fileCount > 20 ? "danger" : "";
 }
 
 function setProgress(value) {
@@ -1826,11 +1842,26 @@ function selectedContextFiles() {
 async function loadContextContents(files) {
   return Promise.all(
     files.map(async (file) => {
-      if (file.content) return file;
-      const loaded = await getJson(`api/file?path=${encodeURIComponent(file.path)}`);
-      return { ...file, content: loaded.content || "" };
+      if (typeof file.content === "string") return file;
+      const content = await loadContextFileContent(file);
+      return { ...file, content };
     })
   );
+}
+
+function loadContextFileContent(file) {
+  if (typeof file.content === "string") return Promise.resolve(file.content);
+  const pending = contextFileContentPromises.get(file.path);
+  if (pending) return pending;
+  const request = getJson(`api/file?path=${encodeURIComponent(file.path)}`).then((loaded) => {
+    const content = loaded.content || "";
+    file.content = content;
+    const cached = state.contextFileMap.get(file.path);
+    if (cached) cached.content = content;
+    return content;
+  }).finally(() => contextFileContentPromises.delete(file.path));
+  contextFileContentPromises.set(file.path, request);
+  return request;
 }
 
 function buildWeightedContext(files) {
@@ -1968,7 +1999,7 @@ function renderChatPackPreview() {
   const chatPack = buildChatPack();
   renderFramePreview();
   els.chatPackPreview.value = chatPack;
-  refreshSelectedContextStats(chatPack);
+  refreshSelectedContextStats();
   renderChatPackWarning();
 }
 
@@ -2013,8 +2044,8 @@ function renderFramePreview() {
 }
 
 function estimateTextStats(text) {
-  const compact = text.replace(/\s/g, "");
-  return { visibleChars: compact.length };
+  const compact = String(text ?? "").replace(/\s/gu, "");
+  return { visibleChars: Array.from(compact).length };
 }
 
 function renderChatPackWarning() {

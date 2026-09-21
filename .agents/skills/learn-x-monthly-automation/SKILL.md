@@ -93,6 +93,8 @@ npm run memory:compress -- --as-of 2026-08-30
    npm run process:monthly -- --month YYYY-MM
    ```
 
+   当前月 Process Pack 还会附上前一自然月 `04_output/monthly/YYYY-MM.md` 的完整内容，单列为“对照专用”材料。它不计入 `input.json` 的来源、事件或输入字符统计，但会计入完整 Process Pack 字节数和现有 100 KB 门禁；也不被当作当前月事实。不存在的文件标记为 `missing`，空文件标记为 `empty`，只有标题 / 自动生成说明的空壳标记为 `shell`；不得用更早月份替代。完整对照材料不截断，超限时停止并报告。
+
 4. 如果命令生成 `compression-requests.json` 并停止：
    - 完整读取 [`references/monthly-compression.md`](references/monthly-compression.md)。
    - 逐份读取请求指向的原始文件，由 Codex 按事件和重要性生成 `compressed-events.json`。
@@ -101,11 +103,13 @@ npm run memory:compress -- --as-of 2026-08-30
    - `04_output/_dist/monthly/YYYY-MM/input.json`
    - `04_output/_dist/monthly/YYYY-MM/process-pack.md`
    - `04_output/monthly/YYYY-MM.md`
+   - 上月对比入口：前一自然月完整月报的绝对可点击文件链接、来源路径和状态：`ready`、`empty`、`shell` 或 `missing`；`ready` 明确说明全文已装入 Process Pack
    - 已完成来源、缺口、验证结果
    - 原始、过滤后、压缩后和最终体积；各来源压缩率、事件数量、省略原因、越界与无效来源
    - 明确说明：语义压缩由 Codex 完成，脚本只检测、校验和组装
 6. 停止，等待用户进入人工 / Chat Pack 阶段。提醒用户按顺序完成：
-   - 在 Learn-X Chat Pack 中使用 Monthly Output，并选择 `process-pack.md`。
+   - 在 Learn-X Chat Pack 中使用 Monthly Output，并选择 `process-pack.md`；检查新生成的“上月与本月对照”章节不超过 1200 字，且只写有材料支撑的变化。
+   - 回答月报新增的“本月最值得思考的 3 个问题与回答”（问题核心以 10–20 字为目标、最多 50 字；另加背景补充后单题最多 100 字）；保留「本月议题」中的 AI 阶段性答案，不以用户问答替换。上月输出缺失、为空或为空壳时，不要求补造对比。
    - 在 Chat Pack 中启用 `芒格之魂`，只生成独立洞察，不重写 Monthly Output。
    - 在最终月报中补充非空的 `芒格之魂的洞察` 或同义区域。
    - 审核并勾选 Memory 候选。
@@ -115,9 +119,11 @@ npm run memory:compress -- --as-of 2026-08-30
 
 阶段 2 汇报还必须把 `process-pack.md` 拆开说明，不能只报告总字数或事件总数。按实际生成的 Input 文件类型 / 来源组，逐组列出来源文件数、原始字符数、进入 Pack 的事件数和字符数；`compression-review/index.md` 必须同时包含“需要语义压缩的来源”和“未进入语义压缩的全部 Input 文件类型”两张表，后者不重复列出上表来源。另需报告完整性与缺口、来源与处理审计两类固定部分的字符数和 UTF-8 字节数，并分别报告原始来源、确定性材料、语义压缩来源、最终上下文正文的来源数/事件数/字符数，明确数字口径。对每个语义压缩来源，提供 `compression-review/index.md` 和对应原文审阅文件的可点击链接。字符数以生成脚本使用的字符口径为准，字节数用于 100 KB 门禁核验。
 
+完整材料超过 100 KB 门禁时按既有规则压缩可压缩的 supporting/minor 输入，不得截断或换用更早的月报。
+
 ## 下一步：打开 Learn-X Chat Pack，手动生成并审核月报
 
-提供 [Learn-X Chat Pack](http://127.0.0.1:4173/#learning) 链接，并说明用户需要选择 Monthly Output、载入 `process-pack.md`、生成并审核月报，再生成独立“芒格之魂”洞察。
+提供 [Learn-X Chat Pack](http://127.0.0.1:4173/#learning) 链接，并说明用户需要选择 Monthly Output、载入 `process-pack.md`、生成并审核月报；核对≤1200字的月度对比，回答恰好 3 个全月根问题（核心以 10–20 字为目标、最多 50 字；含补充最多 100 字），再生成独立“芒格之魂”洞察。缺失/空文件/空壳时不回退到更早月。
 
 ## 再下一步：补充洞察并回复“继续记忆”
 

@@ -15,6 +15,7 @@
     "security:scan": "node scripts/security-scan.mjs",
     "security:scan:staged": "node scripts/security-scan.mjs --staged",
     "input:calendar": "node .agents/skills/learn-x-input/scripts/collect-calendar-weekly.mjs",
+    "input:feishu-docs": "node .agents/skills/learn-x-input/scripts/collect-feishu-docs-weekly.mjs",
     "input:voice": "node .agents/skills/learn-x-input/scripts/collect-voice-weekly.mjs",
     "voice:insight": "node .agents/skills/learn-x-voice-insight/scripts/generate-voice-insight.mjs",
     "input:compress": "node .agents/skills/learn-x-input/scripts/compress-weekly-input.mjs",

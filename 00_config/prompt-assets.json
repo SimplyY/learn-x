@@ -27,9 +27,9 @@
       "derived_from": "common.munger-soul-unused-skip",
       "synced": {
         "document_id": "KRShd91W2oY352xSB4kciB0hnrf",
-        "revision": 3,
-        "sha256": "e4c7261f08eb8a35797cd1ba71c7faf78ecd3050adde6f55fedf62acdd019a8b",
-        "at": "2026-09-17T06:36:07.910Z"
+        "revision": 5,
+        "sha256": "b06374639c591a8dbe63029f9d6f5be60311f78fa8e4b64505c24d952592c12d",
+        "at": "2026-09-21T03:52:03.262Z"
       }
     },
     "chatpack.monthly-output": {
@@ -38,9 +38,9 @@
       "derived_from": "common.munger-soul-unused-skip",
       "synced": {
         "document_id": "ABjzdez4joY0PUxdlaicIKkwnwh",
-        "revision": 3,
-        "sha256": "3aa3ae282610051273ed0eba82f2374765b70dd50603e488294e30b9f3362f11",
-        "at": "2026-09-17T06:36:08.484Z"
+        "revision": 5,
+        "sha256": "d411ea3c307a7f045bb361ee41e587cf8fd06f5cd3383ce4148d1cc22b24edeb",
+        "at": "2026-09-21T03:52:11.869Z"
       }
     },
     "chatpack.yearly-output": {

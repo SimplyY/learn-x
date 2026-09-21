@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { JSDOM } from "jsdom";
 import { renderExecutionContract, renderFinalTaskAnchor } from "../public/chatpack.js";
+import { buildChatPackPromptPayload } from "./static-graph.mjs";
 
 test("完整模式：执行契约覆盖全部已启用 Prompt 自检项", () => {
   const out = renderExecutionContract({ categoryEnabled: true, subtypeEnabled: true, enhancerEnabled: true });
@@ -43,6 +44,11 @@ test("回归：Final Task Anchor 保持既有输出", () => {
 
 test("异步 Prompt 装载后刷新自动装配，切换与失败重试不丢失正文", async () => {
   const html = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
+  const [promptPayload, weeklyRules, monthlyRules] = await Promise.all([
+    buildChatPackPromptPayload({ target: "local" }),
+    readFile(new URL("../../../.agents/skills/learn-x-process/resources/weekly-output-rules.md", import.meta.url), "utf8"),
+    readFile(new URL("../../../.agents/skills/learn-x-process/resources/monthly-output-rules.md", import.meta.url), "utf8")
+  ]);
   const dom = new JSDOM(html, { url: "http://127.0.0.1:4173/#learning" });
   const graph = {
     runtime: { target: "public", canEditChatPack: false, includesPrivateContext: false, contextEnabled: false },
@@ -55,7 +61,12 @@ test("异步 Prompt 装载后刷新自动装配，切换与失败重试不丢失
       usage: {
         schemaVersion: 1,
         mergedThrough: "2026-08",
-        subtypes: { "test-type.example": 200, "test-type.second": 10 },
+        subtypes: {
+          "test-type.example": 200,
+          "test-type.second": 10,
+          "reflective-decision.weekly-output": 40,
+          "reflective-decision.monthly-output": 30
+        },
         enhancers: { "munger-soul": 50 }
       },
       dialogueTypes: [{
@@ -63,7 +74,19 @@ test("异步 Prompt 装载后刷新自动装配，切换与失败重试不丢失
         name: "测试",
         subtypes: [
           { id: "test-type.example", name: "示例" },
-          { id: "test-type.second", name: "第二" }
+          { id: "test-type.second", name: "第二" },
+          {
+            id: "reflective-decision.weekly-output",
+            name: "周输出",
+            includeBaseRecommendedSources: false,
+            recommendedSources: [".agents/skills/learn-x-process/resources/weekly-output-rules.md"]
+          },
+          {
+            id: "reflective-decision.monthly-output",
+            name: "月输出",
+            includeBaseRecommendedSources: false,
+            recommendedSources: [".agents/skills/learn-x-process/resources/monthly-output-rules.md"]
+          }
         ]
       }],
       enhancers: [{ id: "munger-soul", name: "芒格之魂" }]
@@ -71,7 +94,38 @@ test("异步 Prompt 装载后刷新自动装配，切换与失败重试不丢失
     files: [],
     sources: [],
     contextFiles: [],
-    customContextFiles: [],
+    customContextFiles: [
+      {
+        path: ".agents/skills/learn-x-process/resources/weekly-output-rules.md",
+        title: "Weekly Output 规则",
+        content: weeklyRules
+      },
+      {
+        path: ".agents/skills/learn-x-process/resources/monthly-output-rules.md",
+        title: "Monthly Output 规则",
+        content: monthlyRules
+      },
+      {
+        path: "04_output/_dist/weekly/2026-W20/process-pack.md",
+        title: "旧周 Process Pack",
+        content: "OLDER_WEEK_PACK_SENTINEL"
+      },
+      {
+        path: "04_output/_dist/weekly/2026-W21/process-pack.md",
+        title: "本周 Process Pack",
+        content: "# 本周 Process Pack\n\nCURRENT_WEEK_PROCESS_PACK_SENTINEL\n\n## 9. 上周 Weekly Output（仅作对照）\n\n### 上周 Weekly Output 全文\n\nPREVIOUS_WEEK_OUTPUT_COMPLETE_SENTINEL"
+      },
+      {
+        path: "04_output/_dist/monthly/2026-08/process-pack.md",
+        title: "旧月 Process Pack",
+        content: "OLDER_MONTH_PACK_SENTINEL"
+      },
+      {
+        path: "04_output/_dist/monthly/2026-09/process-pack.md",
+        title: "本月 Process Pack",
+        content: "# 本月 Process Pack\n\nCURRENT_MONTH_PROCESS_PACK_SENTINEL\n\n## 上月 Monthly Output 对照材料｜2026-08\n\n### 上月 Monthly Output 全文\n\nPREVIOUS_MONTH_OUTPUT_COMPLETE_SENTINEL"
+      }
+    ],
     domains: []
   };
   const previous = {
@@ -107,10 +161,14 @@ test("异步 Prompt 装载后刷新自动装配，切换与失败重试不丢失
             firstPromptFailed = true;
             return { ok: false, status: 503, json: async () => ({}) };
           }
-          return { ok: true, json: async () => ({ subtypes: {
-            "test-type.example": "FIRST PROTOCOL",
-            "test-type.second": "SECOND PROTOCOL"
-          }, enhancers: {} }) };
+          return { ok: true, json: async () => ({
+            ...promptPayload,
+            subtypes: {
+              ...promptPayload.subtypes,
+              "test-type.example": "FIRST PROTOCOL",
+              "test-type.second": "SECOND PROTOCOL"
+            }
+          }) };
         }
         return { ok: true, json: async () => ({ files: {}, customContextFiles: {} }) };
       }
@@ -143,6 +201,43 @@ test("异步 Prompt 装载后刷新自动装配，切换与失败重试不丢失
     await new Promise((resolve) => setTimeout(resolve, 0));
     await app.ensurePromptProtocols();
     assert.match(document.querySelector("#metaPrompt").value, /SECOND PROTOCOL/);
+
+    graph.runtime.contextEnabled = true;
+    app.renderDialogueSubtypes();
+    const weeklySubtype = [...document.querySelectorAll("#dialogueSubtypeList button")]
+      .find((button) => button.textContent.includes("周输出"));
+    assert.ok(weeklySubtype, "weekly subtype is selectable in Chat Pack");
+    weeklySubtype.click();
+    assert.equal(document.querySelector("#periodSelect").value, "2026-W21");
+    document.querySelector("#generateChatPackBtn").click();
+    for (let attempt = 0; attempt < 100 && !document.querySelector("#chatPackPreview").value.includes("CURRENT_WEEK_PROCESS_PACK_SENTINEL"); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const weeklyChatPack = document.querySelector("#chatPackPreview").value;
+    assert.match(weeklyChatPack, /本周与上周对照/);
+    assert.match(weeklyChatPack, /600 字/);
+    assert.match(weeklyChatPack, /比较当前已存在的实质内容/);
+    assert.match(weeklyChatPack, /Weekly Output 规则/);
+    assert.match(weeklyChatPack, /Normal Context[\s\S]*CURRENT_WEEK_PROCESS_PACK_SENTINEL/);
+    assert.match(weeklyChatPack, /PREVIOUS_WEEK_OUTPUT_COMPLETE_SENTINEL/);
+    assert.doesNotMatch(weeklyChatPack, /OLDER_WEEK_PACK_SENTINEL/);
+
+    const periodSubtypePicker = document.querySelector('#dialogueSubtypeList select[aria-label="其他提示词"]');
+    periodSubtypePicker.value = "reflective-decision.monthly-output";
+    periodSubtypePicker.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    assert.equal(document.querySelector("#periodSelect").value, "2026-09");
+    document.querySelector("#generateChatPackBtn").click();
+    for (let attempt = 0; attempt < 100 && !document.querySelector("#chatPackPreview").value.includes("CURRENT_MONTH_PROCESS_PACK_SENTINEL"); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const monthlyChatPack = document.querySelector("#chatPackPreview").value;
+    assert.match(monthlyChatPack, /上月与本月对照/);
+    assert.match(monthlyChatPack, /1200 字/);
+    assert.match(monthlyChatPack, /比较当前已存在的实质内容/);
+    assert.match(monthlyChatPack, /Monthly Output 规则/);
+    assert.match(monthlyChatPack, /High Priority Context[\s\S]*CURRENT_MONTH_PROCESS_PACK_SENTINEL/);
+    assert.match(monthlyChatPack, /PREVIOUS_MONTH_OUTPUT_COMPLETE_SENTINEL/);
+    assert.doesNotMatch(monthlyChatPack, /OLDER_MONTH_PACK_SENTINEL/);
   } finally {
     dom.window.close();
     for (const [key, value] of Object.entries(previous)) {

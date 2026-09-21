@@ -29,6 +29,10 @@ test("public graph excludes private workflow material and local graph retains ca
 
   assert.equal(publicGraph.runtime.canEditChatPack, false);
   assert.equal(localGraph.runtime.canEditChatPack, true);
+  const weeklyRules = localGraph.customContextFiles.find((file) => file.path === ".agents/skills/learn-x-process/resources/weekly-output-rules.md");
+  assert.ok(weeklyRules);
+  const weeklyRulesText = await readFile(path.join(repoRoot, weeklyRules.path), "utf8");
+  assert.equal(weeklyRules.visibleChars, Array.from(weeklyRulesText.replace(/\s/gu, "")).length);
   assert.equal(publicGraph.customContextFiles.some((file) => isPublicPrivatePath(file.path)), false);
   assert.equal(
     publicGraph.customContextFiles.some((file) => /reflective-decision\/(weekly|monthly|yearly)-output\.md$/.test(file.path)),

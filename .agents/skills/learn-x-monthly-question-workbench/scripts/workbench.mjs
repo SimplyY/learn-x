@@ -59,7 +59,7 @@ function acquireLock(month) {
 
 export const LAYER_LIMIT = 2;
 
-export function rankIssues(issues, events, month, ledgers = []) {
+export function rankIssues(issues, events, month, ledgers = [], now = new Date()) {
   const deadline = monthEnd(month);
   const lastAttention = new Map();
   for (const event of events) {
@@ -72,7 +72,7 @@ export function rankIssues(issues, events, month, ledgers = []) {
     const at = iso(ledger["更新时间"]) || iso(ledger["创建时间"]);
     for (const id of linkIds(ledger["选定议题"])) if (at && (!lastAttention.has(id) || lastAttention.get(id) < at)) lastAttention.set(id, at);
   }
-  const urgent = (issue) => text(issue["类型"]) === "重大决策" && iso(issue["决策截止时间"]) && iso(issue["决策截止时间"]) >= new Date() && iso(issue["决策截止时间"]) < deadline;
+  const urgent = (issue) => text(issue["类型"]) === "重大决策" && iso(issue["决策截止时间"]) && iso(issue["决策截止时间"]) >= now && iso(issue["决策截止时间"]) < deadline;
   const attention = (issue) => lastAttention.get(issue.recordId) || iso(issue["创建时间"]) || new Date(0);
   const compare = (a, b) => priorityIndex(a) - priorityIndex(b) || attention(a) - attention(b) || text(a["议题编号"]).localeCompare(text(b["议题编号"]));
   const eligible = issues.filter((issue) => text(issue["状态"]) === "活跃" && effectiveResearchState(issue) === "继续研究");

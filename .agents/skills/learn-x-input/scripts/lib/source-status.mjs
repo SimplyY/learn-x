@@ -3,16 +3,16 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 
 export const SOURCE_STATUS_FILE = "_source-status.json";
-export const SOURCE_STATUSES = new Set(["ready", "empty", "failed", "unavailable"]);
+export const SOURCE_STATUSES = new Set(["ready", "empty", "needs_review", "failed", "unavailable"]);
 export const SOURCE_NAMES = new Set([
   "daily", "flomo", "weread", "calendar", "voice", "coach", "wisdom",
-  "wechat", "build", "build-bot", "health", "open-actions"
+  "wechat", "build", "build-bot", "health", "open-actions", "feishu-docs"
 ]);
 export const SOURCE_FILES = {
   daily: "daily.md", flomo: "flomo.md", weread: "weread.md", calendar: "calendar.md",
   voice: "voice.md", coach: "coach.md", wisdom: "wisdom.md", wechat: "wechat.md",
   build: "build.md", "build-bot": "build-bot.md", health: "health.md",
-  "open-actions": "open-actions.md"
+  "open-actions": "open-actions.md", "feishu-docs": "feishu-docs.md"
 };
 
 function assertWeek(week) {

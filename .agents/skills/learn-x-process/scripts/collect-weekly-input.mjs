@@ -21,6 +21,17 @@ export async function collectWeeklyInput(options = {}) {
   const allFiles = await collectInputFiles(weekInputRoot, root);
   const sourceStatus = await readWeeklySourceStatus(weekInputRoot, week);
   const statusEntries = Object.entries(sourceStatus.sources);
+  const feishuDocsStatus = sourceStatus.sources["feishu-docs"];
+  const feishuDocsFile = allFiles.find((file) => path.basename(file.relativePath) === "feishu-docs.md");
+  if (feishuDocsFile && !feishuDocsStatus) {
+    throw new Error("feishu-docs.md 缺少本轮来源状态，已阻止生成 Weekly Process；请重新运行飞书文档采集器。");
+  }
+  if (feishuDocsStatus && !["ready", "empty"].includes(feishuDocsStatus.status)) {
+    throw new Error(`feishu-docs 来源状态为 ${feishuDocsStatus.status}，已阻止生成 Weekly Process；请先完成本人身份与版本核验后重采。`);
+  }
+  if (feishuDocsStatus?.status === "ready" && !allFiles.some((file) => path.basename(file.relativePath) === "feishu-docs.md")) {
+    throw new Error("feishu-docs 来源状态为 ready，但本轮文件缺失，已阻止生成 Weekly Process。");
+  }
   const files = filterFilesBySourceStatus(allFiles, sourceStatus.sources);
   const excludedFiles = statusEntries
     .filter(([, entry]) => entry.status !== "ready")
@@ -295,7 +306,7 @@ function categoryFromPathPart(part) {
 function categoryFromSourceName(source) {
   if (["daily", "weekly", "health"].includes(source)) return "log";
   if (["build", "build-bot", "research", "meeting", "chat", "feedback", "coach"].includes(source)) return "action";
-  if (["ai", "flomo", "weread", "reading", "podcast", "docs", "theme-read"].includes(source)) return "inbox";
+  if (["ai", "flomo", "weread", "reading", "podcast", "docs", "feishu-docs", "theme-read"].includes(source)) return "inbox";
   return "input";
 }
 

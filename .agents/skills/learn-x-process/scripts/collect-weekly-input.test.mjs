@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import test from "node:test";
 import os from "node:os";
 import path from "node:path";
@@ -19,6 +19,10 @@ test("keeps source classification for weekly input files", () => {
   assert.deepEqual(inputKindFromRelativePath("03_input/weekly/2026-W29/wisdom.md"), {
     category: "input",
     source: "wisdom"
+  });
+  assert.deepEqual(inputKindFromRelativePath("03_input/weekly/2026-W29/feishu-docs.md"), {
+    category: "inbox",
+    source: "feishu-docs"
   });
 });
 
@@ -61,6 +65,44 @@ test("excludes stale automatic files while keeping legacy files without status",
   const files = [{ relativePath: "03_input/weekly/2026-W29/daily.md" }, { relativePath: "03_input/weekly/2026-W29/weekly.md" }];
   assert.deepEqual(filterFilesBySourceStatus(files, { daily: { file: "daily.md", status: "empty" } }), [files[1]]);
   assert.deepEqual(filterFilesBySourceStatus(files, {}), files);
+});
+
+test("blocks Process when Feishu Docs provenance needs review or the ready snapshot is missing", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-feishu-docs-gate-"));
+  try {
+    const weekDir = path.join(root, "03_input/weekly/2026-W29");
+    await mkdir(weekDir, { recursive: true });
+    await writeFile(path.join(weekDir, "feishu-docs.md"), "本人文档快照\n", "utf8");
+    await writeFile(path.join(weekDir, "_source-status.json"), JSON.stringify({
+      version: 1,
+      week: "2026-W29",
+      updatedAt: "2026-07-20T00:00:00.000Z",
+      sources: {
+        "feishu-docs": {
+          status: "needs_review", file: "feishu-docs.md", count: 1,
+          summary: "编辑者身份待核对", updatedAt: "2026-07-20T00:00:00.000Z", preservedStaleFile: false
+        }
+      }
+    }), "utf8");
+    await assert.rejects(() => collectWeeklyInput({ repoRoot: root, week: "2026-W29" }), /已阻止生成 Weekly Process/);
+
+    const ready = JSON.parse(await readFile(path.join(weekDir, "_source-status.json"), "utf8"));
+    ready.sources["feishu-docs"].status = "ready";
+    await writeFile(path.join(weekDir, "_source-status.json"), JSON.stringify(ready), "utf8");
+    await rm(path.join(weekDir, "feishu-docs.md"));
+    await assert.rejects(() => collectWeeklyInput({ repoRoot: root, week: "2026-W29" }), /ready，但本轮文件缺失/);
+
+    await writeFile(path.join(weekDir, "feishu-docs.md"), "x".repeat(15_001), "utf8");
+    ready.sources["feishu-docs"].status = "ready";
+    await writeFile(path.join(weekDir, "_source-status.json"), JSON.stringify(ready), "utf8");
+    await assert.rejects(() => collectWeeklyInput({ repoRoot: root, week: "2026-W29" }), /超过单文件上限 15000 字符/);
+
+    ready.sources = {};
+    await writeFile(path.join(weekDir, "_source-status.json"), JSON.stringify(ready), "utf8");
+    await assert.rejects(() => collectWeeklyInput({ repoRoot: root, week: "2026-W29" }), /缺少本轮来源状态/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("keeps the unconfirmed AI draft out of weekly process input", () => {
