@@ -92,7 +92,7 @@ Deep Code X 另有一个独立的周日调度（`learn-x-voice-insight`，20:00�
 - 若返回 `ego-bootstrap-permission`，说明当前沙箱不能让 Node 子进程连接 Ego Lite；请求 Full Access 后，仅使用 `npm run ai:weekly -- --week YYYY-Www --retry` 重试这次未提交调用，禁止切换到 Chrome、CDP 或其它浏览器。已提交后的超时、归属不确定或输出不完整不得用 `--retry` 重发。
 - AI 生成通过校验后自动执行等价于 `npm run ai:weekly -- --week YYYY-Www --promote --confirm` 的正式化；已有实质 `ai.md` 时先备份到对应 `_dist` 目录再覆盖。`AI 周回顾已确认` 仍可作为人工复核口令，但不再阻塞流程；`--promote --confirm` 主要保留给旧的待处理草稿或恢复场景。
 - 用户说 `周记已确认`、`继续生成周报材料` 或同义表达：表示飞书周记草稿与同周期 Action Feedback 草稿已共同审核通过；对同一目标周进入阶段 2，采集已确认的 `weekly.md` 并一次生成 `_dist`。
-- 阶段 2 完成后，用户说 `继续`、`继续下一步`、`继续记忆`、`报告已完成，写入记忆`、`Memorize`，或确认完整人工步骤已完成：对同一目标周进入阶段 3。此处的 `继续` 视为用户确认已完成阶段 2 汇报中列出的 Chat Pack 人工步骤；阶段 3 仍必须先验证 Weekly Output、芒格之魂洞察、全文核心重点纪要和问题与回答，不能绕过本地门槛硬写 Memory。
+- 阶段 2 完成后，用户说 `继续`、`继续下一步`、`继续记忆`、`继续生成记忆`、`报告已完成，写入记忆`、`Memorize`，或确认完整人工步骤已完成：对同一目标周进入阶段 3。此处的 `继续` 视为用户确认已完成阶段 2 汇报中列出的 Chat Pack 人工步骤；阶段 3 仍必须先验证 Weekly Output、芒格之魂洞察、全文核心重点纪要和问题与回答，不能绕过本地门槛硬写 Memory。
 - 阶段 1 的 `继续` 不得跳到阶段 3；阶段 3 只按当前流程位置解析别名。
 - 不猜测人工项已经完成。到阶段门槛就停。
 - 同一轮自动化中，阶段 1 / 2 / 3 必须使用同一个已解析目标周；不要在后续阶段重新按当天日期推断。
@@ -189,36 +189,39 @@ Deep Code X 另有一个独立的周日调度（`learn-x-voice-insight`，20:00�
    - `04_output/_dist/weekly/YYYY-Www/action-feedback.md`
    - `04_output/weekly/YYYY-WW.md`
    - 已完成来源、缺口、验证结果
-10. 停止，等待用户完成人工 / Chat Pack 步骤：基于已共同审核的 `process-pack.md` 生成并审核最终 Weekly Output（只写行动闭环摘要，不复制整表；增加不超过 600 字的本周与上周简短对照）；在同一次操作中启用 `芒格之魂` 生成独立洞察，补全 `芒格之魂的洞察 & 全文核心重点纪要`，回答「本周最值得思考的 3 个问题」，并审核 Memory 候选。按需读取 `.agents/skills/learn-x-process/resources/weekly-output-rules.md` 和 `layer-rules.md`。若用户在 Pack 生成后改了 `action-feedback.md`，重跑一次刷新快照。全部完成后回复 `继续`、`继续下一步` 或 `继续记忆`，进入阶段 3。
+10. 停止，等待用户完成人工 / Chat Pack 步骤：基于已共同审核的 `process-pack.md` 生成并审核最终 Weekly Output（只写行动闭环摘要，不复制整表；增加不超过 600 字的本周与上周简短对照）；在同一次操作中启用 `芒格之魂` 生成独立洞察，补全 `芒格之魂的洞察 & 全文核心重点纪要`，回答「本周最值得思考的 3 个问题」，并审核 Memory 候选。按需读取 `.agents/skills/learn-x-process/resources/weekly-output-rules.md` 和 `layer-rules.md`。若用户在 Pack 生成后改了 `action-feedback.md`，重跑一次刷新快照。图片不再是阶段 3 的人工前置步骤；不要在此阶段自动生成图片或发布公众号。全部完成后回复 `继续`、`继续下一步` 或 `继续记忆`，进入阶段 3。
 
-阶段 2 汇报必须包含完整全局流程，并标记：当前位置 = 阶段 2 完成；下一步 = 在 Chat Pack 生成并审核最终 Weekly Output、芒格之魂、核心纪要、问题与回答和 Memory 候选；再下一步 = 展示一张仅针对当前目标周的阶段 3 最后确认卡。确认卡必须在执行前一次性写清本周 Memory 写入目标、行动反馈 Base 写入目标（新增 / 更新事件数与目的地）、备份载荷（`01_core/`、`03_input/`、`04_output/`）及飞书云盘 / `Snapshots` 目的地、YW Next 刷新范围、Flomo 载荷（`weekly.md` 与季度 Memory）及目的地、留存清理和读回校验；用户只需确认一次。不得把备份、Full Access、YW Next 或 Flomo 再拆成多个确认点。
+阶段 2 汇报必须包含完整全局流程，并标记：当前位置 = 阶段 2 完成；下一步 = 在 Chat Pack 生成并审核最终 Weekly Output、芒格之魂、核心纪要、问题与回答和 Memory 候选；再下一步 = 阶段 3 先生成并校验 `memory-candidates.md`，再展示一张仅针对当前目标周的最终确认卡。确认卡必须在执行前一次性写清本周 Memory 写入目标、自动生成图片的目标路径（`04_output/_dist/weekly/YYYY-Www/weekly-core.png`，ChatGPT Bridge 生图，以及已存在时的版本化处理）、行动反馈 Base 写入目标（新增 / 更新事件数与目的地）、备份载荷（`01_core/`、`03_input/`、`04_output/`）及飞书云盘 / `Snapshots` 目的地、YW Next 刷新范围、Flomo 载荷（`weekly.md` 与季度 Memory）及目的地、留存清理和读回校验；用户只需确认一次。不得把图片、备份、Full Access、YW Next 或 Flomo 再拆成多个确认点；图片生成和其他写入都必须等这一次确认。确认卡缺少图片路径、备份目的地或 Flomo 目的地时，不得请求确认或执行任何写入。
 阶段 2 汇报直接复用 `process-pack.md` 第 2 节的合并总表：Flomo 第一行，独立 Action Feedback 第二行，其余输入按原固定顺序。Action Feedback 行标记为“独立产物、不计入 `input.json` 输入数”，字符链路填 `—`，并链接已共同审核的报告；记录/材料列显示议题数、候选数与将写入 Base 数。其余输入逐行保留 Process Pack 中的状态、文件原始 → 解析清洗后有效（去重前）→ Process Pack 最终纳入字符链路和结果；链路最后一个数字必须是本阶段最终纳入数。只有 Voice-X 等实际发生语义压缩的来源才显示压缩比例，文件名本身就是可点击核查入口。不能只报告来源数量和产物路径。失败或不可用行必须在表内可见，不得只藏在末尾缺口列表。
 若 `health.md` 缺失，阶段 1 / 阶段 2 汇报的第一段必须是一级大标题 `# ⚠️ 缺失输入：health.md`，并同时给出目标周、报告结束日和 Health-X 的 `validate` / `sync` 命令；不能把缺失藏在普通缺口列表中。
 
 ## 阶段 3：已审核记忆
 
-目标：生成和迁移已确认的 Memory 候选，把已确认的行动反馈写入 Base，并刷新下一周“找事”离线索引。
+目标：先准备已确认的 Memory 候选和最终确认卡；用户确认后，按依赖顺序写入 Memory、生成周度核心图片、同步行动反馈、备份并刷新下一周“找事”离线索引。
 
 1. 验证 `04_output/weekly/YYYY-WW.md` 是目标周的实质性周报，不是空壳或模板。
 2. 验证同一周报包含非空、实质性的 `芒格之魂的洞察 & 全文核心重点纪要` 区域，以及非空、实质性的本周问题与回答区域。缺失问题或回答时停止，不生成或迁移 Memory。
-3. 用户从阶段 2 完成状态回复 `继续`、`继续下一步` 或 `继续记忆`，视为确认本周 Weekly Output、芒格之魂、核心纪要、问题与回答和 Memory 候选已人工审核；先展示“最后确认卡”，不执行写入。用户对卡片确认后，一次性执行卡内列出的本地写入、行动反馈 Base 写入、私有备份、YW Next 刷新和 Flomo 同步。确认词必须覆盖卡片列出的载荷与目的地，例如：`确认执行 W34 阶段 3：写入已确认 Memory；将行动反馈周报已确认条目写入 Action Feedback Base；将 01_core、03_input、04_output 备份到 Learn-X 专用飞书云盘并维护 Snapshots；刷新 YW Next；将 W34 周记与 2026-Q3 Memory 同步到 Flomo。` 此后不得按备份、Full Access、YW Next、Flomo 分别再次请求确认；同一目标周、同一事务范围内因网络、Ego Lite、读回或工具环境失败而进行的安全重试沿用这次授权。只有新增目标、扩大数据范围、改变写入对象或新增删除动作时才重新确认。除本阶段末尾的 Flomo 同步外，不得访问、验证或发布任何外部内容。若当前并非阶段 2 完成状态，`继续`按前序阶段规则解释，不得直接进入这里。
+3. 用户从阶段 2 完成状态回复 `继续`、`继续下一步` 或 `继续记忆`，视为确认本周 Weekly Output、芒格之魂、核心纪要、问题与回答和 Memory 候选已人工审核，但不等于授权执行批量写入。先运行 `npm run memory:weekly -- --week YYYY-Www` 生成或刷新候选，再读取候选和规则，组装并展示“最后确认卡”；此时不写正式 Memory、Action Feedback Base、备份、YW Next 或 Flomo，也不生成图片。用户确认卡片后，一次性执行卡内列出的本地写入、图片生成、行动反馈 Base 写入、私有备份、YW Next 刷新和 Flomo 同步。确认词必须覆盖卡片列出的载荷与目的地，例如：`确认执行 W34 阶段 3：写入已确认 Memory；生成 W34 核心图片到 04_output/_dist/weekly/2026-W34/weekly-core.png；将行动反馈周报已确认条目写入 Action Feedback Base；将 01_core、03_input、04_output 备份到 Learn-X 专用飞书云盘并维护 Snapshots；刷新 YW Next；将 W34 周记与 2026-Q3 Memory 同步到 Flomo。` 此后不得按图片、备份、Full Access、YW Next、Flomo 分别再次请求确认；同一目标周、同一事务范围内因网络、Ego Lite、读回或工具环境失败而进行的安全重试沿用这次授权。只有新增目标、扩大数据范围、改变写入对象或新增删除动作时才重新确认。确认前不访问、验证或发布公众号；公众号发布始终由用户人工完成。若当前并非阶段 2 完成状态，`继续`按前序阶段规则解释，不得直接进入这里。
    - 标题 11「全文核心重点纪要」、标题 12「芒格之魂的洞察」和标题 13 的问题与回答是系统确认内容，不要求 checkbox。标题 11 和标题 13 写入当周 Memory；标题 12 写入季度芒格洞察候选池。允许轻度去重压缩，但不得丢失独立判断、限定、反转、隐喻、问题、回答或行动边界。
-4. 生成或刷新候选：
-
-   ```bash
-   npm run memory:weekly -- --week YYYY-Www
-   ```
-
-5. 读取 `.agents/skills/learn-x-process/resources/memory-rules.md` 和 `04_output/_dist/weekly/YYYY-Www/memory-candidates.md`。
-6. 只迁移：
+4. 读取 `.agents/skills/learn-x-process/resources/memory-rules.md` 和 `04_output/_dist/weekly/YYYY-Www/memory-candidates.md`，核对候选数量、实际迁移目标和图片目标路径后再展示最终确认卡。
+5. 只迁移：
    - `memory-candidates.md` 中两个「系统确认」章节；
    - `memory-candidates.md` 中已勾选的 checkbox 条目；
    - 用户在当前线程明确确认写入的条目；
    - 当前 `learn-x-process` Skill 定义的结构化显式确认标记。
-7. 不迁移未勾选条目。普通未勾选正文中的 `重要`、`保留`、`确认`、`继续追踪` 等关键词不构成确认。
-8. 将获准条目写入正确的季度 Memory 目标。「全文核心重点纪要」和问题与回答进入对应周的 `Memory`；「芒格之魂的洞察」进入顶部芒格洞察候选池。已勾选的 `法候选` / `术候选` 进入对应候选池；任何内容都不自动升级为正式 `道 / 法 / 术`。
-9. 保持幂等。重复运行不得追加完全重复条目。
-9a. Memory 迁移完成后、备份之前，把独立 `action-feedback.md` 中已勾选（`[x]`）行写入 / 更新 Action Feedback Base 事件表。阶段 3 事务卡已覆盖该写入，不再单独请求确认：
+6. 不迁移未勾选条目。普通未勾选正文中的 `重要`、`保留`、`确认`、`继续追踪` 等关键词不构成确认。
+7. 将获准条目写入正确的季度 Memory 目标。「全文核心重点纪要」和问题与回答进入对应周的 `Memory`；「芒格之魂的洞察」进入顶部芒格洞察候选池。已勾选的 `法候选` / `术候选` 进入对应候选池；任何内容都不自动升级为正式 `道 / 法 / 术`。
+8. 保持幂等。重复运行不得追加完全重复条目。
+9. Memory 迁移完成后、Action Feedback 和备份之前，运行：
+
+   ```bash
+   npm run image:weekly -- --week YYYY-Www
+   ```
+
+   参考 Read-X / Voice-X 的核心内容图流程，通过 ChatGPT Bridge 的 image 模式，把当前周报底部的“全文核心重点纪要”和“芒格之魂的洞察”原文生成为一张竖屏 PNG，写入 `04_output/_dist/weekly/YYYY-Www/weekly-core.png`。脚本只暂存 Bridge 返回的图片字节，不本机绘制，不使用 `imagegen` 另造视觉流程，不得改写核心内容，不得上传或发布公众号。
+   - 目标文件已存在且大小大于 0 时视为 `already-success`，脚本直接跳过，不得覆盖；用户明确要求重新生成时先移走旧文件或使用同周版本化文件名。
+   - 脚本校验 Bridge 的 `succeeded` 状态和 base64 图片载荷后原子落盘，并把结果 JSON 原样纳入汇报。失败不回滚已写入的 Memory，继续执行其他已获确认的独立动作，但最终汇报必须标记 `Overall: partial` 和 `Image: failed`；`needs_review` 表示可能已提交但未确认，不得自动重发。
+9a. 图片生成完成或明确失败后，把独立 `action-feedback.md` 中已勾选（`[x]`）行写入 / 更新 Action Feedback Base 事件表。阶段 3 事务卡已覆盖该写入，不再单独请求确认：
 
    ```bash
    npm run action:feedback -- sync --week YYYY-Www
@@ -230,7 +233,7 @@ Deep Code X 另有一个独立的周日调度（`learn-x-voice-insight`，20:00�
    - 同步失败不回滚已写入的 Memory，继续备份、YW Next 和 Flomo，但最终汇报必须标记 `Overall: partial`，明确列出 `Action Feedback Base: failed`。
    - 同步成功后，Base 是该批事件的时间真值；周报保留为历史快照，后续修改同一周报告可安全重跑，不覆盖其他周事件。
 10. 如果标题 11/12/13 均无实质内容，且没有其他获准条目，停止并要求用户补充、勾选或明确确认候选，不要编造 Memory。
-11. Memory 写入成功后，立即执行 Learn-X 数据备份。阶段 3 事务卡已覆盖该目标周的备份写入和留存清理，不再单独请求确认：
+11. Memory 写入和图片步骤完成或明确失败后，立即执行 Learn-X 数据备份。阶段 3 事务卡已覆盖该目标周的备份写入和留存清理，不再单独请求确认：
    ```bash
    npm run backup:weekly -- --week YYYY-Www
    ```
@@ -266,13 +269,14 @@ Deep Code X 另有一个独立的周日调度（`learn-x-voice-insight`，20:00�
    - Linux 定时任务不得调用 Ego Lite。只在 Flomo 官方非 GUI 通道同时支持“按同步键检索、读回、创建和更新”且认证方式获准用于无人值守时，才启用定时同步；仅能创建的 incoming webhook/API 不满足季度 memo 更新与去重要求，保持不同步并报告缺口。
    - 定时同步以 `目标键 + 源内容哈希` 为幂等键，固定执行“远端检索 → 写入 → 读回核验 → 原子落盘状态”。任何网络或进程异常后，下一次仅先检索和读回同一幂等键；状态不能证明写入未发生时停止人工裁决，绝不盲目重发写请求。
 
-阶段 3 汇报必须包含候选数量、实际迁移数量、行动反馈 Base 同步结果（新增 / 更新 / 跳过 / 失败及原因）、目标文件、去重结果、找事索引路径和状态、Flomo 同步状态（创建 / 更新 / 跳过 / 失败）、验证结果、当前位置、下一步和下次运行。
+阶段 3 汇报必须包含候选数量、实际迁移数量、图片状态（生成 / already-success / failed、目标路径）、行动反馈 Base 同步结果（新增 / 更新 / 跳过 / 失败及原因）、目标文件、去重结果、找事索引路径和状态、Flomo 同步状态（创建 / 更新 / 跳过 / 失败）、验证结果、当前位置、下一步和下次运行。
 
 ## 边界
 
 - 不把本地周输入材料发送到 ChatGPT；只通过全局 `chatgpt-web-bridge` 发送模板提示词和目标周范围。只有未通过完整性校验、状态为 `needs_review` 的 `ai.generated.md` 不进入 Process；校验通过后自动转为正式 `ai.md`。
 - 不在脚本中生成最终 Weekly Output 正文。
 - 不在自动化中生成 `芒格之魂` 洞察。
+- 不自动发布微信公众号；图片只生成到确认卡列出的本地目标路径。
 - 不读取 `coach.md` 中 URL 指向的页面正文，不下载 AI Coach 附件，不把联系方式或访谈原文写入仓库。
 - 不自动生成或升级正式 `道/`、`法/`、`术` 内容；用户明确授权的 `01_core/道/flomo-top.md` 仅作为 Flomo 单向镜像例外，成功采集时允许覆盖更新。
 - 不按关键词迁移未勾选 Memory 候选。

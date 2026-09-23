@@ -62,7 +62,7 @@ test("paginates candidates and history, deduplicates Wiki and Docx, and keeps on
         "": historyPage([history(10, ["bot"], at(-60))], true, "history-next"),
         "history-next": historyPage([
           history(11, [HUMAN], at(0)),
-          history(11, [HUMAN], at(0), "h11-duplicate"),
+          history(11, [HUMAN], at(0), "h11"),
           history(12, [HUMAN], at(86_400)),
           history(13, ["bot"], at(7 * 86_400))
         ])
@@ -86,6 +86,53 @@ test("paginates candidates and history, deduplicates Wiki and Docx, and keeps on
   assert.equal(transport.calls.searches.filter((call) => call.kind === "created").length, 2);
   assert.deepEqual(transport.calls.fetches.map((call) => call.revisionId), [11, 10, 12]);
   assert.equal(transport.calls.fetches.some((call) => call.revisionId === 13), false);
+});
+
+test("accepts Search v2 nested Wiki result metadata", async () => {
+  const wikiUrl = "https://example.feishu.cn/wiki/wiki-v2";
+  const transport = makeTransport({
+    search: { edited: { "": page([{
+      entity_type: "WIKI",
+      title_highlighted: "<h>嵌套标题</h>",
+      result_meta: { doc_types: "DOCX", token: "wiki-node-token", url: wikiUrl }
+    }]) } },
+    wiki: { [wikiUrl]: { node: { obj_type: "docx", obj_token: "doc-v2", title: "底层标题" } } },
+    histories: { "doc-v2": { "": historyPage([history(1, ["bot"], at(-1)), history(2, [HUMAN], at(1))]) } },
+    snapshots: { 1: { revision_id: 1, content: "旧正文" }, 2: { revision_id: 2, content: "新正文" } }
+  });
+
+  const payload = await collectFeishuDocsWeekly({ week: WEEK, editorId: HUMAN, transport });
+  assert.equal(payload.documents[0].title, "嵌套标题");
+  assert.equal(payload.documents[0].latestHumanVersion.markdown, "新正文");
+});
+
+test("accepts the Search v2 DOC entity enum for a Docx URL", async () => {
+  const transport = makeTransport({
+    search: { edited: { "": page([{
+      entity_type: "DOC",
+      title_highlighted: "普通文档",
+      result_meta: { doc_types: "DOCX", token: "doc-v2", url: "https://example.feishu.cn/docx/doc-v2" }
+    }]) } },
+    histories: { "doc-v2": { "": historyPage([history(1, ["bot"], at(-1)), history(2, [HUMAN], at(1))]) } },
+    snapshots: { 1: { revision_id: 1, content: "旧正文" }, 2: { revision_id: 2, content: "新正文" } }
+  });
+
+  const payload = await collectFeishuDocsWeekly({ week: WEEK, editorId: HUMAN, transport });
+  assert.equal(payload.documents[0].title, "普通文档");
+});
+
+test("accepts ISO 8601 edit_time values from docs history", async () => {
+  const transport = makeTransport({
+    search: { edited: { "": page([result("doc-iso-time")]) } },
+    histories: { "doc-iso-time": { "": historyPage([
+      history(1, ["bot"], at(-1)),
+      { revision_id: 2, history_version_id: "h2", edit_time: "2026-07-16T00:00:01Z", editor_ids: [HUMAN] }
+    ]) } },
+    snapshots: { 1: { revision_id: 1, content: "旧正文" }, 2: { revision_id: 2, content: "新正文" } }
+  });
+
+  const payload = await collectFeishuDocsWeekly({ week: WEEK, editorId: HUMAN, transport });
+  assert.equal(payload.documents[0].latestHumanVersion.revisionId, 2);
 });
 
 test("includes a document created by another person when the user edits it that week", async () => {
@@ -115,17 +162,56 @@ test("fails closed when the configured editor ID differs from the current user",
     currentUserId: "different-user",
     search: { edited: { "": page([result("doc-wrong-user")]) } }
   });
-  await assert.rejects(() => collectFeishuDocsWeekly({ week: WEEK, editorId: HUMAN, transport }), /本次 lark-cli 用户 open_id/);
+  await assert.rejects(() => collectFeishuDocsWeekly({ week: WEEK, editorId: HUMAN, transport }), /本次 lark-cli 用户身份/);
   assert.equal(transport.calls.searches.length, 0);
+});
+
+test("keeps history editor ID separate from the current user's open_id", async () => {
+  const transport = makeTransport({
+    search: { edited: { "": page([result("doc-identity-spaces")]) } },
+    histories: { "doc-identity-spaces": { "": historyPage([history(1, ["bot"], at(-1)), history(2, [HUMAN], at(1))]) } },
+    snapshots: { 1: { revision_id: 1, content: "旧正文" }, 2: { revision_id: 2, content: "新正文" } }
+  });
+  transport.currentUserIdentity = async () => ({ openId: "open-human" });
+  delete transport.currentUserId;
+  const payload = await collectFeishuDocsWeekly({ week: WEEK, editorId: HUMAN, humanOpenId: "open-human", transport });
+  assert.equal(payload.documents[0].latestHumanVersion.revisionId, 2);
+});
+
+test("fails closed when the current open_id canary is missing", async () => {
+  const transport = makeTransport();
+  transport.currentUserIdentity = async () => ({ openId: "open-human" });
+  await assert.rejects(() => collectFeishuDocsWeekly({ week: WEEK, editorId: HUMAN, transport }), /未配置经 canary 核实的本人 open_id/);
+  assert.equal(transport.calls.searches.length, 0);
+});
+
+test("fails closed when a custom transport cannot verify the current user", async () => {
+  const transport = makeTransport();
+  delete transport.currentUserId;
+  await assert.rejects(() => collectFeishuDocsWeekly({ week: WEEK, editorId: HUMAN, transport }), /缺少当前用户身份核验能力/);
+  assert.equal(transport.calls.searches.length, 0);
+});
+
+test("fails closed when a revision maps to multiple history versions", async () => {
+  const transport = makeTransport({
+    search: { edited: { "": page([result("doc-ambiguous")]) } },
+    histories: { "doc-ambiguous": { "": historyPage([
+      history(1, ["bot"], at(-1)),
+      history(2, [HUMAN], at(1), "h2-a"),
+      history(2, [HUMAN], at(2), "h2-b")
+    ]) } }
+  });
+  await assert.rejects(() => collectFeishuDocsWeekly({ week: WEEK, editorId: HUMAN, transport }), /对应多个 history_version_id/);
+  assert.equal(transport.calls.fetches.length, 0);
 });
 
 test("fails closed for mixed editor IDs, missing target-week history, and mismatched revisions", async (t) => {
   const cases = [
     {
       name: "mixed editors",
-      entries: [history(1, ["bot"], at(-1)), history(2, [HUMAN], at(1)), history(2, ["bot"], at(1), "h2-bot")],
+      entries: [history(1, ["bot"], at(-1)), history(2, [HUMAN, "bot"], at(1))],
       snapshots: { 1: { revision_id: 1, content: "a" }, 2: { revision_id: 2, content: "b" } },
-      error: /编辑者归属不唯一/
+      error: /编辑者归属(?:缺失或)?不唯一/
     },
     {
       name: "created candidate without human target-week version",
@@ -274,6 +360,7 @@ test("runs CLI adapter, atomic snapshot, source status, and Weekly Process input
   await mkdir(binDir, { recursive: true });
   const cliPath = path.join(binDir, "lark-cli");
   const priorPath = process.env.PATH;
+  const priorOpenId = process.env.LEARNX_FEISHU_HUMAN_OPEN_ID;
   const startEpoch = weekStart;
 const fakeCli = `#!${process.execPath}
 const args = process.argv.slice(2);
@@ -313,6 +400,7 @@ if (args[0] === 'drive' && args[1] === '+search') {
     await writeFile(cliPath, fakeCli, "utf8");
     await chmod(cliPath, 0o755);
     process.env.PATH = binDir;
+    process.env.LEARNX_FEISHU_HUMAN_OPEN_ID = HUMAN;
     const repoRoot = path.join(root, "repo");
     const outputRoot = path.join(repoRoot, "03_input", "weekly", WEEK);
     const transport = createLarkTransport();
@@ -332,6 +420,8 @@ if (args[0] === 'drive' && args[1] === '+search') {
   } finally {
     if (priorPath === undefined) delete process.env.PATH;
     else process.env.PATH = priorPath;
+    if (priorOpenId === undefined) delete process.env.LEARNX_FEISHU_HUMAN_OPEN_ID;
+    else process.env.LEARNX_FEISHU_HUMAN_OPEN_ID = priorOpenId;
     await rm(root, { recursive: true, force: true });
   }
 });

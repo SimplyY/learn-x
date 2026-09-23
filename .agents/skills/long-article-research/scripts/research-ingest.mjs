@@ -58,6 +58,7 @@ function createDoc(title, body) {
       `--title "${title.replace(/"/g, '\\"')}"`,
       `--content @./content.md`,
       '--doc-format markdown',
+      '--as bot',
       '--format json',
     ].join(' ');
 

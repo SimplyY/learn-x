@@ -205,7 +205,7 @@ export async function defaultRunner(args) {
 
 export class Workbench {
   constructor(run = defaultRunner, config = run === defaultRunner ? readConfig() : null) { this.run = run; this.config = config; }
-  async lark(args) { return this.run([...args, "--as", "user", "--format", "json"]); }
+  async lark(args, identity = "user") { return this.run([...args, "--as", identity, "--format", "json"]); }
   async fields(tableId) { return (await this.lark(["base", "+field-list", "--base-token", BASE_TOKEN, "--table-id", tableId, "--limit", "100"])).data.fields || []; }
   async blocks() { return (await this.lark(["base", "+base-block-list", "--base-token", BASE_TOKEN])).data.blocks || []; }
   async ledgerTable() { const tables = (await this.blocks()).filter((block) => block.type === "table" && [LEDGER_NAME, "月度核心议题研究"].includes(block.name)); if (tables.length > 1) throw new Error("议题账本存在多个同名兼容表"); const table = tables[0]; if (!table) throw new Error(`缺少机器表：${LEDGER_NAME}；先运行 setup`); return table.id; }
@@ -294,13 +294,13 @@ export class Workbench {
       return { document: `https://ywhome.feishu.cn/base/${BASE_TOKEN}?block=${doc.id}`, token: doc.id, selected: selected.map((issue) => ({ id: issue["议题编号"], question: issue["议题"] })), recovered: true };
     }
     if (!created && !blankBaseDoc(existing, name)) throw new Error("同名工作台文档已有非模板内容，拒绝覆盖");
-    await this.lark(["docs", "+update", "--doc", doc.id, "--command", "overwrite", "--content", renderWorkbench(month, selected)]);
+    await this.lark(["docs", "+update", "--doc", doc.id, "--command", "overwrite", "--content", renderWorkbench(month, selected)], "bot");
     const readback = await this.lark(["docs", "+fetch", "--doc", doc.id, "--detail", "with-ids"]); const written = text(readback.data?.document?.content); if (!written.includes(`月度议题研究工作台｜${month}`) || !expectedMarkers.every((marker) => written.includes(marker))) throw new Error("工作台文档回读失败");
     const document = `https://ywhome.feishu.cn/base/${BASE_TOKEN}?block=${doc.id}`;
     await this.write(table, row.recordId, { "选定议题": selected.map((issue) => ({ id: issue.recordId })), "研究文档": doc.id, "流程状态": "研究中" });
     return { document, token: doc.id, selected: selected.map((issue) => ({ id: issue["议题编号"], question: issue["议题"] })) };
   }
-  async wiki(args) { return this.lark(["wiki", ...args]); }
+  async wiki(args, identity = "user") { return this.lark(["wiki", ...args], identity); }
   async wikiChildren() { const nodes = []; let pageToken = ""; while (true) { const args = ["+node-list", "--space-id", this.config.space_id, "--parent-node-token", this.config.research_node_token, "--page-size", "50"]; if (pageToken) args.push("--page-token", pageToken); const data = (await this.wiki(args)).data || {}; nodes.push(...(data.nodes || [])); if (!data.has_more) return nodes; if (!data.page_token || data.page_token === pageToken) throw new Error("Wiki 子节点分页异常：has_more=true 但无新 page_token"); pageToken = data.page_token; } }
   async assertWikiRoots() {
     const spaces = (await this.wiki(["+space-list", "--page-all"])).data?.spaces || []; const matches = spaces.filter((space) => String(space.space_id) === String(this.config.space_id)); if (matches.length !== 1 || matches[0].name !== this.config.space_name || matches[0].visibility !== "private" || matches[0].open_sharing === "open") throw new Error("核心议题 Wiki 空间名称或私有权限漂移");
@@ -315,7 +315,7 @@ export class Workbench {
     await this.assertWikiRoots();
     const nodes = sortNodes((await this.wikiChildren()).filter((node) => /^月度议题研究工作台｜\d{4}-(?:0[1-9]|1[0-2])$/.test(node.title) || /^月度核心议题研究工作台｜\d{4}-(?:0[1-9]|1[0-2])$/.test(node.title)));
     const content = renderIndex("细项研究", "月度核心议题研究目录；研究正文位于子节点。", nodes, "当前暂无月度研究。");
-    await this.lark(["docs", "+update", "--doc", this.config.research_node_token, "--command", "overwrite", "--content", content]);
+    await this.lark(["docs", "+update", "--doc", this.config.research_node_token, "--command", "overwrite", "--content", content], "bot");
   }
   async createWiki(month, selection, selected, table, row) {
     const name = `月度议题研究工作台｜${month}`; const legacyName = `月度核心议题研究工作台｜${month}`;
@@ -325,12 +325,12 @@ export class Workbench {
     const children = await this.wikiChildren(); const matches = children.filter((node) => [name, legacyName].includes(node.title));
     if (matches.length > 1) throw new Error("同月存在多个同名工作台文档");
     let node = matches[0]; let created = false;
-    if (!node) { const createdResult = await this.wiki(["+node-create", "--space-id", this.config.space_id, "--parent-node-token", this.config.research_node_token, "--title", name, "--obj-type", "docx"]); node = createdResult.data?.node || createdResult.data; created = true; }
+    if (!node) { const createdResult = await this.wiki(["+node-create", "--space-id", this.config.space_id, "--parent-node-token", this.config.research_node_token, "--title", name, "--obj-type", "docx"], "bot"); node = createdResult.data?.node || createdResult.data; created = true; }
     if (!node?.node_token) throw new Error("月度 Wiki 节点创建后无法定位"); await this.assertWikiChild(node.node_token, [name, legacyName]);
     const token = node.obj_token || node.objToken || node.node_token; const existing = created ? "" : text((await this.lark(["docs", "+fetch", "--doc", token, "--detail", "with-ids"])).data?.document?.content); const expectedMarkers = selected.map((issue) => `[${text(issue["议题编号"])}]`);
     if (!created && expectedMarkers.every((marker) => existing.includes(marker))) { await this.rebuildWikiIndex(); await this.write(table, row.recordId, { "选定议题": selected.map((issue) => ({ id: issue.recordId })), "研究文档": token, "Wiki 节点": node.node_token, "流程状态": "研究中" }); return { document: wikiUrl(node.node_token), token, wikiToken: node.node_token, selected: selected.map((issue) => ({ id: issue["议题编号"], question: issue["议题"] })), recovered: true }; }
     if (!created && existing.replace(/<[^>]+>/g, "").replace(name, "").trim()) throw new Error("同名工作台文档已有非模板内容，拒绝覆盖");
-    await this.lark(["docs", "+update", "--doc", token, "--command", "overwrite", "--content", renderWorkbench(month, selected)]);
+    await this.lark(["docs", "+update", "--doc", token, "--command", "overwrite", "--content", renderWorkbench(month, selected)], "bot");
     const readback = await this.lark(["docs", "+fetch", "--doc", token, "--detail", "with-ids"]); const written = text(readback.data?.document?.content); if (!written.includes(`月度议题研究工作台｜${month}`) || !expectedMarkers.every((marker) => written.includes(marker))) throw new Error("月度 Wiki 文档回读失败");
     await this.rebuildWikiIndex(); await this.write(table, row.recordId, { "选定议题": selected.map((issue) => ({ id: issue.recordId })), "研究文档": token, "Wiki 节点": node.node_token, "流程状态": "研究中" });
     return { document: wikiUrl(node.node_token), token, wikiToken: node.node_token, selected: selected.map((issue) => ({ id: issue["议题编号"], question: issue["议题"] })) };

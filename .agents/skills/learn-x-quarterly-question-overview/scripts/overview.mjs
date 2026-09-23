@@ -141,8 +141,8 @@ export async function defaultRunner(args) {
 
 export class QuarterlyOverview {
   constructor(run = defaultRunner, config = run === defaultRunner ? readConfig() : null) { this.run = run; this.config = config; }
-  async lark(args) { return this.run([...args, "--as", "user", "--format", "json"]); }
-  async wiki(args) { return this.lark(["wiki", ...args]); }
+  async lark(args, identity = "user") { return this.run([...args, "--as", identity, "--format", "json"]); }
+  async wiki(args, identity = "user") { return this.lark(["wiki", ...args], identity); }
   async fields(table) { return (await this.lark(["base", "+field-list", "--base-token", BASE_TOKEN, "--table-id", table, "--limit", "100"])).data.fields || []; }
   async blocks() { return (await this.lark(["base", "+base-block-list", "--base-token", BASE_TOKEN])).data.blocks || []; }
   async list(table, fields) {
@@ -184,7 +184,7 @@ export class QuarterlyOverview {
   async rebuildIndex() {
     await this.assertRoots();
     const nodes = sortNodes((await this.children(this.config.overview_node_token)).filter((node) => /^核心议题总览｜\d{4}-Q[1-4]$/.test(node.title)));
-    await this.lark(["docs", "+update", "--doc", this.config.overview_node_token, "--command", "overwrite", "--content", renderIndex("总览", "季度核心议题总览目录；研究正文位于子节点。", nodes, "当前暂无季度总览。")]);
+    await this.lark(["docs", "+update", "--doc", this.config.overview_node_token, "--command", "overwrite", "--content", renderIndex("总览", "季度核心议题总览目录；研究正文位于子节点。", nodes, "当前暂无季度总览。")], "bot");
     const readback = await this.lark(["docs", "+fetch", "--doc", this.config.overview_node_token, "--detail", "with-ids"]);
     if (!text(readback.data?.document?.content).includes("文档索引（新 → 旧）")) throw new Error("总览目录索引回读失败");
     return { count: nodes.length };
@@ -242,11 +242,11 @@ export class QuarterlyOverview {
     }
     const title = `核心议题总览｜${quarter}`; const baseDuplicate = (await this.blocks()).some((block) => block.type === "docx" && block.name === title); if (baseDuplicate) throw new Error("同季度已有 Base Docx 同名总览，拒绝与 Wiki 产生双端副本");
     const issues = await this.issues(); const matches = (await this.children(this.config.overview_node_token)).filter((node) => node.title === title); if (matches.length > 1) throw new Error("同季度存在多个同名总览");
-    let node = matches[0]; let created = false; if (!node) { const result = await this.wiki(["+node-create", "--space-id", this.config.space_id, "--parent-node-token", this.config.overview_node_token, "--title", title, "--obj-type", "docx"]); node = result.data?.node || result.data; created = true; }
+    let node = matches[0]; let created = false; if (!node) { const result = await this.wiki(["+node-create", "--space-id", this.config.space_id, "--parent-node-token", this.config.overview_node_token, "--title", title, "--obj-type", "docx"], "bot"); node = result.data?.node || result.data; created = true; }
     if (!node?.node_token) throw new Error("季度总览 Wiki 节点创建后无法定位"); await this.assertChild(node.node_token, title, this.config.overview_node_token); const docToken = node.obj_token || node.objToken || node.node_token;
     const existing = created ? "" : text((await this.lark(["docs", "+fetch", "--doc", docToken, "--detail", "with-ids"])).data?.document?.content); const stable = existing.includes(`核心议题总览｜${quarter}`) && (existing.includes("季度回填锚点：quarterly-fillback") || /data-anchor=["']quarterly-fillback["']/.test(existing));
     if (!created && existing && !stable) throw new Error("同名总览缺少稳定标题或模板锚点，拒绝覆盖");
-    if (created || !existing) await this.lark(["docs", "+update", "--doc", docToken, "--command", "overwrite", "--content", renderOverview(quarter, issues)]);
+    if (created || !existing) await this.lark(["docs", "+update", "--doc", docToken, "--command", "overwrite", "--content", renderOverview(quarter, issues)], "bot");
     const readback = await this.lark(["docs", "+fetch", "--doc", docToken, "--detail", "with-ids"]); const content = text(readback.data?.document?.content); if (!content.includes(`核心议题总览｜${quarter}`) || !/quarterly-fillback/.test(content)) throw new Error("季度总览写后读回失败");
     await this.rebuildIndex(); const saved = await this.write(table, row?.recordId, { "季度": quarter, "总览文档": docToken, "Wiki 节点": node.node_token, "流程状态": "研究中" }); const ledgerId = row?.recordId || recordId(saved); const checked = await this.ledger(quarter); if (!checked.row || text(checked.row["总览文档"]) !== docToken || text(checked.row["Wiki 节点"]) !== node.node_token) throw new Error("季度账本写后读回失败");
     const chatTabSync = await this.syncChatTab(quarter, checked.row); await this.persistChatTabSync(table, checked.row, chatTabSync);

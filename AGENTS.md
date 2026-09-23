@@ -18,6 +18,12 @@
 - Memory 写入成功后记录刷新结果、来源摘要和失败原因；核心上下文刷新失败不得回退到旧内容冒充新鲜上下文。
 - 任何流程的完成判断都要同时给出产物路径、校验结果和人工确认状态。
 
+## 飞书身份契约
+
+- Docx / Wiki 写入口固定 `--as bot`。
+- 人工身份用两个变量表示：`LEARNX_FEISHU_HUMAN_EDITOR_ID` 保存历史 `editor_ids`；`LEARNX_FEISHU_HUMAN_OPEN_ID` 保存当前账号 `open_id`。二者属不同 ID 空间，不直接比较。
+- 先用 `lark-cli auth status --json --verify` 核对当前 `open_id`，再匹配历史 `editor_ids`；缺失或不匹配时失败关闭。
+
 ## 按需读取
 
 | 任务类型 | 先读 | 触发条件 |

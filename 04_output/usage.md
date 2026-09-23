@@ -7,7 +7,7 @@
 ## 流程
 
 ```text
-阶段 1 采集输入并同步核心议题 -> 生成周记与 Action Feedback 草稿（有效行动默认选中） -> 用户共同审核 / 修改 -> 用户说“周记已确认” -> 阶段 2 一次生成含 Action Feedback 快照及上周 Output 对照材料的 Process Pack -> Chat Pack 生成最终 Weekly Output（含不超过 600 字的周对照） -> 芒格之魂补充洞察与核心纪要 -> 阶段 3 Memorize + 默认选中的 Action Feedback 事件写入
+阶段 1 采集输入并同步核心议题 -> 生成周记与 Action Feedback 草稿（有效行动默认选中） -> 用户共同审核 / 修改 -> 用户说“周记已确认” -> 阶段 2 一次生成含 Action Feedback 快照及上周 Output 对照材料的 Process Pack -> Chat Pack 生成最终 Weekly Output（含不超过 600 字的周对照） -> 芒格之魂补充洞察与核心纪要 -> 阶段 3 生成并校验 Memory 候选 -> 唯一确认卡 -> 正式 Memory -> ChatGPT Bridge 核心图 -> Action Feedback / 备份 / YW Next / Flomo
 ```
 
 ## 1. 确认材料包
@@ -59,7 +59,7 @@ Output 正文应服务于审稿：哪些输入改变了理解，哪些判断值�
 1. 使用 Learn-X Chat Pack 的 Weekly Output 功能，基于最新 `process-pack.md` 生成并审核周报正文。
 2. 继续在 Chat Pack 启用“芒格之魂”，生成独立洞察。
 3. 在 `04_output/weekly/YYYY-WW.md` 底部完善“芒格之魂的洞察 & 全文核心重点纪要”，并补充“本周最值得思考的 3 个问题”的回答。
-4. 审核并勾选 Memory 候选，最后回复“继续记忆”。
+4. 审核并勾选 Memory 候选，最后回复“继续记忆”。图片不再是进入阶段 3 前的人工前置步骤；公众号发布仍由用户人工完成。
 
 Action Feedback 已在阶段 1 与周记草稿共同审核，不需要逐行勾选；有证据且填写完整的候选默认 `[x]`，将在阶段 3 最后确认后写入 Base。发现问题时可删除或修改；如需保留在 Weekly Output 但不写入 Base，可改为 `[ ]`。如果此处还要改报告，先重跑 `process:weekly` 刷新 Pack 快照。
 
@@ -83,7 +83,7 @@ Action Feedback 的规格见 `docs/ACTION_FEEDBACK.md`；它按当前季度短�
 
 Memorize 交给 Codex 执行，不需要用户手动跑脚本。
 
-在每周自动化线程中，完成 Action Feedback、Weekly Output、芒格洞察与核心纪要、回答本周 3 个问题、审核 Memory 候选后，回复“继续生成记忆”或同义表达，即进入阶段 3。阶段 3 必须先确认 Output 非空、芒格洞察和问题与回答非空且存在已勾选或用户明确确认的 Memory 内容；任一条件未满足时停止，不硬凑 Memory。Memory 写入后执行 `npm run action:feedback -- sync --week YYYY-Www`，把独立报告中默认选中的有效行动行幂等写入 Action Feedback Base 事件表并读回校验。
+在每周自动化线程中，完成 Action Feedback、Weekly Output、芒格洞察与核心纪要、回答本周 3 个问题、审核 Memory 候选后，回复“继续生成记忆”或同义表达，即进入阶段 3。阶段 3 必须先确认 Output 非空、芒格洞察和问题与回答非空且存在已勾选或用户明确确认的 Memory 内容；任一条件未满足时停止，不硬凑 Memory。自动化先生成并校验 `memory-candidates.md`，再展示一次包含正式 Memory、图片路径、Action Feedback Base、备份、YW Next 和 Flomo 的确认卡；用户确认后按“正式 Memory → ChatGPT Bridge 核心图（`04_output/_dist/weekly/YYYY-Www/weekly-core.png`）→ Action Feedback Base / 备份 / YW Next / Flomo”执行，并读回校验。图片失败不回滚 Memory，公众号不自动发布。
 
 可以直接说：
 

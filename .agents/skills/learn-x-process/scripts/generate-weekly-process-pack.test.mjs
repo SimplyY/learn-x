@@ -229,6 +229,35 @@ test("weekly automation creates and reviews Action Feedback at Stage 1", async (
   assert.match(stage2, /不计入 `input\.json` 输入数/);
 });
 
+test("Stage 3 prepares candidates before one confirmation and generates the image after Memory", async () => {
+  const skill = await readFile(new URL("../../learn-x-weekly-automation/SKILL.md", import.meta.url), "utf8");
+  const stage2 = skill.slice(skill.indexOf("## 阶段 2："), skill.indexOf("## 阶段 3："));
+  const stage3 = skill.slice(skill.indexOf("## 阶段 3："), skill.indexOf("## 边界"));
+  const candidateIndex = stage3.indexOf("npm run memory:weekly -- --week YYYY-Www");
+  const confirmationIndex = stage3.indexOf("最后确认卡");
+  const memoryIndex = stage3.indexOf("将获准条目写入正确的季度 Memory 目标");
+  const imageIndex = stage3.indexOf("npm run image:weekly -- --week YYYY-Www");
+
+  assert.match(stage2, /图片不再是阶段 3 的人工前置步骤/);
+  assert.doesNotMatch(stage2, /使用.*核心内容生成一张.*图片/);
+  assert.ok(candidateIndex >= 0 && candidateIndex < confirmationIndex);
+  assert.ok(confirmationIndex >= 0 && confirmationIndex < memoryIndex);
+  assert.ok(memoryIndex >= 0 && memoryIndex < imageIndex);
+  assert.match(skill, /图片只生成到确认卡列出的本地目标路径/);
+  assert.match(stage3, /ChatGPT Bridge 的 image 模式/);
+  assert.match(stage3, /04_output\/_dist\/weekly\/YYYY-Www\/weekly-core\.png/);
+  assert.match(stage3, /不使用 `imagegen`/);
+  assert.match(stage3, /不得上传或发布公众号/);
+  assert.match(stage3, /Overall: partial/);
+  assert.match(stage3, /Image: failed/);
+  assert.match(stage3, /already-success/);
+  assert.match(stage3, /版本化文件名/);
+  assert.match(stage3, /needs_review.*不得自动重发/);
+  assert.doesNotMatch(skill, /ljg-card/);
+  assert.doesNotMatch(skill, /~\/Downloads\/Learn-X-周报/);
+  assert.match(stage2, /确认卡缺少图片路径、备份目的地或 Flomo 目的地时，不得请求确认或执行任何写入/);
+});
+
 test("weekly Output rules define concise comparison and bounded user-answer questions", async () => {
   const [rules, prompt] = await Promise.all([
     readFile(new URL("../resources/weekly-output-rules.md", import.meta.url), "utf8"),

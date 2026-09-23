@@ -75,7 +75,9 @@ Weekly 输入由周目录决定，不依赖 weekly index 或文件修改时间�
 - `coach.md`：按表字段保留新增记录，在采集器内排除回顾、复看和推送状态更新；本周 0 条新增记录时不生成文件，但每周自动化必须报告 0 条记录。
 - `open-actions.md`：旧版 `npm run action:feedback -- collect` 的兼容产物，用于从 Action Feedback Base 回捞未闭环核心行动；不属于默认周流程，也不是当前 Action Feedback 周报来源。
 - `wisdom.md`：智慧之门创建时间落在目标周内的新记录；既有记录的回顾、复看或状态更新不采集；本周 0 条时不生成文件，但每周自动化必须报告 0 条记录。
-- `feishu-docs.md` 采集只采用 Feishu 返回且可核对的历史项。采集器先用 `lark-cli auth status --json --verify` 核对当前用户 `openId` 与专门测试文档确认的 `LEARNX_FEISHU_HUMAN_EDITOR_ID` 一致，再用 `--as user` 搜索、列历史并获取指定 revision；缺失或不匹配时失败关闭。手动粘贴 AI 内容按飞书记录的编辑账号归属。历史列表接口没有已核实的公开稳定契约或逐次编辑完整性保证，因此不得宣称它是完整审计时间线。
+- `feishu-docs.md` 采集只采用 Feishu 返回且可核对的历史项。专门测试文档必须同时确认两项：历史接口的 `editor_ids` 值写入 `LEARNX_FEISHU_HUMAN_EDITOR_ID`，当前用户 `open_id` 写入 `LEARNX_FEISHU_HUMAN_OPEN_ID`；采集器用 `lark-cli auth status --json --verify` 单独核对当前 `open_id`，再用 `--as user` 搜索、列历史并获取指定 revision。历史接口与 Search/Auth 接口当前返回不同 ID 空间，不能直接把 `open_id` 当作 `editor_id`；任一身份证据缺失或不匹配时失败关闭。手动粘贴 AI 内容按飞书记录的编辑账号归属。历史列表接口没有已核实的公开稳定契约或逐次编辑完整性保证，因此不得宣称它是完整审计时间线。
+- 搜索结果同时兼容扁平字段和当前 Search v2 的 `entity_type`、`title_highlighted`、`result_meta.url/token/doc_types` 结构；`entity_type=DOC` 按 Docx 处理，其他类型字段若缺失或结构变化则失败关闭。
+- 若同一 `revision_id` 对应多个 `history_version_id`，因当前正文接口无法证明具体历史快照归属，采集器标记 `needs_review`，不合并为 `ready`。
 - 采集只生成一份 Markdown；图片和附件沿用文档中的链接或占位，不下载二进制文件。文件超过 15,000 个 Unicode 字符时保留全文，由现有人工压缩审核门槛阻止 Process；不自动截断或拆分。
 - `build.md`：Codex / Code X 构建、调试、上线记录。
 - `build-bot.md`：飞书机器人 / Code X Bot 周度执行复盘，由飞书机器人侧 `build-bot-log` 生成；本地周自动化只提示自查。

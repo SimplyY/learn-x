@@ -15,7 +15,7 @@ Learn-X Process 是周期输入到人工审稿的处理流程。它把指定周�
   -> 周 / 月记草稿：仅以已落盘 Input 生成飞书草稿；每周同时生成 Action Feedback，二者共同审核
   -> 阶段 2：生成 input.json、process-pack.md 和 Output 最小壳
   -> AI Chat 生成并人工审核 Output
-  -> 阶段 3：应用已确认的行动反馈变更，并提取候选 Memorize
+  -> 阶段 3：校验 Memory 候选并展示唯一确认卡，确认后写入 Memory、图片、Action Feedback Base、备份与 YW Next / Flomo
 ```
 
 | 阶段 | 主要输入 | 主要产物 | 责任主体 |

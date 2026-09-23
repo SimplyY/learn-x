@@ -31,7 +31,7 @@ test("builds two independent bridge prompts", () => {
   assert.doesNotMatch(memoryPrompt, /旧版|上月|本月|月度/);
 });
 
-test("uses a five-minute gap between independent bridge prompts", async () => {
+test("uses a one-minute gap between independent bridge prompts", async () => {
   const root = await fixture();
   const waits = [];
   try {
@@ -45,7 +45,7 @@ test("uses a five-minute gap between independent bridge prompts", async () => {
     });
     assert.equal(result.status, "succeeded");
     assert.deepEqual(waits, [DEFAULT_BRIDGE_GAP_MS]);
-    assert.equal(DEFAULT_BRIDGE_GAP_MS, 300_000);
+    assert.equal(DEFAULT_BRIDGE_GAP_MS, 60_000);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -262,6 +262,7 @@ test("a legacy successful state skips the bridge when outputs are unchanged", as
 test("deterministic redaction removes sensitive output before writing", async () => {
   const root = await fixture();
   try {
+    const fakePhone = "138" + "00138000"; // 标准假号，仅用于验证脱敏
     const result = await exportChatgptUnderstanding({
       repoRoot: root,
       month: "2026-08",
@@ -269,7 +270,7 @@ test("deterministic redaction removes sensitive output before writing", async ()
       runBridge: async () => ({ result: {
         status: "succeeded",
         runId: "run-3",
-        text: "<SELF_READING>手机号：13800138000</SELF_READING><AI_MEMORY>安全</AI_MEMORY>"
+        text: `<SELF_READING>手机号：${fakePhone}</SELF_READING><AI_MEMORY>安全</AI_MEMORY>`
       } })
     });
     assert.equal(result.status, "succeeded");

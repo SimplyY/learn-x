@@ -7,7 +7,8 @@ import { runBridgeCli } from "../../learn-x-weekly-automation/scripts/generate-a
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const defaultRepoRoot = path.resolve(__dirname, "../../../..");
 const maxChars = { self: 2250, memory: 4500 };
-export const DEFAULT_BRIDGE_GAP_MS = 300_000;
+// 两次月度请求间隔对齐 Bridge 默认成功冷却（60 秒）；失败重试等待仍以 Bridge 返回的 retryAfterSeconds 为准。
+export const DEFAULT_BRIDGE_GAP_MS = 60_000;
 const defaultBridgeTimeoutMs = 240_000;
 const safeRetryReasons = new Set([
   "ego-bootstrap-permission",

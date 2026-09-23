@@ -29,9 +29,21 @@ export async function collectFeishuDocsWeekly(options = {}) {
   const range = isoWeekRangeShanghai(week);
   if (currentShanghaiIsoWeek(new Date(range.startEpoch * 1000)) !== week) throw new Error(`无效 ISO 周：${week}`);
   const transport = options.transport || createLarkTransport();
-  const currentUserId = String(await transport.currentUserId() || "").trim();
-  if (!currentUserId || currentUserId !== editorId) {
-    throw new NeedsReviewError("本次 lark-cli 用户 open_id 与经 canary 核验的本人 editor ID 不一致。");
+  if (typeof transport.currentUserIdentity === "function") {
+    const identity = await transport.currentUserIdentity();
+    const currentOpenId = String(identity?.openId || "").trim();
+    const configuredOpenId = String(options.humanOpenId || process.env.LEARNX_FEISHU_HUMAN_OPEN_ID || "").trim();
+    if (!configuredOpenId) throw new NeedsReviewError("未配置经 canary 核实的本人 open_id；不能把历史 editor ID 与当前账号混用。");
+    if (!currentOpenId || currentOpenId !== configuredOpenId) {
+      throw new NeedsReviewError("本次 lark-cli 用户 open_id 与经 canary 核验的本人 open_id 不一致。");
+    }
+  } else if (typeof transport.currentUserId === "function") {
+    const currentUserId = String(await transport.currentUserId() || "").trim();
+    if (!currentUserId || currentUserId !== editorId) {
+      throw new NeedsReviewError("本次 lark-cli 用户身份与经 canary 核验的本人 editor ID 不一致。");
+    }
+  } else {
+    throw new NeedsReviewError("飞书采集传输缺少当前用户身份核验能力。");
   }
   const candidates = new Map();
   for (const kind of ["created", "edited"]) {
@@ -156,11 +168,11 @@ export async function writeFeishuDocsWeekly(options = {}) {
 
 export function createLarkTransport() {
   return {
-    async currentUserId() {
+    async currentUserIdentity() {
       const data = await runLarkJson(["auth", "status", "--json", "--verify"], { requireUserIdentity: false });
-      const userId = String(data?.identities?.user?.openId || "").trim();
-      if (data?.verified !== true || !userId) throw new NeedsReviewError("无法核验当前 lark-cli 用户 open_id 或登录态。");
-      return userId;
+      const openId = String(data?.identities?.user?.openId || "").trim();
+      if (data?.verified !== true || !openId) throw new NeedsReviewError("无法核验当前 lark-cli 用户 open_id 或登录态。");
+      return { openId };
     },
     async searchPage({ kind, range, pageToken, pageSize }) {
       const args = ["drive", "+search", "--query", "", "--doc-types", "docx,wiki", "--page-size", String(pageSize)];
@@ -194,13 +206,15 @@ function validateSearchPage(page) {
 
 async function normalizeCandidate(result, transport) {
   if (!result || typeof result !== "object") throw new Error("飞书文档搜索结果格式非法。");
-  const rawType = result.doc_type ?? result.type ?? result.result_meta?.doc_types?.[0];
-  const type = String(rawType || "").toLowerCase();
+  const metaDocTypes = result.result_meta?.doc_types;
+  const rawType = result.entity_type ?? result.doc_type ?? result.type
+    ?? (Array.isArray(metaDocTypes) ? metaDocTypes[0] : metaDocTypes);
+  const type = String(rawType || "").toLowerCase() === "doc" ? "docx" : String(rawType || "").toLowerCase();
   if (!["docx", "wiki"].includes(type)) throw new Error(`搜索返回了不支持的文档类型：${rawType || "缺失"}`);
-  const url = normalizeDocumentUrl(result.url || result.url_info?.url || result.doc_url || result.wiki_url || "");
-  let title = stripSearchHighlight(String(result.title || result.name || "")).replace(/[\r\n]+/g, " ").trim();
+  const url = normalizeDocumentUrl(result.url || result.url_info?.url || result.doc_url || result.wiki_url || result.result_meta?.url || "");
+  let title = stripSearchHighlight(String(result.title || result.name || result.title_highlighted || "")).replace(/[\r\n]+/g, " ").trim();
 
-  let docToken = String(result.doc_token || result.obj_token || result.token || tokenFromUrl(url, "docx") || "");
+  let docToken = String(result.doc_token || result.obj_token || result.token || result.result_meta?.token || tokenFromUrl(url, "docx") || "");
   if (type === "wiki") {
     const response = await transport.resolveWiki(url);
     const node = response?.node || response;
@@ -234,7 +248,19 @@ async function collectHistory(transport, docToken) {
     if (existing && stableHistoryKey(existing) !== stableHistoryKey(entry)) throw new NeedsReviewError("同一 history_version_id 返回了冲突的 revision、时间或编辑者。");
     byHistoryVersion.set(entry.historyVersionId, entry);
   }
-  return [...byHistoryVersion.values()].sort(compareHistory);
+  const normalized = [...byHistoryVersion.values()];
+  const historyVersionsByRevision = new Map();
+  for (const entry of normalized) {
+    const historyVersions = historyVersionsByRevision.get(entry.revisionId) || new Set();
+    historyVersions.add(entry.historyVersionId);
+    historyVersionsByRevision.set(entry.revisionId, historyVersions);
+  }
+  for (const [revisionId, historyVersions] of historyVersionsByRevision) {
+    if (historyVersions.size > 1) {
+      throw new NeedsReviewError(`revision_id=${revisionId} 对应多个 history_version_id，无法用 revision 快照唯一归因。`);
+    }
+  }
+  return normalized.sort(compareHistory);
 }
 
 function normalizeHistoryEntry(item) {
@@ -413,6 +439,10 @@ function escapeMarkdownHeading(value) {
 
 function stripSearchHighlight(value) { return value.replace(/<\/?hb?>/gi, ""); }
 function parseEpochSeconds(value) {
+  if (typeof value === "string" && !/^\s*\d+(?:\.\d+)?\s*$/.test(value)) {
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : Number.NaN;
+  }
   const number = Number(value);
   if (!Number.isFinite(number)) return Number.NaN;
   return number >= 1e12 ? Math.floor(number / 1000) : Math.floor(number);

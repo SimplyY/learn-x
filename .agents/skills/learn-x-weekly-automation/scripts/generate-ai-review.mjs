@@ -13,6 +13,8 @@ const defaultBridgePath = path.join(homedir(), ".codex/skills/chatgpt-web-bridge
 const maxInputChars = 15_000;
 // Bridge 默认预算为 120 秒观察 + 90 秒传输/清理余量；适配器必须覆盖完整协议预算。
 export const DEFAULT_BRIDGE_TIMEOUT_MS = 240_000;
+// Bridge image 模式（生图）观察预算为 600 秒（对齐 Voice-X / Read-X），适配器覆盖完整预算。
+export const IMAGE_BRIDGE_TIMEOUT_MS = 750_000;
 
 export function normalizeWeek(value) {
   const match = String(value || "").match(/^(\d{4})-W?(\d{1,2})$/);
@@ -83,8 +85,11 @@ export function parseJsonLines(text) {
 
 export async function runBridgeCli(prompt, options = {}) {
   const bridgePath = options.bridgePath || process.env.LEARN_X_CHATGPT_BRIDGE || defaultBridgePath;
-  const timeoutMs = options.timeoutMs || DEFAULT_BRIDGE_TIMEOUT_MS;
-  const child = spawn(process.execPath, [bridgePath], { stdio: ["pipe", "pipe", "pipe"] });
+  const image = Boolean(options.image);
+  const timeoutMs = options.timeoutMs || (image ? IMAGE_BRIDGE_TIMEOUT_MS : DEFAULT_BRIDGE_TIMEOUT_MS);
+  const args = [bridgePath];
+  if (image) args.push("--image");
+  const child = spawn(process.execPath, args, { stdio: ["pipe", "pipe", "pipe"] });
   let stdout = "";
   let stderr = "";
   child.stdout.setEncoding("utf8");
