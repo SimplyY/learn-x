@@ -115,7 +115,7 @@ export class DeepResearch {
   async ensureYearDir(year) {
     const dir = (await this.topLevelNodes()).find((node) => node.title === `深度研究-${year}`);
     if (dir) return dir;
-    const result = await this.wiki(["+node-create", "--space-id", this.config.space_id, "--title", `深度研究-${year}`, "--obj-type", "docx"], "bot");
+    const result = await this.wiki(["+node-create", "--space-id", this.config.space_id, "--title", `深度研究-${year}`, "--obj-type", "docx"], "user");
     const created = result.data?.node || result.data;
     if (!created?.node_token) throw new Error(`深度研究-${year} 目录创建后无法定位`);
     return created;
@@ -127,7 +127,7 @@ export class DeepResearch {
     for (const dir of await this.yearNodes()) {
       const year = dir.title.match(YEAR_DIR_RE)[1];
       const nodes = sortIndex(await this.wikiChildren(dir.node_token));
-      await this.lark(["docs", "+update", "--doc", dir.node_token, "--command", "overwrite", "--content", renderIndexPage(nodes, year)], "bot");
+      await this.lark(["docs", "+update", "--doc", dir.node_token, "--command", "overwrite", "--content", renderIndexPage(nodes, year)], "user");
       const written = await this.docContent(dir.node_token);
       if (!written.includes("文档索引")) throw new Error(`深度研究-${year} 目录页回读失败`);
       index[year] = nodes.map((node) => node.title);
@@ -150,7 +150,7 @@ export class DeepResearch {
     if (matches.length > 1) throw new Error("跨年存在多个同名深度研究文档，请先人工合并或改名");
     let node = matches[0]; let created = false;
     if (!node) {
-      const result = await this.wiki(["+node-create", "--space-id", this.config.space_id, "--parent-node-token", dir.node_token, "--title", topic, "--obj-type", "docx"], "bot");
+    const result = await this.wiki(["+node-create", "--space-id", this.config.space_id, "--parent-node-token", dir.node_token, "--title", topic, "--obj-type", "docx"], "user");
       node = result.data?.node || result.data; created = true;
     }
     if (!node?.node_token) throw new Error("深度研究 Wiki 节点创建后无法定位");
@@ -159,7 +159,7 @@ export class DeepResearch {
       const index = await this.rebuildIndex();
       return { document: wikiUrl(node.node_token), wikiToken: node.node_token, topic, question: question || topic, issues: issues.map((issue) => ({ id: text(issue["议题编号"]), title: text(issue["议题"]) })), created: false, recovered: true, indexTitles: index };
     }
-    await this.lark(["docs", "+update", "--doc", token, "--command", "overwrite", "--content", renderResearch(topic, question, issues, events)], "bot");
+    await this.lark(["docs", "+update", "--doc", token, "--command", "overwrite", "--content", renderResearch(topic, question, issues, events)], "user");
     const readback = await this.docContent(token);
     if (!readback.includes(topic) || !issues.every((issue) => readback.includes(`[${text(issue["议题编号"])}]`))) throw new Error("深度研究文档回读失败");
     const index = await this.rebuildIndex();

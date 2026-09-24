@@ -84,7 +84,7 @@ export async function readPreviousMonthlyOutput(month, root = repoRoot) {
 }
 
 function isMonthlyOutputShell(content) {
-  const shellNote = /^> 基于 `04_output\/_dist\/monthly\/\d{4}-\d{2}\/process-pack\.md` 由用户使用 AI Chat 生成正文后填入。$/;
+  const shellNote = /^> 基于 `04_output\/_dist\/monthly\/\d{4}-\d{2}\/(?:process-pack\.md)?` 由用户使用 AI Chat 生成正文后填入。$/;
   const meaningfulLines = String(content)
     .replace(/^\uFEFF/, "")
     .split(/\r?\n/)

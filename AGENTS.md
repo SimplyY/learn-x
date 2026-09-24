@@ -20,7 +20,7 @@
 
 ## 飞书身份契约
 
-- Docx / Wiki 写入口固定 `--as bot`。
+- Docx / Wiki 写入口固定 `--as user`。
 - 人工身份用两个变量表示：`LEARNX_FEISHU_HUMAN_EDITOR_ID` 保存历史 `editor_ids`；`LEARNX_FEISHU_HUMAN_OPEN_ID` 保存当前账号 `open_id`。二者属不同 ID 空间，不直接比较。
 - 先用 `lark-cli auth status --json --verify` 核对当前 `open_id`，再匹配历史 `editor_ids`；缺失或不匹配时失败关闭。
 
@@ -38,9 +38,20 @@
 | 月度议题工作台 | `docs/MONTHLY_CORE_QUESTION_WORKBENCH.md`、`docs/TECH.md`、`.agents/skills/learn-x-monthly-question-workbench/` | 运行或修改工作台脚本、处理月度研究文档 |
 | 核心议题知识库 | `docs/CORE_QUESTION_LIBRARY.md`、`.agents/skills/learn-x-quarterly-question-overview/`、`.agents/skills/learn-x-monthly-question-workbench/` | 维护季度总览、月度研究 Wiki、倒序目录索引及 learn-x 群快捷标签 |
 | 一键深度研究 | `docs/DEEP_RESEARCH.md`、`.agents/skills/learn-x-deep-research/` | 发起深度研究、维护深度研究 Wiki 目录、组装 ChatGPT 研究上下文 |
+| 微信 Evidence Source | `docs/requirements/wechat-evidence-source.md`、`docs/cases/wechat-evidence-source/` | 接入 TraceMemo 微信证据源、生成 `WeChat.md` 周输入或运行 PoC；节点③实施前先读其 Gate 与授权边界 |
 | 安全与提交 | `docs/SECURITY.md` | 提交、扫描、处理隐私材料或敏感文件 |
 | 防幻觉规则 | `.agents/ANTI_HALLUCINATION.md` | 涉及外部内容抓取、飞书文档创建、跨系统数据搬运 |
 | 命令策略 | `RTK.md` | 运行 git、diff、搜索、测试等可能高噪声命令 |
+
+## 长期真值文档地图（Development Workflow V1）
+
+跨会话必须靠文件传递——Agent 看不到的聊天与脑内知识等于不存在：
+
+- `docs/requirements/<slug>.md`：Requirement Truth——为什么做、最终做什么（冻结需求）。
+- `docs/architecture.md`：Architecture Truth——系统现在真实是什么样（持续维护，不按需求重建）。
+- `docs/adr/NNN-<slug>.md`：Significant ADR——重大架构决定为什么这样做（保留历史不覆盖）。
+- `docs/cases/<slug>/`：Case 链 + 任务期资产（execution-plan 等）。
+- 当前进行中的 Major Case：[微信 Evidence Source](docs/cases/wechat-evidence-source/case.md)（节点②完成，节点③须用户明确授权）。
 
 ## 始终遵守
 

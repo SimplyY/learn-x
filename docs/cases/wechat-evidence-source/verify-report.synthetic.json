@@ -1,0 +1,36 @@
+{
+  "summary": {
+    "checkedAt": "2026-09-24T03:11:08.817Z",
+    "total": 3,
+    "located": 2,
+    "failed": 1,
+    "pass": false
+  },
+  "results": [
+    {
+      "index": 1,
+      "conversation": "技术交流群",
+      "date": "2026-09-01",
+      "located": true,
+      "timestamp": 1789000000000,
+      "messageRef": "m1",
+      "totalMessages": 2
+    },
+    {
+      "index": 2,
+      "conversation": "技术交流群",
+      "date": "2026-09-01",
+      "located": false,
+      "totalMessages": 2
+    },
+    {
+      "index": 3,
+      "conversation": "老同学群",
+      "date": "2026-09-02",
+      "located": true,
+      "timestamp": 1789100000000,
+      "messageRef": "n1",
+      "totalMessages": 1
+    }
+  ]
+}

@@ -21,6 +21,7 @@ test("classifies prior Monthly Output as missing, empty, shell, or full text", (
   });
   assert.equal(classifyPreviousMonthlyOutput("2026-06", " \n\t").status, "empty");
   assert.equal(classifyPreviousMonthlyOutput("2026-06", "# Learn-X Monthly Output｜2026-05\n\n> 基于 `04_output/_dist/monthly/2026-05/process-pack.md` 由用户使用 AI Chat 生成正文后填入。\n").status, "shell");
+  assert.equal(classifyPreviousMonthlyOutput("2026-06", "# Learn-X Monthly Output｜2026-05\n\n> 基于 `04_output/_dist/monthly/2026-05/` 由用户使用 AI Chat 生成正文后填入。\n").status, "shell");
   assert.equal(classifyPreviousMonthlyOutput("2026-06", "# Learn-X Monthly Output｜2026-05\n\n## 月度总判断\n\n1. xx\n\n## 本月问题与回答\n\n1. 问题：todo\n   回答：待补充").status, "shell");
   assert.deepEqual(classifyPreviousMonthlyOutput("2026-06", "# 2026-05 月报\n\n## 核心洞察\n实质内容\n"), {
     previousMonth: "2026-05", sourcePath: "04_output/monthly/2026-05.md", status: "ready", content: "# 2026-05 月报\n\n## 核心洞察\n实质内容"
