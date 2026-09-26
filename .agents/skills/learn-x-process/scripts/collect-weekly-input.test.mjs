@@ -24,6 +24,10 @@ test("keeps source classification for weekly input files", () => {
     category: "inbox",
     source: "feishu-docs"
   });
+  assert.deepEqual(inputKindFromRelativePath("03_input/weekly/2026-W29/jingdu.md"), {
+    category: "inbox",
+    source: "jingdu"
+  });
 });
 
 test("keeps Time-X summaries as ordinary input", () => {

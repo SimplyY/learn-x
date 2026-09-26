@@ -22,6 +22,10 @@ test("public graph excludes private workflow material and local graph retains ca
   assert.equal(isPublicPrivatePath("02_prompts/chatpack/insight/munger-soul.md"), true);
   assert.equal(isPublicPrivatePath(".agents/skills/learn-x-periodic-insight/SKILL.md"), true);
   assert.equal(isPublicPrivatePath("docs/PERIODIC_INSIGHTS.md"), true);
+  // WeRead 存量划线归档（ADR 0002）：私有阅读数据，公开构建必须排除——前缀误删时此断言必须红
+  assert.equal(isPublicPrivatePath("05_library/weread/fiction/2025.md"), true);
+  assert.equal(isPublicPrivatePath("05_library/weread/_index.md"), true);
+  assert.equal(isPublicPrivatePath("05_library/weread/_manifest.json"), true);
   const [publicGraph, localGraph] = await Promise.all([
     buildGraphPayload({ includeContent: false, target: "public" }),
     buildGraphPayload({ includeContent: false, target: "local" })
@@ -29,6 +33,8 @@ test("public graph excludes private workflow material and local graph retains ca
 
   assert.equal(publicGraph.runtime.canEditChatPack, false);
   assert.equal(localGraph.runtime.canEditChatPack, true);
+  const wereadIndex = localGraph.contextFiles.find((file) => file.path === "05_library/weread/_index.md");
+  assert.ok(wereadIndex, "local context tree must surface the WeRead archive index");
   const weeklyRules = localGraph.customContextFiles.find((file) => file.path === ".agents/skills/learn-x-process/resources/weekly-output-rules.md");
   assert.ok(weeklyRules);
   const weeklyRulesText = await readFile(path.join(repoRoot, weeklyRules.path), "utf8");

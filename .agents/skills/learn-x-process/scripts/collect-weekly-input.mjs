@@ -306,7 +306,7 @@ function categoryFromPathPart(part) {
 function categoryFromSourceName(source) {
   if (["daily", "weekly", "health"].includes(source)) return "log";
   if (["build", "build-bot", "research", "meeting", "chat", "feedback", "coach"].includes(source)) return "action";
-  if (["ai", "flomo", "weread", "reading", "podcast", "docs", "feishu-docs", "theme-read"].includes(source)) return "inbox";
+  if (["ai", "flomo", "weread", "jingdu", "reading", "podcast", "docs", "feishu-docs", "theme-read"].includes(source)) return "inbox";
   return "input";
 }
 

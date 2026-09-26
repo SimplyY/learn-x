@@ -131,7 +131,7 @@ Deep Code X 另有一个独立的周日调度（`learn-x-voice-insight`，20:00�
 4. 阶段 1 不采集线上确认版 `weekly.md`，不生成 `input.json`、`process-pack.md` 或 Weekly Output；唯一 `_dist` 产物是与周记草稿配套的 `action-feedback.md`。
 5. ChatGPT 输入只读取 `03_input/weekly/00_template/ai.md` 提示词，并附加目标周范围；不主动发送 `daily.md`、`flomo.md` 或其它本地周材料。桥接失败时报告原因、`ai.md` 手动空壳路径和完整人工 fallback prompt；成功结果先落为 `ai.generated.md`，完整性校验通过后自动成为正式 `ai.md`，并保留审计副本。回复未通过结构验收时写入 `_ai-invalid.generated.md` 和验证原因；后续代码修复能确定性恢复时优先本地恢复，不重复外发，否则只有用户显式 `--retry` 才能重新提交。
 
-阶段 1 汇报必须先给出一张固定顺序的「输入与压缩总表」，并在表格上方写出“本轮需关注”；不要让用户从多张表自行拼接失败项。固定行依次覆盖 `daily.md`、`weekly.md`、`flomo.md`、`weread.md`、`wechat.md`、`voice.md`、`calendar.md`、`health.md`、`coach.md`、`wisdom.md`、`ai.md`、`build.md`、`build-bot.md`，另有持续出现的其他文件才追加一行。Action Feedback 是独立产物，不作为输入来源行；在输入表后另列该草稿路径、议题数、候选数与 `needs_review` 缺口。表列固定为：输入类型、来源、文件（可点击核查）、状态、记录/材料数、字符链路（原始 → 本阶段最终纳入）、结果；只有实际发生语义压缩时才在字符链路后标注压缩信息。阶段 1 仅生成 `action-feedback.md`，对其它本轮 `ready` 且实际纳入的输入，必须使用项目统一的 `countInputChars`（Unicode 码点数）报告文件字符数；若采集器没有记录来源端原始字符数，链路写 `— → N`，不得把整格写成 `—`，也不得猜测原始数。阶段 2 直接复用 `process-pack.md` 第 2 节的同一张表，并保留处理链路的各阶段计数。`weekly.md` / `ai.md` 是人工或可选文件，不能伪装成自动来源。
+阶段 1 汇报必须先给出一张固定顺序的「输入与压缩总表」，并在表格上方写出“本轮需关注”；不要让用户从多张表自行拼接失败项。固定行依次覆盖 `daily.md`、`weekly.md`、`flomo.md`、`weread.md`、`jingdu.md`、`wechat.md`、`voice.md`、`calendar.md`、`health.md`、`coach.md`、`wisdom.md`、`ai.md`、`build.md`、`build-bot.md`，另有持续出现的其他文件才追加一行。Action Feedback 是独立产物，不作为输入来源行；在输入表后另列该草稿路径、议题数、候选数与 `needs_review` 缺口。表列固定为：输入类型、来源、文件（可点击核查）、状态、记录/材料数、字符链路（原始 → 本阶段最终纳入）、结果；只有实际发生语义压缩时才在字符链路后标注压缩信息。阶段 1 仅生成 `action-feedback.md`，对其它本轮 `ready` 且实际纳入的输入，必须使用项目统一的 `countInputChars`（Unicode 码点数）报告文件字符数；若采集器没有记录来源端原始字符数，链路写 `— → N`，不得把整格写成 `—`，也不得猜测原始数。阶段 2 直接复用 `process-pack.md` 第 2 节的同一张表，并保留处理链路的各阶段计数。`weekly.md` / `ai.md` 是人工或可选文件，不能伪装成自动来源。
 来源状态必须区分 `ready`、`empty`、`failed`、`unavailable`，并明确旧文件是否保留但不计入本轮；成功空结果单独报告“0 条记录，文件未生成”，失败/不可用不得写成 0 条。只有 `ready` 且本轮实际纳入的文件才报告字符数；失败、不可用、空结果和过期旧文件的字符列填 `—`，处理结果列必须直接写出原因。人生核心议题镜像必须在汇报中单独给出 `fresh/stale` 状态、revision 与同步时间；`stale` 时列为“本轮需关注”。
 每个非空来源还必须给出可点击核查文件链接；不可用但保留旧文件的来源也要给链接并标注“过期、不计入”。
 飞书周记草稿链接必须是周记 Skill 在写入后回读确认的目标段落锚点链接：优先使用实际 `#share-...` 锚点，CLI 未返回时使用最新目标标题 block id 的 `#<target-block-id>` 直达链接；不得汇报固定文档首页、旧周锚点或未带 fragment 的 URL。
@@ -160,6 +160,7 @@ Deep Code X 另有一个独立的周日调度（`learn-x-voice-insight`，20:00�
    - `daily.md`
    - `flomo.md`
    - `weread.md`
+   - `jingdu.md`（仅状态 ready 时读取；内容为用户对本周重要划线的精读加工——原始划线来源 + 本人理解/判断/可选行动；本周未做精读时文件缺失或 empty 不阻塞，汇报提示缺口；超 15,000 字符时先跑 input:compress）
    - `voice.md`（仅在状态为 `ready` 时读取；含目标周新版 AI 洞察的完整结构化内容，不含原始文字稿；30,000 字符为提示线，统一在 Process Pack 压缩）
    - `calendar.md`（仅在状态为 `ready` 时读取；只作计划上下文，`empty/unavailable` 时报告但不将其当作行动证据）
    - `coach.md`（本次采集有新增记录时才存在；包含新增记录并标注采集器排除的回顾更新；0 条时按来源状态记录，不阻塞）
@@ -191,7 +192,7 @@ Deep Code X 另有一个独立的周日调度（`learn-x-voice-insight`，20:00�
    - 已完成来源、缺口、验证结果
 10. 停止，等待用户完成人工 / Chat Pack 步骤：基于已共同审核的 `process-pack.md` 生成并审核最终 Weekly Output（只写行动闭环摘要，不复制整表；增加不超过 600 字的本周与上周简短对照）；在同一次操作中启用 `芒格之魂` 生成独立洞察，补全 `芒格之魂的洞察 & 全文核心重点纪要`，回答「本周最值得思考的 3 个问题」，并审核 Memory 候选。按需读取 `.agents/skills/learn-x-process/resources/weekly-output-rules.md` 和 `layer-rules.md`。若用户在 Pack 生成后改了 `action-feedback.md`，重跑一次刷新快照。图片不再是阶段 3 的人工前置步骤；不要在此阶段自动生成图片或发布公众号。全部完成后回复 `继续`、`继续下一步` 或 `继续记忆`，进入阶段 3。
 
-阶段 2 汇报必须包含完整全局流程，并标记：当前位置 = 阶段 2 完成；下一步 = 在 Chat Pack 生成并审核最终 Weekly Output、芒格之魂、核心纪要、问题与回答和 Memory 候选；再下一步 = 阶段 3 先生成并校验 `memory-candidates.md`，再展示一张仅针对当前目标周的最终确认卡。确认卡必须在执行前一次性写清本周 Memory 写入目标、自动生成图片的目标路径（`04_output/_dist/weekly/YYYY-Www/weekly-core.png`，ChatGPT Bridge 生图，以及已存在时的版本化处理）、行动反馈 Base 写入目标（新增 / 更新事件数与目的地）、备份载荷（`01_core/`、`03_input/`、`04_output/`）及飞书云盘 / `Snapshots` 目的地、YW Next 刷新范围、Flomo 载荷（`weekly.md` 与季度 Memory）及目的地、留存清理和读回校验；用户只需确认一次。不得把图片、备份、Full Access、YW Next 或 Flomo 再拆成多个确认点；图片生成和其他写入都必须等这一次确认。确认卡缺少图片路径、备份目的地或 Flomo 目的地时，不得请求确认或执行任何写入。
+阶段 2 汇报必须包含完整全局流程，并标记：当前位置 = 阶段 2 完成；下一步 = 在 Chat Pack 生成并审核最终 Weekly Output、芒格之魂、核心纪要、问题与回答和 Memory 候选；再下一步 = 阶段 3 先生成并校验 `memory-candidates.md`，再展示一张仅针对当前目标周的最终确认卡。确认卡必须在执行前一次性写清本周 Memory 写入目标、自动生成图片的目标路径（`04_output/_dist/weekly/YYYY-Www/weekly-core.png`，ChatGPT Bridge 生图，以及已存在时的版本化处理）、行动反馈 Base 写入目标（新增 / 更新事件数与目的地）、备份载荷（`01_core/`、`03_input/`、`04_output/`、`05_library/`——微信读书存量划线归档，含用户划线原文）及飞书云盘 / `Snapshots` 目的地、YW Next 刷新范围、Flomo 载荷（`weekly.md` 与季度 Memory）及目的地、留存清理和读回校验；用户只需确认一次。不得把图片、备份、Full Access、YW Next 或 Flomo 再拆成多个确认点；图片生成和其他写入都必须等这一次确认。确认卡缺少图片路径、备份目的地或 Flomo 目的地时，不得请求确认或执行任何写入。
 阶段 2 汇报直接复用 `process-pack.md` 第 2 节的合并总表：Flomo 第一行，独立 Action Feedback 第二行，其余输入按原固定顺序。Action Feedback 行标记为“独立产物、不计入 `input.json` 输入数”，字符链路填 `—`，并链接已共同审核的报告；记录/材料列显示议题数、候选数与将写入 Base 数。其余输入逐行保留 Process Pack 中的状态、文件原始 → 解析清洗后有效（去重前）→ Process Pack 最终纳入字符链路和结果；链路最后一个数字必须是本阶段最终纳入数。只有 Voice-X 等实际发生语义压缩的来源才显示压缩比例，文件名本身就是可点击核查入口。不能只报告来源数量和产物路径。失败或不可用行必须在表内可见，不得只藏在末尾缺口列表。
 若 `health.md` 缺失，阶段 1 / 阶段 2 汇报的第一段必须是一级大标题 `# ⚠️ 缺失输入：health.md`，并同时给出目标周、报告结束日和 Health-X 的 `validate` / `sync` 命令；不能把缺失藏在普通缺口列表中。
 

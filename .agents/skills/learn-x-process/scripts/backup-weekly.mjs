@@ -10,7 +10,7 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const repoRoot = path.resolve(__dirname, "../../../..");
-export const BACKUP_ROOTS = ["01_core", "03_input", "04_output"];
+export const BACKUP_ROOTS = ["01_core", "03_input", "04_output", "05_library"];
 export const DRIVE_FOLDER_NAME = "Learn-X Backups";
 export const BASE_NAME = "Learn-X Backup Index";
 export const TABLE_NAME = "Snapshots";
@@ -503,9 +503,10 @@ async function backup(args) {
 export async function validateManifest(extractedRoot, expectedManifestSha256) {
   const manifest = JSON.parse(await readFile(path.join(extractedRoot, "manifest.json"), "utf8"));
   const { createdAt, manifestSha256, ...core } = manifest;
-  if (JSON.stringify(manifest.roots) !== JSON.stringify(BACKUP_ROOTS)) throw new Error("manifest 备份根目录不匹配。");
+  // 子集校验：manifest.roots 每一项都必须属于 BACKUP_ROOTS（新根是旧根的超集，旧式归档仍可恢复），仅拒绝未知根。
+  if (!Array.isArray(manifest.roots) || manifest.roots.some((root) => !BACKUP_ROOTS.includes(root))) throw new Error("manifest 备份根目录不匹配。");
   if (manifestSha256 !== sha256Text(JSON.stringify(core)) || (expectedManifestSha256 && manifestSha256 !== expectedManifestSha256)) throw new Error("manifest SHA-256 校验失败。");
-  const files = await collectBackupFiles(extractedRoot, BACKUP_ROOTS);
+  const files = await collectBackupFiles(extractedRoot, manifest.roots);
   if (files.excluded.length) throw new Error(`恢复目录包含不允许的文件系统项：${files.excluded[0].path}`);
   if (files.files.length !== manifest.fileCount || files.files.reduce((sum, file) => sum + file.bytes, 0) !== manifest.totalBytes) throw new Error("恢复文件数量或总大小与 manifest 不一致。");
   const expected = new Map(manifest.files.map((file) => [file.path, file]));

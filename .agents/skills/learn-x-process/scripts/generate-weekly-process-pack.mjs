@@ -15,6 +15,7 @@ const FIXED_WEEKLY_INPUTS = [
   { file: SOURCE_FILES["feishu-docs"], type: "输入", source: "个人飞书文档", statusSource: "feishu-docs", note: "本人创建或编辑；按历史 editor ID 归因" },
   { file: SOURCE_FILES.flomo, type: "输入", source: "Flomo", statusSource: "flomo" },
   { file: SOURCE_FILES.weread, type: "输入", source: "微信读书", statusSource: "weread" },
+  { file: SOURCE_FILES.jingdu, type: "输入", source: "精读", statusSource: "jingdu" },
   { file: SOURCE_FILES.wechat, type: "输入", source: "微信聊天", statusSource: "wechat", optional: true, note: "按需手工采集" },
   { file: SOURCE_FILES.voice, type: "输入", source: "Voice-X", statusSource: "voice" },
   { file: SOURCE_FILES.calendar, type: "计划", source: "Time-X 日历", statusSource: "calendar" },

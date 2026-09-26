@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { readWeeklySourceStatus, updateWeeklySourceStatus } from "./lib/source-status.mjs";
+import { fileExists, readWeeklySourceStatus, updateWeeklySourceStatus } from "./lib/source-status.mjs";
 
 test("source status merges sources atomically and reads back", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-source-status-"));
@@ -27,6 +27,26 @@ test("source status rejects unsafe or unknown entries", async () => {
     await assert.rejects(() => updateWeeklySourceStatus({ weekRoot: root, week: "2026-W32", source: "daily", status: "empty", file: "../daily.md", count: 0, summary: "" }), /非法来源文件名/);
     await assert.rejects(() => updateWeeklySourceStatus({ weekRoot: root, week: "2026-W32", source: "daily", status: "empty", file: "daily.md", count: -1, summary: "" }), /非法来源计数/);
     await assert.rejects(() => updateWeeklySourceStatus({ weekRoot: root, week: "2026-W32", source: "daily", status: "ready", file: "daily.md", count: 1, summary: "有记录" }), /ready 来源文件不存在/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("jingdu registers as a weekly source with fail-closed ready and fileless empty", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-source-status-jingdu-"));
+  try {
+    await assert.rejects(() => updateWeeklySourceStatus({ weekRoot: root, week: "2026-W38", source: "jingdu", status: "ready", file: "jingdu.md", count: 2, summary: "精读加工" }), /ready 来源文件不存在/);
+    await writeFile(path.join(root, "jingdu.md"), "# 精读\n\n原始划线及来源 + 本人理解/判断\n", "utf8");
+    await updateWeeklySourceStatus({ weekRoot: root, week: "2026-W38", source: "jingdu", status: "ready", file: "jingdu.md", count: 2, summary: "精读加工" });
+    const ready = await readWeeklySourceStatus(root, "2026-W38");
+    assert.equal(ready.sources.jingdu.status, "ready");
+    assert.equal(ready.sources.jingdu.file, "jingdu.md");
+
+    await rm(path.join(root, "jingdu.md"), { force: true });
+    await updateWeeklySourceStatus({ weekRoot: root, week: "2026-W38", source: "jingdu", status: "empty", file: "jingdu.md", count: 0, summary: "本周 0 条（全部跳过），文件未生成" });
+    const empty = await readWeeklySourceStatus(root, "2026-W38");
+    assert.equal(empty.sources.jingdu.status, "empty");
+    assert.equal(await fileExists(path.join(root, "jingdu.md")), false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -51,7 +51,7 @@
 构建分为两个明确目标：
 
 - `npm run build:local`：供 `npm run dev` 使用，保留本地 Input、Process Skill 和 `_dist` 上下文，并启用桌面端 Chat Pack 编辑器。
-- `npm run build:public`：供 GitHub Pages 和 release 使用，在生成图数据时排除 `03_input/`、`.agents/skills/learn-x-process/`、`04_output/_dist/` 及周期 Output 入口；构建产物出现这些路径时直接失败。
+- `npm run build:public`：供 GitHub Pages 和 release 使用，在生成图数据时排除 `03_input/`、`.agents/skills/learn-x-process/`、`04_output/_dist/` 及周期 Output 入口；`05_library/`（微信读书划线等私有阅读数据）同属公开构建排除的私有目录；构建产物出现这些路径时直接失败。
 - `npm run build:public:no-context`：同一 Pages 构建中的轻量公开版，输出到 `dist/no-context/`；通过 `LEARN_X_CHATPACK_CONTEXT=off` 在构建时移除 Chat Pack 的上下文选择与上下文装配，保留提示词、当前问题和生成能力。
 
 GitHub Pages 一次上传整个 `dist/`：标准公开版位于站点根路径，轻量版位于 `/no-context/`。无上下文版本不生成 `contextFiles` 或 `customContextFiles`，生成的 Chat Pack 也不包含 Context 段落；知识库浏览仍沿用公开版的已过滤 Markdown 数据。

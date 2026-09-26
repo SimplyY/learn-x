@@ -154,7 +154,32 @@ test("Action Feedback summary row shows candidate and confirmation counts withou
   assert.match(tableRows[1], /4 条将写入 Base/);
   assert.match(tableRows[1], /\]\(learnx:\/\/04_output%2F_dist%2Fweekly%2F2026-W38%2Faction-feedback\.md\)/);
   assert.doesNotMatch(table, /本轮需关注：.*Action Feedback/);
-  assert.equal(buildInputAuditRows(payload, [], []).length, 14);
+  assert.equal(buildInputAuditRows(payload, [], []).length, 15);
+});
+
+test("fixed weekly input order places jingdu right after weread as a 精读 source row", () => {
+  const payload = {
+    week: "2026-W39",
+    selection: { path: "03_input/weekly/2026-W39" },
+    sourceStatuses: {
+      weread: { status: "ready", file: "weread.md", count: 3, summary: "本周划线" },
+      jingdu: { status: "ready", file: "jingdu.md", count: 2, summary: "本周精读加工" }
+    },
+    excludedFiles: []
+  };
+  const files = [
+    { path: "03_input/weekly/2026-W39/weread.md", source: "weread", itemCount: 3, rawChars: 300, effectiveChars: 300, processChars: 300 },
+    { path: "03_input/weekly/2026-W39/jingdu.md", source: "jingdu", itemCount: 2, rawChars: 200, effectiveChars: 200, processChars: 200 }
+  ];
+  const rows = buildInputAuditRows(payload, files, { files: [] });
+  const wereadIndex = rows.findIndex((row) => row.file === "weread.md");
+  const jingduIndex = rows.findIndex((row) => row.file === "jingdu.md");
+  assert.ok(wereadIndex >= 0 && jingduIndex === wereadIndex + 1);
+  assert.equal(rows[jingduIndex].type, "输入");
+  assert.equal(rows[jingduIndex].source, "精读");
+  assert.equal(rows[jingduIndex].status, "ready");
+  const table = renderInputAuditTable(payload, files, { files: [] });
+  assert.match(table, /\| 输入 \| 精读 \| \[jingdu\.md\]/);
 });
 
 test("weekly Process Pack registers the ready personal Feishu Docs source row", () => {

@@ -22,6 +22,8 @@
     "input:daily-coach": "node .agents/skills/learn-x-input/scripts/collect-daily-coach-weekly.mjs",
     "input:weread": "node .agents/skills/learn-x-input/scripts/collect-weread-weekly.mjs",
     "test:input:weread": "node --test .agents/skills/learn-x-input/scripts/collect-weread-weekly.test.mjs",
+    "input:weread-archive": "node .agents/skills/learn-x-input/scripts/collect-weread-archive.mjs",
+    "test:input:weread-archive": "node --test .agents/skills/learn-x-input/scripts/collect-weread-archive.test.mjs",
     "test:flomo:sync": "node --test .agents/skills/learn-x-process/scripts/flomo-sync-core.test.mjs",
     "process:weekly": "node .agents/skills/learn-x-process/scripts/generate-weekly-process-pack.mjs",
     "action:feedback": "node .agents/skills/learn-x-process/scripts/action-feedback.mjs",
