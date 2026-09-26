@@ -20,7 +20,7 @@ const sensitivePathPatterns = [
   { name: "private personal image", pattern: /^01_core\/good-images\/me\// },
   { name: "private generated output", pattern: /^04_output\/(?!README\.md$|usage\.md$|(monthly|weekly|yearly)\/\.gitkeep$)/ },
   { name: "private legacy output", pattern: /^output\// },
-  { name: "private bot memory", pattern: /^\.agents\/skills\/(build-bot-log\/scripts\/build-bot-memory|long-article-research\/scripts\/research-memory)\.json$/ },
+  { name: "private bot memory", pattern: /^\.agents\/skills\/build-bot-log\/scripts\/build-bot-memory\.json$|^retired\/skills\/retired-long-article-research\/scripts\/research-memory\.json$/ },
   { name: "private build-bot state", pattern: /^scripts\/build-bot-memory\.json$/ },
 ];
 

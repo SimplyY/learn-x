@@ -1,9 +1,11 @@
 ---
-name: long-article-research
-description: 长文系统性深度研究 Skill。接收长文本输入，通过必选 ljg skill（ljg-read、ljg-think、ljg-learn、ljg-rank、ljg-constraint、ljg-roundtable）+ 芒格之魂六层 + ljg-blind 盲区扫描，产出深度研究飞书文档。ljg-rank 和 ljg-constraint 是研究核心——一个找底层生成器，一个找边界约束，缺一不可。ljg-blind 必选——任何研究不扫盲区就是伪闭环。ljg-plain 按需选用——白话转译让非专业读者也能抓住核心概念。ljg-qa 按需增补。质量优先，字数 = 10,000 × 信息量系数（上限 1.0）。质量评分（A/B/C）只用于研究后自评，不参与字数计算。自动入库到智慧之门 Base「研究」表。
+name: retired-long-article-research
+description: 【已退役｜勿用】长文深度研究旧 Skill，仅供历史留档；禁止调用、复用、研究或维护，除非用户明确重新启用。
 ---
 
-# 长文深度研究
+# 【已退役｜勿用】长文深度研究（仅历史留档）
+
+> 自 2026-09-25 起停用。本 Skill、脚本、私有记忆和研究规则只保留作历史记录；禁止调用、复用、研究或维护。只有用户明确要求重新启用后才可恢复。
 
 对一篇长文（播客文字稿、文章、论文、访谈）做系统性深度研究，产出飞书文档，入库智慧之门 Base「研究」表。
 
