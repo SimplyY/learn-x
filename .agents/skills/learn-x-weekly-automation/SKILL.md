@@ -113,7 +113,7 @@ Deep Code X 另有一个独立的周日调度（`learn-x-voice-insight`，20:00�
      该命令把目标周内带 `#需回顾` 标签的 Flomo 笔记写入智慧之门 Base（`来源标识=flomo:<memo_id>` 幂等去重），`智慧时效性`（短期/中期/长期）与 `层级`（道法术器）由 MoonBridge 按内容初判；初判只是草稿，用户可随时在 Base 修改。`#需回顾` 标签本身即用户确认，因此增量模式直接 `--apply`，不要求先 dry-run。脚本自身 fail closed：时间不可解析、正文不完整、初判非法或写回读回失败即停止。Ego Lite 桌面路径不可用时与 Flomo 来源一并跳过并报告，不阻断周流程；导入失败时在汇报中提示手动运行一次全量模式（缺省不带 `--week`）兜底。结果 JSON 的 `report` 字段（新增条目含标题、层级、时效性、一句话精华与 Flomo/Base 双链接）必须原样纳入阶段 1 汇报。
    - 微信读书：按 `learn-x-input` 执行 `npm run input:weread -- --week YYYY-Www`。验证输出保留目标周、Asia/Shanghai 范围、生成时间、阅读统计、进度快照、个人划线和想法，并包含完整 7 天，包括 0 分钟日期。
    - Time-X 日历：按 `learn-x-input` 执行一次 `npm run input:calendar -- --week YYYY-Www`，读取固定 `Time-X｜随时记` 共享日历与用户可读的主日历/自有共享日历，按同时存在的定时日程数分摊重叠时间，将有效时间汇总及每个日历块的日期、起止、原始区间、标题、描述和有效投入写入 `calendar.md`。只做导入阶段的只读计算，不修改日历；不保存日历人员、地点、ID、链接或系统元数据。
-   - Voice-X：按 `learn-x-input` 执行 `npm run input:voice -- --week YYYY-Www`，只读取目标 ISO 周已归档的新版 AI 洞察文档，将完整结构化洞察写入 `voice.md`。缺失/占位计入 `pending`，旧格式计入 `legacy`，不回退到处理后原文；30,000 字符只是强提示线，不是采集门槛。统一生成 Process Pack 时仅压缩一次，目标保留约 20%，并报告整体及各文件的原始字符、压缩字符和保留比例。周日 `npm run voice:insight -- --week YYYY-Www` 是独立阶段，不由周一流程隐式触发；0 条、查询或文档失败均按来源状态处理并保留旧文件。
+   - Voice-X：按 `learn-x-input` 执行 `npm run input:voice -- --week YYYY-Www`，只读取目标 ISO 周已归档的新版 AI 洞察文档，将完整结构化洞察写入 `voice.md`。缺失/占位计入 `pending`，旧格式计入 `legacy`，不回退到处理后原文；30,000 字符只是强提示线，不是采集门槛。`pending` 记录必须在阶段 1 汇报中逐条列出可点击的 Voice-X core 文档链接与录制时间，保证 AI 洞察未完成时本人原话仍可进入周审阅（只提供审阅入口，不搬运原文）。统一生成 Process Pack 时仅压缩一次，目标保留约 20%，并报告整体及各文件的原始字符、压缩字符和保留比例。周日 `npm run voice:insight -- --week YYYY-Www` 是独立阶段，不由周一流程隐式触发；0 条、查询或文档失败均按来源状态处理并保留旧文件。
    - 本人飞书文档：只有在 AI Docx/Wiki 写入者已切换到 Bot，且历史分页、editor ID、revision 快照、用户 `full_access` 等在线 canary 全部通过后才运行 `npm run input:feishu-docs -- --week YYYY-Www`。门禁通过后的第一个完整 ISO 周不加 `--activate`，由采集器保存 `needs_review` 影子快照；人工逐篇核对发现列表、本人版本全文和差异后，下一次重采才加 `--activate`。缺少门禁证据时报告来源尚未启用，不把它标成 `ready/empty`。`needs_review/failed/unavailable` 会阻止 Weekly Process。
    - 阶段 1 固定总表在 `weekly.md` 后加入 `feishu-docs.md`；仅 `ready` 快照可计入输入字符数，影子快照、失败结果和旧文件均不计入。
    - 飞书日记与 AI Coach：执行 `npm run input:daily-coach -- --week YYYY-Www`。采集器先用 `--as bot` 现场核验 Base、表和字段，再按各表边界筛选并遍历全部分页；各来源状态写入 `_source-status.json`。日记与 Coach 分别判定：Coach 0 条时记录 `coach=empty` 且不生成 `coach.md`，不影响有记录的 `daily.md`；日记 0 条时记录 `daily=empty`，查询或字段失败才记录 `daily=failed/unavailable`。旧文件可保留但标记过期；失败时保留旧文件但标记失败。
@@ -287,12 +287,31 @@ Deep Code X 另有一个独立的周日调度（`learn-x-voice-insight`，20:00�
 - 线上采集阻塞时，不降级使用过期本地文件。
 - Flomo 同步不删除 memo；重复或无标签旧 memo 只报告，等待用户单独授权处理。
 
+## 进化收据（方案三 M4）
+
+仅定时触发的阶段 1 运行执行本节；用户交互续跑（阶段 2/3）不写收据。在阶段 1 汇报输出前追加执行；本节任何失败都不阻塞、不改变周链本身的结果，只在汇报末尾标注「进化收据：<状态>」。
+
+1. 写收据（幂等：event_id 固定格式，同日重复触发自动去重；summary 与各字段避免半角单引号 `'`，保证 shell 单引号安全）：
+
+   ```bash
+   echo '<TaskStarted JSON>' | /opt/homebrew/bin/node /Users/yuwei/code/group-index/evolution/cli.mjs append
+   echo '<ResultRecorded JSON>' | /opt/homebrew/bin/node /Users/yuwei/code/group-index/evolution/cli.mjs append
+   ```
+
+   - event_id：`weekly-chain-<YYYYMMDD>-start` 与 `weekly-chain-<YYYYMMDD>-result`（YYYYMMDD＝本次运行日期，Asia/Shanghai）；task_id 统一 `weekly-chain-<YYYYMMDD>`；与周一 05:00 并行运行的 group-index 每日链使用不同 task_id/event_id，追加写入互不干扰。
+   - 结果五分：`execution`/`delivery` 按阶段 1 实际结果（全部自动来源完成且草稿生成＝`ok`；部分失败＝`partial`；中断＝`failed`）；`business_result`/`user_judgment`/`later_reality` 固定 `unknown`——真正的业务结果是经人工确认的 Weekly Output，属后续阶段，未知不折算成功。
+   - `source_ref.id` 填本轮可读回核查的产物仓库相对路径（如目标周 `ai.generated.md` 或 `action-feedback.md`）；已读回该产物则 `evidence_tier`＝`read-back-verified`，否则 `source-claimed`。
+   - summary 一句话概括本轮状态与缺口；不写入周记正文、日记原文或任何个人隐私内容（账本在 group-index 私有仓，但仍按最小化原则）。
+2. 对账（只读）：`/opt/homebrew/bin/node /Users/yuwei/code/group-index/evolution/cli.mjs reconcile`；`unendedTasks`/`tornCount`/`duplicates` 非零时列入汇报「本轮需关注」，不自动修复、不虚构收据、不补写历史成功。
+3. 边界：账本只追加不改历史；CLI 不可达或失败时如实标注，不在本仓重建账本；本节不读取、不写入 learn-x 之外的任何学习数据。
+
 ## 汇报格式
 
 每次运行必须包含：
 
 - 目标周。
 - 全局流程，并标记当前阶段。
+- 进化收据状态（见「进化收据」节；仅定时运行；交互续跑填「不适用」）。
 - 已完成来源或产物。
 - 阻塞项和缺口。
 - 当前位置。
