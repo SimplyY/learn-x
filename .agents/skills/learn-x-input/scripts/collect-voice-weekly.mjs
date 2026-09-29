@@ -4,7 +4,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { defaultWeeklyReviewWeek, isoWeekRangeShanghai, normalizeWeek } from "./collect-weread-weekly.mjs";
-import { inputSize, VOICE_TARGET_RETAINED_RATIO } from "./lib/input-limits.mjs";
+import { inputSize, VOICE_TARGET_RETAINED_RATIO, VOICE_TARGET_RETAINED_RATIO_RANGE } from "./lib/input-limits.mjs";
 import { fileExists, updateWeeklySourceStatus } from "./lib/source-status.mjs";
 
 export const VOICE_X_BASE_URL = "https://ywhome.feishu.cn/base/OBapbpVNIaw7kfsM1Q9cftlmnbe?table=tbljFGhqPgKaMD5l&view=vew4IAgkv3";
@@ -182,6 +182,7 @@ export function voiceCompressionMetrics(source, candidate) {
   const candidateChars = inputSize(candidate).chars;
   return {
     targetRetainedRatio: VOICE_TARGET_RETAINED_RATIO,
+    targetRetainedRatioRange: VOICE_TARGET_RETAINED_RATIO_RANGE,
     overall: {
       sourceChars,
       candidateChars,

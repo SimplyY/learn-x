@@ -7,10 +7,10 @@ repo_path: "/Users/yuwei/code/learn-x"
 repo_url: null
 group_info_path: "/Users/yuwei/code/learn-x/GROUP_INFO.md"
 registry_source: "live"
-registry_fetched_at: "2026-09-25T09:52:49.616Z"
+registry_fetched_at: "2026-09-28T21:07:11.977Z"
 registry_age_seconds: 0
 registry_degraded: false
-updated_at: "2026-09-25T09:52:49.639Z"
+updated_at: "2026-09-28T21:07:18.143Z"
 icon: "🧠"
 name_zh: "learn-x"
 summary: "认知进化系统。核心功能 chat pack（chat 上下文提示词） + 定期（周、月、年）复盘 IPO (输入、处理、输出)"
@@ -47,7 +47,7 @@ priority: 1
 10. learn-x-quarterly-question-overview：生成、审计和提交 Learn-X 人生核心议题季度
 11. learn-x-voice-insight
 12. learn-x-weekly-automation：每周输入自动采集、Weekly Output 报告
-13. learn-x-weekly-journal：从 Learn-X 已落盘的周输入生成安全的飞书周
+13. learn-x-weekly-journal：从 Learn-X 已落盘的周输入生成飞书周记草稿
 14. wechat-weekly-input：通过用户手动提供的微信聊天截图生成重点聊天周度
 
 ## 可用 Workflow
@@ -72,4 +72,4 @@ priority: 1
 - 链接数：3
 - Skill 扫描：正常
 - 注册表新鲜度：可用
-- 最近更新时间：2026-09-25T09:52:49.639Z
+- 最近更新时间：2026-09-28T21:07:18.143Z

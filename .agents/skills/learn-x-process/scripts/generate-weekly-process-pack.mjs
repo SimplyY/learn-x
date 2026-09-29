@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { compressVoiceForProcessPack, voiceCompressionMetrics } from "../../learn-x-input/scripts/collect-voice-weekly.mjs";
-import { inputSize, MAX_VOICE_WEEKLY_INPUT_CHARS, VOICE_TARGET_RETAINED_RATIO } from "../../learn-x-input/scripts/lib/input-limits.mjs";
+import { inputSize, MAX_VOICE_WEEKLY_INPUT_CHARS, VOICE_TARGET_RETAINED_RATIO, VOICE_TARGET_RETAINED_RATIO_RANGE } from "../../learn-x-input/scripts/lib/input-limits.mjs";
 import { SOURCE_FILES } from "../../learn-x-input/scripts/lib/source-status.mjs";
 import { ensureActionFeedbackDraft, readShortTermTopics, validateActionFeedbackReport } from "./action-feedback.mjs";
 import { defaultWeeklyReviewWeek, isoWeekRange, writeWeeklyInput } from "./collect-weekly-input.mjs";
@@ -29,10 +29,11 @@ const FIXED_WEEKLY_INPUTS = [
 
 export async function generateWeeklyProcessPack(options = {}) {
   const week = options.week || defaultWeeklyReviewWeek();
-  const { payload } = await writeWeeklyInput({ week });
-  const sourceSummaries = buildSourceSummaries(payload);
-  const { items, compression } = compressWeeklyProcessItems(payload.items, payload.files);
-  const fileSummaries = buildFileSummaries(payload, items);
+  const { payload } = await writeWeeklyInput({ week, excludeUnreviewedSources: options.excludeUnreviewedSources });
+  const packPayload = omitExcludedSourcesFromPack(payload, options.excludeUnreviewedSources);
+  const sourceSummaries = buildSourceSummaries(packPayload);
+  const { items, compression } = compressWeeklyProcessItems(packPayload.items, packPayload.files);
+  const fileSummaries = buildFileSummaries(packPayload, items);
   const outputRoot = path.join(repoRoot, "04_output/_dist/weekly", distWeekId(payload.week));
   const previousOutput = await readPreviousWeeklyOutput(payload.week);
   const shellPath = await ensureWeeklyOutputShell(payload.week);
@@ -62,7 +63,7 @@ export async function generateWeeklyProcessPack(options = {}) {
       result: `独立产物，不计入 input.json；候选表需核对：${error.message}`
     };
   }
-  const processPack = renderProcessPack(payload, sourceSummaries, fileSummaries, items, compression, actionFeedbackSummary, actionFeedbackContent, previousOutput);
+  const processPack = renderProcessPack(packPayload, sourceSummaries, fileSummaries, items, compression, actionFeedbackSummary, actionFeedbackContent, previousOutput);
   const outputPath = path.join(outputRoot, "process-pack.md");
   await writeFile(outputPath, processPack, "utf8");
 
@@ -75,6 +76,23 @@ export async function generateWeeklyProcessPack(options = {}) {
     previousOutput,
     outputPath,
     shellPath
+  };
+}
+
+function omitExcludedSourcesFromPack(payload, excludedSources = []) {
+  const omittedSources = new Set(excludedSources);
+  if (!omittedSources.size) return payload;
+
+  const sourceStatuses = Object.fromEntries(
+    Object.entries(payload.sourceStatuses || {}).filter(([source]) => !omittedSources.has(source))
+  );
+  const excludedFiles = (payload.excludedFiles || []).filter((file) => !omittedSources.has(file.source));
+  return {
+    ...payload,
+    sourceStatuses,
+    excludedFiles,
+    omittedSources: [...omittedSources],
+    stats: { ...payload.stats, excludedFileCount: excludedFiles.length }
   };
 }
 
@@ -120,7 +138,7 @@ export function renderProcessPack(payload, sourceSummaries, fileSummaries, items
     "",
     "## 1. 处理信息",
     "",
-    `- 周期：${payload.range.start.slice(0, 10)} 到 ${payload.range.end.slice(0, 10)}`,
+    `- 周期：${payload.range.start.slice(0, 10)} 到 ${inclusiveRangeEnd(payload.range.end)}`,
     `- 周目录：\`${payload.selection.path}\``,
     `- 选择方式：${payload.selection.mode}`,
     `- 生成时间：${payload.generatedAt}`,
@@ -128,7 +146,7 @@ export function renderProcessPack(payload, sourceSummaries, fileSummaries, items
     `- 有效材料数：${payload.stats.itemCount}`,
     `- 去重后材料数：${payload.stats.uniqueItemCount}`,
     `- 去重数量：${payload.stats.duplicateCount}`,
-    `- 被状态侧车排除的旧文件：${payload.stats.excludedFileCount}`,
+    `- 状态侧车排除的文件：${payload.stats.excludedFileCount}`,
     `- JSON 中间材料：\`04_output/_dist/weekly/${distWeekId(payload.week)}/input.json\``,
     "",
     "## 2. 输入与压缩总表",
@@ -254,7 +272,9 @@ export function buildInputAuditRows(payload, fileSummaries, compression) {
   const summariesByFile = new Map(fileSummaries.map((file) => [path.basename(file.path), file]));
   const statusesByFile = new Map(Object.entries(payload.sourceStatuses || {}).map(([source, entry]) => [entry.file, { source, entry }]));
   const fixedFiles = new Set(FIXED_WEEKLY_INPUTS.map((definition) => definition.file));
-  const rows = FIXED_WEEKLY_INPUTS.map((definition) => buildInputAuditRow({
+  const rows = FIXED_WEEKLY_INPUTS
+    .filter((definition) => !payload.omittedSources?.includes(definition.statusSource))
+    .map((definition) => buildInputAuditRow({
     payload,
     definition,
     fileSummary: summariesByFile.get(definition.file),
@@ -379,6 +399,7 @@ export function compressWeeklyProcessItems(items, files = []) {
       retainedRatio: sourceChars ? Number((outputChars / sourceChars).toFixed(3)) : 0,
       reductionRatio: sourceChars ? Number((1 - outputChars / sourceChars).toFixed(3)) : 0,
       targetRetainedRatio: VOICE_TARGET_RETAINED_RATIO,
+      targetRetainedRatioRange: VOICE_TARGET_RETAINED_RATIO_RANGE,
       warnings: sourceChars > MAX_VOICE_WEEKLY_INPUT_CHARS
         ? [`Voice.md 原始内容 ${sourceChars} 字符，超过提示线 ${MAX_VOICE_WEEKLY_INPUT_CHARS} 字符；仍保留完整输入，并在 Process Pack 统一压缩。`]
         : [],
@@ -393,8 +414,9 @@ export function compressWeeklyProcessItems(items, files = []) {
 
 function renderCompressionSummary(compression) {
   if (!compression.sourceCount) return "- 本周没有 Voice-X 内容需要统一压缩。";
+  const [minimumRetainedRatio, maximumRetainedRatio] = compression.targetRetainedRatioRange || VOICE_TARGET_RETAINED_RATIO_RANGE;
   return [
-    `- Voice-X：整体原始 ${compression.sourceChars} 字符 → Process Pack ${compression.outputChars} 字符；整体保留比例 ${Math.round(compression.retainedRatio * 100)}%，整体压缩幅度 ${Math.round(compression.reductionRatio * 100)}%；目标保留比例 ${Math.round(compression.targetRetainedRatio * 100)}%。`,
+    `- Voice-X：整体原始 ${compression.sourceChars} 字符 → Process Pack ${compression.outputChars} 字符；整体保留比例 ${Math.round(compression.retainedRatio * 100)}%，整体压缩幅度 ${Math.round(compression.reductionRatio * 100)}%；目标保留 ${Math.round(minimumRetainedRatio * 100)}%–${Math.round(maximumRetainedRatio * 100)}%（压缩预算中心 ${Math.round(compression.targetRetainedRatio * 1000) / 10}%）。`,
     ...compression.warnings.map((warning) => `- 强提示：${warning}`),
     "",
     "| 文件 | 原始字符 | 纳入 Process Pack 字符 | 保留比例 |",
@@ -404,7 +426,9 @@ function renderCompressionSummary(compression) {
 }
 
 function renderSourceStatuses(payload) {
-  const rows = Object.entries(payload.sourceStatuses || {}).map(([source, entry]) => {
+  const rows = Object.entries(payload.sourceStatuses || {})
+    .filter(([source]) => !payload.omittedSources?.includes(source))
+    .map(([source, entry]) => {
     const usable = entry.status === "ready" ? "计入" : "排除";
     const stale = entry.preservedStaleFile ? "旧文件已保留但过期" : "无旧文件";
     const present = payload.files.some((file) => file.path.endsWith(`/${entry.file}`))
@@ -418,6 +442,12 @@ function renderSourceStatuses(payload) {
     "| --- | --- | ---: | --- | --- | --- |",
     ...rows
   ].join("\n");
+}
+
+function inclusiveRangeEnd(exclusiveEnd) {
+  const date = new Date(exclusiveEnd);
+  date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
 }
 
 async function ensureWeeklyOutputShell(weekId) {
@@ -611,6 +641,11 @@ function parseArgs(argv) {
     if (argv[index] === "--week") {
       options.week = argv[index + 1];
       index += 1;
+    } else if (argv[index] === "--exclude-unreviewed-source") {
+      const source = argv[index + 1];
+      if (source !== "feishu-docs") throw new Error("当前只允许显式排除 feishu-docs 来源。");
+      options.excludeUnreviewedSources = [...(options.excludeUnreviewedSources || []), source];
+      index += 1;
     }
   }
   return options;
@@ -624,6 +659,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   console.log(`Action Feedback report: ${path.relative(repoRoot, result.actionFeedback.path)} (${result.actionFeedback.status})`);
   console.log(`Previous Weekly Output baseline: ${result.previousOutput.week} (${result.previousOutput.status}) at ${result.previousOutput.relativePath}`);
   console.log(`Weekly output shell ready: ${path.relative(repoRoot, result.shellPath)}`);
+  if (result.payload.excludedFiles.some((file) => file.source === "feishu-docs" && file.status === "needs_review")) {
+    console.log("Explicit override: feishu-docs remains needs_review and its content is excluded from this Process Pack by request.");
+  }
   console.log(`Input files: ${result.payload.stats.fileCount}`);
   console.log(`Unique items: ${result.payload.stats.uniqueItemCount}`);
   console.log(`Sources: ${result.sourceSummaries.map((source) => `${source.source}:${source.itemCount}`).join(", ") || "none"}`);

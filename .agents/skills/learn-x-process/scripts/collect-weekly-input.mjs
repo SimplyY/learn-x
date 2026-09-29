@@ -23,10 +23,11 @@ export async function collectWeeklyInput(options = {}) {
   const statusEntries = Object.entries(sourceStatus.sources);
   const feishuDocsStatus = sourceStatus.sources["feishu-docs"];
   const feishuDocsFile = allFiles.find((file) => path.basename(file.relativePath) === "feishu-docs.md");
+  const explicitlyExcludedSources = new Set(options.excludeUnreviewedSources || []);
   if (feishuDocsFile && !feishuDocsStatus) {
     throw new Error("feishu-docs.md 缺少本轮来源状态，已阻止生成 Weekly Process；请重新运行飞书文档采集器。");
   }
-  if (feishuDocsStatus && !["ready", "empty"].includes(feishuDocsStatus.status)) {
+  if (feishuDocsStatus && !["ready", "empty"].includes(feishuDocsStatus.status) && !explicitlyExcludedSources.has("feishu-docs")) {
     throw new Error(`feishu-docs 来源状态为 ${feishuDocsStatus.status}，已阻止生成 Weekly Process；请先完成本人身份与版本核验后重采。`);
   }
   if (feishuDocsStatus?.status === "ready" && !allFiles.some((file) => path.basename(file.relativePath) === "feishu-docs.md")) {

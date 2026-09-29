@@ -82,7 +82,11 @@ Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 刷新 YW Next �
    node .agents/skills/learn-x-process/scripts/generate-weekly-process-pack.mjs --week 2026-22
    ```
 
-   Weekly Process 对普通文件保留 15,000 Unicode 字符校验；Voice-X 的 `voice.md` 完整落盘，30,000 字符只是强提示，不阻断输入生成。统一生成 Process Pack 时先输出合并总表：Flomo 第一行、Action Feedback 独立产物第二行（不计入 `input.json` 输入材料数），其余输入保持原顺序；输入逐来源合并状态、记录/材料数、文件原始 → 解析清洗后有效（去重前）→ Process Pack 最终纳入字符链路和结果，最后一个数字为本阶段最终纳入数。Action Feedback 行显示议题数、候选数、将写入 Base 数和审核状态；其完整周报快照作为核心内容放在 Process Pack 第 8 节。只有 Voice-X 做一次约 20% 保留比例的高信号压缩并在字符链路后标明，普通来源不做语义压缩，`input:compress` 不处理 Voice-X。
+   Weekly Process 对普通文件保留 15,000 Unicode 字符校验；Voice-X 的 `voice.md` 完整落盘，30,000 字符只是强提示，不阻断输入生成。统一生成 Process Pack 时先输出合并总表：Flomo 第一行、Action Feedback 独立产物第二行（不计入 `input.json` 输入材料数），其余输入保持原顺序；输入逐来源合并状态、记录/材料数、文件原始 → 解析清洗后有效（去重前）→ Process Pack 最终纳入字符链路和结果，最后一个数字为本阶段最终纳入数。Action Feedback 行显示议题数、候选数、将写入 Base 数和审核状态；其完整周报快照作为核心内容放在 Process Pack 第 8 节。Voice-X 目标保留 10%–15%（预算中心 12.5%），按下述规则压缩；微信读书是另一项必压缩来源。普通来源默认不做语义压缩，`input:compress` 不处理 Voice-X。
+
+   `weread.md` 中只要有划线或想法，每次生成周 Process Pack 都必须做语义压缩，不受 15,000 字符门槛影响。保持 `03_input/weekly/YYYY-Www/weread.md` 不变，并让 `input.json` 保留未做语义压缩的完整清洗内容；只压缩 Process Pack 第 7 节里的微信读书正文，不把原始划线整段搬入 Pack。先保留阅读统计、书名、作者、进度和“当前章节”快照，再按书和必要的章节归纳高信号观点：合并重复或相近划线，保留彼此独立的主张、推理链、条件、反例、风险与关键具象信息。用户自己的想法与批注要和作者观点分开，内容完整保留；不得把作者观点写成用户判断，不推导行动或 Memory，不补造含义。压缩不设固定比例，但必须形成实质缩短；不得靠删尾、机械截断或仅清理空行冒充压缩。若无法在不损失独立观点的情况下缩短，标记 `needs_review` 并停止交付，不把未压缩正文标为完成。
+
+   `generate-weekly-process-pack.mjs` 目前只自动压缩 Voice-X。生成后，Codex 必须完成微信读书语义压缩，再交付 Pack；同步更新第 2 节字符链路、第 5 节来源索引、第 6 节压缩概览和第 7 节正文。所有计数使用 `countInputChars`（Unicode 码点数）：字符链路报告文件原始 → 清洗有效 → Pack 最终纳入；`input.json` 保留完整清洗内容且未做语义压缩，不能用其字符数冒充 Pack 最终纳入数。保留书籍和必要章节归属，确保摘要可回溯到 `weread.md`。
 
    `智慧之门` 的增值源是飞书 Base；采集入口读取结构化字段，并把 `长篇内容、原始内容` 做自适应高信号抽取：以每条约 300 Unicode 字符为中心，通常保留 200-500 字，预算根据独立核心判断、因果/模型结构、结论、边界、风险和与参考字段的关联度有限调整；短内容不硬扩，长内容不超过 500。只把压缩内容写入本地，原文不落盘。因此 `wisdom.md`、`input.json` 和 Process Pack 保持同一内容口径；需要核查长篇原文时回到 Base 链接。各来源仍记录原始字符数与纳入字符数，避免把材料体量和实际纳入上下文混为一谈。
 

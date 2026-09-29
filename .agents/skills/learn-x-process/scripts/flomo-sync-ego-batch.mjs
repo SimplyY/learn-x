@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 
 export async function runEgoBatch(action, payload) {
-  if (!["preflight", "apply"].includes(action)) throw new Error(`Unsupported Ego batch action: ${action}`);
+  if (!["preflight", "apply", "close"].includes(action)) throw new Error(`Unsupported Ego batch action: ${action}`);
   const taskName = `learn-x-flomo-sync-batch-${process.pid}`;
 const script = `
 const { createHash } = await import('node:crypto');
@@ -100,29 +100,41 @@ const writeMemo = async (plan) => {
   if (!memo) throw new Error('Flomo did not expose the written memo for readback.');
   return await readMemo(memo, title);
 };
+// The caller owns task-space cleanup so preflight and all memo checkpoints reuse this space.
 try {
-  task = await useOrCreateTaskSpace(${JSON.stringify(taskName)});
-  await openOrReuseTab('https://v.flomoapp.com/mine', { wait: true, timeout: 20 });
-  if (action === 'preflight') {
-    for (const spec of payload.specs) {
-      const found = await findOne(spec, payload.allowLegacy === true);
-      if (found.matches.length > 1) throw new Error(spec.key + ': found multiple matching Flomo memos.');
-      if (found.legacy && payload.allowLegacy !== true) throw new Error(spec.key + ': found an unmarked legacy memo; adopt it manually before syncing.');
-      const remote = found.matches.length ? await readMemo(found.matches[0], spec.title, false) : null;
-      completed.push({ key: spec.key, found, remote });
-    }
+  if (action === 'close' && payload.taskId) {
+    const taskId = payload.taskId;
+    await completeTaskSpace(taskId, { keep: false });
+    cliLog(JSON.stringify({ ok: true, completed, closedTaskId: taskId }));
   } else {
-    for (const plan of payload.plans) {
-      const result = await writeMemo(plan);
-      completed.push({ key: plan.key, action: plan.action, ...result });
+    task = await useOrCreateTaskSpace(${JSON.stringify(taskName)});
+    if (action === 'close') {
+      const taskId = task.id;
+      await completeTaskSpace(taskId, { keep: false });
+      task = null;
+      cliLog(JSON.stringify({ ok: true, completed, closedTaskId: taskId }));
+    } else {
+      await openOrReuseTab('https://v.flomoapp.com/mine', { wait: true, timeout: 20 });
+      if (action === 'preflight') {
+        for (const spec of payload.specs) {
+          const found = await findOne(spec, payload.allowLegacy === true);
+          if (found.matches.length > 1) throw new Error(spec.key + ': found multiple matching Flomo memos.');
+          if (found.legacy && payload.allowLegacy !== true) throw new Error(spec.key + ': found an unmarked legacy memo; adopt it manually before syncing.');
+          const remote = found.matches.length ? await readMemo(found.matches[0], spec.title, false) : null;
+          completed.push({ key: spec.key, found, remote });
+        }
+      } else if (action === 'apply') {
+        for (const plan of payload.plans) {
+          const result = await writeMemo(plan);
+          completed.push({ key: plan.key, action: plan.action, ...result });
+        }
+      }
+      const outputCompleted = payload.compactResult ? completed.map((item) => { const { content, ...rest } = item; return { ...rest, found: item.found ? { legacy: item.found.legacy, matches: item.found.matches.map((match) => ({ memoId: match.memoId })) } : item.found, remote: item.remote ? { memoId: item.remote.memoId, hash: digestText(item.remote.content), length: canonicalText(item.remote.content).length } : null }; }) : completed;
+      cliLog(JSON.stringify({ ok: true, taskId: task.id, completed: outputCompleted }));
     }
   }
-  const outputCompleted = payload.compactResult ? completed.map((item) => { const { content, ...rest } = item; return { ...rest, found: item.found ? { legacy: item.found.legacy, matches: item.found.matches.map((match) => ({ memoId: match.memoId })) } : item.found, remote: item.remote ? { memoId: item.remote.memoId, hash: digestText(item.remote.content), length: canonicalText(item.remote.content).length } : null }; }) : completed;
-  cliLog(JSON.stringify({ ok: true, completed: outputCompleted }));
 } catch (error) {
-  cliLog(JSON.stringify({ ok: false, completed, error: error?.stack || String(error) }));
-} finally {
-  if (task) await completeTaskSpace(task.id, { keep: false });
+  cliLog(JSON.stringify({ ok: false, taskId: task?.id ?? null, completed, error: error?.stack || String(error) }));
 }
 `;
   const output = await runCommand("ego-browser", ["nodejs"], script);
@@ -132,6 +144,7 @@ try {
   if (!result.ok) {
     const error = new Error(result.error || `Ego batch ${action} failed.`);
     error.completed = result.completed ?? [];
+    error.taskId = result.taskId ?? null;
     throw error;
   }
   return result;

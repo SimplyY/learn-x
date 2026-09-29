@@ -21,10 +21,11 @@ const COLLECTORS = [
     tableId: "tblMGGWdVH4Iq9Og",
     fields: [
       "所属主题", "核心问题和使用场景", "一句话精华",
-      WISDOM_RAW_FIELD, "层级", "智慧时效性", "创建时间",
+      WISDOM_RAW_FIELD, "层级", "智慧时效性", "创建时间", "来源标识", "Flomo创建时间",
     ],
     compression: { sourceField: WISDOM_RAW_FIELD, minChars: 200, maxChars: 500 },
     filterField: "创建时间",
+    sourceDateOverrides: [{ sourceKeyField: "来源标识", sourcePrefix: "flomo:", dateField: "Flomo创建时间" }],
     outputFile: "wisdom.md",
     title: "智慧之门",
   },
@@ -46,14 +47,34 @@ export async function collectOne(config, week, dependencies = {}) {
     if (!table) throw new Error(`${config.name}：未找到表 ${config.tableId}`);
     const tableId = table.table_id || table.id;
     await verify(base, tableId, config.fields);
-    const { records, pages, complete } = await recordsFor(base, tableId, {
+    const conditionsFor = (field) => [
+      [field, ">", `ExactDate(${range.startExclusive})`],
+      [field, "<", `ExactDate(${range.end})`],
+    ];
+    const primary = await recordsFor(base, tableId, {
       fields: config.fields,
-      conditions: [
-        [config.filterField, ">", `ExactDate(${range.startExclusive})`],
-        [config.filterField, "<", `ExactDate(${range.end})`],
-      ],
+      conditions: conditionsFor(config.filterField),
     });
-    const inRange = filter(records, config.filterField, range);
+    const recordsById = new Map(primary.records.map((record, index) => [record.id || `primary:${index}`, record]));
+    let pages = primary.pages;
+    let complete = primary.complete;
+    for (const override of config.sourceDateOverrides || []) {
+      const supplemental = await recordsFor(base, tableId, {
+        fields: config.fields,
+        conditions: conditionsFor(override.dateField),
+      });
+      supplemental.records.forEach((record, index) => recordsById.set(record.id || `${override.dateField}:${index}`, record));
+      pages += supplemental.pages;
+      complete = complete && supplemental.complete;
+    }
+    const records = [...recordsById.values()];
+    const inRange = records.filter((record) => {
+      const override = (config.sourceDateOverrides || []).find((item) =>
+        String(record.values[item.sourceKeyField] || "").startsWith(item.sourcePrefix) && record.values[item.dateField],
+      );
+      const dateField = override?.dateField || config.filterField;
+      return filter([record], dateField, range).length > 0;
+    });
     const content = render(config, week, range, { records: inRange, pages, complete });
     const written = inRange.length > 0;
     if (written) await atomicWrite(out, content);
@@ -81,10 +102,16 @@ function render(config, week, range, data) {
     "", "## 记录", "",
   ];
   for (const r of data.records) {
-    lines.push(`### ${r.values[config.filterField] || "(无时间)"}`);
+    const override = (config.sourceDateOverrides || []).find((item) =>
+      String(r.values[item.sourceKeyField] || "").startsWith(item.sourcePrefix) && r.values[item.dateField],
+    );
+    const dateField = override?.dateField || config.filterField;
+    lines.push(`### ${r.values[dateField] || "(无时间)"}`);
+    if (override) lines.push("- 记录来源：Flomo #需回顾（按原笔记创建时间归周）");
+    const metadataFields = new Set((config.sourceDateOverrides || []).flatMap((item) => [item.sourceKeyField, item.dateField]));
     for (const k of config.fields) {
       const v = r.values[k];
-      if (k === config.filterField) continue;
+      if (k === config.filterField || metadataFields.has(k)) continue;
       if (config.compression?.sourceField === k) continue;
       if (v) lines.push(`- ${k}：${v}`);
     }

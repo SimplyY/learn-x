@@ -9,7 +9,70 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
 const statePath = path.join(repoRoot, "04_output/_dist/flomo-sync/state.json");
 
-export async function syncFlomoWeekly({ week, manifestPath, dryRun = false, only, skipKeys = [], overwriteConflicts = false, overwriteKeys = [], browser } = {}) {
+export async function syncFlomoWeekly(options = {}) {
+  let batchTaskSpaceAttempted = false;
+  let operationError;
+  let operationFailed = false;
+  let syncResult;
+  const taskSpaceIds = new Set();
+  const closedTaskSpaceIds = [];
+  // Keep one Ego Lite task space across preflight and per-memo read/write checkpoints.
+  const runBatch = async (...args) => {
+    batchTaskSpaceAttempted = true;
+    let result;
+    try {
+      result = await runEgoBatch(...args);
+    } catch (error) {
+      if (error.taskId) taskSpaceIds.add(error.taskId);
+      throw error;
+    }
+    if (result.taskId) {
+      taskSpaceIds.add(result.taskId);
+      if (taskSpaceIds.size > 1) throw new Error("Ego Lite changed task spaces during one Flomo sync.");
+    }
+    return result;
+  };
+  try {
+    syncResult = await syncFlomoWeeklyImpl(options, runBatch);
+    return syncResult;
+  } catch (error) {
+    operationFailed = true;
+    operationError = error;
+    throw error;
+  } finally {
+    if (batchTaskSpaceAttempted) {
+      const taskIdsToClose = taskSpaceIds.size ? [...taskSpaceIds] : [null];
+      const closeErrors = [];
+      for (const taskId of taskIdsToClose) {
+        try {
+          const closed = await runEgoBatch("close", taskId ? { taskId } : {});
+          if (closed.closedTaskId) closedTaskSpaceIds.push(closed.closedTaskId);
+        } catch (closeError) {
+          closeErrors.push(closeError);
+        }
+      }
+      if (syncResult) {
+        syncResult.taskSpace = {
+          ids: [...taskSpaceIds],
+          closedIds: closedTaskSpaceIds,
+          closed: closeErrors.length === 0 && taskIdsToClose.length === closedTaskSpaceIds.length
+        };
+      }
+      if (closeErrors.length) {
+        const closeError = new AggregateError(closeErrors, "One or more Ego Lite task spaces could not be closed.");
+        if (operationFailed && operationError instanceof Error) {
+          operationError.message += `\nEgo Lite task-space cleanup also failed: ${closeError.message}`;
+        } else if (operationFailed) {
+          throw new AggregateError([new Error(String(operationError)), closeError], "Flomo sync and Ego Lite task-space cleanup failed.");
+        } else {
+          throw closeError;
+        }
+      }
+    }
+  }
+}
+
+async function syncFlomoWeeklyImpl({ week, manifestPath, dryRun = false, only, skipKeys = [], overwriteConflicts = false, overwriteKeys = [], browser } = {}, runBatch = runEgoBatch) {
   if (!week && !manifestPath) throw new Error("Use --week YYYY-Www or --manifest path.");
   if (only && !["weekly", "monthly", "memory"].includes(only)) throw new Error("Use --only weekly|monthly|memory.");
   if (overwriteConflicts && (!manifestPath || !overwriteKeys.length)) throw new Error("Conflict overwrite requires --manifest and --overwrite-key.");
@@ -32,7 +95,7 @@ export async function syncFlomoWeekly({ week, manifestPath, dryRun = false, only
   // ponytail: reuse the deterministic editor path for every real sync; keep the legacy client only for injected tests.
   const useBatch = Boolean(!dryRun && !browser);
   const batchPreflight = useBatch
-    ? new Map((await runEgoBatch("preflight", { allowLegacy: overwriteConflicts, compactResult: overwriteConflicts, specs: specs.map(({ key, title, tag }) => ({ key, title, tag })) })).completed.map((item) => [item.key, item]))
+    ? new Map((await runBatch("preflight", { allowLegacy: overwriteConflicts, compactResult: overwriteConflicts, specs: specs.map(({ key, title, tag }) => ({ key, title, tag })) })).completed.map((item) => [item.key, item]))
     : null;
 
   for (const spec of specs) {
@@ -129,7 +192,7 @@ export async function syncFlomoWeekly({ week, manifestPath, dryRun = false, only
     };
     try {
       for (const batchPlan of batchPlans) {
-        const applied = await runEgoBatch("apply", { plans: [batchPlan] });
+        const applied = await runBatch("apply", { plans: [batchPlan] });
         for (const item of applied.completed) await checkpoint(item);
       }
     } catch (error) {
@@ -329,5 +392,5 @@ function parseArgs(argv) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const result = await syncFlomoWeekly(parseArgs(process.argv.slice(2)));
-  console.log(JSON.stringify({ week: result.week, manifestPath: result.manifestPath, skipped: result.skipped, results: result.results }, null, 2));
+  console.log(JSON.stringify({ week: result.week, manifestPath: result.manifestPath, skipped: result.skipped, results: result.results, taskSpace: result.taskSpace }, null, 2));
 }

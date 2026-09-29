@@ -1,6 +1,7 @@
 export const MAX_WEEKLY_INPUT_CHARS = 15_000;
 export const MAX_VOICE_WEEKLY_INPUT_CHARS = 30_000;
-export const VOICE_TARGET_RETAINED_RATIO = 0.20;
+export const VOICE_TARGET_RETAINED_RATIO_RANGE = Object.freeze([0.10, 0.15]);
+export const VOICE_TARGET_RETAINED_RATIO = 0.125;
 
 export function countInputChars(value) {
   return Array.from(String(value)).length;

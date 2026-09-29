@@ -218,6 +218,12 @@ test("异步 Prompt 装载后刷新自动装配，切换与失败重试不丢失
     assert.match(weeklyChatPack, /600 字/);
     assert.match(weeklyChatPack, /比较当前已存在的实质内容/);
     assert.match(weeklyChatPack, /Weekly Output 规则/);
+    assert.match(weeklyChatPack, /使用 Markdown 加粗时，开闭 `\*\*` 必须成对并紧贴被强调内容，标记内不得有空格/);
+    assert.match(weeklyChatPack, /错误：`\*\*标签： \*\*内容`/);
+    assert.match(weeklyChatPack, /下周最小高价值行动中的 `完成边界：` 和 `价值：` 是结构标签，一律使用普通文本，不加粗/);
+    assert.match(weeklyChatPack, /闭标记后若紧接普通正文，留一个半角空格/);
+    assert.match(weeklyChatPack, /若紧接中文标点，不插入空格/);
+    assert.match(weeklyChatPack, /代码块外每组 `\*\*` 是否成对、紧贴强调内容/);
     assert.match(weeklyChatPack, /Normal Context[\s\S]*CURRENT_WEEK_PROCESS_PACK_SENTINEL/);
     assert.match(weeklyChatPack, /PREVIOUS_WEEK_OUTPUT_COMPLETE_SENTINEL/);
     assert.doesNotMatch(weeklyChatPack, /OLDER_WEEK_PACK_SENTINEL/);

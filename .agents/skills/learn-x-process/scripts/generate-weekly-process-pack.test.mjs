@@ -90,7 +90,8 @@ test("compresses Voice-X once at Process Pack time and reports the overall ratio
   assert.notEqual(result.items[0].text, source);
   assert.ok(result.compression.outputChars < result.compression.sourceChars);
   assert.ok(result.compression.retainedRatio <= 0.25);
-  assert.equal(result.compression.targetRetainedRatio, 0.2);
+  assert.equal(result.compression.targetRetainedRatio, 0.125);
+  assert.deepEqual(result.compression.targetRetainedRatioRange, [0.10, 0.15]);
 });
 
 test("renders the full source-to-final character chain with failures and compression", () => {

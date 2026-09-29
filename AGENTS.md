@@ -24,9 +24,8 @@
 
 ## 飞书身份契约
 
-- Docx / Wiki 写入口固定 `--as user`。
-- 人工身份用两个变量表示：`LEARNX_FEISHU_HUMAN_EDITOR_ID` 保存历史 `editor_ids`；`LEARNX_FEISHU_HUMAN_OPEN_ID` 保存当前账号 `open_id`。二者属不同 ID 空间，不直接比较。
-- 先用 `lark-cli auth status --json --verify` 核对当前 `open_id`，再匹配历史 `editor_ids`；缺失或不匹配时失败关闭。
+- AI 的 Docx / Wiki 写入口固定 `--as bot`；用户本人手动操作与 Base 写入用 `--as user`。
+- `feishu-docs` 采集不使用身份环境变量：采集器每轮用 `lark-cli auth status --json --verify` 核验当前账号，并与飞书历史 `editor_ids` 自动互证出本人 editor ID（历史接口与搜索/认证接口属不同 ID 空间，不直接比较）；互证失败即失败关闭。
 
 ## 按需读取
 
