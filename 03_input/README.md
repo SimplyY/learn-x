@@ -74,7 +74,7 @@ Weekly 输入由周目录决定，不依赖 weekly index 或文件修改时间�
 - `calendar.md`：`Time-X｜随时记` 共享日历与用户个人日历（主日历及自有共享日历，用户手动建日程）合并后的每日与全周有效时间汇总，以及每个日历块的日期、起止、原始区间、标题、描述和有效投入分钟；重叠时间按同时日程数均分，不保存人员、地点、ID、链接或系统元数据。详见 [`docs/calendar-time-allocation.md`](../docs/calendar-time-allocation.md)。
 - `health.md`：Health-X 周报摘要，由 Health-X 在飞书周报同步成功后生成。
 - `coach.md`：按表字段保留新增记录，在采集器内排除回顾、复看和推送状态更新；本周 0 条新增记录时不生成文件，但每周自动化必须报告 0 条记录。
-- `open-actions.md`：旧版 `npm run action:feedback -- collect` 的兼容产物，用于从 Action Feedback Base 回捞未闭环核心行动；不属于默认周流程，也不是当前 Action Feedback 周报来源。
+- `open-actions.md`：旧版 `action:feedback -- collect` 的历史兼容产物（该命令已随 Action Feedback 退役被守卫拒绝）；不属于默认周流程。
 - `wisdom.md`：智慧之门创建时间落在目标周内的新记录；既有记录的回顾、复看或状态更新不采集；本周 0 条时不生成文件，但每周自动化必须报告 0 条记录。
 - `feishu-docs.md` 采集只采用 Feishu 返回且可核对的历史项。本人身份不依赖环境变量：采集器先用 `lark-cli auth status --json --verify` 核验当前用户 `open_id`，再从本周候选自动互证本人 editor ID（候选搜索元数据 `edit_user_id` 与该文档历史 `editor_ids` 属不同 ID 空间，由同一编辑事件交叉确认；`created-by-me` 候选也可由首个历史版本的编辑者锚定）；找不到可互证候选且本周存在候选时失败关闭。bot 身份的 AI 写入按 bot editor ID 计数标注为「AI 代笔」。手动粘贴 AI 内容按飞书记录的编辑账号归属。历史列表接口没有已核实的公开稳定契约或逐次编辑完整性保证，因此不得宣称它是完整审计时间线。
 - 搜索结果同时兼容扁平字段和当前 Search v2 的 `entity_type`、`title_highlighted`、`result_meta.url/token/doc_types` 结构；`entity_type=DOC` 按 Docx 处理，其他类型字段若缺失或结构变化则失败关闭。

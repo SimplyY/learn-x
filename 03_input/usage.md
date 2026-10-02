@@ -23,7 +23,7 @@
 | AI 对话摘要 | `ai.generated.md` → `ai.md` | 阶段 1 自动生成并经结构校验后转正，用户复核；失败时使用 fallback prompt 手动生成 |
 | Codex / Code X 构建复盘 | `build.md` | 专项自动化或人工补充 |
 | 飞书机器人 Build 复盘 | `build-bot.md` | 飞书机器人侧生成；本地周自动化只提示自查 |
-| 历史行动回捞（兼容） | `open-actions.md`（有未闭环行动时） | `npm run action:feedback -- collect --week YYYY-Www`；从 Action Feedback Base 读取 continue 状态核心行动；不属于默认周流程 |
+| 历史行动回捞（已退役） | `open-actions.md`（历史遗留） | `action:feedback` 命令已随 Action Feedback 退役被守卫拒绝，不再可执行 |
 | 调研等其他重要输入 | `research.md` 或语义清楚的 `<source>.md` | 按需补充 |
 
 `learn-x-process` 不联网采集，也不判断材料价值；它只读取指定周目录，生成 `04_output/_dist/weekly/YYYY-Www/input.json` 和 `process-pack.md`。
@@ -47,8 +47,8 @@ rm 03_input/weekly/YYYY-Www/README.md
 0. 自动判断目标周：未指定时，周一至周五默认处理上一 ISO 周；周六、周日默认处理当前 ISO 周。周三至周五运行时需要提示“现在仍是周中，默认处理上一周”；周六、周日处理当前周时视为提前写当周，只能声明覆盖截至运行时。
 1. 采集所有自动来源并更新 `_source-status.json`；成功空结果统一报告“0 条记录，文件未生成”，失败/不可用单独报告。此阶段不采集周记，不生成 `input.json`、`process-pack.md` 或 Weekly Output 壳。
 2. 自动化读取 `03_input/weekly/00_template/ai.md`，通过全局 ChatGPT Web Bridge 在已登录 ChatGPT 新聊天中生成 `ai.generated.md`；不发送本地周输入材料。失败时报告可手动复制的 fallback prompt。
-3. 自动化生成飞书周记草稿，并根据本周 `ready` 输入同时生成 `04_output/_dist/weekly/YYYY-Www/action-feedback.md`。用户一起审核、修改两份草稿；回复“周记已确认”后，自动采集确认后的 `weekly.md`，一次生成 `input.json`、Process Pack 和 Weekly Output 壳。
-4. 用户基于最新 Process Pack 完成 `04_output/weekly/YYYY-WW.md`、核心内容和 Memory 候选审核后，回复继续进入阶段 3。阶段 3 先生成并校验 `memory-candidates.md`，再展示包含正式 Memory、图片、Action Feedback Base、备份、YW Next 和 Flomo 目标的唯一确认卡；用户确认后按“正式 Memory → ChatGPT Bridge 核心图（写入 `04_output/_dist/weekly/YYYY-Www/weekly-core.png`）→ Action Feedback Base / 备份 / YW Next / Flomo”执行。公众号发布仍由用户人工完成。
+3. 自动化生成飞书周记草稿（Action Feedback 已退役，不再有配套草稿）。用户审核、修改；回复“周记已确认”后，自动采集确认后的 `weekly.md`，一次生成 `input.json`、Process Pack 和 Weekly Output 壳。
+4. 用户基于最新 Process Pack 完成 `04_output/weekly/YYYY-WW.md`、核心内容和 Memory 候选审核后，回复继续进入阶段 3。阶段 3 先生成并校验 `memory-candidates.md`，再展示包含正式 Memory、图片、备份、YW Next 和 Flomo 目标的唯一确认卡（Action Feedback Base 已退役）；用户确认后按“正式 Memory → ChatGPT Bridge 核心图（写入 `04_output/_dist/weekly/YYYY-Www/weekly-core.png`）→ 备份 / YW Next / Flomo”执行。公众号发布仍由用户人工完成。
 
 要求：
 

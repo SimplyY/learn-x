@@ -1,4 +1,6 @@
-# Learn-X Action Feedback 周报
+# Learn-X Action Feedback 周报（已退役，仅历史留档）
+
+> **退役说明（2026-10）**：Action Feedback 已由 Core V1（`/Users/yuwei/code/core`）接管周度行动复盘。本文仅作历史留档；`action:feedback` 命令被退役守卫拒绝，不再生成 `action-feedback.md`、不再写入 Base。历史文件与 Base「Learn-X Action Feedback」保留可读。
 
 Action Feedback 是每周流程中的核心行动 / 反馈输入，独立于最终 Weekly Output。它只记录本周在当前季度「短期核心议题」下真实发生的行动和反馈；阶段 1 与周记草稿同时生成，用户默认与周记一起审核通过，需要时直接修改。阶段 2 的 Process Pack 自动嵌入完整快照供 AI Chat 阅读，最终 Weekly Output 据此综合判断，但不重复整张表。独立 `action-feedback.md` 保持可编辑，也是阶段 3 写入 Base 的依据；若在 Pack 生成后修改，再运行一次 `process:weekly` 更新快照。
 

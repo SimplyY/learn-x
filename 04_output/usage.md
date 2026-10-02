@@ -7,7 +7,7 @@
 ## 流程
 
 ```text
-阶段 1 采集输入并同步核心议题 -> 生成周记与 Action Feedback 草稿（有效行动默认选中） -> 用户共同审核 / 修改 -> 用户说“周记已确认” -> 阶段 2 一次生成含 Action Feedback 快照及上周 Output 对照材料的 Process Pack -> Chat Pack 生成最终 Weekly Output（含不超过 600 字的周对照） -> 芒格之魂补充洞察与核心纪要 -> 阶段 3 生成并校验 Memory 候选 -> 唯一确认卡 -> 正式 Memory -> ChatGPT Bridge 核心图 -> Action Feedback / 备份 / YW Next / Flomo
+阶段 1 采集输入并同步核心议题 -> 生成周记草稿 -> 用户审核 / 修改 -> 用户说“周记已确认” -> 阶段 2 一次生成含上周 Output 对照材料的 Process Pack -> Chat Pack 生成最终 Weekly Output（含不超过 600 字的周对照） -> 芒格之魂补充洞察与核心纪要 -> 阶段 3 生成并校验 Memory 候选 -> 唯一确认卡 -> 正式 Memory -> ChatGPT Bridge 核心图 -> 备份 / YW Next / Flomo（Action Feedback 已于 2026-10 退役）
 ```
 
 ## 1. 确认材料包
@@ -21,7 +21,7 @@
 04_output/_dist/yearly/YYYY/process-pack.md
 ```
 
-每周生成 Weekly Output 时，把 `process-pack.md` 交给 AI Chat；第 8 节已嵌入同目录 `action-feedback.md` 的完整快照，作为核心行动 / 反馈输入。该独立文件已在阶段 1 与周记草稿共同审核；若 Pack 生成后还要修改，再运行 `npm run process:weekly -- --week YYYY-Www` 刷新快照。`input.json` 不含正文，只在核查来源、日期过滤、缺口、重复、哈希和压缩结果时使用。
+每周生成 Weekly Output 时，把 `process-pack.md` 交给 AI Chat；行动与反馈直接来自材料正文（原第 8 节 Action Feedback 快照已退役）。`input.json` 不含正文，只在核查来源、日期过滤、缺口、重复、哈希和压缩结果时使用。
 
 周 Process Pack 还会把上一周完整 Weekly Output 放在单独的“仅作对照”章节。旧 Output 不能成为本周事实；本周事实以当前 Process Pack 为准。基线缺失、为空或只有壳时，对照章节标注不可比较，不回退到更早周，也不读取旧周记替代。
 
@@ -61,9 +61,9 @@ Output 正文应服务于审稿：哪些输入改变了理解，哪些判断值�
 3. 在 `04_output/weekly/YYYY-WW.md` 底部完善“芒格之魂的洞察 & 全文核心重点纪要”，并补充“本周最值得思考的 3 个问题”的回答。
 4. 审核并勾选 Memory 候选，最后回复“继续记忆”。图片不再是进入阶段 3 前的人工前置步骤；公众号发布仍由用户人工完成。
 
-Action Feedback 已在阶段 1 与周记草稿共同审核，不需要逐行勾选；有证据且填写完整的候选默认 `[x]`，将在阶段 3 最后确认后写入 Base。发现问题时可删除或修改；如需保留在 Weekly Output 但不写入 Base，可改为 `[ ]`。如果此处还要改报告，先重跑 `process:weekly` 刷新 Pack 快照。
+（Action Feedback 已于 2026-10 退役：周度行动与反馈直接来自 Process Pack 材料正文，不再有独立报告与 Base 写入。）
 
-Action Feedback 的规格见 `docs/ACTION_FEEDBACK.md`；它按当前季度短期核心议题生成，与最终 Weekly Output 分离，但属于 Process Pack 中的核心输入。Weekly Output 使用共同审核后的有效行，不复制完整表格。默认选中的有效行动行在阶段 3 写入按时间保存的 Action Feedback Base 事件。
+历史 Action Feedback 规格见 `docs/ACTION_FEEDBACK.md`（仅留档）；现行动与反馈来自 Process Pack 材料正文，不复制完整原始表格。
 
 自动化不得代替用户访问 AI Chat 或编写洞察。
 
@@ -83,7 +83,7 @@ Action Feedback 的规格见 `docs/ACTION_FEEDBACK.md`；它按当前季度短�
 
 Memorize 交给 Codex 执行，不需要用户手动跑脚本。
 
-在每周自动化线程中，完成 Action Feedback、Weekly Output、芒格洞察与核心纪要、回答本周 3 个问题、审核 Memory 候选后，回复“继续生成记忆”或同义表达，即进入阶段 3。阶段 3 必须先确认 Output 非空、芒格洞察和问题与回答非空且存在已勾选或用户明确确认的 Memory 内容；任一条件未满足时停止，不硬凑 Memory。自动化先生成并校验 `memory-candidates.md`，再展示一次包含正式 Memory、图片路径、Action Feedback Base、备份、YW Next 和 Flomo 的确认卡；用户确认后按“正式 Memory → ChatGPT Bridge 核心图（`04_output/_dist/weekly/YYYY-Www/weekly-core.png`）→ Action Feedback Base / 备份 / YW Next / Flomo”执行，并读回校验。图片失败不回滚 Memory，公众号不自动发布。
+在每周自动化线程中，完成 Weekly Output、芒格洞察与核心纪要、回答本周 3 个问题、审核 Memory 候选后，回复“继续生成记忆”或同义表达，即进入阶段 3。阶段 3 必须先确认 Output 非空、芒格洞察和问题与回答非空且存在已勾选或用户明确确认的 Memory 内容；任一条件未满足时停止，不硬凑 Memory。自动化先生成并校验 `memory-candidates.md`，再展示一次包含正式 Memory、图片路径、备份、YW Next 和 Flomo 的确认卡（Action Feedback Base 已退役）；用户确认后按“正式 Memory → ChatGPT Bridge 核心图（`04_output/_dist/weekly/YYYY-Www/weekly-core.png`）→ 备份 / YW Next / Flomo”执行，并读回校验。图片失败不回滚 Memory，公众号不自动发布。
 
 可以直接说：
 
