@@ -505,11 +505,13 @@ if (args[0] === 'drive' && args[1] === '+search') {
 
 test("Core V1 拥有的 wiki 文档按 token 排除，不进入周输入采集", async () => {
   const coreOverviewUrl = "https://ywhome.feishu.cn/wiki/QIaQwXf07iMvqokKQf3cp3XmnMC";
+  const coreWeeklyUrl = "https://ywhome.feishu.cn/wiki/DN4EwZBN5i9pGukdzIgcSzdCn2d";
   const coreDoc = { doc_type: "wiki", title: "2026｜总览", url: coreOverviewUrl, result_meta: { edit_user_id: HUMAN } };
+  const coreWeeklyDoc = { doc_type: "wiki", title: "2026｜周报", url: coreWeeklyUrl, result_meta: { edit_user_id: HUMAN } };
   const normalDoc = result("doc-normal", "docx", "普通文档");
   const transport = makeTransport({
-    search: { created: { "": page([coreDoc, normalDoc]) }, edited: { "": page() } },
-    wiki: { [coreOverviewUrl]: { node: { obj_type: "docx", obj_token: "doc-core", title: "2026｜总览" } } },
+    search: { created: { "": page([coreDoc, coreWeeklyDoc, normalDoc]) }, edited: { "": page() } },
+    wiki: { [coreOverviewUrl]: { node: { obj_type: "docx", obj_token: "doc-core", title: "2026｜总览" } }, [coreWeeklyUrl]: { node: { obj_type: "docx", obj_token: "doc-core-weekly", title: "2026｜周报" } } },
     histories: { "doc-normal": { "": historyPage([history(1, [HUMAN], at(0))]) } },
     snapshots: { 1: { revision_id: 1, content: "normal content\n" } }
   });

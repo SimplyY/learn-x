@@ -17,6 +17,7 @@ const SHADOW_SUMMARY_PREFIX = "影子结果：";
 // 2026-10-02：排除「2026｜总览」；M5 创建「2026｜周报」后把其 wiki token 加入此处。
 const EXCLUDED_WIKI_TOKENS = new Set([
   "QIaQwXf07iMvqokKQf3cp3XmnMC", // 2026｜总览
+  "DN4EwZBN5i9pGukdzIgcSzdCn2d", // 2026｜周报
 ]);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
