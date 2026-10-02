@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { buildInsightContext, buildInsightPrompt, buildPromptAssets, findTask, isSubstantive, preflightSnapshotFreshness, readPeriodicConfig } from "./periodic-insight-core.mjs";
 import { runBridgeCli } from "../../learn-x-weekly-automation/scripts/generate-ai-review.mjs";
+import { dcPublishXml } from "../../../lib/inquiry-wiki.mjs";
 
 const execFile = promisify(execFileCallback);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -62,10 +63,10 @@ export async function runPeriodicInsight(options = {}) {
   } finally { await releaseLock(); }
 }
 
-async function archiveIfRequested({ repoRoot, task, context, paths, state, archive, runLark }) {
+async function archiveIfRequested({ repoRoot, task, context, paths, state, archive, runLark, publishDoc }) {
   if (!archive) return { ...state, paths };
   const pending = { ...state, status: "archive_pending", archiveStartedAt: new Date().toISOString() }; await writeJson(paths.state, pending);
-  try { const archived = await archiveResult({ repoRoot, task, target: context.target, content: await readFile(paths.generated, "utf8"), runLark }); const completed = { ...pending, status: "completed", archive: archived, completedAt: new Date().toISOString() }; await writeJson(paths.state, completed); return { ...completed, paths }; }
+  try { const archived = await archiveResult({ repoRoot, task, target: context.target, content: await readFile(paths.generated, "utf8"), runLark, state, publishDoc }); const completed = { ...pending, status: "completed", archive: archived, completedAt: new Date().toISOString() }; await writeJson(paths.state, completed); return { ...completed, paths }; }
   catch (error) { const failed = { ...pending, ...(error?.archive ? { archive: error.archive } : {}), status: "archive_pending", reason: String(error?.message || error), updatedAt: new Date().toISOString() }; await writeJson(paths.state, failed); return { ...failed, paths }; }
 }
 
@@ -78,14 +79,21 @@ export async function setupWiki({ runLark = runLarkJson, repoRoot = defaultRepoR
   const spaceId = data.space_id || data.spaceId; if (!spaceId) throw new Error("知识库缺少 space_id"); const record = { name: "Learn-X 周期洞察", spaceId, visibility, openSharing, updatedAt: new Date().toISOString() }; const file = path.join(repoRoot, "04_output/_dist/periodic-insights/wiki.json"); await mkdir(path.dirname(file), { recursive: true }); await writeJson(file, record); return record;
 }
 
-export async function archiveResult({ repoRoot = defaultRepoRoot, task, target, content, runLark = runLarkJson }) {
+export async function archiveResult({ repoRoot = defaultRepoRoot, task, target, content, runLark = runLarkJson, state = null, publishDoc = dcPublishXml }) {
   const wiki = await readJson(path.join(repoRoot, "04_output/_dist/periodic-insights/wiki.json")); if (!wiki?.spaceId || wiki.name !== "Learn-X 周期洞察" || wiki.visibility !== "private" || wiki.openSharing !== "closed") throw new Error("周期洞察知识库身份或私有边界未确认，请重新执行 setup-wiki --confirm");
   const roots = await runLark(["wiki", "+node-list", "--space-id", wiki.spaceId, "--as", "user", "--page-all", "--format", "json"]); const rootNodes = roots?.data?.nodes || []; const yearMatches = rootNodes.filter((node) => node.title === target.id.slice(0, 4)); if (yearMatches.length > 1) throw new Error(`年份目录重复：${target.id.slice(0, 4)}`); let yearNode = yearMatches[0];
   if (!yearNode) yearNode = await runLark(["wiki", "+node-create", "--space-id", wiki.spaceId, "--title", target.id.slice(0, 4), "--as", "bot", "--format", "json"]); const yearData = yearNode?.data || yearNode; const yearToken = yearData.node_token || yearData.nodeToken; if (!yearToken) throw new Error("年份目录缺少 node_token");
   const children = await runLark(["wiki", "+node-list", "--space-id", wiki.spaceId, "--parent-node-token", yearToken, "--as", "user", "--page-all", "--format", "json"]); const title = `${task.name}｜${target.id}`; const matches = (children?.data?.nodes || []).filter((node) => node.title === title); if (matches.length > 1) throw new Error(`归档标题重复：${title}`);
   const renderedPath = path.join(repoRoot, "04_output/_dist/periodic-insights", task.id, target.id, "feishu.xml"); await renderFeishu(content, renderedPath, title); let node = matches[0]; if (!node) node = await runLark(["wiki", "+node-create", "--parent-node-token", yearToken, "--title", title, "--as", "bot", "--format", "json"]); const nodeData = node?.data || node; const nodeToken = nodeData.node_token || nodeData.nodeToken; const doc = nodeData.obj_token || nodeData.objToken; if (!doc) throw new Error("知识库节点缺少 obj_token");
-  const archive = { spaceId: wiki.spaceId, nodeToken, documentToken: doc, title }; try { await runLark(["docs", "+update", "--doc", doc, "--command", "overwrite", "--doc-format", "xml", "--content", `@${path.relative(repoRoot, renderedPath)}`, "--as", "bot", "--format", "json"]); const fetched = await runLark(["docs", "+fetch", "--doc", doc, "--doc-format", "markdown", "--as", "user", "--format", "json"]); const fetchedText = fetched?.data?.document?.content || fetched?.data?.content || ""; const runKey = `运行键：${task.id}:${target.kind}:${target.id}`; const conversationUrl = content.match(/- ChatGPT 会话：([^\s]+)/)?.[1]; if (!fetchedText.includes(title) || !fetchedText.includes("候选洞察") || !fetchedText.includes(runKey) || (conversationUrl && !fetchedText.includes(conversationUrl)) || sha256(normalizeMarkdown(fetchedText)) !== sha256(normalizeMarkdown(content))) throw new Error("飞书写后读回缺少标题、运行键、会话链接、实质正文或规范化哈希不一致"); } catch (error) { error.archive = archive; throw error; } finally { await unlink(renderedPath).catch(() => {}); }
-  return { spaceId: wiki.spaceId, nodeToken, documentToken: doc, title };
+  const archive = { spaceId: wiki.spaceId, nodeToken, documentToken: doc, title }; let published = null;
+  try {
+    // M5 入口切换（2026-10-02）：正文写入统一经 Document Compiler 质量链（XML 桥）。
+    // 人工确认工件 = run --send --confirm 的运行回执（run_id + 生成内容哈希）；既有规范化哈希读回继续成立。
+    const xml = await readFile(renderedPath, "utf8");
+    published = await publishDoc({ caller: "learn-x-periodic-insight", businessKey: `learn-x-periodic-insight-${task.id}-${target.id}`, docToken: doc, xml, identity: "bot", workDir: path.dirname(renderedPath), confirmation: { source: "periodic-insight-confirm", confirmed_by: "用户（run --send --confirm 确认后执行）", ...(state?.runId ? { run_id: state.runId } : {}), ...(state?.outputSha256 ? { sha256: state.outputSha256 } : {}) } });
+    const fetched = await runLark(["docs", "+fetch", "--doc", doc, "--doc-format", "markdown", "--as", "user", "--format", "json"]); const fetchedText = fetched?.data?.document?.content || fetched?.data?.content || ""; const runKey = `运行键：${task.id}:${target.kind}:${target.id}`; const conversationUrl = content.match(/- ChatGPT 会话：([^\s]+)/)?.[1]; if (!fetchedText.includes(title) || !fetchedText.includes("候选洞察") || !fetchedText.includes(runKey) || (conversationUrl && !fetchedText.includes(conversationUrl)) || sha256(normalizeMarkdown(fetchedText)) !== sha256(normalizeMarkdown(content))) throw new Error("飞书写后读回缺少标题、运行键、会话链接、实质正文或规范化哈希不一致");
+  } catch (error) { error.archive = archive; throw error; } finally { await unlink(renderedPath).catch(() => {}); }
+  return { spaceId: wiki.spaceId, nodeToken, documentToken: doc, title, published: { status: published.status, business_key: published.business_key } };
 }
 
 function renderGenerated(text, task, target, conversationUrl) { return [`# ${task.name}｜${target.id}`, ``, `- 目标周期：${target.id}`, `- 运行键：${task.id}:${target.kind}:${target.id}`, `- 运行结果：候选洞察`, conversationUrl ? `- ChatGPT 会话：${conversationUrl}` : "", ``, String(text).trim(), ""].filter(Boolean).join("\n"); }

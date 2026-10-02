@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { readConfig, renderIndex, sortNodes, wikiUrl } from "../../../lib/inquiry-wiki.mjs";
+import { readConfig, renderIndex, sortNodes, wikiUrl, dcPublishXml } from "../../../lib/inquiry-wiki.mjs";
 
 const execFileAsync = promisify(execFile);
 export const BASE_TOKEN = "W6NLbDh1YahvZ9sbjIccEirBnae";
@@ -206,6 +206,9 @@ export async function defaultRunner(args) {
 export class Workbench {
   constructor(run = defaultRunner, config = run === defaultRunner ? readConfig() : null) { this.run = run; this.config = config; }
   async lark(args, identity = "user") { return this.run([...args, "--as", identity, "--format", "json"]); }
+  // M5 入口切换（2026-10-02）：docx 正文写入统一经 Document Compiler 质量链（XML 桥）。
+  // 测试可注入本方法；生产默认走 lib 的 dcPublishXml（tableplan → fingerprint → publish）。
+  async publishDoc(options) { return dcPublishXml(options); }
   async fields(tableId) { return (await this.lark(["base", "+field-list", "--base-token", BASE_TOKEN, "--table-id", tableId, "--limit", "100"])).data.fields || []; }
   async blocks() { return (await this.lark(["base", "+base-block-list", "--base-token", BASE_TOKEN])).data.blocks || []; }
   async ledgerTable() { const tables = (await this.blocks()).filter((block) => block.type === "table" && [LEDGER_NAME, "月度核心议题研究"].includes(block.name)); if (tables.length > 1) throw new Error("议题账本存在多个同名兼容表"); const table = tables[0]; if (!table) throw new Error(`缺少机器表：${LEDGER_NAME}；先运行 setup`); return table.id; }
@@ -294,7 +297,8 @@ export class Workbench {
       return { document: `https://ywhome.feishu.cn/base/${BASE_TOKEN}?block=${doc.id}`, token: doc.id, selected: selected.map((issue) => ({ id: issue["议题编号"], question: issue["议题"] })), recovered: true };
     }
     if (!created && !blankBaseDoc(existing, name)) throw new Error("同名工作台文档已有非模板内容，拒绝覆盖");
-    await this.lark(["docs", "+update", "--doc", doc.id, "--command", "overwrite", "--content", renderWorkbench(month, selected)], "bot");
+    // M5：写入走 dc 链；人工确认工件 = 用户会话内议题选择（parseSelection 解析结果）。
+    await this.publishDoc({ caller: "learn-x-monthly-workbench", businessKey: `learn-x-workbench-${month}`, docToken: doc.id, xml: renderWorkbench(month, selected), identity: "bot", confirmation: { source: "selection-json", confirmed_by: "用户（会话内选定议题并确认创建）", sha256: sha(JSON.stringify(selection)) } });
     const readback = await this.lark(["docs", "+fetch", "--doc", doc.id, "--detail", "with-ids"]); const written = text(readback.data?.document?.content); if (!written.includes(`月度议题研究工作台｜${month}`) || !expectedMarkers.every((marker) => written.includes(marker))) throw new Error("工作台文档回读失败");
     const document = `https://ywhome.feishu.cn/base/${BASE_TOKEN}?block=${doc.id}`;
     await this.write(table, row.recordId, { "选定议题": selected.map((issue) => ({ id: issue.recordId })), "研究文档": doc.id, "流程状态": "研究中" });
@@ -315,7 +319,8 @@ export class Workbench {
     await this.assertWikiRoots();
     const nodes = sortNodes((await this.wikiChildren()).filter((node) => /^月度议题研究工作台｜\d{4}-(?:0[1-9]|1[0-2])$/.test(node.title) || /^月度核心议题研究工作台｜\d{4}-(?:0[1-9]|1[0-2])$/.test(node.title)));
     const content = renderIndex("细项研究", "月度核心议题研究目录；研究正文位于子节点。", nodes, "当前暂无月度研究。");
-    await this.lark(["docs", "+update", "--doc", this.config.research_node_token, "--command", "overwrite", "--content", content], "bot");
+    // M5：目录页写入走 dc 链；business_key 绑定内容哈希（目录随月份追加而演进，每次演进独立可审计）。
+    await this.publishDoc({ caller: "learn-x-monthly-workbench", businessKey: `learn-x-research-index-c${sha(content).slice(0, 12)}`, docToken: this.config.research_node_token, xml: content, identity: "bot", confirmation: { source: "create-flow", confirmed_by: "用户（会话内 create 指令，经议题选择确认）" } });
   }
   async createWiki(month, selection, selected, table, row) {
     const name = `月度议题研究工作台｜${month}`; const legacyName = `月度核心议题研究工作台｜${month}`;
@@ -330,7 +335,8 @@ export class Workbench {
     const token = node.obj_token || node.objToken || node.node_token; const existing = created ? "" : text((await this.lark(["docs", "+fetch", "--doc", token, "--detail", "with-ids"])).data?.document?.content); const expectedMarkers = selected.map((issue) => `[${text(issue["议题编号"])}]`);
     if (!created && expectedMarkers.every((marker) => existing.includes(marker))) { await this.rebuildWikiIndex(); await this.write(table, row.recordId, { "选定议题": selected.map((issue) => ({ id: issue.recordId })), "研究文档": token, "Wiki 节点": node.node_token, "流程状态": "研究中" }); return { document: wikiUrl(node.node_token), token, wikiToken: node.node_token, selected: selected.map((issue) => ({ id: issue["议题编号"], question: issue["议题"] })), recovered: true }; }
     if (!created && existing.replace(/<[^>]+>/g, "").replace(name, "").trim()) throw new Error("同名工作台文档已有非模板内容，拒绝覆盖");
-    await this.lark(["docs", "+update", "--doc", token, "--command", "overwrite", "--content", renderWorkbench(month, selected)], "bot");
+    // M5：写入走 dc 链；人工确认工件 = 用户会话内议题选择（parseSelection 解析结果）。
+    await this.publishDoc({ caller: "learn-x-monthly-workbench", businessKey: `learn-x-workbench-${month}`, docToken: token, xml: renderWorkbench(month, selected), identity: "bot", confirmation: { source: "selection-json", confirmed_by: "用户（会话内选定议题并确认创建）", sha256: sha(JSON.stringify(selection)) } });
     const readback = await this.lark(["docs", "+fetch", "--doc", token, "--detail", "with-ids"]); const written = text(readback.data?.document?.content); if (!written.includes(`月度议题研究工作台｜${month}`) || !expectedMarkers.every((marker) => written.includes(marker))) throw new Error("月度 Wiki 文档回读失败");
     await this.rebuildWikiIndex(); await this.write(table, row.recordId, { "选定议题": selected.map((issue) => ({ id: issue.recordId })), "研究文档": token, "Wiki 节点": node.node_token, "流程状态": "研究中" });
     return { document: wikiUrl(node.node_token), token, wikiToken: node.node_token, selected: selected.map((issue) => ({ id: issue["议题编号"], question: issue["议题"] })) };

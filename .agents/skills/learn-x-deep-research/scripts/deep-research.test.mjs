@@ -110,7 +110,10 @@ function fakeApp(state = {}) {
     if (command.startsWith("base +record-upsert") || command.startsWith("base +field-create") || command.startsWith("base +table-create")) throw new Error(`深度研究 Skill 不得写 Base：${command}`);
     throw new Error(`unexpected fake call: ${command}`);
   };
-  return { app: new DeepResearch(run, config), state };
+  // M5：正文写入已切到 dc 链（app.publishDoc）；测试注入桩，沿用 state.docs 断言写入内容。
+  const app = new DeepResearch(run, config);
+  app.publishDoc = async (options) => { state.docs[options.docToken] = options.xml; state.updated.push({ token: options.docToken, content: options.xml }); return { status: "published", business_key: options.businessKey }; };
+  return { app, state };
 }
 
 test("create puts a new document in the current annual directory and rebuilds the index", async () => {

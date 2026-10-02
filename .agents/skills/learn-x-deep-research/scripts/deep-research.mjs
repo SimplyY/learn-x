@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { promisify } from "node:util";
-import { readConfig, escapeXml, wikiUrl } from "../../../lib/inquiry-wiki.mjs";
+import { readConfig, escapeXml, wikiUrl, dcPublishXml } from "../../../lib/inquiry-wiki.mjs";
 
 const execFileAsync = promisify(execFile);
 export const BASE_TOKEN = "W6NLbDh1YahvZ9sbjIccEirBnae";
@@ -71,6 +72,9 @@ export class DeepResearch {
     this.run = run; this.config = config;
   }
   async lark(args, identity = "user") { return this.run([...args, "--as", identity, "--format", "json"]); }
+  // M5 入口切换（2026-10-02）：docx 正文写入统一经 Document Compiler 质量链（XML 桥）。
+  // 测试可注入本方法；生产默认走 lib 的 dcPublishXml（tableplan → fingerprint → publish）。
+  async publishDoc(options) { return dcPublishXml(options); }
   async list(tableId, fields) {
     const rows = []; let offset = 0;
     while (true) {
@@ -127,7 +131,9 @@ export class DeepResearch {
     for (const dir of await this.yearNodes()) {
       const year = dir.title.match(YEAR_DIR_RE)[1];
       const nodes = sortIndex(await this.wikiChildren(dir.node_token));
-      await this.lark(["docs", "+update", "--doc", dir.node_token, "--command", "overwrite", "--content", renderIndexPage(nodes, year)], "bot");
+      const indexPage = renderIndexPage(nodes, year);
+      // M5：目录页写入走 dc 链；business_key 绑定内容哈希（目录随研究追加而演进，每次演进独立可审计）。
+      await this.publishDoc({ caller: "learn-x-deep-research", businessKey: `learn-x-deep-research-index-${year}-c${createHash("sha256").update(indexPage).digest("hex").slice(0, 12)}`, docToken: dir.node_token, xml: indexPage, identity: "bot", confirmation: { source: "deep-research-command", confirmed_by: "用户（会话内 create/setup/index 指令）" } });
       const written = await this.docContent(dir.node_token);
       if (!written.includes("文档索引")) throw new Error(`深度研究-${year} 目录页回读失败`);
       index[year] = nodes.map((node) => node.title);
@@ -159,7 +165,9 @@ export class DeepResearch {
       const index = await this.rebuildIndex();
       return { document: wikiUrl(node.node_token), wikiToken: node.node_token, topic, question: question || topic, issues: issues.map((issue) => ({ id: text(issue["议题编号"]), title: text(issue["议题"]) })), created: false, recovered: true, indexTitles: index };
     }
-    await this.lark(["docs", "+update", "--doc", token, "--command", "overwrite", "--content", renderResearch(topic, question, issues, events)], "bot");
+    // M5：写入走 dc 链；business_key 绑定研究主题（slug + 哈希避免歧义），人工确认为会话内 create 指令。
+    const slug = topic.replace(/[^\w\u4e00-\u9fff-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "topic";
+    await this.publishDoc({ caller: "learn-x-deep-research", businessKey: `learn-x-deep-research-${slug}-c${createHash("sha256").update(topic).digest("hex").slice(0, 8)}`, docToken: token, xml: renderResearch(topic, question, issues, events), identity: "bot", confirmation: { source: "create-command", confirmed_by: "用户（会话内 create 指令）" } });
     const readback = await this.docContent(token);
     if (!readback.includes(topic) || !issues.every((issue) => readback.includes(`[${text(issue["议题编号"])}]`))) throw new Error("深度研究文档回读失败");
     const index = await this.rebuildIndex();

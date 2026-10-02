@@ -73,6 +73,7 @@ test("new quarter persists chat-tab status after the Wiki ledger is created", as
   app.assertChild = async () => {};
   app.rebuildIndex = async () => ({ count: 1 });
   app.ledger = async () => ({ table: "ledger", row });
+  app.publishDoc = async (options) => { content = options.xml; return { status: "published", business_key: options.businessKey }; }; // M5：正文写入已切 dc 链，测试注入桩
   app.lark = async (args) => {
     if (args.includes("+update")) content = args[args.indexOf("--content") + 1];
     return args.includes("+fetch") ? { data: { document: { content, revision_id: 1 } } } : { ok: true };
