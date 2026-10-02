@@ -285,9 +285,9 @@ test("Action Feedback CLI 已退役：全部子命令非零退出且无副作用
       (error) => error.code === 2 && /RETIRED/.test(error.stderr) && /Core V1/.test(error.stderr)
     );
   }
-  // 未知命令仍走用法提示路径（exit 1）。
+  // 未知命令仍走非执行路径（exit 1），并带退役声明与回流指引（不再指向已移除的 npm 入口）。
   await assert.rejects(
     execFile(process.execPath, [script, "bogus"]),
-    (error) => error.code === 1 && /用法/.test(error.stderr)
+    (error) => error.code === 1 && /RETIRED/.test(error.stderr) && /input:core/.test(error.stderr) && !/用法：/.test(error.stderr)
   );
 });
