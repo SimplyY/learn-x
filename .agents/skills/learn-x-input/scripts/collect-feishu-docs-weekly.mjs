@@ -12,6 +12,12 @@ const execFileAsync = promisify(execFile);
 const PAGE_SIZE = 20;
 const TIMEZONE = "Asia/Shanghai";
 const SHADOW_SUMMARY_PREFIX = "影子结果：";
+// Core V1 拥有的飞书文档（人生复利工作台）不进入 Learn-X 周输入采集：
+// 它们的状态由 Core 仓库确认后再经 input:core 导入，直接采集会形成未确认状态旁路。
+// 2026-10-02：排除「2026｜总览」；M5 创建「2026｜周报」后把其 wiki token 加入此处。
+const EXCLUDED_WIKI_TOKENS = new Set([
+  "QIaQwXf07iMvqokKQf3cp3XmnMC", // 2026｜总览
+]);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
 
@@ -311,6 +317,8 @@ async function normalizeCandidate(result, transport) {
   const type = String(rawType || "").toLowerCase() === "doc" ? "docx" : String(rawType || "").toLowerCase();
   if (!["docx", "wiki"].includes(type)) throw new Error(`搜索返回了不支持的文档类型：${rawType || "缺失"}`);
   const url = normalizeDocumentUrl(result.url || result.url_info?.url || result.doc_url || result.wiki_url || result.result_meta?.url || "");
+  const wikiToken = tokenFromUrl(url, "wiki");
+  if (wikiToken && EXCLUDED_WIKI_TOKENS.has(wikiToken)) return null;
   let title = stripSearchHighlight(String(result.title || result.name || result.title_highlighted || "")).replace(/[\r\n]+/g, " ").trim();
 
   let docToken = String(result.doc_token || result.obj_token || result.token || result.result_meta?.token || tokenFromUrl(url, "docx") || "");

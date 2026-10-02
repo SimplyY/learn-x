@@ -44,6 +44,7 @@
     "release": "node app/code/scripts/release.mjs",
     "input:build-bot": "node .agents/skills/build-bot-log/scripts/generate-build-bot.mjs",
     "input:wisdom": "node .agents/skills/learn-x-input/scripts/collect-base-weekly.mjs",
+    "input:core": "node .agents/skills/learn-x-input/scripts/collect-core-weekly.mjs",
     "input:source-status": "node .agents/skills/learn-x-input/scripts/update-weekly-source-status.mjs",
     "inquiry:monthly-workbench": "node .agents/skills/learn-x-monthly-question-workbench/scripts/workbench.mjs",
     "inquiry:quarterly-overview": "node .agents/skills/learn-x-quarterly-question-overview/scripts/overview.mjs",

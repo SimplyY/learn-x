@@ -143,7 +143,7 @@ test("audit table has no Action Feedback row after retirement and keeps input to
   assert.doesNotMatch(table, /Action Feedback/);
   assert.doesNotMatch(table, /独立产物/);
   assert.doesNotMatch(table, /action-feedback\.md/);
-  assert.equal(buildInputAuditRows(payload, [], []).length, 15);
+  assert.equal(buildInputAuditRows(payload, [], []).length, 16);
 });
 
 test("fixed weekly input order places jingdu right after weread as a 精读 source row", () => {

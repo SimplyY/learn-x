@@ -21,6 +21,7 @@ const FIXED_WEEKLY_INPUTS = [
   { file: SOURCE_FILES.health, type: "日志", source: "Health-X", statusSource: "health" },
   { file: SOURCE_FILES.coach, type: "行动", source: "AI Coach", statusSource: "coach" },
   { file: SOURCE_FILES.wisdom, type: "输入", source: "智慧之门", statusSource: "wisdom" },
+  { file: SOURCE_FILES.core, type: "输入", source: "Core V1 确认复盘", statusSource: "core", optional: true, note: "Core 回流为历史认知背景（按确认周归属），非第二份独立证据" },
   { file: "ai.md", type: "补充", source: "AI 周回顾", mode: "manual", optional: true, note: "可选；确认后进入 Process" },
   { file: SOURCE_FILES.build, type: "复盘", source: "Codex / Code X Build", statusSource: "build" },
   { file: SOURCE_FILES["build-bot"], type: "复盘", source: "飞书机器人 Build", statusSource: "build-bot" }
