@@ -143,6 +143,26 @@
         "sha256": "6549cf26d0bda5be9b663eaa64365b52508a6108c4fbad1bdf7e59e44842b045",
         "at": "2026-10-02T13:19:44.345Z"
       }
+    },
+    "chatpack.weekly-output-rules": {
+      "tier": "P0",
+      "local_path": ".agents/skills/learn-x-process/resources/weekly-output-rules.md",
+      "synced": {
+        "document_id": "NCSwd0Y7uoBElaxEEMKcRzqDn5c",
+        "revision": 5,
+        "sha256": "d7e220488082efa2c9605f0b44a5f9673c415b7e4b560f26719d923ea22e1087",
+        "at": "2026-10-02T13:36:29.256Z"
+      }
+    },
+    "chatpack.monthly-output-rules": {
+      "tier": "P0",
+      "local_path": ".agents/skills/learn-x-process/resources/monthly-output-rules.md",
+      "synced": {
+        "document_id": "SMc0dptbFow7auxvPYychQlmnsK",
+        "revision": 6,
+        "sha256": "1a55aed88e92c78aaca54529b049921d1327be5779386df260417ac685cff5dd",
+        "at": "2026-10-02T13:36:29.898Z"
+      }
     }
   }
 }

@@ -2,7 +2,7 @@
 
 Prompt 默认是普通、可试用的文件；只有真实使用证明长期价值，并经人工确认 P0/P1，才纳入治理。
 
-受治理 Prompt 有两个边界：飞书提示词知识库中的 Learn-X 文档是唯一人工正文真源；Learn-X `02_prompts/` 中的 Markdown 是本地运行副本。`00_config/prompt-assets.json` 只登记稳定 `prompt_id`、P0/P1、运行路径、派生关系和最后同步的 revision/hash，不保存第二份正文。
+受治理 Prompt 有两个边界：飞书提示词知识库中的 Learn-X 文档是唯一人工正文真源；Learn-X `02_prompts/` 中的 Markdown 通常是本地运行副本。由 Skill 直接消费的规则可登记其实际项目内 Markdown 路径，避免复制出会独立演变的第二份正文。`00_config/prompt-assets.json` 只登记稳定 `prompt_id`、P0/P1、运行路径、派生关系和最后同步的 revision/hash，不保存第二份正文。
 
 ## 最小闭环
 
@@ -32,6 +32,12 @@ Codex 在线组装 Chat Pack 或读取 `02_prompts/` 受治理正文时同样先
 - 周记草稿和月记草稿分别由 `learn-x.weekly-journal`、`learn-x.monthly-journal` 驱动；本地副本位于 `02_prompts/journal/`，对应的 `learn-x-weekly-journal`、`learn-x-monthly-journal` Skill 只负责校验版本并读取副本。
 - 周回顾 ChatGPT 提示词与月度自我阅读/AI 记忆导出提示词属于其他任务，不替代周记/月记正文生成提示词。
 - 在线运行这些 Skill 前先核对对应资产的远端版本；远端更新且本地干净时预览并同步，再读取本地副本。漂移或读取失败时停止。
+
+## 周度/月度 Output 提示词
+
+- Weekly / Monthly Output 的 Chat Pack 主提示词分别是 `chatpack.weekly-output`、`chatpack.monthly-output`；两者都为 P0。
+- 实际判断规则和输出结构也分别由 `chatpack.weekly-output-rules`、`chatpack.monthly-output-rules` 管理，均为 P0。它们继续放在 `.agents/skills/learn-x-process/resources/`，因为 Chat Pack 和 Process Skill 共用这两个运行副本。
+- `00_config/chatpack.config.json` 的周、月 Output 子类型把对应规则文件作为推荐上下文注入。生成前用 `status --live` 核验四项资产；远端更新时先预览并同步，漂移或读取失败时停止。
 
 ## 操作与失败
 
