@@ -63,6 +63,7 @@ Weekly 输入由周目录决定，不依赖 weekly index 或文件修改时间�
 ## 常用文件
 
 - `daily.md`：日记、自我状态与每日反馈。
+- `core.md`：Core V1（`/Users/yuwei/code/core`）确认复盘回流，`npm run input:core` 从 Core 确认导出生成。在目标周上海窗口内取 `frozenAt` 最新的一份，注明确认时间、覆盖周与来源哈希；无导出报缺失（可选来源，不阻断），不回退更早版本。Core 回流是历史认知背景，与底层经历同源，不构成第二份独立现实证据。
 - `weekly.md`：已人工确认后从飞书采回的周记、周复盘；草稿事实来自同周已落盘输入，不以线上周记反向补证。
 - `feishu-docs.md`：目标 ISO 周内由本人创建或本人编辑的 Docx/Wiki 文档变更报告。按历史记录中的 editor ID 归因，不按 owner 过滤；历史快照只用于比较，临时比较文件放在仓库外并自动清理，落盘只保留目标周变更，不含文档全文或全量 diff。每篇语义变更累计不超过 3,000 个 Unicode 字符时保留精准差异；超过时由 Codex 压缩为不超过 1,500 字的核心变化摘要并附原句证据。报告包含总览、来源链接和 revision/日期依据。Wiki 节点按底层 Docx token 去重。仅在写入者身份迁移、在线历史与 revision canary、用户访问验证及首个完整周影子核对通过后启用；影子运行写入 `needs_review`，不能进入 Process。
 - `feishu-docs.md` 不能使用历史周的无状态兼容：文件存在但本周来源状态缺失时，Process 必须失败关闭。若任一 AI 写入者仍以用户身份保存 Docx/Wiki，editor ID 无法区分它和本人操作，因此不能启用来源。

@@ -87,3 +87,13 @@ test("无任何导出目录时报告缺失", async (t) => {
   assert.equal(status, "unavailable");
   assert.match(report.reason, /缺失|不存在|无有效/);
 });
+
+test("周目录不存在时 ready 路径自动创建（单独运行不崩溃）", async (t) => {
+  const fx = await makeFixture({ confirmedWeek: WEEK });
+  await rm(path.join(fx.repoRoot, "03_input/weekly", WEEK), { recursive: true, force: true });
+  t.after(() => rm(fx.root, { recursive: true, force: true }));
+  const { status } = await collectCoreWeekly({ week: WEEK, coreRoot: fx.coreRoot, repoRoot: fx.repoRoot });
+  assert.equal(status, "ready");
+  const coreMd = await readFile(path.join(fx.repoRoot, "03_input/weekly", WEEK, "core.md"), "utf8");
+  assert.match(coreMd, /Core 复盘正文/);
+});

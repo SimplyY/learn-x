@@ -123,6 +123,26 @@
         "sha256": "ad560288ca5411dc3262192bca44bd613ab64873ed787d41b8253a14783eb593",
         "at": "2026-09-17T06:36:13.455Z"
       }
+    },
+    "learn-x.weekly-journal": {
+      "tier": "P0",
+      "local_path": "02_prompts/journal/weekly-journal.md",
+      "synced": {
+        "document_id": "DovOdEwTGoXnsOxe9U8cC5lIn4b",
+        "revision": 5,
+        "sha256": "6e7277dd9cae71c41730a8aaf2a1d898da242f4e614c725eb3bde39f9d7f18fe",
+        "at": "2026-10-02T13:19:35.631Z"
+      }
+    },
+    "learn-x.monthly-journal": {
+      "tier": "P0",
+      "local_path": "02_prompts/journal/monthly-journal.md",
+      "synced": {
+        "document_id": "Upe0d9AOKozhtlxkmvHceORJnTg",
+        "revision": 3,
+        "sha256": "6549cf26d0bda5be9b663eaa64365b52508a6108c4fbad1bdf7e59e44842b045",
+        "at": "2026-10-02T13:19:44.345Z"
+      }
     }
   }
 }

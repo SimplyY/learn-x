@@ -962,13 +962,10 @@ async function appendSyncLog(report) {
 
 function usage() {
   return [
-    "用法：",
-    "  npm run action:feedback -- draft --week YYYY-Www     # 创建独立 Action Feedback 草稿",
-    "  npm run action:feedback -- sync --week YYYY-Www      # 独立 Action Feedback 周报 -> Base 事件",
-    "  npm run action:feedback -- migrate                  # 只新增缺失的事件字段（需明确执行）",
-    "  npm run action:feedback -- collect --week YYYY-Www  # 旧流程兼容，不再是默认周流程",
-    "",
-    "可选 token 覆盖：LEARN_X_ACTION_BASE_TOKEN、LEARN_X_ACTION_TABLE_ID",
+    "RETIRED: Action Feedback 已退役，由 Core V1（/Users/yuwei/code/core）接管周度行动复盘。",
+    "本命令的全部子命令不再执行，也不产生任何本地或 Base 写入；npm run action:feedback 入口已移除。",
+    "历史 action-feedback.md、Base「Learn-X Action Feedback」与旧 Process Pack 保留可读。",
+    "周度行动与反馈改由 Process Pack 材料正文直接提炼，Core V1 的确认复盘经 npm run input:core 回流。"
   ].join("\n");
 }
 

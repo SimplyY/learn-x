@@ -7,7 +7,7 @@
 // - 缺元数据、未知版本、哈希不符时排除该文件并报告异常。
 // Core 回流是历史认知背景，与底层经历同源，不得当作第二份独立现实证据。
 import { createHash } from "node:crypto";
-import { readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isoWeekRangeShanghai, normalizeWeek, defaultWeeklyReviewWeek } from "./collect-weread-weekly.mjs";
@@ -55,10 +55,16 @@ export async function selectCoreExport({ coreRoot, week }) {
       rejected.push({ source: path.relative(coreRoot, metaPath), reason: `未知 schemaVersion=${meta.schemaVersion}` });
       continue;
     }
-    if (meta.reviewWeek !== week) continue; // 导出正文不覆盖目标周，跳过（不是异常）
-    const frozenAt = Date.parse(String(meta.frozenAt || ""));
+    if (meta.reviewWeek !== week) {
+      rejected.push({ source: path.relative(coreRoot, metaPath), reason: `reviewWeek=${meta.reviewWeek} 与文件名 ${week} 不一致，无法归属` });
+      continue;
+    }
+    const frozenAtRaw = String(meta.frozenAt || "");
+    // Core 以 Asia/Shanghai 为准；无时区标记的 ISO 串按上海时间解释，避免依赖本机时区。
+    const frozenAtIso = /(Z|[+-]\d{2}:?\d{2})$/i.test(frozenAtRaw) ? frozenAtRaw : frozenAtRaw === "" ? "" : frozenAtRaw + "+08:00";
+    const frozenAt = Date.parse(frozenAtIso);
     if (!Number.isFinite(frozenAt) || frozenAt < range.startEpoch * 1000 || frozenAt >= range.endEpoch * 1000) {
-      rejected.push({ source: path.relative(coreRoot, metaPath), reason: `frozenAt=${meta.frozenAt || "缺失"} 不在目标周窗口内` });
+      rejected.push({ source: path.relative(coreRoot, metaPath), reason: `frozenAt=${frozenAtRaw || "缺失"} 不在目标周窗口内` });
       continue;
     }
     let body;
@@ -108,10 +114,11 @@ export async function collectCoreWeekly(options = {}) {
     ""
   ].join("\n");
   const outputPath = path.join(repoRoot, "03_input/weekly", week, "core.md");
+  await mkdir(path.dirname(outputPath), { recursive: true });
   await writeFile(outputPath, `${header}${selected.body}`, "utf8");
   await updateWeeklySourceStatus({ weekRoot, week, source: "core", status: "ready", file: "core.md", count: 1, summary: `Core ${selected.meta.reviewWeek} 复盘（确认于 ${selected.meta.frozenAt}）` });
   report.selected = { confirmedWeek: selected.confirmedWeek, frozenAt: selected.meta.frozenAt, reviewWeek: selected.meta.reviewWeek, feishuUrl: selected.meta.feishuUrl || "" };
-  report.skippedNewer = skipped;
+  report.skippedOlder = skipped;
   report.rejected = result.rejected;
   report.written = path.relative(repoRoot, outputPath);
   console.log(JSON.stringify({ ...report, status: "ready" }, null, 2));
