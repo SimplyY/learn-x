@@ -973,33 +973,15 @@ function usage() {
 }
 
 async function main(argv) {
+  // Action Feedback 已于 2026-10 退役（Core V1 接管周度行动复盘）；全部子命令拒绝执行，仅保留实现作历史留档。
   const [command] = argv;
-  if (command !== "collect" && command !== "sync" && command !== "migrate" && command !== "draft") {
-    console.error(usage());
-    process.exitCode = 1;
+  if (command === "collect" || command === "sync" || command === "migrate" || command === "draft") {
+    console.error(`RETIRED: Action Feedback 已退役，由 Core V1（/Users/yuwei/code/core）接管周度行动复盘；本命令不再产生任何本地或 Base 写入。历史 action-feedback.md、Base「Learn-X Action Feedback」与旧 Pack 保留可读。`);
+    process.exitCode = 2;
     return;
   }
-  let week = "";
-  for (let index = 0; index < argv.length; index += 1) {
-    if (argv[index] === "--week") week = argv[index + 1] || "";
-  }
-  if (command === "draft") {
-    week = normalizeWeek(week || defaultWeeklyReviewWeek());
-    const outputRoot = path.join(repoRoot, "04_output/_dist/weekly", week);
-    const report = await ensureActionFeedbackDraft({ week, outputRoot });
-    console.log(JSON.stringify(report, null, 2));
-    if (report.status === "needs_review") process.exitCode = 1;
-    return;
-  }
-  if (command === "migrate") {
-    const report = await cmdMigrate();
-    console.log(JSON.stringify(report, null, 2));
-    return;
-  }
-  week = normalizeWeek(week || defaultWeeklyReviewWeek());
-  const report = command === "collect" ? await cmdCollect({ week }) : await cmdSync({ week });
-  console.log(JSON.stringify(report, null, 2));
-  if (report.ok === false) process.exitCode = 1;
+  console.error(usage());
+  process.exitCode = 1;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

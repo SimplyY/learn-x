@@ -3,13 +3,9 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { buildInputAuditRows, classifyWeeklyOutput, compressWeeklyProcessItems, previousWeeklyPeriod, readPreviousWeeklyOutput, renderInputAuditTable, renderProcessPack, summarizeActionFeedbackReport } from "./generate-weekly-process-pack.mjs";
-import { renderActionFeedbackDraft } from "./action-feedback.mjs";
+import { buildInputAuditRows, classifyWeeklyOutput, compressWeeklyProcessItems, previousWeeklyPeriod, readPreviousWeeklyOutput, renderInputAuditTable, renderProcessPack } from "./generate-weekly-process-pack.mjs";
 
-const ACTION_TOPICS = ["投资线-北大光华价值投资课", "创业线-和丽姐深度合作", "活动线-读书会", "求职市场采样", "旅游线-大理-12月"];
-
-test("weekly Process Pack embeds the co-reviewed Action Feedback snapshot", () => {
-  const actionFeedback = renderActionFeedbackDraft({ week: "2026-W37", topics: ACTION_TOPICS, revision: "246" });
+test("weekly Process Pack no longer embeds Action Feedback (retired, Core V1 owns weekly action review)", () => {
   const pack = renderProcessPack({
     week: "2026-W37",
     range: { start: "2026-09-14T00:00:00.000Z", end: "2026-09-20T23:59:59.999Z" },
@@ -19,13 +15,12 @@ test("weekly Process Pack embeds the co-reviewed Action Feedback snapshot", () =
     sourceStatuses: {},
     files: [],
     excludedFiles: []
-  }, [], [], [], { sourceCount: 0, files: [] }, { status: "needs_review", count: "5 议题 / 0 条候选", result: "needs_review" }, actionFeedback);
+  }, [], [], [], { sourceCount: 0, files: [] });
 
-  assert.match(pack, /Action Feedback 是核心行动 \/ 反馈输入，完整快照见第 8 节/);
-  assert.match(pack, /以下为同目录 `action-feedback\.md` 的完整快照/);
-  assert.match(pack, /Action Feedback 周报｜2026-W37/);
-  for (const topic of ACTION_TOPICS) assert.match(pack, new RegExp(topic));
-  assert.match(pack, /\| 独立产物 \| Action Feedback \|/);
+  assert.match(pack, /行动与反馈直接来自第 7 节各来源材料正文/);
+  assert.match(pack, /## 9\. 上周 Weekly Output（仅作对照）/);
+  assert.doesNotMatch(pack, /Action Feedback/);
+  assert.doesNotMatch(pack, /action-feedback\.md/);
   assert.doesNotMatch(pack, /常规只把本文件交给 AI Chat/);
 });
 
@@ -121,9 +116,9 @@ test("renders the full source-to-final character chain with failures and compres
   assert.match(table, /字符链路（文件原始 → 清洗有效〔去重前〕→ 最终纳入）/);
   const tableRows = table.split("\n").filter((line) => /^\|/.test(line)).slice(2);
   assert.match(tableRows[0], /\| Flomo \| \[flomo\.md\]/);
-  assert.match(tableRows[1], /\| 独立产物 \| Action Feedback \| \[action-feedback\.md\]/);
-  assert.match(tableRows[1], /不计入 input\.json/);
-  assert.match(tableRows[2], /\| 飞书日记 \| \[daily\.md\]/);
+  assert.match(tableRows[1], /\| 飞书日记 \| \[daily\.md\]/);
+  assert.doesNotMatch(table, /Action Feedback/);
+  assert.doesNotMatch(table, /独立产物/);
   assert.match(table, /采集失败：页面不可用/);
   assert.match(table, /1000 → 1000 → 220（Voice-X 压缩，保留 22%）/);
   assert.doesNotMatch(table, /仅确定性清洗|未做语义压缩/);
@@ -136,25 +131,18 @@ test("renders the full source-to-final character chain with failures and compres
   assert.match(table, /\]\(learnx:\/\/03_input%2Fweekly%2F2026-W36%2Fdaily\.md\)/);
 });
 
-test("Action Feedback summary row shows candidate and confirmation counts without changing input totals", () => {
+test("audit table has no Action Feedback row after retirement and keeps input totals", () => {
   const payload = {
     week: "2026-W38",
     selection: { path: "03_input/weekly/2026-W38" },
     sourceStatuses: {},
     excludedFiles: []
   };
-  const table = renderInputAuditTable(payload, [], { files: [] }, {
-    path: "04_output/_dist/weekly/2026-W38/action-feedback.md",
-    status: "ready（默认通过）",
-    count: "5 议题 / 4 条候选",
-    result: "独立产物，不计入 input.json；随用户确认周记一并通过；4 条候选，4 条将写入 Base。"
-  });
+  const table = renderInputAuditTable(payload, [], { files: [] });
 
-  const tableRows = table.split("\n").filter((line) => /^\|/.test(line)).slice(2);
-  assert.match(tableRows[1], /5 议题 \/ 4 条候选/);
-  assert.match(tableRows[1], /4 条将写入 Base/);
-  assert.match(tableRows[1], /\]\(learnx:\/\/04_output%2F_dist%2Fweekly%2F2026-W38%2Faction-feedback\.md\)/);
-  assert.doesNotMatch(table, /本轮需关注：.*Action Feedback/);
+  assert.doesNotMatch(table, /Action Feedback/);
+  assert.doesNotMatch(table, /独立产物/);
+  assert.doesNotMatch(table, /action-feedback\.md/);
   assert.equal(buildInputAuditRows(payload, [], []).length, 15);
 });
 
@@ -208,51 +196,33 @@ test("weekly Process Pack registers the ready personal Feishu Docs source row", 
   assert.equal(row.rawChars, 120);
 });
 
-test("Action Feedback table summary counts candidates and fails closed on incomplete rows", () => {
-  const week = "2026-W37";
-  let report = renderActionFeedbackDraft({ week, topics: ACTION_TOPICS, revision: "246" });
-  ACTION_TOPICS.forEach((topic, index) => {
-    const action = index < 4 ? `[x] 行动 ${index + 1}` : "—";
-    const feedback = index < 4 ? `反馈 ${index + 1}` : "本周无实际行动或反馈";
-    report = report.replace(`| ${topic} | 待核对 | 待核对 |`, `| ${topic} | ${action} | ${feedback} |`);
-  });
-
-  const summary = summarizeActionFeedbackReport({ report, week, topics: ACTION_TOPICS, currentRevision: "246", filePath: "action-feedback.md" });
-  assert.equal(summary.status, "ready（默认通过）");
-  assert.equal(summary.count, "5 议题 / 4 条候选");
-  assert.match(summary.result, /4 条候选，4 条将写入 Base/);
-
-  const incomplete = report.replace(`| ${ACTION_TOPICS[0]} | [x] 行动 1 | 反馈 1 |`, `| ${ACTION_TOPICS[0]} |  |  |`);
-  const needsReview = summarizeActionFeedbackReport({ report: incomplete, week, topics: ACTION_TOPICS, currentRevision: "246" });
-  assert.equal(needsReview.status, "needs_review");
-  assert.match(needsReview.result, /候选初稿尚待证据核对/);
-});
-
 test("Stage 1 automation requires a final character count for each included ready file", async () => {
   const skill = await readFile(new URL("../../learn-x-weekly-automation/SKILL.md", import.meta.url), "utf8");
   const stage1Report = skill.slice(skill.indexOf("阶段 1 汇报必须"), skill.indexOf("## 阶段 1 内"));
 
-  assert.match(stage1Report, /阶段 1 仅生成 `action-feedback.md`/);
+  assert.match(stage1Report, /Action Feedback 已退役，输入表中不再有独立产物行/);
+  assert.doesNotMatch(stage1Report, /action:feedback/);
+  assert.doesNotMatch(stage1Report, /在输入表后另列该草稿路径/);
   assert.match(stage1Report, /`countInputChars`（Unicode 码点数）/);
   assert.match(stage1Report, /链路写 `— → N`，不得把整格写成 `—`/);
-  assert.match(stage1Report, /Action Feedback 是独立产物，不作为输入来源行/);
   assert.match(skill, /阶段 1 固定总表在 `weekly\.md` 后加入 `feishu-docs\.md`/);
 });
 
-test("weekly automation creates and reviews Action Feedback at Stage 1", async () => {
+test("weekly automation no longer creates Action Feedback at Stage 1 (retired)", async () => {
   const skill = await readFile(new URL("../../learn-x-weekly-automation/SKILL.md", import.meta.url), "utf8");
   const stage1Report = skill.slice(skill.indexOf("阶段 1 汇报必须"), skill.indexOf("## 阶段 2："));
   const stage2 = skill.slice(skill.indexOf("## 阶段 2："), skill.indexOf("## 阶段 3："));
 
-  assert.match(stage1Report, /Action Feedback 草稿/);
-  assert.match(stage1Report, /action:feedback -- draft/);
-  assert.match(stage1Report, /`周记已确认` 表示两份草稿都已审核通过/);
-  assert.match(stage2, /回读 Process Pack 第 8 节/);
+  assert.match(skill, /Action Feedback 已于 2026-10 退役/);
+  assert.match(skill, /`周记已确认` 只确认周记草稿/);
+  assert.doesNotMatch(stage1Report, /action:feedback -- draft/);
+  assert.doesNotMatch(stage1Report, /两份草稿都已审核通过/);
+  assert.doesNotMatch(stage2, /Action Feedback/);
+  assert.doesNotMatch(stage2, /第 8 节/);
+  assert.match(stage2, /回读 Process Pack 第 9 节/);
   assert.match(stage2, /上一 ISO 周.*完整的 `04_output\/weekly\/YYYY-WW\.md`/);
   assert.match(stage2, /阶段 2 汇报只报告上一周 Output 的周期、状态和绝对可点击文件链接，不复述旧 Output 正文或旧问答/);
-  assert.doesNotMatch(stage2, /逐项填 Action Feedback 候选/);
-  assert.match(stage2, /Flomo 第一行，独立 Action Feedback 第二行/);
-  assert.match(stage2, /不计入 `input\.json` 输入数/);
+  assert.match(stage2, /Flomo 第一行，其余输入按原固定顺序/);
 });
 
 test("Stage 3 prepares candidates before one confirmation and generates the image after Memory", async () => {
@@ -313,5 +283,5 @@ function renderWeeklyPackWithComparison(previousOutput) {
     sourceStatuses: {},
     files: [],
     excludedFiles: []
-  }, [], [], [], { sourceCount: 0, files: [] }, {}, "", previousOutput);
+  }, [], [], [], { sourceCount: 0, files: [] }, previousOutput);
 }

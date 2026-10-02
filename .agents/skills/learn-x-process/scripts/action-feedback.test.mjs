@@ -271,5 +271,23 @@ test("旧 open-actions 仍只作为兼容源，不进入新 process pack 固定�
   assert.ok(SOURCE_NAMES.has("open-actions"));
   const source = await readFile(path.join(repoRoot, ".agents/skills/learn-x-process/scripts/generate-weekly-process-pack.mjs"), "utf8");
   assert.doesNotMatch(source, /SOURCE_FILES\["open-actions"\]/);
-  assert.match(await readFile(path.join(repoRoot, "package.json"), "utf8"), /action:feedback/);
+});
+
+test("Action Feedback CLI 已退役：全部子命令非零退出且无副作用", async () => {
+  const { promisify } = await import("node:util");
+  const { execFile: execFileCb } = await import("node:child_process");
+  const execFile = promisify(execFileCb);
+  const { fileURLToPath } = await import("node:url");
+  const script = fileURLToPath(new URL("./action-feedback.mjs", import.meta.url));
+  for (const command of ["draft", "sync", "collect", "migrate"]) {
+    await assert.rejects(
+      execFile(process.execPath, [script, command, "--week", "2026-W39"]),
+      (error) => error.code === 2 && /RETIRED/.test(error.stderr) && /Core V1/.test(error.stderr)
+    );
+  }
+  // 未知命令仍走用法提示路径（exit 1）。
+  await assert.rejects(
+    execFile(process.execPath, [script, "bogus"]),
+    (error) => error.code === 1 && /用法/.test(error.stderr)
+  );
 });
