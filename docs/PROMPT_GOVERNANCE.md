@@ -2,11 +2,11 @@
 
 Prompt 默认是普通、可试用的文件；只有真实使用证明长期价值，并经人工确认 P0/P1，才纳入治理。
 
-受治理 Prompt 有两个边界：飞书 `chatgpt-bridge-prompts/Learn-X` 文档是唯一人工正文真源；Learn-X `02_prompts/` 中的 Markdown 是本地运行副本。`00_config/prompt-assets.json` 只登记稳定 `prompt_id`、P0/P1、运行路径、派生关系和最后同步的 revision/hash，不保存第二份正文。
+受治理 Prompt 有两个边界：飞书提示词知识库中的 Learn-X 文档是唯一人工正文真源；Learn-X `02_prompts/` 中的 Markdown 是本地运行副本。`00_config/prompt-assets.json` 只登记稳定 `prompt_id`、P0/P1、运行路径、派生关系和最后同步的 revision/hash，不保存第二份正文。
 
 ## 最小闭环
 
-普通 Prompt → `discover` 提供使用/重复证据 → 人工决定 P0/P1 → `adopt` 创建或绑定飞书文档 → `sync` 更新本地副本 → Chat Pack/自动化继续读取本地副本并记录版本事实。
+普通 Prompt → `discover` 提供使用/重复证据 → 人工决定 P0/P1 → `adopt` 创建或绑定飞书文档 → `sync` 更新本地副本 → Chat Pack/自动化/Skill 消费者继续读取本地副本并记录版本事实。
 
 ```mermaid
 flowchart LR
@@ -16,7 +16,7 @@ flowchart LR
   H -->|P0/P1| A[adopt]
   A --> F[飞书正文真源]
   F --> S[sync 本地运行副本]
-  S --> C[Chat Pack / 自动化]
+  S --> C[Chat Pack / 自动化 / Skill]
   C --> U[使用次数与版本证据]
   U --> D
 ```
@@ -26,6 +26,12 @@ flowchart LR
 不建后台监听。Snapshot 只在真正被在线消费时校准：`run-periodic-insight` 等在线入口在组装 Prompt 前执行 governance `check --live`；远端有新版本且本地干净时自动 `pull`，本地脏或漂移时保留旧版本并显式告警；离线（lark-cli 失败）继续使用本地副本并告警。距上次同步超过 7 天（`freshness: stale`）强告警但不阻塞运行。所有告警随运行状态落盘（`snapshot_preflight` 字段），不允许旧 Snapshot 静默存在。普通构建（`npm run build`）保持只验本地 manifest，不新增网络依赖。
 
 Codex 在线组装 Chat Pack 或读取 `02_prompts/` 受治理正文时同样先跑 `status --live`（别名 `check`）再使用。
+
+## 周记/月记提示词
+
+- 周记草稿和月记草稿分别由 `learn-x.weekly-journal`、`learn-x.monthly-journal` 驱动；本地副本位于 `02_prompts/journal/`，对应的 `learn-x-weekly-journal`、`learn-x-monthly-journal` Skill 只负责校验版本并读取副本。
+- 周回顾 ChatGPT 提示词与月度自我阅读/AI 记忆导出提示词属于其他任务，不替代周记/月记正文生成提示词。
+- 在线运行这些 Skill 前先核对对应资产的远端版本；远端更新且本地干净时预览并同步，再读取本地副本。漂移或读取失败时停止。
 
 ## 操作与失败
 
