@@ -9,7 +9,7 @@
 | 类型 | 来源 | 说明 |
 | --- | --- | --- |
 | `target-output` | `04_output/monthly/YYYY-MM.md` 或 `04_output/weekly/YYYY-Www.md`（兼容 `2026-Ww`） | 唯一洞察对象，人工确认后的 Output；`isSubstantive`（≥120 字且非占位）才合格 |
-| `life-core` | `01_core/道/人生核心议题.md` | 飞书《人生核心议题》的本地镜像，长期背景，不受历史范围约束；带同步状态 |
+| `life-core` | `03_input/_mirrors/人生核心议题.md` | 飞书《人生核心议题》的私有输入镜像，长期背景，不受历史范围约束；带同步状态，不属于 Core 正式道法 |
 | `target-journal` | `03_input/weekly/<id>/weekly.md` | 周目标取对应周记；月目标优先 `_dist/monthly/<id>/input.json` 的 `selection.weeklyPaths`，缺失时按日期相交回退 |
 | `history-backbone` | `01_core/memory/YYYY-QN.memory.md`、`03_input/monthly/*/monthly-journal.md`、周记 | 历史骨架，按周期逐月补位，只取日期标题切片 |
 | `flomo` | `03_input/{weekly,weekly-history,monthly}/*/flomo.md` | memo 级精选，见下节过滤规则 |

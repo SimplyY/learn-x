@@ -22,7 +22,7 @@ Learn-X Process 是周期输入到人工审稿的处理流程。它把指定周�
 | --- | --- | --- | --- |
 | 采集 | 日记、周记、AI 摘要、Flomo、微信读书等 | `03_input/<period>/` | 人 + `learn-x-input` |
 | Process | 指定周期 Input | `_dist/.../input.json`、`process-pack.md`、Output 最小壳 | `learn-x-process` 脚本 |
-| Output | Process Pack、规则、必要的道与 Memory | 周 / 月 / 年 Output 正文 | AI Chat 辅助，人审核 |
+| Output | Process Pack、对应周期主 Prompt、必要的道与 Memory | 周 / 月 / 年 Output 正文 | AI Chat 辅助，人审核 |
 | 行动反馈 / Memorize | 默认选中的有效行动与已审核的 Output 候选 | Memory 候选与周期 Memory（Action Feedback Base 已退役，历史记录保留） | Codex 执行，人确认 |
 
 ## 核心产物
@@ -31,6 +31,7 @@ Learn-X Process 是周期输入到人工审稿的处理流程。它把指定周�
 - `process-pack.md`：给 AI Chat 的自包含材料包。Weekly 开头先放合并总表：Flomo 第一行，其余输入按固定顺序。行动与反馈直接来自材料正文（原第 8 节 Action Feedback 快照已退役）。输入行用“文件原始 → 解析清洗后有效（去重前）→ Process Pack 最终纳入”字符链路合并来源状态、纳入结果和核查链接，最后一项展示本阶段最终字符数；只有实际发生语义压缩时才附带压缩信息，目前周流程对 Voice-X 和微信读书做统一语义压缩，其中 Voice-X 目标保留 10%–15%。Monthly 按 Input 文件类型 / 来源标识分组，由确定性过滤材料与 Codex 事件压缩共同组成；对每个语义压缩来源另生成可点击的 `_dist/monthly/YYYY-MM/compression-review/` 审阅目录，默认不超过 100 KB。
 - Output 最小壳：只保证目标文件存在，不代写正文，不覆盖已有内容。
 - `memory-candidates.md`：只收集已勾选或明确确认的候选，供 Memorize 使用。
+- Weekly / Monthly Output 的“值得长期保留”只列 0–3 个 checkbox 候选，0 个合法；只供人工确认，不自动升级为正式长期资产。
 - Memory 压缩候选：`04_output/_dist/memory-compression/YYYY-MM/` 下的候选与 comparison 报告；只读规划、人工修改和显式晋级，不覆盖源文件。
 
 目录和人工操作分别见 [03_input/README.md](../03_input/README.md)、[03_input/usage.md](../03_input/usage.md)、[04_output/README.md](../04_output/README.md) 和 [04_output/usage.md](../04_output/usage.md)。
@@ -56,7 +57,7 @@ Memory 写入成功后，YW Next 只从已确认的 `01_core/memory/*.memory.md`
 - 已有 Output 不覆盖；未确认候选不写入 Memory；重复执行不重复追加同一条目。
 - Memory 压缩按 Unicode 字符预算运行：当前年硬上限 8000、目标 6000；旧年度按 `max(200, floor(8000 × 0.6^年龄))` 衰减，目标为硬上限的 75%。当前月、跨月周块和无法识别来源的条目保护；内容压缩与变化摘要由 Codex 通读原文和候选后完成，脚本只校验和展示，不用固定句式生成语义摘要。比较报告先展示文件特异的 `changeSummary`，再展示稳定的 Markdown 5—10 条核心变化表：字数变化（风险写在括号内）、现在是什么、之前是什么；按风险从高到低、同风险按净减少字数排序。非删除类变化把原文和压缩后拆成两列，来源小节细分表合并低信息列，保护范围和量化校验后置。实际改动量按字符级删除加新增计算；实际改动量不超过 10 字的变化归类，较大但未入选核心的变化按来源小节细分。语义合并必须保留重要、反复出现且承载证据或行动的具象锚点，例如 `出门`、`读书会`、`写诗`、`运动`、人物、地点、项目和方法名。
 - 来源审计以原文、周期来源标签和保护状态共同判断：原文未逐字出现但候选保留 `[YYYY-Www]` 或 `[Monthly｜YYYY-MM]` 标签的内容标记为“已归纳（仍需语义核对）”，不得直接归为删除候选。
-- 不自动修改 `01_core/道/`、`01_core/法/` 或 Prompt、Skill 等正式资产。
+- 不自动修改 Core 正式《道》《法》或 Prompt、Skill 等正式资产；候选不自动升级，须经用户明确确认。
 - Action Feedback 已于 2026-10 退役（Core V1 接管周度行动复盘）：周度行动与反馈直接来自 Process Pack 材料正文。历史机制见 [ACTION_FEEDBACK.md](ACTION_FEEDBACK.md)。
 - 不引入数据库、RAG、自动抓取、多 Agent 或全自动价值判断。
 
@@ -88,7 +89,8 @@ Chat Pack 的功能说明见 [Chat Pack 功能说明](CHAT_PACK.md)。
 | --- | --- |
 | 功能目标、阶段和边界 | 本文档 |
 | Agent 调用条件、命令和执行规则 | `.agents/skills/learn-x-process/SKILL.md` |
-| 输出判断与 Memory 规则 | `.agents/skills/learn-x-process/resources/` |
+| Weekly / Monthly / Yearly Output 判断与结构 | `02_prompts/chatpack/reflective-decision/{weekly,monthly,yearly}-output.md` |
+| Memory 与输入层规则 | `.agents/skills/learn-x-process/resources/` |
 | 确定性处理 | `.agents/skills/learn-x-process/scripts/` |
 | 用户输入 / 输出操作 | `03_input/usage.md`、`04_output/usage.md` |
 

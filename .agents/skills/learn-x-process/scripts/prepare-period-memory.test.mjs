@@ -61,3 +61,41 @@ test("period memory rejects numbered xx placeholders", () => {
   assert.deepEqual(result.coreSummary, []);
   assert.deepEqual(result.mungerInsights, []);
 });
+
+test("monthly memory recognizes checked long-term items and accepts zero candidates", () => {
+  const result = extractMemoryCandidates(`# Monthly
+
+## 7. 值得长期保留（最多 3 条）
+
+- [x] 唯一已确认候选。
+- [ ] 尚未确认。
+
+## 8. 普通正文
+
+- [x] 不迁移。
+
+## 9. 道 / 法 / 术候选观察
+
+- [x] 历史标题仍能读到。`, { periodType: "monthly" });
+
+  assert.deepEqual(result.checked.map((item) => item.text), ["唯一已确认候选。"]);
+  assert.deepEqual(result.unchecked.map((item) => item.text), ["尚未确认。"]);
+  assert.deepEqual(result.observations.map((item) => item.text), ["历史标题仍能读到。"]);
+
+  const empty = extractMemoryCandidates(`# Monthly
+
+## 7. 值得长期保留
+
+- [ ] 未确认。`, { periodType: "monthly" });
+  assert.deepEqual(empty.checked, []);
+});
+
+test("yearly parsing keeps its existing section scope", () => {
+  const result = extractMemoryCandidates(`# Yearly
+
+## 7. 值得长期保留
+
+- [x] 不属于本次 Weekly / Monthly 契约。`, { periodType: "yearly" });
+
+  assert.deepEqual(result.checked, []);
+});

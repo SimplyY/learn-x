@@ -1,12 +1,15 @@
 import { createServer } from "node:http";
 import { createReadStream } from "node:fs";
+import { createHash } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { watch } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { collectDocumentsMarkdown, readDocumentsMarkdown } from "./scripts/documents-context.mjs";
+import { collectDocumentsMarkdown, readContextFile } from "./scripts/documents-context.mjs";
 import { buildUsageView, readLocalUsageStore, readUsageBaseline, recordLocalUsage } from "./scripts/chatpack-usage.mjs";
+import { readPromptAssets } from "./scripts/prompt-assets.mjs";
+import { containsPromptFragment } from "../../../skills/prompt-governance/scripts/fetch-prompt.mjs";
 import { readChatPackConfig } from "./scripts/static-graph.mjs";
 import { buildInsightContext } from "../../.agents/skills/learn-x-periodic-insight/scripts/periodic-insight-core.mjs";
 
@@ -155,18 +158,19 @@ async function loadChatPackEditor() {
   return import(`${pathToFileURL(editorPath).href}?t=${Date.now()}`);
 }
 
-async function handleDocumentsContext(req, res, url) {
+export async function handleDocumentsContext(req, res, url, { collectFiles = collectDocumentsMarkdown, readContext = readContextFile } = {}) {
   if (!isLocalRequest(req)) {
     sendJson(res, 403, { error: "Local context requests only" });
     return;
   }
   try {
+    res.setHeader("cache-control", "no-store");
     if (url.pathname === "/api/context-files") {
-      sendJson(res, 200, { files: await collectDocumentsMarkdown(undefined, repoRoot) });
+      sendJson(res, 200, { files: await collectFiles(undefined, repoRoot) });
       return;
     }
     const filePath = url.searchParams.get("path") || "";
-    sendJson(res, 200, { path: filePath, content: await readDocumentsMarkdown(filePath) });
+    sendJson(res, 200, await readContext(filePath));
   } catch (error) {
     sendJson(res, 400, { error: error.message || "Unable to read Documents context" });
   }
@@ -186,6 +190,96 @@ async function handlePeriodicInsightContext(req, res, url) {
     });
     sendJson(res, 200, payload);
   } catch (error) { sendJson(res, 400, { error: error.message || "Unable to build periodic insight context" }); }
+}
+
+async function fetchLatestPromptAsset(promptId) {
+  const readerPath = process.env.PROMPT_GOVERNANCE_FETCHER
+    ? path.resolve(process.env.PROMPT_GOVERNANCE_FETCHER)
+    : path.resolve(repoRoot, "../skills/prompt-governance/scripts/fetch-prompt.mjs");
+  const { fetchPrompt } = await import(pathToFileURL(readerPath).href);
+  return fetchPrompt(promptId);
+}
+
+export async function handleChatPackPromptsLatest(req, res, {
+  readManifest = () => readPromptAssets(repoRoot, { optional: false }),
+  fetchAsset = fetchLatestPromptAsset
+} = {}) {
+  res.setHeader("cache-control", "no-store");
+  if (!isLocalRequest(req)) {
+    sendJson(res, 403, { error: "Local Prompt requests only" });
+    return;
+  }
+  if (!(req.headers["content-type"] || "").toLowerCase().startsWith("application/json")) {
+    sendJson(res, 415, { error: "Content-Type must be application/json" });
+    return;
+  }
+
+  let promptIds;
+  try {
+    const body = await readJsonBody(req);
+    promptIds = body?.prompt_ids;
+    if (!Array.isArray(promptIds) || promptIds.length < 1 || promptIds.length > 24 ||
+        promptIds.some((id) => typeof id !== "string" || !/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(id)) ||
+        new Set(promptIds).size !== promptIds.length) {
+      throw new Error("prompt_ids must contain 1–24 unique prompt_id values");
+    }
+  } catch (error) {
+    sendJson(res, 400, { error: error.message || "Invalid Prompt request" });
+    return;
+  }
+
+  let manifest;
+  try {
+    manifest = await readManifest();
+  } catch (error) {
+    sendJson(res, 503, { error: `Learn-X Prompt allowlist unavailable: ${error.message || "invalid manifest"}` });
+    return;
+  }
+  const allowed = new Set(Object.keys(manifest.assets || {}));
+  const unknown = promptIds.find((id) => !allowed.has(id));
+  if (unknown) {
+    sendJson(res, 400, { error: `Prompt is not registered for Learn-X: ${unknown}`, prompt_id: unknown });
+    return;
+  }
+
+  const assets = {};
+  for (const promptId of promptIds) {
+    try {
+      const asset = await fetchAsset(promptId);
+      validateLatestPromptAsset(asset, promptId);
+      assets[promptId] = asset;
+    } catch (error) {
+      sendJson(res, 502, {
+        error: `飞书 Prompt ${promptId} 最新内容读取失败：${error.message || "invalid prompt-asset/v1"}`,
+        prompt_id: promptId
+      });
+      return;
+    }
+  }
+  sendJson(res, 200, { assets });
+}
+
+function validateLatestPromptAsset(asset, promptId) {
+  if (!asset || asset.contract_version !== "prompt-asset/v1" || asset.prompt_id !== promptId) {
+    throw new Error("响应的 Prompt 身份或 contract_version 无效");
+  }
+  if (typeof asset.prompt_source !== "string" || !asset.prompt_source.trim() ||
+      typeof asset.prompt_document_id !== "string" || !asset.prompt_document_id.trim()) {
+    throw new Error("响应缺少 Prompt 来源或 document_id");
+  }
+  if (!Number.isInteger(asset.prompt_revision) || asset.prompt_revision < 0) {
+    throw new Error("响应缺少有效 prompt_revision");
+  }
+  if (typeof asset.content !== "string" || !asset.content.trim() || containsPromptFragment(asset.content)) {
+    throw new Error("响应正文为空或不是完整 Prompt");
+  }
+  if (!/^[a-f0-9]{64}$/.test(asset.prompt_sha256) ||
+      createHash("sha256").update(asset.content, "utf8").digest("hex") !== asset.prompt_sha256) {
+    throw new Error("响应正文与 prompt_sha256 不一致");
+  }
+  if (!asset.prompt_fetched_at || Number.isNaN(Date.parse(asset.prompt_fetched_at))) {
+    throw new Error("响应缺少有效 prompt_fetched_at");
+  }
 }
 
 async function handleChatPackUsage(req, res) {
@@ -274,6 +368,10 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
     if (req.method === "PUT" && url.pathname === "/api/chatpack/editor") {
       await handleChatPackSave(req, res);
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/chatpack/prompts/latest") {
+      await handleChatPackPromptsLatest(req, res);
       return;
     }
     if (url.pathname === "/api/chatpack/usage" && new Set(["GET", "POST"]).has(req.method)) {

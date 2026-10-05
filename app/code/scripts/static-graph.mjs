@@ -5,7 +5,7 @@ import MarkdownIt from "markdown-it";
 import createDOMPurify from "dompurify";
 import { JSDOM } from "jsdom";
 import { buildUsageView, readLocalUsageStore, readUsageBaseline } from "./chatpack-usage.mjs";
-import { readPromptAssets, verifyPromptAssets } from "./prompt-assets.mjs";
+import { readPromptAssets } from "./prompt-assets.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../..");
@@ -61,7 +61,11 @@ const CUSTOM_CONTEXT_IGNORED_DIRS = new Set([".git", ".test-tmp", "node_modules"
 const CUSTOM_CONTEXT_IGNORED_FILES = new Set(["AGENTS.md", "CONTEXT_MASTER.md"]);
 const PROMPT_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
 const CHATPACK_PROMPT_ROOT = "02_prompts/chatpack";
-const PUBLIC_PRIVATE_PREFIXES = ["03_input/", "05_library/", ".agents/skills/learn-x-process/", ".agents/skills/learn-x-periodic-insight/", "04_output/_dist/", "01_core/memory/", "01_core/memory-archive/", "02_prompts/chatpack/insight/"];
+const PUBLIC_PRIVATE_PREFIXES = ["Core/", "03_input/", "05_library/", ".agents/skills/learn-x-process/", ".agents/skills/learn-x-periodic-insight/", ".agents/skills/learn-x-weekly-automation/", "04_output/_dist/", "01_core/memory/", "01_core/memory-archive/", "02_prompts/chatpack/insight/"];
+const CORE_TRUTH_METADATA = [
+  { path: "Core/道", title: "道", kind: "dao", layer: "dao" },
+  { path: "Core/法", title: "法", kind: "fa", layer: "fa" }
+];
 const PERIOD_OUTPUT_SUBTYPE_IDS = new Set([
   "reflective-decision.weekly-output",
   "reflective-decision.monthly-output",
@@ -70,8 +74,8 @@ const PERIOD_OUTPUT_SUBTYPE_IDS = new Set([
 ]);
 const PUBLIC_PRIVATE_FILES = new Set([
   "01_core/ChatGPT-自我阅读版.md",
-  "01_core/道/人生核心议题.md",
-  "01_core/道/flomo-top.md",
+  "03_input/_mirrors/人生核心议题.md",
+  "03_input/_mirrors/flomo-top.md",
   "02_prompts/chatpack/reflective-decision/weekly-output.md",
   "02_prompts/chatpack/reflective-decision/monthly-output.md",
   "02_prompts/chatpack/reflective-decision/yearly-output.md",
@@ -190,18 +194,30 @@ export function buildContext(files, label = "Learn-X") {
 export async function buildGraphPayload({ includeContent = false, target = "public", contextEnabled = true } = {}) {
   if (!new Set(["local", "public"]).has(target)) throw new Error(`Unknown build target: ${target}`);
   const appConfig = await readAppConfig();
+  const clientAppConfig = target === "public" ? withoutCoreTruthWeights(appConfig) : appConfig;
   const sourceChatPackConfig = await readChatPackConfig();
-  const chatPackConfig = await hydrateChatPackMetadata(
-    target === "public" ? publicChatPackConfig(sourceChatPackConfig) : sourceChatPackConfig
+  const promptManifest = await readPromptAssets(repoRoot, { optional: false });
+  const managedPromptPaths = new Set(Object.values(promptManifest.assets).map((asset) => asset.local_path));
+  const hydratedChatPackConfig = await hydrateChatPackMetadata(
+    target === "public" ? publicChatPackConfig(sourceChatPackConfig) : sourceChatPackConfig,
+    { target, manifest: promptManifest }
   );
+  const chatPackConfig = target === "public"
+    ? omitManagedPromptPaths(hydratedChatPackConfig, managedPromptPaths)
+    : hydratedChatPackConfig;
   const usageBaseline = await readUsageBaseline(repoRoot);
   const usage = buildUsageView(usageBaseline, target === "local" ? await readLocalUsageStore(repoRoot) : null);
   const allFiles = await collectMarkdownFiles();
-  const files = target === "public" ? allFiles.filter((file) => !isPublicPrivatePath(file.path)) : allFiles;
+  const files = target === "public"
+    ? allFiles.filter((file) => !isPublicPrivatePath(file.path) && !managedPromptPaths.has(file.path))
+    : allFiles;
   const customFiles = contextEnabled
     ? await collectCustomContextFiles(repoRoot, { excludePrivate: target === "public" })
     : [];
-  const contextWeights = appConfig.contextWeights || fallbackContextWeights();
+  const visibleCustomFiles = target === "public"
+    ? customFiles.filter((file) => !managedPromptPaths.has(file.path))
+    : customFiles;
+  const contextWeights = clientAppConfig.contextWeights || fallbackContextWeights();
 
   return {
     runtime: {
@@ -210,7 +226,7 @@ export async function buildGraphPayload({ includeContent = false, target = "publ
       includesPrivateContext: target === "local",
       contextEnabled
     },
-    appConfig,
+    appConfig: clientAppConfig,
     chatPackConfig: { ...chatPackConfig, usage },
     files: files.map((file) => {
       const preview = file.content.trim().split(/\n\s*\n/)[0] || "";
@@ -230,26 +246,57 @@ export async function buildGraphPayload({ includeContent = false, target = "publ
       return payload;
     }),
     tree: buildTree(files),
-    sources: buildSources(files, appConfig),
-    contextFiles: contextEnabled ? buildContextFiles(files, contextWeights, appConfig) : [],
-    customContextFiles: buildContextFiles(customFiles, contextWeights, appConfig, { includePrompts: true, includeContent }),
+    sources: buildSources(files, clientAppConfig),
+    contextFiles: contextEnabled ? buildContextFiles(files, contextWeights, clientAppConfig) : [],
+    customContextFiles: [
+      ...buildContextFiles(visibleCustomFiles, contextWeights, clientAppConfig, { includePrompts: true, includeContent }),
+      ...(target === "local" && contextEnabled ? CORE_TRUTH_METADATA.map((source) => ({
+        ...source,
+        label: source.path,
+        size: 0,
+        visibleChars: null,
+        ...resolveContextWeight(source.path, contextWeights, clientAppConfig),
+        external: true,
+        live: true
+      })) : [])
+    ],
     contextWeights,
-    domains: buildDomains(files, appConfig),
-    promptDirectory: appConfig.promptDirectory || "01_meta-prompts"
+    domains: buildDomains(files, clientAppConfig),
+    promptDirectory: clientAppConfig.promptDirectory || "01_meta-prompts"
+  };
+}
+
+function withoutCoreTruthWeights(appConfig) {
+  const contextWeights = appConfig.contextWeights;
+  if (!contextWeights?.paths) return appConfig;
+  return {
+    ...appConfig,
+    contextWeights: {
+      ...contextWeights,
+      paths: contextWeights.paths.filter((rule) => !/^Core\/(?:道|法)(?:\/|$)/u.test(rule.path || ""))
+    }
   };
 }
 
 export async function buildContentPayload({ target = "public", contextEnabled = true } = {}) {
   if (!new Set(["local", "public"]).has(target)) throw new Error(`Unknown build target: ${target}`);
-  const allFiles = await collectMarkdownFiles();
-  const files = target === "public" ? allFiles.filter((file) => !isPublicPrivatePath(file.path)) : allFiles;
+  const [allFiles, promptManifest] = await Promise.all([
+    collectMarkdownFiles(),
+    readPromptAssets(repoRoot, { optional: false })
+  ]);
+  const managedPromptPaths = new Set(Object.values(promptManifest.assets).map((asset) => asset.local_path));
+  const files = target === "public"
+    ? allFiles.filter((file) => !isPublicPrivatePath(file.path) && !managedPromptPaths.has(file.path))
+    : allFiles;
   const customFiles = contextEnabled
     ? await collectCustomContextFiles(repoRoot, { excludePrivate: target === "public" })
     : [];
 
   return {
     files: contentEntries(files),
-    customContextFiles: contentEntries(customFiles)
+    customContextFiles: contentEntries(target === "public"
+      ? customFiles.filter((file) => !managedPromptPaths.has(file.path))
+      : customFiles)
   };
 }
 
@@ -259,29 +306,25 @@ export async function buildChatPackPromptPayload({ target = "public" } = {}) {
   const config = target === "public" ? publicChatPackConfig(sourceChatPackConfig) : sourceChatPackConfig;
   const subtypes = {};
   const enhancers = {};
-  const manifest = await readPromptAssets(repoRoot);
-  const managed = await verifyPromptAssets(repoRoot, manifest);
+  const manifest = await readPromptAssets(repoRoot, { optional: false });
   const assets = {};
 
   await Promise.all(
     (config.dialogueTypes || []).flatMap((type) =>
       (type.subtypes || []).map(async (subtype) => {
-        subtypes[subtype.id] = await readChatPackPrompt(type.id, subtype.id);
-        const promptId = managedPromptIdForPath(manifest, subtypePromptRelativePath(type.id, subtype.id));
-        if (promptId && managed[promptId] && (target === "local" || !isPublicPrivatePath(manifest.assets[promptId].local_path))) {
-          assets[subtype.id] = publicManagedAsset(managed[promptId]);
-        }
+        const promptPath = subtypePromptRelativePath(type.id, subtype.id);
+        const promptId = managedPromptIdForPath(manifest, promptPath);
+        subtypes[subtype.id] = promptId ? "" : await readChatPackPrompt(type.id, subtype.id);
+        if (promptId) assets[subtype.id] = managedPromptDescriptor(promptId, target);
       })
     )
   );
   await Promise.all(
     (config.enhancers || []).map(async (enhancer) => {
-      enhancers[enhancer.id] = await readEnhancerPrompt(enhancer);
       const promptPath = enhancer.promptPath || `${CHATPACK_PROMPT_ROOT}/enhancers/${enhancer.id}.md`;
       const promptId = managedPromptIdForPath(manifest, promptPath);
-      if (promptId && managed[promptId] && (target === "local" || !isPublicPrivatePath(manifest.assets[promptId].local_path))) {
-        assets[enhancer.id] = publicManagedAsset(managed[promptId]);
-      }
+      enhancers[enhancer.id] = promptId ? "" : await readEnhancerPrompt(enhancer);
+      if (promptId) assets[enhancer.id] = managedPromptDescriptor(promptId, target);
     })
   );
 
@@ -297,12 +340,30 @@ function managedPromptIdForPath(manifest, promptPath) {
   return Object.entries(manifest.assets || {}).find(([, asset]) => asset.local_path === clean)?.[0] || null;
 }
 
-function publicManagedAsset(asset) {
+function managedPromptDescriptor(promptId, target) {
   return {
-    prompt_id: asset.prompt_id,
-    revision: asset.revision,
-    sha256: asset.sha256,
-    synced_at: asset.synced_at
+    prompt_id: promptId,
+    runtime: "feishu-latest",
+    ...(target === "public" ? {
+      unavailable: true,
+      unavailable_reason: "受治理 Prompt 需要读取飞书最新版本；公开静态版无法访问本地读取服务。"
+    } : {})
+  };
+}
+
+function omitManagedPromptPaths(config, managedPromptPaths) {
+  const omitPath = (item) => {
+    if (!managedPromptPaths.has(item.promptPath)) return item;
+    const { promptPath: _promptPath, ...withoutPath } = item;
+    return withoutPath;
+  };
+  return {
+    ...config,
+    dialogueTypes: (config.dialogueTypes || []).map((type) => ({
+      ...type,
+      subtypes: (type.subtypes || []).map(omitPath)
+    })),
+    enhancers: (config.enhancers || []).map(omitPath)
   };
 }
 
@@ -369,15 +430,17 @@ function publicChatPackConfig(config) {
   };
 }
 
-async function hydrateChatPackMetadata(config) {
+async function hydrateChatPackMetadata(config, { target, manifest }) {
   const dialogueTypes = await Promise.all(
     (config.dialogueTypes || []).map(async (type) => {
       const subtypes = await Promise.all(
         (type.subtypes || []).map(async (subtype) => {
-          const protocol = await readChatPackPrompt(type.id, subtype.id);
+          const promptId = managedPromptIdForPath(manifest, subtypePromptRelativePath(type.id, subtype.id));
+          const protocol = promptId ? "" : await readChatPackPrompt(type.id, subtype.id);
           return {
             ...subtype,
-            tooltip: buildChatPackTooltip(subtype.summary, extractPromptTooltipSource(protocol))
+            ...(promptId ? { managedPrompt: managedPromptDescriptor(promptId, target) } : {}),
+            tooltip: buildChatPackTooltip(subtype.summary, promptId ? "" : extractPromptTooltipSource(protocol))
           };
         })
       );
@@ -391,10 +454,13 @@ async function hydrateChatPackMetadata(config) {
 
   const enhancers = await Promise.all(
     (config.enhancers || []).map(async (enhancer) => {
-      const protocol = await readEnhancerPrompt(enhancer);
+      const promptPath = enhancer.promptPath || `${CHATPACK_PROMPT_ROOT}/enhancers/${enhancer.id}.md`;
+      const promptId = managedPromptIdForPath(manifest, promptPath);
+      const protocol = promptId ? "" : await readEnhancerPrompt(enhancer);
       return {
         ...enhancer,
-        tooltip: buildChatPackTooltip(enhancer.summary, enhancer.applicationNote, extractPromptTooltipSource(protocol))
+        ...(promptId ? { managedPrompt: managedPromptDescriptor(promptId, target) } : {}),
+        tooltip: buildChatPackTooltip(enhancer.summary, enhancer.applicationNote, promptId ? "" : extractPromptTooltipSource(protocol))
       };
     })
   );
@@ -538,33 +604,11 @@ function buildTree(files) {
   return root;
 }
 
-function buildSources(files, appConfig) {
-  const promptDirectory = appConfig.promptDirectory || "01_meta-prompts";
-  const sourceMap = new Map([["README.md", { path: "README.md", label: "README.md", type: "file" }]]);
-  for (const file of files) {
-    const parts = file.path.split("/");
-    if (parts[0] === "01_core" && parts[1] === "道") {
-      sourceMap.set("01_core/道", { path: "01_core/道", label: "01_core/道/", type: "directory" });
-    }
-    if (parts[0] === "01_core" && parts[1] === "法" && parts[2] && parts[0] !== promptDirectory) {
-      const domainPath = `01_core/法/${parts[2]}`;
-      sourceMap.set(domainPath, { path: domainPath, label: `${domainPath}/`, type: "domain" });
-    }
-  }
-
-  return [...sourceMap.values()].sort((a, b) => a.path.localeCompare(b.path, "zh-Hans-CN"));
+function buildSources() {
+  return [{ path: "README.md", label: "README.md", type: "file" }];
 }
 
-function buildDomains(files, appConfig) {
-  const promptDirectory = appConfig.promptDirectory || "01_meta-prompts";
-  const domains = new Set();
-  for (const file of files) {
-    const parts = file.path.split("/");
-    if (parts[0] === promptDirectory) continue;
-    if (parts[0] === "01_core" && parts[1] === "法" && parts[2]) domains.add(parts[2]);
-  }
-  return [...domains].sort((a, b) => a.localeCompare(b, "zh-Hans-CN"));
-}
+function buildDomains() { return []; }
 
 function buildContextFiles(files, weightConfig, appConfig, options = {}) {
   const promptDirectory = appConfig.promptDirectory || "01_meta-prompts";
@@ -610,6 +654,8 @@ function resolveContextWeight(filePath, weightConfig, appConfig) {
 
 function inferLayer(filePath, appConfig) {
   const parts = filePath.split("/");
+  if (filePath === "Core/道") return "dao";
+  if (filePath === "Core/法") return "fa";
   if (parts[0] === "output" && parts[1] === "memory") return "memory";
   if (filePath === "README.md" || (parts[0] === "01_core" && parts[1] === "道")) return "dao";
   if (parts[0] === "01_core" && parts[1] === "法" && (parts[2] === "read" || parts[2] === "theme-read")) return "read";

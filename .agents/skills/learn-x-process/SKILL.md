@@ -23,7 +23,7 @@ Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 刷新 YW Next �
 | --- | --- |
 | `03_input/weekly/YYYY-Www/*.md` | 扁平周输入；文件名表达来源，不用目录预分类 |
 | `03_input/weekly/00_template/*.md` | 每周输入文件模板 |
-| `resources/` | 判断规则、输出要求、参考材料 |
+| `resources/` | Process / Memory 规则与参考材料 |
 | `scripts/` | 确定性处理：读取、清洗、合并、去重、编号、来源覆盖、生成 Process Pack、抽取 Memory 候选 |
 | `04_output/` | `_dist` 中间材料、Output 最小壳和人工写入报告 |
 
@@ -45,17 +45,17 @@ Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 刷新 YW Next �
 - 可以在 `04_output/weekly/YYYY-WW.md` 不存在或为空时创建最小壳；如果已有内容，不覆盖、不改写。
 - 可以生成中间材料 `04_output/_dist/weekly/YYYY-Www/input.json` 和 `04_output/_dist/weekly/YYYY-Www/process-pack.md`。
 - 可以生成 metadata-only 的 `04_output/_dist/monthly/YYYY-MM/input.json`、压缩请求和自包含的 `process-pack.md`。
-- 可以读取 `04_output/weekly/YYYY-WW.md`，抽取候选区内已勾选内容及三个系统确认章节（全文核心重点纪要、芒格之魂的洞察、问题与回答），生成 `04_output/_dist/weekly/YYYY-Www/memory-candidates.md`，再由 Codex 无损整理写入 `01_core/memory/YYYY-QN.memory.md`。
+- 可以读取 `04_output/weekly/YYYY-WW.md`，抽取“值得长期保留”中已勾选项（0–3 项，0 项合法）及系统确认章节，生成 `04_output/_dist/weekly/YYYY-Www/memory-candidates.md`；问题与回答逐题筛选，只抽取有实质回答的问题，不迁移空回答或占位内容。
 - 可以读取 `04_output/monthly/YYYY-MM.md` 或 `04_output/yearly/YYYY.md`，抽取 Memory 候选包，供 Codex 无损整理写入季度或年度 Memory。
 - 可以运行 `npm run memory:compress -- --as-of YYYY-MM-DD` 生成只读压缩规划；Codex 将不含技术注释的语义压缩候选写入 `04_output/_dist/memory-compression/`，技术元数据、`changeSummary`、`coreDifferences` 和 `otherChanges` 放在同目录隐藏 sidecar，脚本再负责比较、哈希、保护范围和预算校验。`changeSummary` 必须由 Codex 通读原文与候选后按 `resources/memory-compression-rules.md` 生成，脚本不得用固定句式代写。
 - comparison 报告必须把“核心变化”放在最前面，先说明整份文件实际减少量，再按上一版的简洁表格列出 5—10 条代表性核心变化：字数变化（风险写在括号内）、之前是什么、现在是什么，并按风险从高到低、同风险按净减少字数排序；实际改动量按字符级删除加新增计算，净减少不超过 10 字但替换超过 10 字的改写仍需展示。不把所有碎片逐条铺开。实际改动量不超过 10 字的变化按类型归类，超过 10 字但未入选核心的变化只做汇总。报告另设“非删除类变化”表，说明改动（风险写在括号内），并把原文和压缩后拆成两列；未逐字保留的来源单元再按候选池小节、Memory、洞察和继续追踪等类型细分，删除候选不得与普通合并混为一类。保护范围和量化校验后置；报告说明核心摘要与整份文件实际总压缩量的口径区别；缺少 5—10 条核心摘要时标记 `needs_review`，不允许晋级。
 - 来源审计不能把“整条原文未逐字出现”直接当成删除。若候选保留该单元的 `[YYYY-Www]` 或 `[Monthly｜YYYY-MM]` 来源标签，说明它可能已被归纳进核心判断，报告标记“已归纳（仍需语义核对）”；没有原文、来源标签和保护依据的单元才进入删除候选。
 - 语义压缩可以合并重复判断，但必须保留重要、反复出现且承载证据或行动的具象锚点，例如 `出门`、`读书会`、`写诗`、`运动`、人物、地点、项目和方法名；抽象标签不能替代全部具体词。
 - 压缩候选必须人工修改并显式 `--promote ... --confirm` 后才可晋级；定时任务不得替换正式 Memory。详细规则见 `resources/memory-compression-rules.md`。
-- Weekly Output 默认不固定输出图谱、第一性原理、Prompt、Skill、写作或 Demo 候选；必要时才可在做中学复盘或下周行动中简短提及。
+- Weekly 保留未来有解释价值的周度经历、重要输入、思考、状态和变化；Monthly 从跨周样本寻找模式与结构。二者不强制做中学评分、行动闭环、下周行动、洞察/盲点数量或道 / 法 / 术候选。
 - Action Feedback 已于 2026-10 退役（Core V1 接管周度行动复盘）：`action:feedback` 命令（draft / sync / collect / migrate）被退役守卫拒绝，不再创建 `action-feedback.md`、不再写 Base。历史 `action-feedback.md`、Base「Learn-X Action Feedback」与旧 Pack 保留可读，但不再回读。
 - 可以维护 `03_input/README.md`、`04_output/README.md` 和 `03_input/weekly/00_template/` 下划线模板。
-- 不要自动修改 `README.md`、`01_core/道/`、`01_core/法/`、`02_prompts/` 或 `.agents/skills/` 的正式资产。
+- 不要自动修改 `README.md`、Core 正式《道》《法》、`02_prompts/` 或 `.agents/skills/` 的正式资产；道法候选须经用户明确确认后才能进入 Core。
 - 不要引入数据库、RAG、自动抓取、多 Agent 或全自动价值判断。
 - 不要把 `AGENTS.md`、`app/code/`、生成物或工具目录混入学习上下文。
 
@@ -96,7 +96,7 @@ Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 刷新 YW Next �
 
    该脚本先读取相交周、月度独有输入，以及各周 Weekly Output 中系统确认的标题 11「全文核心重点纪要」和标题 12「芒格之魂的洞察」，执行日期过滤、空值过滤、Daily 元数据合并和去重；不读取 Weekly Output 的其它正文代替原始 Input。周目录存在 `_source-status.json` 时，只有 `ready` 文件进入 `input.json`、Process Pack 和月度输入；`empty/failed/unavailable` 的旧文件保留但被排除，状态表仍展示 0 条或失败原因。侧车缺失保持历史周兼容，格式非法则失败关闭。`ai`、`research`、`weread`、`build`、`build-bot`、`voice` 和 `calendar` 必须按价值策略语义整理；AI 必须先排除提示词/模板，再逐周保留核心事件，不能跨周压成一个段落；月度 `ai` 保留比例控制在 10%–30%，`build` 与 `build-bot` 各控制在 2%–8%；Voice 每月一律只保留最核心事件，月度累计不超过 10,000 字符，并优先保留原文约 5%–10% 的可核查核心内容。月记、周记、Daily、Flomo、Health 和 Time 默认只做确定性清洗。脚本写出 `compression-requests.json` 并停止；Codex 按 `learn-x-monthly-automation/references/monthly-compression.md` 生成结构化 `compressed-events.json` 后重跑。最终写入 metadata-only `input.json`、不超过 100 KB 的按 Input 文件类型分组的 `process-pack.md`，以及可点击的 `compression-review/` 临时原文审阅文件。
 6. Codex 报告 `_dist` 路径、Output 最小壳路径和输入缺口，不生成 Weekly Output 正文。
-7. 用户在阶段 1 已审核周记草稿；本阶段把 `process-pack.md` 一次生成，再把 Pack 与需要的规则文件交给 AI Chat，自行生成并写入 Weekly Output 正文。行动与反馈直接来自 Pack 第 7 节各来源材料正文（Action Feedback 已退役，不再有第 8 节快照或独立报告）。
+7. 用户在阶段 1 已审核周记草稿；本阶段一次生成 `process-pack.md`，再在 Learn-X Chat Pack 中选择对应周期的 Output 主提示词，与 Process Pack 一起生成并写入 Weekly / Monthly / Yearly Output 正文。Chat Pack 在每次生成前读取飞书最新 Prompt 并直接注入本次内容。若经其他入口生成，先用共享 `fetch-prompt.mjs` 读取相应 ID：`chatpack.weekly-output`、`chatpack.monthly-output` 或 `chatpack.yearly-output`，遵循返回的 `content`；读取失败时停止生成，不使用静态副本。行动与反馈直接来自 Pack 中各来源材料正文（Action Feedback 已退役，不再有独立快照或报告）。
 8. 人工审核候选，不要直接写入正式 core 文件。
 9. 如果用户要求 Memorize，由 Codex 判断周期并内部调用候选抽取脚本；用户不需要手动执行命令。Weekly 可调用：
 
@@ -113,28 +113,18 @@ Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 刷新 YW Next �
    npm run memory:yearly -- YYYY
    ```
 
-   然后读取 `resources/memory-rules.md` 和对应 `memory-candidates.md`，把已确认内容无损迁移到 Memory，并按来源周期排序；候选不足时报告不建议写入。
+   然后读取 `resources/memory-rules.md` 和对应 `memory-candidates.md`，把已确认内容无损迁移到 Memory，并按来源周期排序；0 个长期候选合法，没有获准内容时不写入 Memory，也不要求用户为凑数补选。
 
    Weekly Memorize 完成后不再有 Action Feedback Base 同步步骤（已于 2026-10 退役，由 Core V1 接管周度行动复盘）。
-   Weekly 自动化将此作为阶段 3：标题「全文核心重点纪要」「芒格之魂的洞察」和“本周最值得思考的问题与回答”是系统确认内容，无需 checkbox；前者和问题与回答进入当周 Memory，芒格洞察进入季度芒格洞察候选池。问题与回答必须成对保留，不只记问题或只记答案。其余内容只接受候选区内已勾选 checkbox 或用户当场明确确认；禁止扫描普通正文，禁止把“继续追踪”“重要”“保留”“确认”等词语当作确认。道 / 法 / 术候选即使已勾选，也只进入季度顶部对应候选观察池，不进入普通 Memory。重复执行时不得重复追加同一条目。
+   Weekly 自动化仍按现有契约处理标题「全文核心重点纪要」「芒格之魂的洞察」及问题与回答；问题逐题过滤，只有有实质回答的题目可迁移，未回答问题和背景排除。新格式只从“值得长期保留”章节读取已勾选项，最多 3 条；不再从新 Output 提取道 / 法 / 术候选。旧格式候选可按历史兼容规则识别，但不得当作新格式候选。禁止扫描普通正文或把关键词当作确认；重复执行不得追加同一条目。
 
 10. 如需维护历史 Memory，先读取 `resources/memory-compression-rules.md`，运行压缩规划并由 Codex 生成候选；对候选目录运行 `--validate`。只向用户报告 `ready`、`needs_review` 或 `stale`，不把校验结果描述为语义无损证明。只有用户另行明确确认晋级，才运行 `--promote --confirm`。
 
 ## 输出要求
 
-用户用 AI Chat 生成 Weekly Output 时，可参考 `resources/weekly-output-rules.md`。
+Weekly、Monthly、Yearly Output 的完整输出要求由飞书受治理 Prompt 提供。Chat Pack 在生成时实时读取；其他生成入口按所选周期调用共享 `fetch-prompt.mjs`，分别使用 `chatpack.weekly-output`、`chatpack.monthly-output`、`chatpack.yearly-output` 的本次 `content`。本地文件 `02_prompts/chatpack/reflective-decision/` 是兼容副本，不是运行时真值；读取失败默认停止，只有用户明确授权本次降级且副本校验通过时才可使用，并标记为非最新来源。
 
-Weekly Output 要综合三类输入：
-
-- 本周有哪些信息输入；
-- 本周有哪些真实行动；
-- 本周有哪些自我反馈；
-- 哪些行动产生了现实反馈；
-- 哪些判断被验证、修正或暴露问题。
-
-Weekly Output 默认围绕议题、做中学复盘、行动闭环摘要、下周 3 件事、道 / 法 / 术和处理信息；行动闭环检查并入做中学复盘。行动与反馈来自 Process Pack 第 7 节各来源材料正文（Action Feedback 已退役，原第 8 节快照不再存在）。不复制完整原始表格。
-
-Memory 必须遵守 `resources/memory-rules.md`。标题「全文核心重点纪要」「芒格之魂的洞察」和“本周最值得思考的问题与回答”可作为系统确认章节；允许轻度去重压缩，但不得丢失独立判断、问题、回答及其对应关系。其余只处理候选区内已勾选内容或用户当场明确确认内容。已勾选道 / 法 / 术候选观察进入季度 Memory 文件顶部对应候选池，并保留来源，不进入普通 Memory；普通正文和未勾选内容默认不写入。具体用法见 `04_output/usage.md`。
+Weekly 以当前周 Process Pack 为事实源，保存具体经历、重要输入、思考、状态与变化；Monthly 以当前月 Process Pack 为事实源，寻找跨周结构；Yearly 按年度材料生成年度轨迹。长期上下文只辅助理解和重要性判断，不补造周期事实。Memory 按 `resources/memory-rules.md` 处理；周/月“值得长期保留”各为 0–3 条 checkbox 候选，0 条合法，未确认内容不写入正式资产。具体使用流程见 `04_output/usage.md`。
 
 ## 六阶段架构
 
@@ -165,6 +155,6 @@ Memory 必须遵守 `resources/memory-rules.md`。标题「全文核心重点纪
 - `03_input/README.md` 是人和 Codex 共同使用的输入说明，新增来源目录或导入规则时要同步更新。
 - `04_output/README.md` 是报告阅读和人工审核说明，报告结构或审核流程改变时要同步更新。
 - `03_input/weekly/00_template/` 是每周输入文件模板，只保留 Markdown 文件。
-- `resources/weekly-output-rules.md` 是用户生成 Weekly Output 正文时的质量规则；`resources/layer-rules.md` 是判断规则。
+- Weekly / Monthly / Yearly Output 正文由飞书受治理主提示词定义，并在每次生成时实时读取；`resources/layer-rules.md` 仍是 Process 的判断规则。
 - `resources/memory-rules.md` 是 Memory 的质量规则。
 - 脚本只能做确定性整理、来源覆盖、Process Pack 生成和 Output 最小壳创建，不要把最终判断写死进代码。

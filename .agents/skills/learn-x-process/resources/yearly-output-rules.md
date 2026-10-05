@@ -61,7 +61,7 @@ Yearly Output 必须服从用户的长期之道：
 
 1. 若存在本年度 `04_output/_dist/yearly/YYYY/process-pack.md`，优先读取它；
 2. 若年度 `process-pack.md` 不存在，读取本年度已生成的 `04_output/monthly/YYYY-*.md`；
-3. 必要时参考本年度相关 Memory、`01_core/道/` 与长期 Memory；
+3. 必要时参考本年度相关 Memory、Core 正式《道》与长期 Memory；附录及历史候选不作为正式 Truth；
 4. 只有在月报缺失、月报明显失真或需要核查来源覆盖时，才回到对应月份的 `04_output/_dist/monthly/YYYY-MM/process-pack.md`；
 5. 只有在 `_dist` 材料包本身缺失或脚本异常时，才回到原始来源。
 

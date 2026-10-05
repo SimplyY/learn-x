@@ -8,7 +8,7 @@ export async function preparePeriodMemory(options = {}) {
   const period = normalizePeriod(options);
   const outputPath = sourceOutputPath(period);
   const content = await readFile(outputPath, "utf8");
-  const candidates = extractMemoryCandidates(content);
+  const candidates = extractMemoryCandidates(content, { periodType: period.type });
   const target = memoryTarget(period);
   const distRoot = path.join(repoRoot, "04_output/_dist", period.type, period.id);
 
@@ -31,7 +31,8 @@ export async function preparePeriodMemory(options = {}) {
   };
 }
 
-export function extractMemoryCandidates(content) {
+export function extractMemoryCandidates(content, options = {}) {
+  const periodType = options.periodType || "monthly";
   const required = extractRequiredSections(content);
   const checked = [];
   const observations = [];
@@ -44,9 +45,9 @@ export function extractMemoryCandidates(content) {
     const heading = line.match(/^(#{1,6})\s+(.+)$/);
     if (heading) {
       const level = heading[1].length;
-      section = heading[2].trim();
-      if (candidateLevel && level <= candidateLevel && !isCandidateHeading(section)) candidateLevel = 0;
-      if (isCandidateHeading(section)) candidateLevel = level;
+      section = periodType === "monthly" ? normalizeHeading(heading[2]) : heading[2].trim();
+      if (candidateLevel && level <= candidateLevel && !isCandidateHeading(section, periodType)) candidateLevel = 0;
+      if (isCandidateHeading(section, periodType)) candidateLevel = level;
       continue;
     }
 
@@ -76,8 +77,9 @@ export function extractMemoryCandidates(content) {
   };
 }
 
-function isCandidateHeading(title) {
-  return /人工确认清单|Memory 候选|值得进入 Memory|继续追踪|候选观察|道\s*\/\s*法\s*\/\s*术|器/.test(title);
+function isCandidateHeading(title, periodType) {
+  return (periodType === "monthly" && /^值得长期保留(?:$|[（(])/.test(title))
+    || /人工确认清单|Memory 候选|值得进入 Memory|继续追踪|候选观察|道\s*\/\s*法\s*\/\s*术|器/.test(title);
 }
 
 function isObservationSection(title) {
@@ -118,6 +120,23 @@ function normalizeHeading(title) {
 }
 
 function renderCandidatePack(period, outputPath, target, candidates) {
+  const monthly = period.type === "monthly";
+  const observationHeading = monthly
+    ? "## 历史兼容候选观察（只读）"
+    : "## 候选观察（只进入季度候选池，不进入普通 Memory）";
+  const observationInstructions = monthly
+    ? [
+        "- 新 Monthly Output 只把「值得长期保留」章节中已勾选的条目作为长期候选；0 条合法，不得补造、催促补勾或强行写入。",
+        "- 历史旧候选标题仍可解析；历史道 / 法 / 术 / 器观察只供查阅，不作为本期写入候选。"
+      ]
+    : [
+        "- 仅候选区内已勾选内容进入 Memory，不设数量上限。",
+        "- 道 / 法 / 术 / 器候选观察即使已勾选，也只进入季度候选池，不进入普通 Memory。",
+        "- 道 / 法 / 术 / 器候选观察写入目标 Memory 文件顶部的 `候选观察池`，并保留来源周期。"
+      ];
+  const emptyCandidateInstruction = monthly
+    ? "- 没有已勾选的长期候选是合法结果，不得强行写入。"
+    : "- 如果没有确认内容，先报告候选不足，不要强行写入。";
   return [
     `# Learn-X ${period.label} Memory Candidates｜${period.id}`,
     "",
@@ -142,7 +161,7 @@ function renderCandidatePack(period, outputPath, target, candidates) {
     "",
     renderBlocks(candidates.mungerInsights),
     "",
-    "## 候选观察（只进入季度候选池，不进入普通 Memory）",
+    observationHeading,
     "",
     renderList(candidates.observations),
     "",
@@ -158,12 +177,11 @@ function renderCandidatePack(period, outputPath, target, candidates) {
     "",
     "## 生成要求",
     "",
-    "- 仅候选区内已勾选内容进入 Memory，不设数量上限。",
+    ...observationInstructions,
     "- 系统确认章节仅限精确标题“全文核心重点纪要”和“芒格之魂的洞察”。",
     "- 只做无损整理：去掉 checkbox、归类、去除完全重复项。",
     "- 不要改写用户已确认的关键语义。",
-    "- 道 / 法 / 术 / 器候选观察写入目标 Memory 文件顶部的 `候选观察池`，并保留来源周期。",
-    "- 如果没有确认内容，先报告候选不足，不要强行写入。",
+    emptyCandidateInstruction,
     "- 未勾选内容默认不写入。",
     "- 不替代正式 `道/`、`法/`、`术/`。"
   ].join("\n");

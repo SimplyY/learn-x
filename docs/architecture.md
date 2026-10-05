@@ -1,10 +1,10 @@
 # Architecture Truth｜Learn-X
 
-> 回答「系统现在真实是什么样」。由技术架构与规划节点在架构变化时增量维护。首次建立：2026-09-24（Case：[wechat-evidence-source](cases/wechat-evidence-source/case.md)）。最后核对：2026-09-26（Case：[weread-highlights](cases/weread-highlights/case.md)）。
+> 回答「系统现在真实是什么样」。由技术架构与规划节点在架构变化时增量维护。首次建立：2026-09-24（Case：[wechat-evidence-source](cases/wechat-evidence-source/case.md)）。最后核对：2026-10-03（Case：[Core 道法真源迁移](../../core/docs/cases/2026-10-core-dao-fa/case.md)）。
 
 ## 定位
 
-Learn-X 是个人 AI native 知行进化系统：输入（证据与反馈）→ 处理（Process Pack / AI Chat）→ 输出（周/月/年 Output）→ 人工判断 → Memory / 道 / 法 / 术 → 行动反馈。人负责最终价值判断，脚本做确定性整理；只有人工确认后的内容才进入长期认知资产。
+Learn-X 是个人 AI native 知行进化系统：输入（证据与反馈）→ 处理（Process Pack / AI Chat）→ 输出（周/月/年 Output）→ 人工判断 → 周期 Memory 与候选 → 行动反馈。正式道法唯一真源为飞书 Core《道》《法》；候选须由用户明确确认后才可进入正文。
 
 ## 分层与数据流（当前真实状态）
 
@@ -15,7 +15,8 @@ Learn-X 是个人 AI native 知行进化系统：输入（证据与反馈）→ 
         ↓ AI Chat（人工触发）
 04_output/weekly|monthly|yearly/   人读 Output
         ↓ 人工确认
-01_core/memory/ · 01_core/道/ · 01_core/法/   长期认知资产（Memory 需人工确认）
+01_core/memory/                      Learn-X 周期记忆（需人工确认）
+飞书 Core《道》《法》                 正式道法唯一真源（Learn-X 只读实时消费）
 
 05_library/weread/                 WeRead 存量划线全量归档（ADR 0002）：fiction/ 与 nonfiction/ 按年一文件（书整本归入划线最多年份，不劈开）
                                    + _index.md（按年列书目索引）+ _manifest.json

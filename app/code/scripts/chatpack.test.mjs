@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { JSDOM } from "jsdom";
@@ -42,13 +43,41 @@ test("回归：Final Task Anchor 保持既有输出", () => {
   assert.match(out, /回答时优先遵守：Current Question、Assembled Prompt。/);
 });
 
+test("本地 Chat Pack 只装载周期 Prompt 的 latest 路由，不装载本地正文", async () => {
+  const graph = await buildChatPackPromptPayload({ target: "local" });
+  const config = JSON.parse(await readFile(new URL("../../../00_config/chatpack.config.json", import.meta.url), "utf8"));
+  const subtypes = new Map(config.dialogueTypes.flatMap((type) => type.subtypes.map((subtype) => [subtype.id, subtype])));
+
+  for (const id of [
+    "reflective-decision.weekly-output",
+    "reflective-decision.monthly-output",
+    "reflective-decision.yearly-output"
+  ]) {
+    assert.equal(graph.subtypes[id], "", `${id} body is not packaged locally`);
+    assert.match(graph.assets[id].prompt_id, /^chatpack\./, `${id} has a managed live route`);
+    assert.equal(graph.assets[id].runtime, "feishu-latest");
+    const subtype = subtypes.get(id);
+    assert.ok(subtype, `${id} is enabled in config`);
+    assert.equal(subtype.recommendedSources.some((source) => /(?:weekly|monthly|yearly)-output-rules\.md$/.test(source)), false);
+  }
+});
+
 test("异步 Prompt 装载后刷新自动装配，切换与失败重试不丢失正文", async () => {
   const html = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
-  const [promptPayload, weeklyRules, monthlyRules] = await Promise.all([
-    buildChatPackPromptPayload({ target: "local" }),
-    readFile(new URL("../../../.agents/skills/learn-x-process/resources/weekly-output-rules.md", import.meta.url), "utf8"),
-    readFile(new URL("../../../.agents/skills/learn-x-process/resources/monthly-output-rules.md", import.meta.url), "utf8")
-  ]);
+  const promptPayload = await buildChatPackPromptPayload({ target: "local" });
+  const managedAsset = (promptId, content) => ({
+    contract_version: "prompt-asset/v1",
+    prompt_id: promptId,
+    prompt_revision: 1,
+    prompt_sha256: createHash("sha256").update(content, "utf8").digest("hex"),
+    prompt_fetched_at: "2026-10-04T00:00:00.000Z",
+    content
+  });
+  promptPayload.assets = {
+    ...promptPayload.assets,
+    "test-type.example": managedAsset("test-type.example", "LATEST_EXAMPLE_PROMPT"),
+    "test-type.second": managedAsset("test-type.second", "LATEST_SECOND_PROMPT")
+  };
   const dom = new JSDOM(html, { url: "http://127.0.0.1:4173/#learning" });
   const graph = {
     runtime: { target: "public", canEditChatPack: false, includesPrivateContext: false, contextEnabled: false },
@@ -73,19 +102,19 @@ test("异步 Prompt 装载后刷新自动装配，切换与失败重试不丢失
         id: "test-type",
         name: "测试",
         subtypes: [
-          { id: "test-type.example", name: "示例" },
-          { id: "test-type.second", name: "第二" },
+          { id: "test-type.example", name: "示例", managedPrompt: { prompt_id: "test-type.example" } },
+          { id: "test-type.second", name: "第二", managedPrompt: { prompt_id: "test-type.second" } },
           {
             id: "reflective-decision.weekly-output",
             name: "周输出",
             includeBaseRecommendedSources: false,
-            recommendedSources: [".agents/skills/learn-x-process/resources/weekly-output-rules.md"]
+            recommendedSources: []
           },
           {
             id: "reflective-decision.monthly-output",
             name: "月输出",
             includeBaseRecommendedSources: false,
-            recommendedSources: [".agents/skills/learn-x-process/resources/monthly-output-rules.md"]
+            recommendedSources: []
           }
         ]
       }],
@@ -95,16 +124,6 @@ test("异步 Prompt 装载后刷新自动装配，切换与失败重试不丢失
     sources: [],
     contextFiles: [],
     customContextFiles: [
-      {
-        path: ".agents/skills/learn-x-process/resources/weekly-output-rules.md",
-        title: "Weekly Output 规则",
-        content: weeklyRules
-      },
-      {
-        path: ".agents/skills/learn-x-process/resources/monthly-output-rules.md",
-        title: "Monthly Output 规则",
-        content: monthlyRules
-      },
       {
         path: "04_output/_dist/weekly/2026-W20/process-pack.md",
         title: "旧周 Process Pack",
@@ -132,27 +151,82 @@ test("异步 Prompt 装载后刷新自动装配，切换与失败重试不丢失
     window: globalThis.window,
     document: globalThis.document,
     localStorage: globalThis.localStorage,
-    fetch: globalThis.fetch
+    fetch: globalThis.fetch,
+    requestAnimationFrame: globalThis.requestAnimationFrame,
+    navigator: Object.getOwnPropertyDescriptor(globalThis, "navigator")
   };
   let releasePromptPayload;
   let promptFetchStarted;
+  let releaseLatestPrompt;
+  let latestPromptFetchStarted;
+  let releaseContextRead;
+  let contextReadStarted;
   let promptAttempts = 0;
   let firstPromptFailed = false;
+  let deferLatestPrompt = false;
+  let latestPromptFetches = 0;
+  let deferContextRead = false;
+  let contextReadWasStarted = false;
+  let usageWrites = 0;
+  const copiedChatPacks = [];
   const promptFetchStartedPromise = new Promise((resolve) => {
     promptFetchStarted = resolve;
   });
   const promptPayloadPromise = new Promise((resolve) => {
     releasePromptPayload = resolve;
   });
+  const latestPromptPayloadPromise = new Promise((resolve) => {
+    releaseLatestPrompt = resolve;
+  });
+  const latestPromptFetchStartedPromise = new Promise((resolve) => {
+    latestPromptFetchStarted = resolve;
+  });
+  const contextReadPromise = new Promise((resolve) => {
+    releaseContextRead = resolve;
+  });
+  const contextReadStartedPromise = new Promise((resolve) => {
+    contextReadStarted = resolve;
+  });
 
   try {
     dom.window.LEARN_X_GRAPH = graph;
     dom.window.requestIdleCallback = (callback) => dom.window.setTimeout(callback, 0);
+    Object.defineProperty(dom.window.navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: async (text) => copiedChatPacks.push(text) }
+    });
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: dom.window.navigator });
     Object.assign(globalThis, {
       window: dom.window,
       document: dom.window.document,
       localStorage: dom.window.localStorage,
-      fetch: async (url) => {
+      requestAnimationFrame: (callback) => dom.window.setTimeout(callback, 0),
+      fetch: async (url, options = {}) => {
+        if (String(url).includes("api/chatpack/prompts/latest")) {
+          latestPromptFetches += 1;
+          if (deferLatestPrompt) {
+            deferLatestPrompt = false;
+            latestPromptFetchStarted();
+            return latestPromptPayloadPromise;
+          }
+          const promptIds = JSON.parse(options.body || "{}").prompt_ids || [];
+          return { ok: true, json: async () => ({
+            assets: Object.fromEntries(promptIds.map((id) => {
+              const existing = promptPayload.assets[id];
+              return [id, existing?.content ? existing : managedAsset(id, `LIVE_${id}`)];
+            }))
+          }) };
+        }
+        if (String(url).includes("api/file?path=") && deferContextRead) {
+          deferContextRead = false;
+          contextReadWasStarted = true;
+          contextReadStarted();
+          return contextReadPromise;
+        }
+        if (String(url).includes("api/chatpack/usage")) {
+          usageWrites += 1;
+          return { ok: true, json: async () => ({ ok: true }) };
+        }
         if (String(url).includes("prompts")) {
           promptAttempts += 1;
           promptFetchStarted();
@@ -175,6 +249,7 @@ test("异步 Prompt 装载后刷新自动装配，切换与失败重试不丢失
     });
 
     const app = await import("../public/app.js");
+    const { state } = await import("../public/runtime.js");
     for (let attempt = 0; attempt < 100 && document.querySelector("#learningStatus").textContent !== "已加载 Chat Pack 类型体系。"; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
@@ -200,30 +275,71 @@ test("异步 Prompt 装载后刷新自动装配，切换与失败重试不丢失
     }
     await new Promise((resolve) => setTimeout(resolve, 0));
     await app.ensurePromptProtocols();
-    assert.match(document.querySelector("#metaPrompt").value, /SECOND PROTOCOL/);
+    assert.doesNotMatch(document.querySelector("#metaPrompt").value, /SECOND PROTOCOL/);
 
-    graph.runtime.contextEnabled = true;
+    // If the user changes the selected governed prompt while its latest read is pending,
+    // the originally selected asset must not be copied or counted as the new selection.
+    state.runtime.target = "local";
+    state.runtime.contextEnabled = true;
+    assert.equal(state.runtime.contextEnabled, true);
+    [...document.querySelectorAll("#dialogueSubtypeList button")]
+      .find((button) => button.textContent.includes("示例"))
+      .click();
+    deferLatestPrompt = true;
+    document.querySelector("#generateChatPackBtn").click();
+    await latestPromptFetchStartedPromise;
+    const currentHiddenSelect = document.querySelector('#dialogueSubtypeList select[aria-label="其他提示词"]');
+    currentHiddenSelect.value = "test-type.second";
+    currentHiddenSelect.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    releaseLatestPrompt({ ok: true, json: async () => ({ assets: { "test-type.example": promptPayload.assets["test-type.example"] } }) });
+    for (let attempt = 0; attempt < 100 && !document.querySelector("#learningStatus").textContent.includes("Prompt 选择在读取期间发生变化"); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.match(document.querySelector("#learningStatus").textContent, /Prompt 选择在读取期间发生变化/);
+    assert.deepEqual(copiedChatPacks, []);
+    assert.equal(usageWrites, 0, "a selection change during latest read must not write usage");
+
     app.renderDialogueSubtypes();
     const weeklySubtype = [...document.querySelectorAll("#dialogueSubtypeList button")]
       .find((button) => button.textContent.includes("周输出"));
     assert.ok(weeklySubtype, "weekly subtype is selectable in Chat Pack");
     weeklySubtype.click();
+    assert.equal(state.runtime.contextEnabled, true, "context generation is active during the race check");
     assert.equal(document.querySelector("#periodSelect").value, "2026-W21");
+    const currentWeekContext = graph.customContextFiles.find((file) => file.path === "04_output/_dist/weekly/2026-W21/process-pack.md");
+    assert.ok(currentWeekContext, "weekly context fixture exists");
+    const currentWeekContent = currentWeekContext.content;
+    currentWeekContext.content = undefined;
+    currentWeekContext.external = true;
+    assert.equal(state.contextFileMap.get(currentWeekContext.path)?.content, undefined, "runtime context cache uses the delayed test file");
+    deferContextRead = true;
+    const contextRaceLatestFetchCount = latestPromptFetches;
     document.querySelector("#generateChatPackBtn").click();
-    for (let attempt = 0; attempt < 100 && !document.querySelector("#chatPackPreview").value.includes("CURRENT_WEEK_PROCESS_PACK_SENTINEL"); attempt += 1) {
+    for (let attempt = 0; attempt < 100 && !contextReadWasStarted; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
-    const weeklyChatPack = document.querySelector("#chatPackPreview").value;
-    assert.match(weeklyChatPack, /本周与上周对照/);
-    assert.match(weeklyChatPack, /600 字/);
-    assert.match(weeklyChatPack, /比较当前已存在的实质内容/);
-    assert.match(weeklyChatPack, /Weekly Output 规则/);
-    assert.match(weeklyChatPack, /使用 Markdown 加粗时，开闭 `\*\*` 必须成对并紧贴被强调内容，标记内不得有空格/);
-    assert.match(weeklyChatPack, /错误：`\*\*标签： \*\*内容`/);
-    assert.match(weeklyChatPack, /下周最小高价值行动中的 `完成边界：` 和 `价值：` 是结构标签，一律使用普通文本，不加粗/);
-    assert.match(weeklyChatPack, /闭标记后若紧接普通正文，留一个半角空格/);
-    assert.match(weeklyChatPack, /若紧接中文标点，不插入空格/);
-    assert.match(weeklyChatPack, /代码块外每组 `\*\*` 是否成对、紧贴强调内容/);
+    assert.equal(contextReadWasStarted, true, `context read was not started: ${document.querySelector("#learningStatus").textContent}`);
+    await contextReadStartedPromise;
+    assert.ok(latestPromptFetches > contextRaceLatestFetchCount, "generation reads latest before waiting on context");
+    const contextRacePicker = document.querySelector('#dialogueSubtypeList select[aria-label="其他提示词"]');
+    contextRacePicker.value = "reflective-decision.monthly-output";
+    contextRacePicker.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    releaseContextRead({ ok: true, json: async () => ({ content: currentWeekContent }) });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(copiedChatPacks, [], "a selection change during context read must not copy output");
+    assert.equal(usageWrites, 0, "a selection change during context read must not write usage");
+
+    weeklySubtype.click();
+    currentWeekContext.content = currentWeekContent;
+    currentWeekContext.external = false;
+    const weeklyCopyCount = copiedChatPacks.length;
+    document.querySelector("#generateChatPackBtn").click();
+    for (let attempt = 0; attempt < 100 && copiedChatPacks.length === weeklyCopyCount; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const weeklyChatPack = copiedChatPacks.at(-1);
+    assert.ok(weeklyChatPack, "weekly generation is copied only after the latest prompt is read");
+    assert.match(weeklyChatPack, /LIVE_chatpack\.weekly-output/);
     assert.match(weeklyChatPack, /Normal Context[\s\S]*CURRENT_WEEK_PROCESS_PACK_SENTINEL/);
     assert.match(weeklyChatPack, /PREVIOUS_WEEK_OUTPUT_COMPLETE_SENTINEL/);
     assert.doesNotMatch(weeklyChatPack, /OLDER_WEEK_PACK_SENTINEL/);
@@ -232,22 +348,24 @@ test("异步 Prompt 装载后刷新自动装配，切换与失败重试不丢失
     periodSubtypePicker.value = "reflective-decision.monthly-output";
     periodSubtypePicker.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
     assert.equal(document.querySelector("#periodSelect").value, "2026-09");
+    const monthlyCopyCount = copiedChatPacks.length;
     document.querySelector("#generateChatPackBtn").click();
-    for (let attempt = 0; attempt < 100 && !document.querySelector("#chatPackPreview").value.includes("CURRENT_MONTH_PROCESS_PACK_SENTINEL"); attempt += 1) {
+    for (let attempt = 0; attempt < 100 && copiedChatPacks.length === monthlyCopyCount; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
-    const monthlyChatPack = document.querySelector("#chatPackPreview").value;
-    assert.match(monthlyChatPack, /上月与本月对照/);
-    assert.match(monthlyChatPack, /1200 字/);
-    assert.match(monthlyChatPack, /比较当前已存在的实质内容/);
-    assert.match(monthlyChatPack, /Monthly Output 规则/);
+    const monthlyChatPack = copiedChatPacks.at(-1);
+    assert.ok(monthlyChatPack, "monthly generation is copied only after the latest prompt is read");
+    assert.match(monthlyChatPack, /LIVE_chatpack\.monthly-output/);
     assert.match(monthlyChatPack, /High Priority Context[\s\S]*CURRENT_MONTH_PROCESS_PACK_SENTINEL/);
     assert.match(monthlyChatPack, /PREVIOUS_MONTH_OUTPUT_COMPLETE_SENTINEL/);
     assert.doesNotMatch(monthlyChatPack, /OLDER_MONTH_PACK_SENTINEL/);
   } finally {
     dom.window.close();
     for (const [key, value] of Object.entries(previous)) {
-      if (value === undefined) delete globalThis[key];
+      if (key === "navigator") {
+        if (value) Object.defineProperty(globalThis, "navigator", value);
+        else delete globalThis.navigator;
+      } else if (value === undefined) delete globalThis[key];
       else globalThis[key] = value;
     }
   }

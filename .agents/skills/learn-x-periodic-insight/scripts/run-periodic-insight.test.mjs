@@ -4,10 +4,19 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { exitCodeForResult, runPeriodicInsight, validateGeneratedOutput } from "./run-periodic-insight.mjs";
+import { exitCodeForResult, runPeriodicInsight as runPeriodicInsightImpl, validateGeneratedOutput } from "./run-periodic-insight.mjs";
 
 const sha256 = (value) => createHash("sha256").update(String(value), "utf8").digest("hex");
 const bridgeSuccess = (text, extra = {}) => ({ result: { status: "succeeded", runId: "run-generated", conversationUrl: "https://chatgpt.com/c/generated", text, format: "markdown", verification: "live-dom+snapshot", outputSha256: sha256(text), ...extra } });
+const defaultLatestPromptAssets = async ({ task }) => {
+  const subtype = String(task.chatPackSubtypeId || `insight.${task.id}`).replace(/^insight\./, "");
+  const ids = [`chatpack.insight-${subtype}`, ...(task.prompt.defaultEnhancerIds.includes("munger-soul") ? ["chatpack.munger-soul"] : [])];
+  return ids.map((prompt_id, index) => {
+    const content = `实时 Prompt 正文：${prompt_id}`;
+    return { contract_version: "prompt-asset/v1", prompt_id, consumer_role: index === 0 ? "subtype" : "enhancer", prompt_source: "https://example.feishu.cn/wiki/doc", prompt_document_id: "doc", prompt_revision: 42, prompt_sha256: sha256(content), prompt_fetched_at: "2026-10-04T00:00:00.000Z", content };
+  });
+};
+const runPeriodicInsight = (options = {}) => runPeriodicInsightImpl({ ...options, fetchLatestPromptAssets: options.fetchLatestPromptAssets || defaultLatestPromptAssets });
 
 test("CLI 只把已完成状态视为成功，setup-wiki 成功也返回 0", () => { assert.equal(exitCodeForResult("setup-wiki", { name: "Learn-X 周期洞察" }), 0); assert.equal(exitCodeForResult("run", { status: "preview" }), 0); assert.equal(exitCodeForResult("run", { status: "skipped" }), 0); assert.equal(exitCodeForResult("run", { status: "completed" }), 0); assert.equal(exitCodeForResult("run", { status: "archive_pending" }), 2); assert.equal(exitCodeForResult("run", { status: "needs_review" }), 2); });
 
@@ -16,9 +25,21 @@ test("preview 写入 Manifest 和状态；submitted 不会自动重发", async (
   await mkdir(path.join(root, "00_config"), { recursive: true }); await mkdir(path.join(root, "04_output/monthly"), { recursive: true }); await mkdir(path.join(root, "02_prompts/chatpack/insight"), { recursive: true }); await mkdir(path.join(root, "02_prompts/chatpack/enhancers"), { recursive: true });
   await writeFile(path.join(root, "00_config/periodic-insights.json"), JSON.stringify({ schemaVersion: 2, contextPolicies: { "periodic-v1": { defaultRange: "1y", maxContextChars: 100000, maxPromptChars: 120000, timezone: "Asia/Shanghai", defaultMaterialTypes: ["life-core", "target-journal", "history-backbone", "flomo"] } }, tasks: [{ id: "munger-soul", name: "芒格之魂", prompt: { productionReady: true, defaultEnhancerIds: [] }, target: { preferred: "month" }, contextPolicyId: "periodic-v1" }] }));
   await writeFile(path.join(root, "04_output/monthly/2026-08.md"), `# 月报\n\n${"有效材料 ".repeat(100)}`); await writeFile(path.join(root, "02_prompts/chatpack/insight/munger-soul.md"), "输出候选洞察");
-  const first = await runPeriodicInsight({ repoRoot: root, taskId: "munger-soul", target: "2026-08" }); assert.equal(first.status, "preview"); assert.ok((await readFile(first.paths.manifest, "utf8")).includes("target-output"));
+  const first = await runPeriodicInsight({ repoRoot: root, taskId: "munger-soul", target: "2026-08" }); assert.equal(first.status, "preview"); assert.ok((await readFile(first.paths.manifest, "utf8")).includes("target-output")); assert.equal(first.prompt_assets[0].prompt_revision, 42); assert.equal(first.prompt_assets[0].prompt_fetched_at, "2026-10-04T00:00:00.000Z"); const state = JSON.parse(await readFile(first.paths.state, "utf8")); assert.equal("prompt" in state, false); assert.equal(JSON.stringify(state).includes("实时 Prompt 正文"), false);
   await writeFile(first.paths.state, JSON.stringify({ status: "completed", contextSha256: "stale", promptSha256: "stale" })); const changed = await runPeriodicInsight({ repoRoot: root, taskId: "munger-soul", target: "2026-08" }); assert.equal(changed.status, "needs_review"); assert.equal(changed.reason, "input-changed-after-completion");
   await writeFile(first.paths.state, JSON.stringify({ status: "submitted", taskId: "munger-soul" })); let calls = 0; const second = await runPeriodicInsight({ repoRoot: root, taskId: "munger-soul", target: "2026-08", send: true, confirm: true, runBridge: async () => { calls += 1; throw new Error("must-not-resend"); } }); assert.equal(second.status, "submitted"); assert.equal(calls, 0);
+});
+
+test("飞书 latest 读取失败时不启动 Bridge，下一次调用会重新读取", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-periodic-prompt-failure-")); t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, "00_config"), { recursive: true }); await mkdir(path.join(root, "04_output/monthly"), { recursive: true }); await mkdir(path.join(root, "02_prompts/chatpack/insight"), { recursive: true });
+  await writeFile(path.join(root, "00_config/periodic-insights.json"), JSON.stringify({ schemaVersion: 2, contextPolicies: { "periodic-v1": { defaultRange: "1y", maxContextChars: 100000, maxPromptChars: 120000, timezone: "Asia/Shanghai", defaultMaterialTypes: ["life-core", "target-journal", "history-backbone", "flomo"] } }, tasks: [{ id: "munger-soul", name: "芒格之魂", prompt: { productionReady: true, defaultEnhancerIds: [] }, target: { preferred: "month" }, contextPolicyId: "periodic-v1" }] }));
+  await writeFile(path.join(root, "04_output/monthly/2026-08.md"), `# 月报\n\n${"有效材料 ".repeat(100)}`); await writeFile(path.join(root, "02_prompts/chatpack/insight/munger-soul.md"), "STALE LOCAL BODY");
+  let reads = 0, bridgeCalls = 0;
+  const fail = await runPeriodicInsight({ repoRoot: root, taskId: "munger-soul", target: "2026-08", send: true, confirm: true, fetchLatestPromptAssets: async () => { reads += 1; throw new Error("飞书权限失败"); }, runBridge: async () => { bridgeCalls += 1; } });
+  assert.equal(fail.status, "needs_review"); assert.match(fail.reason, /latest-prompt-read-failed: 飞书权限失败/); assert.equal(bridgeCalls, 0);
+  const retry = await runPeriodicInsight({ repoRoot: root, taskId: "munger-soul", target: "2026-08", fetchLatestPromptAssets: async (args) => { reads += 1; return defaultLatestPromptAssets(args); } });
+  assert.equal(retry.status, "preview"); assert.equal(reads, 2); assert.equal(bridgeCalls, 0);
 });
 
 test("Bridge 返回 needs_review 时只记录一次提交", async (t) => {

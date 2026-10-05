@@ -44,14 +44,15 @@ Chat Pack 是 Learn-X 的对话启动器。它把一个具体场景所需的 Pro
 - 无上下文版本隐藏 Context 选择器时，生成、复制等状态反馈仍须保留。
 - 以上调整只优化视觉层级和空间利用，不改变 Prompt、Context、增强器和生成流程的功能语义。
 
-领域 Context 不写死为教育、投资或 AI；需要领域时，从 `01_core/法/` 自动发现。
+领域 Context 不写死为教育、投资或 AI；Core《法》只提供跨系统原则与专业系统引用，领域选择沿用现有“当前领域”回退。
 
 ## 周期 Output
 
 周、月、年 Output 是 Chat Pack 的特殊子类型：
 
 - 默认使用对应周期的 `process-pack.md`，不默认选择 `input.json` 或回捞原始 Input。
-- 推荐 `01_core/道/`、`01_core/memory/` 和对应周期规则。
+- 使用完整的 Weekly / Monthly / Yearly 主提示词；主提示词已经包含输出结构、判断边界和机器契约，不再单独注入规则文件。
+- 推荐 Core 正式《道》与 `01_core/memory/` 作为长期背景，不用于补造本周期事实；Core 附录不进入上下文。
 - 本地自动生成的 `01_core/memory/ChatGPT-AI记忆版.md` 随 `01_core/memory/` 默认勾选；`01_core/ChatGPT-自我阅读版.md` 只供人工阅读，不默认加入上下文。
 - 启用“芒格之魂”时切换为独立洞察，不生成 Output 正文；关闭后恢复普通 Output 上下文。
 - AI 只生成审稿草稿，是否写入 Output、Memory、道或法由人确认。

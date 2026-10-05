@@ -112,33 +112,25 @@ test("rejects an oversized full comparison source instead of truncating it", () 
   assert.throws(() => assertMonthlyProcessPackSize(pack), /previous Monthly Output comparison source is never truncated/);
 });
 
-test("monthly prompt contract covers bounded comparison and separate user-answer root questions", async () => {
-  const [rules, prompt, automation] = await Promise.all([
-    readFile(new URL("../resources/monthly-output-rules.md", import.meta.url), "utf8"),
+test("complete Monthly Output prompt defines facts, structure, comparison and user-answer contracts", async () => {
+  const [prompt, automation] = await Promise.all([
     readFile(new URL("../../../../02_prompts/chatpack/reflective-decision/monthly-output.md", import.meta.url), "utf8"),
     readFile(new URL("../../learn-x-monthly-automation/SKILL.md", import.meta.url), "utf8")
   ]);
 
-  assert.match(rules, /上月与本月对照/);
-  assert.match(rules, /1200.{0,8}(?:字符|字)/);
-  assert.match(rules, /月度总判断、月度核心洞察、全文核心重点纪要、芒格之魂洞察和月度问题与回答/);
-  assert.match(rules, /只作次级参照/);
-  assert.match(rules, /不显示百分比、不机械打分/);
-  assert.match(rules, /本月事实以当前 Process Pack 的本月材料为准/);
-  assert.match(rules, /本月最值得思考的 3 个问题与回答/);
-  assert.match(rules, /问题核心以 10–20 字为目标，最多 50 字/);
-  assert.match(rules, /问题核心与背景补充合计不超过 100 字/);
-  assert.match(rules, /背景补充（选填）/);
-  assert.match(rules, /本月议题[\s\S]*?阶段性答案[\s\S]*?不得/);
-  assert.match(rules, /不构成新的 Memory 来源|不作为.*Memory.*来源/);
-  assert.match(prompt, /上月 Monthly Output/);
-  assert.match(prompt, /问题核心以 10–20 字为目标、最多 50 字/);
-  assert.match(prompt, /单题合计最多 100 字/);
+  assert.match(prompt, /^# Monthly Output 核心输出要求/m);
+  assert.match(prompt, /Monthly Output 是 Learn-X 的\*\*月度结构层\*\*/);
+  assert.match(prompt, /本月事实必须来自当前 Process Pack/);
+  assert.match(prompt, /## 10\. 上月与本月对照/);
+  assert.match(prompt, /最多 1200 字符/);
+  assert.match(prompt, /## 11\. 值得长期保留/);
+  assert.match(prompt, /必须提出\*\*恰好 3 个\*\*/);
+  assert.match(prompt, /## 13\. 人工补充章节/);
+  assert.match(prompt, /## 15\. 来源与证据/);
+  assert.match(prompt, /本月议题[\s\S]*?阶段性答案[\s\S]*?不得/);
+  assert.doesNotMatch(prompt, /请查看.*monthly-output-rules/);
   assert.match(automation, /上月对比入口/);
   assert.match(automation, /不得用更早月份替代/);
-  assert.match(automation, /1200/);
-  assert.match(automation, /本月最值得思考的 3 个问题与回答/);
-  assert.match(automation, /最多 50 字.*最多 100 字/s);
   assert.match(automation, /精确标题为「全文核心重点纪要」和「芒格之魂的洞察」/);
 });
 

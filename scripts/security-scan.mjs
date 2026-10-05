@@ -35,7 +35,7 @@ const contentPatterns = [
   { name: "Chinese resident ID number", pattern: /(?:身份证|公民身份号码|id\s*card)[^\n]{0,20}\b[1-9]\d{5}(?:18|19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx]\b/ },
   { name: "Chinese mobile phone number with privacy label", pattern: /(?:手机号|手机|电话|联系方式|phone|mobile)[^\n]{0,20}\b1[3-9]\d{9}\b/i },
   { name: "bank card number with privacy label", pattern: /(?:银行卡|卡号|bank\s*card|card\s*number)[^\n]{0,20}\b\d{13,19}\b/i },
-  { name: "home address label", pattern: /(?:家庭住址|住址|家庭地址|收货地址|home\s*address|address)\s*[:：]\s*\S.{8,}/i },
+  { name: "home address label", pattern: /(?<!remote)(?:家庭住址|住址|家庭地址|收货地址|home\s*address|address)\s*[:：]\s*\S.{8,}/i },
 ];
 
 function git(args, options = {}) {

@@ -4,6 +4,12 @@ description: 从 Learn-X 本地周输入和已确认周记生成安全的飞书�
 ---
 # Learn-X 月记草稿
 
-执行前运行命令：node /Users/yuwei/.codex/skills/prompt-governance/scripts/manage-prompts.mjs status --project /Users/yuwei/code/learn-x --live，校验资产 learn-x.monthly-journal。若该资产远端更新且本地一致，先预览同步计划，再以 sync --confirm 同步；本地漂移、飞书读取失败或无法确认版本时停止。
+每次生成前，运行共享读取器：
 
-完整读取受治理提示词 ../../../02_prompts/journal/monthly-journal.md，并遵循其中全部流程、来源门禁、输出、写入、回读与汇报要求。该提示词是本 Skill 正文规则的唯一来源。
+```bash
+node /Users/yuwei/code/skills/prompt-governance/scripts/fetch-prompt.mjs learn-x.monthly-journal
+```
+
+以本次返回的 `content` 作为月记生成规则，完整遵循其中的来源门禁、输出、写入、回读与汇报要求。不要读取或使用 `02_prompts/journal/monthly-journal.md` 的本地副本。
+
+读取失败、响应身份或正文校验失败时，说明飞书最新 Prompt 无法取得并停止；不要生成草稿或写入飞书。只有用户在失败后明确授权本次使用本地副本，且副本存在并通过校验时，才可临时降级；说明使用的 revision/hash 不是飞书最新值。读取成功后，本次以 `prompt_revision`、`prompt_sha256`、`prompt_fetched_at` 作为运行证据，不把这些元数据插入 Prompt 正文。

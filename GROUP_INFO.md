@@ -7,10 +7,10 @@ repo_path: "/Users/yuwei/code/learn-x"
 repo_url: null
 group_info_path: "/Users/yuwei/code/learn-x/GROUP_INFO.md"
 registry_source: "live"
-registry_fetched_at: "2026-09-28T21:07:11.977Z"
+registry_fetched_at: "2026-10-04T23:54:06.833Z"
 registry_age_seconds: 0
 registry_degraded: false
-updated_at: "2026-09-28T21:07:18.143Z"
+updated_at: "2026-10-04T23:54:12.042Z"
 icon: "🧠"
 name_zh: "learn-x"
 summary: "认知进化系统。核心功能 chat pack（chat 上下文提示词） + 定期（周、月、年）复盘 IPO (输入、处理、输出)"
@@ -61,15 +61,15 @@ priority: 1
 - README.md：[研究&学习](https://ywhome.feishu.cn/wiki/KcTcwG90OiZh3rksu0ucvwx5nFe)
 - README.md：[人生核心议题](https://ywhome.feishu.cn/wiki/QIaQwXf07iMvqokKQf3cp3XmnMC)
 - README.md：| 器 | tool，工具实现层 | flomo、飞书、Codex、脚本、书籍 |
+- README.md：7. 人工确认后，才允许更新 Core 飞书《道》《法》；Learn-X 只保留周期 Memory 与候选材料，不是真源。
+- README.md：原则：Learn-X 是个人 AI native 的知行进化系统；Weekly / Monthly / Yearly Output 是其中的认知审稿环节，Memory 是跨周上下文；Core 飞书《道》《法》是正式道法唯一真源。
+- README.md：| `01_core/` | Learn-X 周期 Memory 与相关过程材料；正式道法由 Core 飞书《道》《法》维护。 |
+- README.md：Core 飞书《道》《法》是正式道法真源；附录和 Learn-X 候选均不是 Truth。AI 不得自动升级，只有用户明确确认后才可更新 Core。
 - docs/TECH.md：| `learn-x-deep-research` | 一键深度研究：创建 `深度研究-YYYY` 年目录下的 Wiki 文档、注入议题上下文、维护年度索引、组装 ChatGPT 上下文包；对 Base 只读。 |
-- docs/TECH.md：受治理 Prompt 的飞书正文由全局 `prompt-governance` Skill 管理，本地构建在使用副本前校验清单中的 SHA-256；静态载荷只暴露 `prompt_id/revision/hash`，不暴露飞书 URL、文档 ID 或绝对路径。详见 `docs/PROMPT_GOVERNANCE.md`。
-- docs/TECH.md：业务真值源是飞书「研究&学习」Base：`议题`=`tbllcm6oBbdMKnkN`，`认知事件`=`tblIE9FK9mWGv7GE`；议题实例和事件不得落盘为 Markdown。
-- docs/TECH.md：Base 真实主表：`议题=tbllcm6oBbdMKnkN`，`认知事件=tblIE9FK9mWGv7GE`。`议题`是唯一原子对象，可以是问题或目标；新增字段的名字与选项由脚本 Schema 校验；`议题周期`的规范值为短期/中期/长期，历史含“核心问题”的旧选项只在迁移期间兼容；月度账本表 ID 在运行时按名称解析，避免将不稳定的 Base 资源 ID 硬编码。
-- docs/TECH.md：长期议题系统只保存系统边界、字段契约和工程规则；问题、判断、事件与 Chat Pack 数据留在 Base 或当前会话。
 
 ## 状态
 - 工作目录：可访问
 - 链接数：3
 - Skill 扫描：正常
 - 注册表新鲜度：可用
-- 最近更新时间：2026-09-28T21:07:18.143Z
+- 最近更新时间：2026-10-04T23:54:12.042Z

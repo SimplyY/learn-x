@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// 每周确定性同步《人生核心议题》飞书正文到本地私有镜像 01_core/道/人生核心议题.md。
-// 这是「道」目录的两个自动写入口之一（另一个是 Flomo 置顶镜像）；其他思想内容禁止自动改写。
+// 每周确定性同步《人生核心议题》飞书正文到本地私有镜像 03_input/_mirrors/人生核心议题.md。
+// 这是两个私有输入镜像写入口之一（另一个是 Flomo 置顶镜像）；它不写入 Core Truth。
 import { execFile as execFileCallback } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, rename, readFile, writeFile } from "node:fs/promises";
@@ -12,7 +12,7 @@ const execFile = promisify(execFileCallback);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const defaultRepoRoot = path.resolve(__dirname, "../../../..");
 export const SOURCE_URL = "https://ywhome.feishu.cn/wiki/QIaQwXf07iMvqokKQf3cp3XmnMC";
-const MIRROR_RELATIVE = "01_core/道/人生核心议题.md";
+const MIRROR_RELATIVE = "03_input/_mirrors/人生核心议题.md";
 const REQUIRED_H1 = ["长期核心议题", "中期核心议题", "短期核心议题"];
 // 防御性截断：即使线上附录已删除，也永远以首个 `# 附录` 一级标题为边界，附录内容不得进入本地镜像。
 const APPENDIX_RE = /^#\s*附录/m;

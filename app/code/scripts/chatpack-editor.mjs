@@ -20,7 +20,7 @@ export async function prepareChatPackEdits({ repoRoot, payload }) {
   if (payload.prompt) {
     const promptPath = resolvePromptPath(config, payload.prompt);
     if (Object.values(manifest.assets || {}).some((asset) => asset.local_path === promptPath)) {
-      throw new Error("受治理 Prompt 正文只读，请在飞书修改后执行 sync");
+      throw new Error("受治理 Prompt 正文由飞书维护；请在飞书保存后重新调用，以读取最新正文");
     }
     writes.push({ path: path.join(repoRoot, promptPath), content: normalizePrompt(payload.prompt.content) });
   }
@@ -176,6 +176,9 @@ function validateRecommendedSources(sources, repoRoot) {
     const clean = source.trim().replaceAll("\\", "/");
     if (clean.startsWith("/") || clean.split("/").includes("..") || clean.includes("\0")) {
       throw new Error(`Unsafe recommended context path: ${source}`);
+    }
+    if (clean === "01_core/道" || clean.startsWith("01_core/道/") || clean === "01_core/法" || clean.startsWith("01_core/法/")) {
+      throw new Error(`Learn-X historical Dao/Fa sources are not active context: ${source}`);
     }
     const validationPath = clean.includes("{{domain}}") ? clean.split("{{domain}}")[0].replace(/\/$/, "") : clean;
     const absolutePath = path.resolve(repoRoot, validationPath || ".");

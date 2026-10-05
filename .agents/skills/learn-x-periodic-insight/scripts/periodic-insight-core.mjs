@@ -1,10 +1,8 @@
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { readPromptAssets, verifyPromptAssets } from "../../../../app/code/scripts/prompt-assets.mjs";
+import { pathToFileURL } from "node:url";
+import { readPromptAssets } from "../../../../app/code/scripts/prompt-assets.mjs";
 
 export const RANGE_IDS = new Set(["1m", "3m", "6m", "1y", "all", "custom"]);
 export const SELECTABLE_MATERIAL_TYPES = ["life-core", "target-journal", "history-backbone", "flomo"];
@@ -13,7 +11,7 @@ const DAY = 86_400_000;
 const PLACEHOLDER_RE = /^(?:TODO|待补充|暂无内容|占位|请在此|未完成|内容为空)/i;
 const SECTION_RE = /^(#{1,6})\s+(.+?)\s*$/gm;
 
-const LIFE_CORE_RELATIVE = "01_core/道/人生核心议题.md";
+const LIFE_CORE_RELATIVE = "03_input/_mirrors/人生核心议题.md";
 const REQUIRED_LIFE_CORE_H1 = ["长期核心议题", "中期核心议题", "短期核心议题"];
 // Learn-X 反向同步 memo 的生成标题前缀；普通正文仅提到 Learn-X 不受影响。
 const REVERSE_SYNC_TITLE_PREFIXES = ["Learn-X 周记", "Learn-X 月记", "Learn-X 记忆", "Learn-X 同步校验", "AI 基础草稿", "# 飞书周记"];
@@ -500,80 +498,50 @@ function parseMirrorHeader(raw) {
   return { header, body };
 }
 
-export async function buildInsightPrompt({ repoRoot, context, task, target, maxPromptChars = 120000 }) {
-  const declaredSubtype = String(task.chatPackSubtypeId || `insight.${task.id}`); const subtypeSlug = declaredSubtype.startsWith("insight.") ? declaredSubtype.slice("insight.".length) : ""; if (!/^[a-z0-9-]+$/.test(subtypeSlug)) throw new Error(`洞察子类型标识无效：${task.chatPackSubtypeId || task.id}`);
-  const subtype = await readOptional(path.join(repoRoot, "02_prompts/chatpack/insight", `${subtypeSlug}.md`)); const enhancer = task.prompt.defaultEnhancerIds.includes("munger-soul") ? await readOptional(path.join(repoRoot, "02_prompts/chatpack/enhancers/munger-soul.md")) : "";
-  await verifyPromptAssets(repoRoot, await readPromptAssets(repoRoot));
-  const prompt = ["你正在执行 Learn-X 周期洞察。", `任务：${task.name}（${task.id}）。`, `洞察对象：${target.id}（${target.kind}）。`, "历史 Context 仅用于理解背景，不得替代洞察对象。", "输出必须是 Markdown，明确区分事实、推断与未知，并标记为候选洞察。", "--- 子类型输出适配 ---", subtype?.trim(), enhancer ? "--- 芒格之魂增强器（唯一正文来源） ---" : "", enhancer?.trim(), "--- Context ---", context.trim()].filter(Boolean).join("\n\n");
+export async function buildInsightPrompt({ context, task, target, promptAssets, maxPromptChars = 120000 }) {
+  const declaredSubtype = String(task.chatPackSubtypeId || `insight.${task.id}`);
+  const subtypeSlug = declaredSubtype.startsWith("insight.") ? declaredSubtype.slice("insight.".length) : "";
+  if (!/^[a-z0-9-]+$/.test(subtypeSlug)) throw new Error(`洞察子类型标识无效：${task.chatPackSubtypeId || task.id}`);
+  const assets = new Map((promptAssets || []).map((asset) => [asset.consumer_role, asset]));
+  const subtype = assets.get("subtype");
+  if (!subtype?.content?.trim()) throw new Error(`周期洞察子类型正文不可用：${subtypeSlug}`);
+  const enhancer = task.prompt.defaultEnhancerIds.includes("munger-soul") ? assets.get("enhancer") : null;
+  if (task.prompt.defaultEnhancerIds.includes("munger-soul") && !enhancer?.content?.trim()) throw new Error("芒格之魂增强器正文不可用：munger-soul");
+  const prompt = ["你正在执行 Learn-X 周期洞察。", `任务：${task.name}（${task.id}）。`, `洞察对象：${target.id}（${target.kind}）。`, "历史 Context 仅用于理解背景，不得替代洞察对象。", "输出必须是 Markdown，明确区分事实、推断与未知，并标记为候选洞察。", "--- 子类型输出适配 ---", subtype.content.trim(), enhancer ? "--- 芒格之魂增强器（唯一正文来源） ---" : "", enhancer?.content?.trim(), "--- Context ---", context.trim()].filter(Boolean).join("\n\n");
   if (charCount(prompt) > maxPromptChars) throw new Error(`最终 Prompt 超过 ${maxPromptChars} 字符上限`); return prompt;
 }
 
-export async function buildPromptAssets({ repoRoot, task }) {
-  const manifest = await readPromptAssets(repoRoot);
-  const verified = await verifyPromptAssets(repoRoot, manifest);
-  const paths = [`02_prompts/chatpack/insight/${String(task.chatPackSubtypeId || `insight.${task.id}`).replace(/^insight\./, "")}.md`];
-  if (task.prompt.defaultEnhancerIds.includes("munger-soul")) paths.push("02_prompts/chatpack/enhancers/munger-soul.md");
-  return paths.map((promptPath) => {
-    const promptId = Object.entries(manifest.assets || {}).find(([, asset]) => asset.local_path === promptPath)?.[0];
-    return promptId && verified[promptId] ? {
-      prompt_id: promptId,
-      prompt_revision: verified[promptId].revision,
-      prompt_sha256: verified[promptId].sha256,
-      prompt_synced_at: verified[promptId].synced_at
-    } : null;
-  }).filter(Boolean);
-}
-
-// 使用时校准：在线消费 Snapshot 前跑 governance check --live；远端有新版本且本地干净时自动 pull。
-// 所有失败都不阻塞运行（离线允许使用本地副本），但必须显式留下告警，不允许旧 Snapshot 静默存在。
-export function resolveGovernanceScript(env = process.env, home = homedir()) {
-  const candidates = [
-    env.PROMPT_GOVERNANCE_MANAGE,
-    env.CODEX_HOME && path.join(env.CODEX_HOME, "skills/prompt-governance/scripts/manage-prompts.mjs"),
-    path.join(home, ".codex/skills/prompt-governance/scripts/manage-prompts.mjs"),
-  ].filter(Boolean);
-  const found = candidates.find((candidate) => existsSync(candidate));
-  if (!found) throw new Error("prompt-governance manage-prompts.mjs 不可用");
-  return found;
-}
-
-export async function preflightSnapshotFreshness({ repoRoot, script, run, log = () => {} } = {}) {
-  const warnings = [];
-  const exec = run || ((args) => {
-    const resolved = script || resolveGovernanceScript();
-    try { return { status: 0, stdout: execFileSync(process.execPath, [resolved, ...args], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }) }; }
-    catch (error) { return { status: error.status ?? 1, stdout: String(error.stdout || ""), stderr: String(error.stderr || error.message || "") }; }
+export async function buildPromptAssets({ repoRoot, task, fetchPromptAsset }) {
+  const manifest = await readPromptAssets(repoRoot, { optional: false });
+  const specs = [{ role: "subtype", path: `02_prompts/chatpack/insight/${String(task.chatPackSubtypeId || `insight.${task.id}`).replace(/^insight\./, "")}.md` }];
+  if (task.prompt.defaultEnhancerIds.includes("munger-soul")) specs.push({ role: "enhancer", path: "02_prompts/chatpack/enhancers/munger-soul.md" });
+  const assetSpecs = specs.map((spec) => {
+    const promptId = Object.entries(manifest.assets || {}).find(([, asset]) => asset.local_path === spec.path)?.[0];
+    return { ...spec, promptId };
   });
-  let check;
-  try {
-    check = JSON.parse(exec(["check", "--live", "--project", repoRoot]).stdout);
-  } catch (error) {
-    const warning = `prompt snapshot check 失败（governance 不可用），继续使用本地副本：${String(error.message || error).split("\n")[0]}`;
-    warnings.push(warning); warnings.forEach(log);
-    return { checked: false, pulled: false, stale_ids: [], remote_changed_ids: [], warnings };
-  }
-  if (!check || !Array.isArray(check.assets)) {
-    const warning = "prompt snapshot check 输出无效，继续使用本地副本";
-    warnings.push(warning); warnings.forEach(log);
-    return { checked: false, pulled: false, stale_ids: [], remote_changed_ids: [], warnings };
-  }
-  const staleIds = check.assets.filter((asset) => asset.freshness === "stale").map((asset) => asset.prompt_id);
-  if (staleIds.length) warnings.push(`prompt snapshot 超过 ${check.fresh_limit_days} 天未校准：${staleIds.join(", ")}`);
-  for (const asset of check.assets.filter((asset) => asset.live_error)) warnings.push(`prompt 远端检查失败，继续使用本地副本（可能是 offline）：${asset.prompt_id}: ${asset.live_error}`);
-  const changedIds = check.assets.filter((asset) => asset.remote_changed).map((asset) => asset.prompt_id);
-  let pulled = false;
-  if (changedIds.length) {
-    try {
-      const result = JSON.parse(exec(["pull", "--project", repoRoot, "--all", "--confirm"]).stdout);
-      pulled = result?.ok === true;
-      if (pulled) warnings.push(`飞书有新版本 Prompt，已自动 pull 本地 Snapshot：${changedIds.join(", ")}`);
-      else warnings.push(`飞书有新版本 Prompt 但自动 pull 未确认成功，保留本地旧版本：${changedIds.join(", ")}`);
-    } catch (error) {
-      warnings.push(`飞书有新版本 Prompt 但自动 pull 被拒绝（本地脏或漂移），保留旧版本：${changedIds.join(", ")}；${String(error.stderr || error.message || "").split("\n")[0]}`);
+  const reader = fetchPromptAsset || (async (promptId) => {
+    const readerPath = process.env.PROMPT_GOVERNANCE_FETCHER
+      ? path.resolve(process.env.PROMPT_GOVERNANCE_FETCHER)
+      : path.resolve(repoRoot, "../skills/prompt-governance/scripts/fetch-prompt.mjs");
+    const { fetchPrompt } = await import(pathToFileURL(readerPath).href);
+    return fetchPrompt(promptId);
+  });
+  const assets = [];
+  for (const spec of assetSpecs) {
+    if (!spec.promptId) {
+      const content = await readOptional(path.join(repoRoot, spec.path));
+      if (!content?.trim()) throw new Error(`非治理周期洞察正文不可用：${spec.path}`);
+      assets.push({ consumer_role: spec.role, content });
+      continue;
     }
+    const asset = await reader(spec.promptId);
+    if (!asset || asset.contract_version !== "prompt-asset/v1" || asset.prompt_id !== spec.promptId) throw new Error(`飞书返回的 Prompt 身份无效：${spec.promptId}`);
+    if (typeof asset.prompt_source !== "string" || !asset.prompt_source.trim() || typeof asset.prompt_document_id !== "string" || !asset.prompt_document_id.trim()) throw new Error(`飞书返回的 Prompt 来源信息无效：${spec.promptId}`);
+    if (typeof asset.content !== "string" || !asset.content.trim()) throw new Error(`飞书返回的 Prompt 正文为空：${spec.promptId}`);
+    if (!Number.isInteger(asset.prompt_revision) || asset.prompt_revision < 0 || asset.prompt_sha256 !== sha256(asset.content) || !Number.isFinite(Date.parse(asset.prompt_fetched_at || ""))) throw new Error(`飞书返回的 Prompt 版本或完整性信息无效：${spec.promptId}`);
+    assets.push({ ...asset, consumer_role: spec.role });
   }
-  warnings.forEach(log);
-  return { checked: true, pulled, stale_ids: staleIds, remote_changed_ids: changedIds, warnings };
+  return assets;
 }
 
 async function targetFile(repoRoot, target) { const candidates = target.kind === "month" ? [`04_output/monthly/${target.id}.md`] : [`04_output/weekly/${target.id}.md`, `04_output/weekly/${target.id.replace("-W", "-")}.md`]; for (const filePath of candidates) { const content = await readOptional(path.join(repoRoot, filePath)); if (content !== null) return { path: filePath, content, ...target }; } return null; }

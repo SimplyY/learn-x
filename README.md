@@ -71,15 +71,15 @@ Learn-X 不以 Output 为终点。
 4. 人工确认值得保留的判断
 5. 生成周期 Memory：`01_core/memory/YYYY-QN.memory.md`
 6. 月度 / 年度再审计 Memory 与 Output，形成少量道 / 法 / 术候选
-7. 人工确认后，才允许更新 `01_core/道/`、`01_core/法/`
+7. 人工确认后，才允许更新 Core 飞书《道》《法》；Learn-X 只保留周期 Memory 与候选材料，不是真源。
 
-原则：Learn-X 是个人 AI native 的知行进化系统；Weekly / Monthly / Yearly Output 是其中的认知审稿环节，Memory 是跨周上下文，Core 是长期真值源。
+原则：Learn-X 是个人 AI native 的知行进化系统；Weekly / Monthly / Yearly Output 是其中的认知审稿环节，Memory 是跨周上下文；Core 飞书《道》《法》是正式道法唯一真源。
 
 ## 入口地图
 
 | 位置 | 职责 |
 | --- | --- |
-| `01_core/` | 人工确认后的长期认知资产，包括道、法和 Memory。 |
+| `01_core/` | Learn-X 周期 Memory 与相关过程材料；正式道法由 Core 飞书《道》《法》维护。 |
 | `02_prompts/` | 可复用提示词资产，Chat Pack Prompt 也在这里维护。 |
 | `03_input/` | 原始输入区，只保存进入处理流程的证据和反馈。详见 `03_input/README.md`。 |
 | `04_output/` | 周度处理结果和中间材料区。详见 `04_output/README.md`。 |
@@ -98,7 +98,7 @@ Learn-X 不以 Output 为终点。
 - 根 README 只保留系统总览、核心原则和入口地图。
 - 功能细节写在功能自己的 README 或技术文档里，不堆在根 README。
 - Input、Output、Chat Pack、Skill、脚本等细节分别由对应目录维护。
-- `README.md`、`01_core/道/`、`01_core/法/` 是认知真值源；除非明确要求，不自动改写。
+- Core 飞书《道》《法》是正式道法真源；附录和 Learn-X 候选均不是 Truth。AI 不得自动升级，只有用户明确确认后才可更新 Core。
 - 人负责最终价值判断，脚本只做确定性整理和可追溯输出。
 
 ## 护栏

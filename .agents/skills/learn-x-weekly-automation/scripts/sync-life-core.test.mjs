@@ -29,7 +29,7 @@ test("同步成功写入 fresh 头并支持幂等重读", async (t) => {
   const runLark = async () => { calls += 1; return { markdown: body(), revision: 242 }; };
   const first = await syncLifeCore({ repoRoot: root, runLark });
   assert.equal(first.status, "fresh");
-  const raw = await readFile(path.join(root, "01_core/道/人生核心议题.md"), "utf8");
+  const raw = await readFile(path.join(root, "03_input/_mirrors/人生核心议题.md"), "utf8");
   const { header, body: mirrorBody } = parseMirror(raw);
   assert.equal(header.revision, "242");
   assert.equal(header.status, "fresh");
@@ -46,13 +46,13 @@ test("同步失败保留最后有效正文并标记 stale；首次失败不伪�
   const firstFailure = await syncLifeCore({ repoRoot: root, runLark: fail });
   assert.equal(firstFailure.status, "failed");
   assert.equal(firstFailure.wrote, false);
-  await assert.rejects(readFile(path.join(root, "01_core/道/人生核心议题.md"), "utf8"));
+  await assert.rejects(readFile(path.join(root, "03_input/_mirrors/人生核心议题.md"), "utf8"));
   await syncLifeCore({ repoRoot: root, runLark: async () => ({ markdown: body(), revision: 1 }) });
-  const rawBefore = await readFile(path.join(root, "01_core/道/人生核心议题.md"), "utf8");
+  const rawBefore = await readFile(path.join(root, "03_input/_mirrors/人生核心议题.md"), "utf8");
   const stale = await syncLifeCore({ repoRoot: root, runLark: fail });
   assert.equal(stale.status, "stale");
   assert.equal(stale.wrote, true);
-  const { header, body: mirrorBody } = parseMirror(await readFile(path.join(root, "01_core/道/人生核心议题.md"), "utf8"));
+  const { header, body: mirrorBody } = parseMirror(await readFile(path.join(root, "03_input/_mirrors/人生核心议题.md"), "utf8"));
   assert.equal(header.status, "stale");
   assert.ok(header["last-attempt-at"]);
   assert.equal(mirrorBody, parseMirror(rawBefore).body);

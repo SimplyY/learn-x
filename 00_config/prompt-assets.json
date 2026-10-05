@@ -27,9 +27,9 @@
       "derived_from": "common.munger-soul-unused-skip",
       "synced": {
         "document_id": "KRShd91W2oY352xSB4kciB0hnrf",
-        "revision": 5,
-        "sha256": "b06374639c591a8dbe63029f9d6f5be60311f78fa8e4b64505c24d952592c12d",
-        "at": "2026-09-21T03:52:03.262Z"
+        "revision": 10,
+        "sha256": "cf1ae9f5b8e4025faa0e49a4f56ef570cd61beb228047d6b681fc8b72c1f24db",
+        "at": "2026-10-03T01:14:11.911Z"
       }
     },
     "chatpack.monthly-output": {
@@ -38,9 +38,9 @@
       "derived_from": "common.munger-soul-unused-skip",
       "synced": {
         "document_id": "ABjzdez4joY0PUxdlaicIKkwnwh",
-        "revision": 5,
-        "sha256": "d411ea3c307a7f045bb361ee41e587cf8fd06f5cd3383ce4148d1cc22b24edeb",
-        "at": "2026-09-21T03:52:11.869Z"
+        "revision": 10,
+        "sha256": "6b453517ebfcb00e7051abf261a1ad842ecfedbee6fc16a14b756be5630cd5b7",
+        "at": "2026-10-03T01:14:56.534Z"
       }
     },
     "chatpack.yearly-output": {
@@ -48,9 +48,9 @@
       "local_path": "02_prompts/chatpack/reflective-decision/yearly-output.md",
       "synced": {
         "document_id": "KZ0WdBeHioqolrxmWQmc1rOTnZe",
-        "revision": 3,
-        "sha256": "64ec8829bc32b5282a351d6aaad72088276ae1ba66695862aadb69b90c416816",
-        "at": "2026-09-17T06:36:09.083Z"
+        "revision": 24,
+        "sha256": "351333d35714483b7b265f9611a1c3ca3bf2cff289a4a998ec1d0f30e167267d",
+        "at": "2026-10-03T08:48:12.919Z"
       }
     },
     "chatpack.insight-weekly-review": {
@@ -142,26 +142,6 @@
         "revision": 3,
         "sha256": "6549cf26d0bda5be9b663eaa64365b52508a6108c4fbad1bdf7e59e44842b045",
         "at": "2026-10-02T13:19:44.345Z"
-      }
-    },
-    "chatpack.weekly-output-rules": {
-      "tier": "P0",
-      "local_path": ".agents/skills/learn-x-process/resources/weekly-output-rules.md",
-      "synced": {
-        "document_id": "NCSwd0Y7uoBElaxEEMKcRzqDn5c",
-        "revision": 5,
-        "sha256": "d7e220488082efa2c9605f0b44a5f9673c415b7e4b560f26719d923ea22e1087",
-        "at": "2026-10-02T13:36:29.256Z"
-      }
-    },
-    "chatpack.monthly-output-rules": {
-      "tier": "P0",
-      "local_path": ".agents/skills/learn-x-process/resources/monthly-output-rules.md",
-      "synced": {
-        "document_id": "SMc0dptbFow7auxvPYychQlmnsK",
-        "revision": 6,
-        "sha256": "1a55aed88e92c78aaca54529b049921d1327be5779386df260417ac685cff5dd",
-        "at": "2026-10-02T13:36:29.898Z"
       }
     }
   }

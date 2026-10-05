@@ -80,7 +80,7 @@ export function renderProcessPack(payload, sourceSummaries, fileSummaries, items
     "",
     "## 0. 使用方式",
     "",
-    "1. 第 9 节若含上周 Output，只能用于跨周对照；本周事实以本文件第 1–7 节为准。使用本文件和需要的规则文件生成最终 Weekly Output；`input.json` 是脚本中间态，仅在排错或核查来源时使用。",
+    "1. 第 9 节若含上周 Output，只能用于跨周对照；本周事实以本文件第 1–7 节为准。使用本文件和完整受治理 Weekly Output 主提示词生成最终 Weekly Output；`input.json` 是脚本中间态，仅在排错或核查来源时使用。",
     "2. Codex / 脚本只生成 `_dist` 和 `04_output/weekly/YYYY-WW.md` 最小壳；如果 Output 文件已有内容，不覆盖。",
     "3. 人再决定是否把正文写入 `04_output/weekly/YYYY-WW.md`，以及是否进入 Memory、正式 `道/`、`法/`、`术`、Prompt 或 Skill。",
     "",

@@ -7,7 +7,7 @@
 ## 流程
 
 ```text
-阶段 1 采集输入并同步核心议题 -> 生成周记草稿 -> 用户审核 / 修改 -> 用户说“周记已确认” -> 阶段 2 一次生成含上周 Output 对照材料的 Process Pack -> Chat Pack 生成最终 Weekly Output（含不超过 600 字的周对照） -> 芒格之魂补充洞察与核心纪要 -> 阶段 3 生成并校验 Memory 候选 -> 唯一确认卡 -> 正式 Memory -> ChatGPT Bridge 核心图 -> 备份 / YW Next / Flomo（Action Feedback 已于 2026-10 退役）
+阶段 1 采集输入并同步核心议题 -> 生成周记草稿 -> 用户审核 / 修改 -> 用户说“周记已确认” -> 阶段 2 一次生成含上周 Output 对照材料的 Process Pack -> Chat Pack 使用完整 Weekly Output 主提示词生成报告 -> 用户补充核心纪要、芒格洞察和问题回答 -> 阶段 3 生成并校验 Memory 候选 -> 唯一确认卡 -> 按需写入 Memory -> 图片 / 备份 / YW Next / Flomo
 ```
 
 ## 1. 确认材料包
@@ -16,7 +16,6 @@
 
 ```text
 04_output/_dist/weekly/YYYY-Www/process-pack.md
-04_output/_dist/weekly/YYYY-Www/action-feedback.md
 04_output/_dist/monthly/YYYY-MM/process-pack.md
 04_output/_dist/yearly/YYYY/process-pack.md
 ```
@@ -33,7 +32,7 @@
 - Monthly Output
 - Yearly Output
 
-Weekly Output 应保留恰好 3 个由 AI 提出、由用户补充回答的整周根本问题，并新增不超过 600 字的周度对照；问题核心以 10–20 字为目标、最多 50 字，含背景补充的单题总长最多 100 字。Monthly Output 应新增不超过 1200 字的月度对照和 3 个面向整月根本问题的用户回答入口；问题核心以 10–20 字为目标、最多 50 字，含背景补充的单题总长最多 100 字；它与“本月议题”中的 AI 阶段性答案分开。
+Weekly Output 保存周内具体经历、重要输入、思考、状态与变化，强调广度和人生纹理；AI 提出恰好 3 个由用户本人回答的问题，并最多用 600 字与上周对照。Monthly Output 从跨周样本寻找模式、趋势和变化；保留“本月议题”的 AI 阶段性理解，另提出恰好 3 个由用户本人回答的问题，并最多用 1200 字与上月对照。两者都以当前 Process Pack 为本周期事实源，旧周期 Output 只作比较。
 
 生成后，由用户人工确认并写入：
 
@@ -43,7 +42,7 @@ Weekly Output 应保留恰好 3 个由 AI 提出、由用户补充回答的整�
 04_output/yearly/YYYY.md
 ```
 
-Output 正文应服务于审稿：哪些输入改变了理解，哪些判断值得追踪，哪些只是噪声。
+Weekly / Monthly 的“值得长期保留”只列 0–3 个候选，0 个完全合法；候选需由用户勾选或明确确认，AI 不自动写入正式长期资产。
 
 ### 芒格之魂洞察（可选、推荐）
 
@@ -69,21 +68,20 @@ Output 正文应服务于审稿：哪些输入改变了理解，哪些判断值�
 
 ## 3. 人工标记
 
-在 Output 候选区用 checkbox 标记确认内容：
+仅在 Weekly / Monthly 主提示词的“值得长期保留”章节用 checkbox 标记候选：
 
 ```md
-- [x] 值得进入 Memory
-- [ ] 值得继续追踪
-- [ ] 法：候选内容
+- [x] 候选内容
+- [ ] 候选内容
 ```
 
-只有已勾选或明确标记的内容进入 Memorize。未确认的漂亮表达不写入 Memory。
+只有已勾选或用户明确确认的候选进入 Memorize。0 个候选合法；未确认的正文、旧道法术候选和漂亮表达不写入 Memory。
 
 ## 4. Memorize
 
 Memorize 交给 Codex 执行，不需要用户手动跑脚本。
 
-在每周自动化线程中，完成 Weekly Output、芒格洞察与核心纪要、回答本周 3 个问题、审核 Memory 候选后，回复“继续生成记忆”或同义表达，即进入阶段 3。阶段 3 必须先确认 Output 非空、芒格洞察和问题与回答非空且存在已勾选或用户明确确认的 Memory 内容；任一条件未满足时停止，不硬凑 Memory。自动化先生成并校验 `memory-candidates.md`，再展示一次包含正式 Memory、图片路径、备份、YW Next 和 Flomo 的确认卡（Action Feedback Base 已退役）；用户确认后按“正式 Memory → ChatGPT Bridge 核心图（`04_output/_dist/weekly/YYYY-Www/weekly-core.png`）→ 备份 / YW Next / Flomo”执行，并读回校验。图片失败不回滚 Memory，公众号不自动发布。
+在每周自动化线程中，完成 Weekly Output、芒格洞察与核心纪要、补充有意回答的问题并审核候选后，回复“继续生成记忆”或同义表达，即进入阶段 3。阶段 3 先核验 Output 与机器消费章节，再生成候选；没有已确认候选时不写入 Memory、不要求用户为凑数补选。其他已授权的图片、备份、YW Next 与 Flomo 操作仍按自动化 Skill 中的依赖和确认边界执行。
 
 可以直接说：
 
@@ -93,7 +91,7 @@ Memorize 2026-05 月报
 Memorize 2026 年度输出
 ```
 
-Codex 会读取对应 Output 和规则，必要时生成 `memory-candidates.md`，再把已确认内容无损迁移到：
+Codex 会读取对应 Output 和 Memory 规则，必要时生成 `memory-candidates.md`，再把已确认内容无损迁移到：
 
 ```text
 01_core/memory/YYYY-QN.memory.md

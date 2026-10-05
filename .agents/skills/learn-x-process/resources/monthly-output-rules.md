@@ -60,7 +60,7 @@ AI 是剑，Learn-X 是脑，真实世界是校验场。
 
 1. 本月 `04_output/_dist/monthly/YYYY-MM/process-pack.md`；
 2. 本月 `monthly.md` 和周记清洗内容；
-3. 必要时参考 `01_core/道/` 和长期 Memory；
+3. 必要时参考 Core 正式《道》和长期 Memory；附录及历史候选不作为正式 Truth；
 4. 只有在材料缺失、冲突或需要核对来源时，才查看原始输入或 `input.json`。
 
 若材料冲突，优先级为：

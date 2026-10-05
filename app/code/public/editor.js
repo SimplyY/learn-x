@@ -339,7 +339,7 @@ export function renderPromptEntityFields() {
     appendEditorTextField("Prompt Markdown", "protocol", entity.item.protocol || "", true, false, "prompt-source-editor", els.promptEntityFields, promptEditorEntity, managed);
     if (managed) {
       const hint = document.createElement("small");
-      hint.textContent = "受治理 Prompt：正文只读。请在飞书修改后执行 sync。";
+      hint.textContent = "受治理 Prompt：正文由飞书维护。保存后下一次调用会读取最新内容。";
       els.promptEntityFields.append(hint);
     }
     if (entity.kind === "subtype") appendRecommendedSourcesEditor(entity.item, entity.type);
@@ -375,7 +375,7 @@ export function appendRecommendedSourcesEditor(subtype, type) {
   section.className = "editor-field";
   section.innerHTML = `<span>推荐上下文</span><div class="recommended-source-checklist source-checklist"></div><small class="recommended-source-count"></small>`;
   const inherited = subtype.includeBaseRecommendedSources !== false && type?.id !== "diagram-generate"
-    ? ["01_core/道", "01_core/memory"]
+    ? ["Core/道", "01_core/memory"]
     : [];
   const selected = new Set([...inherited, ...(subtype.recommendedSources || [])]);
   subtype.includeBaseRecommendedSources = false;

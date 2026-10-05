@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { buildInsightContext, buildInsightPrompt, cleanFlomoMemoBody, extractFlomoTags, flomoExclusionReason, parseFlomoMemos, parseIsoWeek, parseRange, preflightSnapshotFreshness, resolveMaterialTypes, resolveTarget, validatePeriodicConfig } from "./periodic-insight-core.mjs";
+import { buildInsightContext, buildInsightPrompt, buildPromptAssets, cleanFlomoMemoBody, extractFlomoTags, flomoExclusionReason, parseFlomoMemos, parseIsoWeek, parseRange, resolveMaterialTypes, resolveTarget, validatePeriodicConfig } from "./periodic-insight-core.mjs";
 
 const config = { schemaVersion: 2, contextPolicies: { "periodic-v1": { defaultRange: "1y", maxContextChars: 100000, maxPromptChars: 120000, timezone: "Asia/Shanghai", defaultMaterialTypes: ["life-core", "target-journal", "history-backbone", "flomo"] } }, tasks: [{ id: "munger-soul", name: "芒格之魂", chatPackSubtypeId: "insight.munger-soul", prompt: { productionReady: true, defaultEnhancerIds: [] }, target: { preferred: "month", fallback: "week" }, contextPolicyId: "periodic-v1" }] };
 const NOW = new Date("2026-09-16T00:00:00+08:00");
 const body = (title, text = "证据 ".repeat(100)) => `# ${title}\n\n${text}`;
 const text = (count = 60, word = "背景") => `${word} `.repeat(count);
+const sha256 = (value) => createHash("sha256").update(String(value), "utf8").digest("hex");
 const lifeCore = (status = "fresh", wordCount = 60) => `<!--\nsource: https://example.feishu.cn/wiki/life-core\nrevision: 242\nbody-sha256: ${"a".repeat(64)}\nlast-synced-at: 2026-09-14T08:00:00+08:00\nlast-attempt-at: 2026-09-14T08:00:00+08:00\nstatus: ${status}\n-->\n\n# 人生核心议题\n\n长期核心议题：${"议题 ".repeat(wordCount)}`;
 const memoryFile = (segments) => `# 季度记忆\n\n${segments.join("\n\n")}\n`;
 const seg = (heading, word = "背景") => `## ${heading}\n\n${text(60, word)}`;
@@ -25,10 +27,10 @@ async function prepare(root, extra = {}) {
 
 test("月目标缺失时选择最近完整周，目标输出与历史背景分开装配", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-periodic-")); t.after(() => rm(root, { recursive: true, force: true }));
-  await prepare(root, { files: { "04_output/weekly/2026-37.md": body("Weekly"), "04_output/monthly/2026-07.md": "# 空壳\n\nTODO", "01_core/memory/2026-Q3.memory.md": body("Memory"), "01_core/道/人生核心议题.md": lifeCore() } });
+  await prepare(root, { files: { "04_output/weekly/2026-37.md": body("Weekly"), "04_output/monthly/2026-07.md": "# 空壳\n\nTODO", "01_core/memory/2026-Q3.memory.md": body("Memory"), "03_input/_mirrors/人生核心议题.md": lifeCore() } });
   const target = await resolveTarget(root, config.tasks[0], "auto", NOW); assert.equal(target.id, "2026-W37"); assert.equal(target.path, "04_output/weekly/2026-37.md");
   const result = await buildInsightContext({ repoRoot: root, taskId: "munger-soul", range: "1y", now: NOW });
-  assert.equal(result.target.id, "2026-W37"); assert.equal(result.range.id, "1y"); assert.match(result.content, /## 目标输出 · /); assert.match(result.content, /## 人生核心议题 · 01_core\/道\/人生核心议题\.md/); assert.ok(result.content.indexOf("## 人生核心议题") < result.content.indexOf("## 目标输出"));
+  assert.equal(result.target.id, "2026-W37"); assert.equal(result.range.id, "1y"); assert.match(result.content, /## 目标输出 · /); assert.match(result.content, /## 人生核心议题 · 03_input\/_mirrors\/人生核心议题\.md/); assert.ok(result.content.indexOf("## 人生核心议题") < result.content.indexOf("## 目标输出"));
   assert.ok(result.included.some((item) => item.role === "target-output" && item.tier === 1)); assert.ok(result.included.some((item) => item.role === "life-core" && item.sync?.status === "fresh")); assert.ok(result.excluded.some((item) => item.role === "target-journal" && item.reason === "missing-or-empty"));
   assert.equal(result.sha256.length, 64); assert.equal(result.manifest.schemaVersion, 2);
 });
@@ -204,7 +206,7 @@ test("其他材料超预算时按优先级排除而不是失败", async (t) => {
   const tight = { ...config, contextPolicies: { "periodic-v1": { ...config.contextPolicies["periodic-v1"], maxContextChars: 900 } } };
   await prepare(root, { config: tight, files: {
     "04_output/monthly/2026-08.md": body("月报", "目标 ".repeat(110)),
-    "01_core/道/人生核心议题.md": lifeCore(),
+    "03_input/_mirrors/人生核心议题.md": lifeCore(),
     "03_input/weekly/2026-W31/flomo.md": `## 2026-08-01 09:30\n\n${"闲聊 ".repeat(120)}`
   } });
   const result = await buildInsightContext({ repoRoot: root, taskId: "munger-soul", target: "2026-08", now: NOW });
@@ -216,7 +218,7 @@ test("Manifest 显式记录预算、材料类型与稳定 sha256", async (t) => 
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-periodic-manifest-")); t.after(() => rm(root, { recursive: true, force: true }));
   await prepare(root, { files: {
     "04_output/monthly/2026-08.md": body("Target"),
-    "01_core/道/人生核心议题.md": lifeCore("stale")
+    "03_input/_mirrors/人生核心议题.md": lifeCore("stale")
   } });
   const first = await buildInsightContext({ repoRoot: root, taskId: "munger-soul", target: "2026-08", now: NOW });
   const second = await buildInsightContext({ repoRoot: root, taskId: "munger-soul", target: "2026-08", now: NOW });
@@ -260,44 +262,28 @@ test("配置契约要求 schema v2 与 defaultMaterialTypes，拒绝重复任务
   assert.throws(() => validatePeriodicConfig({ ...config, tasks: [{ ...config.tasks[0] }, { ...config.tasks[0] }] }), /洞察任务/);
 });
 
-test("Prompt 装配使用声明的子类型并拒绝路径穿越", async (t) => {
+test("周期洞察按注册 prompt_id 读取 latest 并且只注入读取正文", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-periodic-prompt-")); t.after(() => rm(root, { recursive: true, force: true }));
-  await mkdir(path.join(root, "02_prompts/chatpack/insight"), { recursive: true }); await writeFile(path.join(root, "02_prompts/chatpack/insight/munger-soul.md"), "声明的适配器");
-  const task = { id: "alias", chatPackSubtypeId: "insight.munger-soul", prompt: { defaultEnhancerIds: [] } }; const prompt = await buildInsightPrompt({ repoRoot: root, context: "Context", task, target: { id: "2026-08", kind: "month" } }); assert.match(prompt, /声明的适配器/); await assert.rejects(() => buildInsightPrompt({ repoRoot: root, context: "Context", task: { ...task, chatPackSubtypeId: "insight.foo\/..\/bar" }, target: { id: "2026-08", kind: "month" } }), /子类型标识无效/);
-});
-
-test("snapshot 预检：远端新版本自动 pull，且告警显式留痕", async () => {
-  const calls = [];
-  const check = { project: "/repo", fresh_limit_days: 7, live_status: "ok", assets: [
-    { prompt_id: "chatpack.a", freshness: "ok", freshness_days: 1, remote_changed: true },
-    { prompt_id: "chatpack.b", freshness: "stale", freshness_days: 30, remote_changed: false },
-  ] };
-  const run = (args) => { calls.push(args); if (args[0] === "check") return { status: 0, stdout: JSON.stringify(check) }; return { status: 0, stdout: JSON.stringify({ ok: true, plans: [] }) }; };
-  const logs = [];
-  const result = await preflightSnapshotFreshness({ repoRoot: "/repo", run, log: (line) => logs.push(line) });
-  assert.equal(result.checked, true);
-  assert.equal(result.pulled, true);
-  assert.deepEqual(result.remote_changed_ids, ["chatpack.a"]);
-  assert.deepEqual(result.stale_ids, ["chatpack.b"]);
-  assert.deepEqual(calls[1], ["pull", "--project", "/repo", "--all", "--confirm"]);
-  assert.ok(logs.some((line) => line.includes("自动 pull")));
-  assert.ok(logs.some((line) => line.includes("30") || line.includes("未校准")));
-});
-
-test("snapshot 预检：offline 与 pull 被拒都不阻塞且必须告警", async () => {
-  const logs = [];
-  const offline = await preflightSnapshotFreshness({ repoRoot: "/repo", run: () => { throw new Error("spawn lark-cli failed"); }, log: (line) => logs.push(line) });
-  assert.equal(offline.checked, false);
-  assert.equal(offline.pulled, false);
-  assert.ok(offline.warnings.some((line) => line.includes("继续使用本地副本")));
-  const logs2 = [];
-  const check = { project: "/repo", fresh_limit_days: 7, live_status: "degraded", assets: [
-    { prompt_id: "chatpack.a", freshness: "ok", freshness_days: 1, remote_changed: true },
-    { prompt_id: "chatpack.b", freshness: "ok", freshness_days: 2, live_error: "offline" },
-  ] };
-  const result2 = await preflightSnapshotFreshness({ repoRoot: "/repo", run: (args) => { if (args[0] === "check") return { status: 2, stdout: JSON.stringify(check) }; throw new Error("本地文件存在未提交修改：02_prompts/x.md"); }, log: (line) => logs2.push(line) });
-  assert.equal(result2.checked, true);
-  assert.equal(result2.pulled, false);
-  assert.ok(logs2.some((line) => line.includes("保留旧版本")));
-  assert.ok(logs2.some((line) => line.includes("offline")));
+  await mkdir(path.join(root, "00_config"), { recursive: true });
+  const synced = { document_id: "doc", revision: 1, sha256: "0".repeat(64), at: "2026-10-04T00:00:00.000Z" };
+  await writeJson(root, "00_config/prompt-assets.json", { schema_version: "learn-x-prompt-assets/v1", assets: {
+    "chatpack.insight-munger-soul": { tier: "P1", local_path: "02_prompts/chatpack/insight/munger-soul.md", synced },
+    "chatpack.munger-soul": { tier: "P1", local_path: "02_prompts/chatpack/enhancers/munger-soul.md", synced }
+  } });
+  await mkdir(path.join(root, "02_prompts/chatpack/insight"), { recursive: true });
+  await writeFile(path.join(root, "02_prompts/chatpack/insight/munger-soul.md"), "STALE LOCAL BODY");
+  const ids = [];
+  const fetchPromptAsset = async (promptId) => {
+    ids.push(promptId);
+    const content = `LATEST ${promptId}`;
+    return { contract_version: "prompt-asset/v1", prompt_id: promptId, prompt_source: "https://example.feishu.cn/wiki/doc", prompt_document_id: "doc", prompt_revision: 42, prompt_sha256: sha256(content), prompt_fetched_at: "2026-10-04T00:00:00.000Z", content };
+  };
+  const task = { id: "munger-soul", name: "芒格之魂", chatPackSubtypeId: "insight.munger-soul", prompt: { defaultEnhancerIds: ["munger-soul"] } };
+  const assets = await buildPromptAssets({ repoRoot: root, task, fetchPromptAsset });
+  const prompt = await buildInsightPrompt({ context: "Context", task, target: { id: "2026-08", kind: "month" }, promptAssets: assets });
+  assert.deepEqual(ids, ["chatpack.insight-munger-soul", "chatpack.munger-soul"]);
+  assert.match(prompt, /LATEST chatpack\.insight-munger-soul/);
+  assert.match(prompt, /LATEST chatpack\.munger-soul/);
+  assert.doesNotMatch(prompt, /STALE LOCAL BODY/);
+  await assert.rejects(() => buildInsightPrompt({ context: "Context", task: { ...task, chatPackSubtypeId: "insight.foo\/..\/bar" }, target: { id: "2026-08", kind: "month" }, promptAssets: assets }), /子类型标识无效/);
 });

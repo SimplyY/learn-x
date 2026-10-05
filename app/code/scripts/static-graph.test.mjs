@@ -7,11 +7,13 @@ import { mergeEditableConfig, prepareChatPackEdits, writePreparedEdits } from ".
 import {
   buildChatPackPromptPayload,
   buildChatPackTooltip,
+  buildContentPayload,
   buildGraphPayload,
   extractPromptTooltipSource,
   isPublicPrivatePath,
   renderMarkdown
 } from "./static-graph.mjs";
+import { readPromptAssets } from "./prompt-assets.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../..");
@@ -21,24 +23,36 @@ test("public graph excludes private workflow material and local graph retains ca
   assert.equal(isPublicPrivatePath("01_core/memory-archive/2026-Q2.memory.md"), true);
   assert.equal(isPublicPrivatePath("02_prompts/chatpack/insight/munger-soul.md"), true);
   assert.equal(isPublicPrivatePath(".agents/skills/learn-x-periodic-insight/SKILL.md"), true);
+  assert.equal(isPublicPrivatePath(".agents/skills/learn-x-weekly-automation/SKILL.md"), true);
   assert.equal(isPublicPrivatePath("docs/PERIODIC_INSIGHTS.md"), true);
   // WeRead 存量划线归档（ADR 0002）：私有阅读数据，公开构建必须排除——前缀误删时此断言必须红
   assert.equal(isPublicPrivatePath("05_library/weread/fiction/2025.md"), true);
   assert.equal(isPublicPrivatePath("05_library/weread/_index.md"), true);
   assert.equal(isPublicPrivatePath("05_library/weread/_manifest.json"), true);
-  const [publicGraph, localGraph] = await Promise.all([
+  const [publicGraph, publicContent, localGraph] = await Promise.all([
     buildGraphPayload({ includeContent: false, target: "public" }),
+    buildContentPayload({ target: "public" }),
     buildGraphPayload({ includeContent: false, target: "local" })
   ]);
 
   assert.equal(publicGraph.runtime.canEditChatPack, false);
+  const publicGraphJson = JSON.stringify(publicGraph);
+  assert.doesNotMatch(publicGraphJson, /Core\/道|Core\/法|BZKNwMA5KiczTFkiFAEcqUeDnXg|RfwBwmu6piXlM5kP0HRcFXMmn4b/);
+  assert.doesNotMatch(JSON.stringify(publicContent), /Core\/道|Core\/法|BZKNwMA5KiczTFkiFAEcqUeDnXg|RfwBwmu6piXlM5kP0HRcFXMmn4b/);
   assert.equal(localGraph.runtime.canEditChatPack, true);
+  const coreSources = localGraph.customContextFiles.filter((file) => file.path.startsWith("Core/"));
+  assert.deepEqual(coreSources.map((file) => file.path).sort(), ["Core/法", "Core/道"]);
+  assert.equal(coreSources.find((file) => file.path === "Core/道").baseWeight, 85);
+  assert.equal(coreSources.find((file) => file.path === "Core/道").defaultStrategy, "high");
   const wereadIndex = localGraph.contextFiles.find((file) => file.path === "05_library/weread/_index.md");
   assert.ok(wereadIndex, "local context tree must surface the WeRead archive index");
-  const weeklyRules = localGraph.customContextFiles.find((file) => file.path === ".agents/skills/learn-x-process/resources/weekly-output-rules.md");
-  assert.ok(weeklyRules);
-  const weeklyRulesText = await readFile(path.join(repoRoot, weeklyRules.path), "utf8");
-  assert.equal(weeklyRules.visibleChars, Array.from(weeklyRulesText.replace(/\s/gu, "")).length);
+  const outputSubtypes = localGraph.chatPackConfig.dialogueTypes
+    .flatMap((type) => type.subtypes)
+    .filter((subtype) => /reflective-decision\.(?:weekly|monthly|yearly)-output$/.test(subtype.id));
+  assert.equal(outputSubtypes.length, 3);
+  assert.equal(outputSubtypes.some((subtype) =>
+    subtype.recommendedSources.some((source) => /(?:weekly|monthly|yearly)-output-rules\.md$/.test(source))
+  ), false, "period rules are carried by the complete main prompt, not duplicate context files");
   assert.equal(publicGraph.customContextFiles.some((file) => isPublicPrivatePath(file.path)), false);
   assert.equal(
     publicGraph.customContextFiles.some((file) => /reflective-decision\/(weekly|monthly|yearly)-output\.md$/.test(file.path)),
@@ -65,11 +79,44 @@ test("Chat Pack payload keeps local period prompts out of public builds", async 
     buildChatPackPromptPayload({ target: "local" })
   ]);
 
-  assert.equal(Boolean(localPayload.subtypes["reflective-decision.weekly-output"]), true);
+  assert.equal(localPayload.subtypes["reflective-decision.weekly-output"], "");
+  assert.equal(localPayload.assets["reflective-decision.weekly-output"].prompt_id, "chatpack.weekly-output");
+  assert.equal(localPayload.assets["reflective-decision.weekly-output"].runtime, "feishu-latest");
+  assert.equal("revision" in localPayload.assets["reflective-decision.weekly-output"], false);
   assert.equal(Object.keys(localPayload.subtypes).some((id) => id.includes("wechat")), false);
   assert.equal(Boolean(publicPayload.subtypes["reflective-decision.weekly-output"]), false);
   assert.equal(Object.keys(publicPayload.subtypes).length > 0, true);
   assert.equal(Object.keys(publicPayload.enhancers).length > 0, true);
+});
+
+test("public static payload excludes governed prompt paths and bodies while keeping entries visibly unavailable", async () => {
+  const manifest = await readPromptAssets(repoRoot, { optional: false });
+  const [graph, content, prompts] = await Promise.all([
+    buildGraphPayload({ includeContent: false, target: "public" }),
+    buildContentPayload({ target: "public" }),
+    buildChatPackPromptPayload({ target: "public" })
+  ]);
+  const serialized = JSON.stringify({ graph, content, prompts });
+  for (const [promptId, asset] of Object.entries(manifest.assets)) {
+    assert.equal(content.files[asset.local_path], undefined, `${promptId} source path is omitted from public content`);
+    assert.equal(graph.files.some((file) => file.path === asset.local_path), false, `${promptId} source path is omitted from public graph`);
+    assert.equal(
+      graph.chatPackConfig.enhancers.some((enhancer) => enhancer.promptPath === asset.local_path),
+      false,
+      `${promptId} local prompt path is omitted from the public Chat Pack config`
+    );
+    const body = (await readFile(path.join(repoRoot, asset.local_path), "utf8")).trim();
+    assert.equal(body ? serialized.includes(body) : false, false, `${promptId} body is absent from every public payload`);
+  }
+
+  const publicSubtype = graph.chatPackConfig.dialogueTypes
+    .flatMap((type) => type.subtypes)
+    .find((subtype) => subtype.id === "learning-insight.first-principles");
+  assert.equal(publicSubtype.managedPrompt.unavailable, true);
+  assert.match(publicSubtype.managedPrompt.unavailable_reason, /公开静态版/);
+  assert.equal(prompts.subtypes["learning-insight.first-principles"], "");
+  assert.equal(prompts.assets["learning-insight.first-principles"].unavailable, true);
+  assert.ok(prompts.subtypes["learning-insight.ljg-learn"].length > 0, "non-governed Chat Pack prompts remain available");
 });
 
 test("chat pack tooltips prefer prompt purpose and clean markdown noise", () => {
@@ -165,6 +212,13 @@ test("editor writes a validated prompt and rejects repository traversal", async 
   const unsafePayload = structuredClone(payload);
   unsafePayload.dialogueTypes[0].subtypes[0].recommendedSources = ["../outside.md"];
   await assert.rejects(() => prepareChatPackEdits({ repoRoot: fixtureRoot, payload: unsafePayload }), /Unsafe recommended/);
+  const retiredTruthPayload = structuredClone(payload);
+  retiredTruthPayload.dialogueTypes[0].subtypes[0].recommendedSources = ["01_core/道/01_自我认知.md"];
+  await assert.rejects(() => prepareChatPackEdits({ repoRoot: fixtureRoot, payload: retiredTruthPayload }), /historical Dao\/Fa/);
+  const coreSourcesPayload = structuredClone(payload);
+  coreSourcesPayload.dialogueTypes[0].subtypes[0].recommendedSources = ["Core/道", "Core/法"];
+  const coreSources = mergeEditableConfig(source, coreSourcesPayload, fixtureRoot);
+  assert.deepEqual(coreSources.dialogueTypes[0].subtypes[0].recommendedSources, ["Core/道", "Core/法"]);
 });
 
 test("editor adds categories and moves subtype prompts without deleting existing items", async (context) => {
@@ -262,7 +316,7 @@ test("editor protects managed prompts and still allows editable fields", async (
 
   await assert.rejects(
     () => prepareChatPackEdits({ repoRoot: fixtureRoot, payload: { ...base, prompt: { kind: "subtype", id: "alpha.one", content: "# tampered" } } }),
-    /受治理 Prompt 正文只读/
+    /受治理 Prompt 正文由飞书维护/
   );
 
   const renamed = structuredClone(base);

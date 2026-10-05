@@ -77,6 +77,28 @@ test("本地记录按事件幂等，拒绝未知提示词", async (context) => {
     () => recordLocalUsage({ repoRoot: root, payload: { ...event, eventId: "event-9012", managedVersions: { "demo.prompt": { month: currentMonth, revision: 1, sha256: "bad" } } }, config }),
     /Invalid managed prompt version/
   );
+  const fetchedAt = "2026-10-04T10:00:00.000Z";
+  await recordLocalUsage({
+    repoRoot: root,
+    payload: { ...event, eventId: "event-3456", managedVersions: { "demo.prompt": { month: currentMonth, revision: 7, sha256: "a".repeat(64), fetched_at: fetchedAt } } },
+    config
+  });
+  assert.equal((await readLocalUsageStore(root)).months[currentMonth].managedVersions["demo.prompt"].fetched_at, fetchedAt);
+  await assert.rejects(
+    () => recordLocalUsage({ repoRoot: root, payload: { ...event, eventId: "event-7890", managedVersions: { "demo.prompt": { month: currentMonth, revision: 1, sha256: "a".repeat(64), fetched_at: "invalid" } } }, config }),
+    /Invalid managed prompt version/
+  );
+});
+
+test("browser usage storage retains the live Prompt fetch timestamp", () => {
+  const fetchedAt = "2026-10-04T10:00:00.000Z";
+  const store = normalizeUsageStore({
+    schemaVersion: 1,
+    months: { "2026-10": { subtypes: {}, enhancers: {}, managedVersions: {
+      "chatpack.sample": { month: "2026-10", revision: 4, sha256: "b".repeat(64), fetched_at: fetchedAt }
+    } } }
+  });
+  assert.equal(store.months["2026-10"].managedVersions["chatpack.sample"].fetched_at, fetchedAt);
 });
 
 test("浏览器统计只保留合法月份和非负整数次数", () => {

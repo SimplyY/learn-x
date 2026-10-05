@@ -5,7 +5,7 @@ import { mkdir, open as openFile, readdir, readFile, rename, stat, unlink, write
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { buildInsightContext, buildInsightPrompt, buildPromptAssets, findTask, isSubstantive, preflightSnapshotFreshness, readPeriodicConfig } from "./periodic-insight-core.mjs";
+import { buildInsightContext, buildInsightPrompt, buildPromptAssets, findTask, isSubstantive, readPeriodicConfig } from "./periodic-insight-core.mjs";
 import { runBridgeCli } from "../../learn-x-weekly-automation/scripts/generate-ai-review.mjs";
 import { dcPublishXml } from "../../../lib/inquiry-wiki.mjs";
 
@@ -31,24 +31,46 @@ export async function runPeriodicInsight(options = {}) {
     if (options.force && (!options.send || !options.confirm)) throw new Error("force-requires-send-confirm");
     const previous = await readJson(paths.state);
     if (previous && !new Set(["preview", "submitted", "generated", "archive_pending", "completed", "needs_review", "skipped"]).has(previous.status)) throw new Error("unknown-periodic-insight-state");
-    if (["submitted", "needs_review"].includes(previous?.status) && !options.force) return { ...previous, paths };
+    const retryablePromptReadFailure = previous?.status === "needs_review" && String(previous.reason || "").startsWith("latest-prompt-read-failed:");
+    if ((previous?.status === "submitted" || (previous?.status === "needs_review" && !retryablePromptReadFailure)) && !options.force) return { ...previous, paths };
     await writeFile(paths.context, context.content, "utf8"); await writeJson(paths.manifest, context.manifest);
-    const prompt = await buildInsightPrompt({ repoRoot, context: context.content, task, target: context.target, maxPromptChars: policy.maxPromptChars || 120000 });
-    // 在线消费 Snapshot 前的使用时校准：远端有新版本自动 pull，失败与过期都显式告警，不阻塞运行。
-    const snapshotPreflight = options.skipSnapshotPreflight ? { checked: false, pulled: false, stale_ids: [], remote_changed_ids: [], warnings: [] } : await (options.runSnapshotPreflight || preflightSnapshotFreshness)({ repoRoot, log: (line) => console.error(`[snapshot-preflight] ${line}`) });
-    const prompt_assets = await buildPromptAssets({ repoRoot, task });
+    let promptAssets;
+    let prompt;
+    try {
+      promptAssets = await (options.fetchLatestPromptAssets || buildPromptAssets)({ repoRoot, task });
+      prompt = await buildInsightPrompt({ repoRoot, context: context.content, task, target: context.target, promptAssets, maxPromptChars: policy.maxPromptChars || 120000 });
+    } catch (error) {
+      const failed = {
+        schemaVersion: 1,
+        taskId,
+        runKey,
+        target: context.target,
+        status: "needs_review",
+        reason: `latest-prompt-read-failed: ${String(error?.message || error).split("\n")[0]}`,
+        contextSha256: context.sha256,
+        updatedAt: new Date().toISOString()
+      };
+      await writeJson(paths.state, failed);
+      return { ...failed, paths };
+    }
+    const prompt_assets = promptAssets.filter((asset) => asset.prompt_id).map((asset) => ({
+      prompt_id: asset.prompt_id,
+      prompt_revision: asset.prompt_revision,
+      prompt_sha256: asset.prompt_sha256,
+      prompt_fetched_at: asset.prompt_fetched_at
+    }));
     const inputChanged = previous && (previous.contextSha256 !== context.sha256 || previous.promptSha256 !== sha256(prompt));
     if (["completed", "generated", "archive_pending"].includes(previous?.status) && inputChanged && !options.force) {
       const review = { ...previous, status: "needs_review", reason: "input-changed-after-completion", updatedAt: new Date().toISOString() }; await writeJson(paths.state, review); return { ...review, paths };
     }
-    if (["completed", "needs_review", "submitted"].includes(previous?.status) && !options.force) return { ...previous, paths };
+    if ((["completed", "submitted"].includes(previous?.status) || (previous?.status === "needs_review" && !retryablePromptReadFailure)) && !options.force) return { ...previous, paths };
     if (["generated", "archive_pending"].includes(previous?.status)) {
       if (await exists(paths.generated)) return options.archive ? archiveIfRequested({ ...options, repoRoot, task, context, paths, state: previous }) : { ...previous, paths };
       if (!options.force) { const review = { ...previous, status: "needs_review", reason: "generated-output-missing", updatedAt: new Date().toISOString() }; await writeJson(paths.state, review); return { ...review, paths }; }
     }
-    if (!task.prompt.productionReady || !options.send) { const preview = { schemaVersion: 1, taskId, runKey, target: context.target, status: "preview", contextSha256: context.sha256, promptSha256: sha256(prompt), prompt_assets, snapshot_preflight: snapshotPreflight, ...(task.prompt.productionReady ? { prompt } : { reason: "production-not-ready" }), updatedAt: new Date().toISOString() }; await writeJson(paths.state, preview); return { ...preview, paths }; }
+    if (!task.prompt.productionReady || !options.send) { const preview = { schemaVersion: 1, taskId, runKey, target: context.target, status: "preview", contextSha256: context.sha256, promptSha256: sha256(prompt), prompt_assets, updatedAt: new Date().toISOString(), ...(task.prompt.productionReady ? {} : { reason: "production-not-ready" }) }; await writeJson(paths.state, preview); return { ...preview, paths }; }
     if (!options.confirm) throw new Error("send-requires-confirm");
-    const submitted = { schemaVersion: 1, taskId, runKey, target: context.target, status: "submitted", contextSha256: context.sha256, promptSha256: sha256(prompt), prompt_assets, snapshot_preflight: snapshotPreflight, submittedAt: new Date().toISOString() }; await writeJson(paths.state, submitted);
+    const submitted = { schemaVersion: 1, taskId, runKey, target: context.target, status: "submitted", contextSha256: context.sha256, promptSha256: sha256(prompt), prompt_assets, submittedAt: new Date().toISOString() }; await writeJson(paths.state, submitted);
     let bridge;
     try { bridge = await (options.runBridge || runBridgeCli)(prompt, { ...options, bridgePath: options.bridgePath || defaultBridge }); } catch (error) { const review = { ...submitted, status: "needs_review", reason: String(error?.message || error), updatedAt: new Date().toISOString() }; await writeJson(paths.state, review); return { ...review, paths }; }
     const result = bridge?.result || bridge;

@@ -18,6 +18,7 @@ test("weekly Process Pack no longer embeds Action Feedback (retired, Core V1 own
   }, [], [], [], { sourceCount: 0, files: [] });
 
   assert.match(pack, /行动与反馈直接来自第 7 节各来源材料正文/);
+  assert.match(pack, /完整受治理 Weekly Output 主提示词/);
   assert.match(pack, /## 9\. 上周 Weekly Output（仅作对照）/);
   assert.doesNotMatch(pack, /Action Feedback/);
   assert.doesNotMatch(pack, /action-feedback\.md/);
@@ -254,23 +255,18 @@ test("Stage 3 prepares candidates before one confirmation and generates the imag
   assert.match(stage2, /确认卡缺少图片路径、备份目的地或 Flomo 目的地时，不得请求确认或执行任何写入/);
 });
 
-test("weekly Output rules define concise comparison and bounded user-answer questions", async () => {
-  const [rules, prompt] = await Promise.all([
-    readFile(new URL("../resources/weekly-output-rules.md", import.meta.url), "utf8"),
-    readFile(new URL("../../../../02_prompts/chatpack/reflective-decision/weekly-output.md", import.meta.url), "utf8")
-  ]);
-  assert.match(rules, /上周 Weekly Output（仅作对照）/);
-  assert.match(rules, /600 字/);
-  assert.match(rules, /本周总览.*核心洞察/s);
-  assert.match(rules, /全文核心重点纪要.*芒格之魂的洞察.*问题与回答/);
-  assert.match(rules, /其它相关内容只作次级参照/);
-  assert.match(rules, /不显示百分比、不机械打分/);
-  assert.match(rules, /10–20 字/);
-  assert.match(rules, /最多 50 字/);
-  assert.match(rules, /问题核心加补充合计不超过 100 字/);
-  assert.match(prompt, /跨周对照/);
-  assert.match(prompt, /10–20 字为目标、最多 50 字/);
-  assert.match(prompt, /问题与补充合计最多 100 字/);
+test("complete Weekly Output prompt defines facts, memory candidates, comparison and machine contracts", async () => {
+  const prompt = await readFile(new URL("../../../../02_prompts/chatpack/reflective-decision/weekly-output.md", import.meta.url), "utf8");
+  assert.match(prompt, /^# Weekly Output 核心输出要求/m);
+  assert.match(prompt, /Weekly Output 是 Learn-X 的\*\*周度记忆层\*\*/);
+  assert.match(prompt, /本周事实必须来自当前 Process Pack/);
+  assert.match(prompt, /## 9\. 值得长期保留/);
+  assert.match(prompt, /最多 600 字/);
+  assert.match(prompt, /必须提出\*\*恰好 3 个\*\*/);
+  assert.match(prompt, /## 11\. 全文核心重点纪要/);
+  assert.match(prompt, /## 12\. 芒格之魂的洞察/);
+  assert.match(prompt, /## 13\. 本周最值得思考的 3 个问题与回答/);
+  assert.doesNotMatch(prompt, /请查看.*weekly-output-rules/);
 });
 
 function renderWeeklyPackWithComparison(previousOutput) {

@@ -149,78 +149,28 @@
       },
       {
         "path": "README.md",
-        "layer": "dao",
-        "baseWeight": 85,
+        "layer": "shu",
+        "baseWeight": 60,
         "tags": [
-          "项目内核"
+          "系统说明"
         ],
         "defaultStrategy": "normal"
       },
       {
-        "path": "01_core/道/00_README.md",
+        "path": "Core/道",
         "layer": "dao",
         "baseWeight": 85,
         "tags": [
-          "道",
-          "总纲"
+          "Core 道"
         ],
         "defaultStrategy": "high"
       },
       {
-        "path": "01_core/道/01_自我认知.md",
-        "layer": "dao",
-        "baseWeight": 85,
-        "tags": [
-          "道",
-          "自我认知"
-        ],
-        "defaultStrategy": "normal"
-      },
-      {
-        "path": "01_core/道/02_人生导师.md",
-        "layer": "dao",
-        "baseWeight": 85,
-        "tags": [
-          "道",
-          "人生导师"
-        ],
-        "defaultStrategy": "normal"
-      },
-      {
-        "path": "01_core/道/03_世界之道.md",
-        "layer": "dao",
-        "baseWeight": 85,
-        "tags": [
-          "道",
-          "世界观"
-        ],
-        "defaultStrategy": "normal"
-      },
-      {
-        "path": "01_core/法/*/领域地图.md",
+        "path": "Core/法",
         "layer": "fa",
-        "baseWeight": 80,
+        "baseWeight": 70,
         "tags": [
-          "法",
-          "领域地图"
-        ],
-        "defaultStrategy": "normal"
-      },
-      {
-        "path": "01_core/法/read/**",
-        "layer": "read",
-        "baseWeight": 45,
-        "tags": [
-          "阅读"
-        ],
-        "defaultStrategy": "normal"
-      },
-      {
-        "path": "01_core/法/theme-read/**",
-        "layer": "read",
-        "baseWeight": 45,
-        "tags": [
-          "主题阅读"
+          "Core 法"
         ],
         "defaultStrategy": "normal"
       }

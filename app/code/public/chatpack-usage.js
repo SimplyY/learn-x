@@ -75,7 +75,13 @@ function normalizeManagedVersions(values) {
   if (!values || typeof values !== "object" || Array.isArray(values)) return {};
   return Object.fromEntries(Object.entries(values).filter(([id, value]) =>
     /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(id) && value && isValidUsageMonth(value.month) && Number.isInteger(value.revision) && value.revision >= 0 && /^[a-f0-9]{64}$/.test(value.sha256)
-  ).map(([id, value]) => [id, { month: value.month, revision: value.revision, sha256: value.sha256, ...(value.synced_at ? { synced_at: value.synced_at } : {}) }]));
+  ).map(([id, value]) => [id, {
+    month: value.month,
+    revision: value.revision,
+    sha256: value.sha256,
+    ...(value.synced_at ? { synced_at: value.synced_at } : {}),
+    ...(value.fetched_at && !Number.isNaN(Date.parse(value.fetched_at)) ? { fetched_at: value.fetched_at } : {})
+  }]));
 }
 
 export function normalizeUsageStore(store, device = "browser") {

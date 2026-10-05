@@ -50,7 +50,7 @@ const ACTION_ID_RE = /^AF-\d{4}-W\d{2}-\d{2}$/;
 const SYNC_LOG_DIR = "04_output/_dist/action-feedback";
 const SYNC_LOG_FILE = "sync-log.jsonl";
 export const ACTION_FEEDBACK_REPORT = "action-feedback.md";
-export const CORE_TOPICS_FILE = "01_core/道/人生核心议题.md";
+export const CORE_TOPICS_FILE = "03_input/_mirrors/人生核心议题.md";
 export const MAX_REPORT_CHARS = 1000;
 
 async function runLarkCli(args) {

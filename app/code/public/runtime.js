@@ -18,7 +18,7 @@ export const state = {
   contextSelections: new Map(),
   customDraftSelections: new Set(),
   expandedCustomContextDirs: new Set(["Documents"]),
-  expandedContextDirs: new Set(["", "01_core", "01_core/道", "01_core/法"]),
+  expandedContextDirs: new Set(["", "Core", "01_core", "01_core/memory"]),
   expandedContextFilePreviews: new Set(),
   currentQuestionTouched: false,
   chatPack: "",

@@ -116,6 +116,7 @@ let promptProtocolsLoaded = false;
 let lastAutoAssembledPrompt = "";
 let periodicInsightRequestId = 0;
 let selectedContextStatsRequestId = 0;
+let contextGenerationSequence = 0;
 const contextFileContentPromises = new Map();
 const periodicInsightContextApi = window.LEARN_X_PERIODIC_INSIGHT_CONTEXT_API || "";
 
@@ -240,7 +241,7 @@ async function getJson(url) {
     const file = state.contextFileMap.get(filePath) || state.files.find((item) => item.path === filePath);
     if (!file) throw new Error(`File not found in static graph: ${filePath}`);
     if (file.external) {
-      const response = await fetch(parsedUrl);
+      const response = await fetch(parsedUrl, file.live ? { cache: "no-store" } : undefined);
       if (!response.ok) throw new Error(`Unable to read Documents context: ${response.status}`);
       return response.json();
     }
@@ -306,13 +307,13 @@ export async function ensurePromptProtocols() {
   state.managedAssets = payload.assets || {};
   for (const type of DIALOGUE_TYPES) {
     for (const subtype of type.subtypes || []) {
-      subtype.protocol = payload.subtypes?.[subtype.id] || subtype.protocol || "";
-      subtype.managedAsset = state.managedAssets[subtype.id] || null;
+      subtype.managedAsset = state.managedAssets[subtype.id] || subtype.managedPrompt || null;
+      subtype.protocol = subtype.managedAsset ? "" : payload.subtypes?.[subtype.id] || subtype.protocol || "";
     }
   }
   for (const enhancer of ENHANCERS) {
-    enhancer.protocol = payload.enhancers?.[enhancer.id] || enhancer.protocol || "";
-    enhancer.managedAsset = state.managedAssets[enhancer.id] || null;
+    enhancer.managedAsset = state.managedAssets[enhancer.id] || enhancer.managedPrompt || null;
+    enhancer.protocol = enhancer.managedAsset ? "" : payload.enhancers?.[enhancer.id] || enhancer.protocol || "";
   }
   promptProtocolsLoaded = true;
   if (els.metaPrompt.value === lastAutoAssembledPrompt) setAutoAssembledPrompt();
@@ -638,11 +639,15 @@ export function renderDialogueSubtypes() {
 
   for (const subtype of visible) {
     const button = document.createElement("button");
+    const unavailableReason = managedPromptUnavailableReason(subtype);
     button.type = "button";
     button.className = `dialogue-subtype-btn${subtype.id === state.activeDialogueSubtypeId ? " active" : ""}`;
     bindPromptTooltip(button, subtype.tooltip || subtype.summary || subtype.protocol || subtype.name);
-    button.textContent = usage ? `${subtype.name}${usageBadge(subtype.usageCount)}` : subtype.name;
+    button.disabled = Boolean(unavailableReason);
+    if (unavailableReason) button.title = unavailableReason;
+    button.textContent = `${usage ? `${subtype.name}${usageBadge(subtype.usageCount)}` : subtype.name}${unavailableReason ? "（不可用）" : ""}`;
     button.addEventListener("click", () => {
+      if (unavailableReason) return;
       if (subtype.id === state.activeDialogueSubtypeId) {
         if (activePeriodOutputMode()) applyChatPackSelection(`已恢复「${subtype.name}」推荐上下文。`);
         return;
@@ -662,7 +667,10 @@ export function renderDialogueSubtypes() {
     const select = document.createElement("select");
     select.setAttribute("aria-label", "其他提示词");
     select.innerHTML = `<option value="">选择低频提示词</option>${hidden
-      .map((subtype) => `<option value="${escapeHtml(subtype.id)}"${subtype.id === state.activeDialogueSubtypeId ? " selected" : ""}>${escapeHtml(subtype.name)}${usageBadge(subtype.usageCount)}</option>`)
+      .map((subtype) => {
+        const unavailableReason = managedPromptUnavailableReason(subtype);
+        return `<option value="${escapeHtml(subtype.id)}"${subtype.id === state.activeDialogueSubtypeId ? " selected" : ""}${unavailableReason ? " disabled" : ""}>${escapeHtml(subtype.name)}${usageBadge(subtype.usageCount)}${unavailableReason ? "（不可用）" : ""}</option>`;
+      })
       .join("")}`;
     select.addEventListener("change", () => {
       const subtype = hidden.find((item) => item.id === select.value);
@@ -686,11 +694,15 @@ export function renderEnhancers() {
 
   for (const enhancer of orderedButtonItems) {
     const button = document.createElement("button");
+    const unavailableReason = managedPromptUnavailableReason(enhancer);
     button.type = "button";
     button.className = `dialogue-subtype-btn${state.activeEnhancerIds.has(enhancer.id) ? " active" : ""}`;
     bindPromptTooltip(button, enhancer.tooltip || enhancer.summary || enhancer.protocol || enhancer.name);
-    button.textContent = usage ? `${enhancer.name}${usageBadge(enhancer.usageCount)}` : enhancer.name;
+    button.disabled = Boolean(unavailableReason);
+    if (unavailableReason) button.title = unavailableReason;
+    button.textContent = `${usage ? `${enhancer.name}${usageBadge(enhancer.usageCount)}` : enhancer.name}${unavailableReason ? "（不可用）" : ""}`;
     button.addEventListener("click", () => {
+      if (unavailableReason) return;
       const enhancerWasActive = state.activeEnhancerIds.has(enhancer.id);
       if (state.activeEnhancerIds.has(enhancer.id)) {
         state.activeEnhancerIds.delete(enhancer.id);
@@ -1161,7 +1173,7 @@ function recommendedSourcesForSelection() {
   const subtype = activeDialogueSubtype();
   const type = activeDialogueType();
   const includeBase = subtype?.includeBaseRecommendedSources !== false;
-  const baseSources = includeBase && type?.id !== "diagram-generate" ? ["01_core/道", "01_core/memory"] : [];
+  const baseSources = includeBase && type?.id !== "diagram-generate" ? ["Core/道", "01_core/memory"] : [];
   const configured = subtype?.recommendedSources?.length ? subtype.recommendedSources : type?.recommendedSources || [];
   const recommended = uniqueList([...baseSources, ...configured]);
   const periodMode = activePeriodOutputMode();
@@ -1496,30 +1508,46 @@ function strategyTooltip(strategy, scope = "file") {
 async function generateContext() {
   if (activeDialogueType()?.id === "insight") {
     const payload = await loadPeriodicInsightContext();
-    if (!payload?.content) return;
+    if (!payload?.content) return false;
     setProgress(100);
-    return;
+    return true;
   }
+  const generationId = ++contextGenerationSequence;
+  state.context = "";
+  renderChatPackPreview();
+  setProgress(0);
   const selectedFiles = selectedContextFiles();
   if (!selectedFiles.length) {
     els.learningStatus.textContent = "建议选择一个上下文来源。";
-    return;
+    return false;
   }
 
   setProgress(18);
   els.learningStatus.textContent = "正在读取并编排上下文。";
 
-  setProgress(48);
-  const filesWithContent = await loadContextContents(selectedFiles);
-  setProgress(82);
-  const weighted = buildWeightedContext(filesWithContent);
-  state.context = weighted;
-  setProgress(100);
-  els.learningStatus.textContent = `已编排 ${filesWithContent.length} 个文件的上下文。`;
-  renderChatPackPreview();
+  try {
+    setProgress(48);
+    const filesWithContent = await loadContextContents(selectedFiles);
+    if (generationId !== contextGenerationSequence) return false;
+    setProgress(82);
+    const weighted = buildWeightedContext(filesWithContent);
+    state.context = weighted;
+    setProgress(100);
+    els.learningStatus.textContent = `已编排 ${filesWithContent.length} 个文件的上下文。`;
+    renderChatPackPreview();
+    return true;
+  } catch (error) {
+    if (generationId !== contextGenerationSequence) return false;
+    state.context = "";
+    setProgress(0);
+    els.learningStatus.textContent = `上下文读取失败，本轮未生成：${error.message || "未知错误"}`;
+    renderChatPackPreview();
+    return false;
+  }
 }
 
 function resetGeneratedContext(message) {
+  contextGenerationSequence += 1;
   state.context = "";
   setProgress(0);
   els.learningStatus.textContent = message;
@@ -1536,9 +1564,12 @@ function refreshSelectedContextStats() {
   }
   const files = selectedContextFiles();
   const fileCount = files.length;
-  const missing = files.filter((file) => contextFileCharCount(file) === null);
-  const totalChars = missing.length ? null : files.reduce((total, file) => total + contextFileCharCount(file), 0);
-  renderSelectedContextStats(fileCount, totalChars, missing.length ? "正在统计字数" : "");
+  const measurableFiles = files.filter((file) => !file.live);
+  const hasLiveFiles = measurableFiles.length !== fileCount;
+  const missing = measurableFiles.filter((file) => contextFileCharCount(file) === null);
+  const totalChars = missing.length ? null : measurableFiles.reduce((total, file) => total + contextFileCharCount(file), 0);
+  const status = missing.length ? "正在统计字数" : hasLiveFiles ? "Core 正文在生成时实时读取" : "";
+  renderSelectedContextStats(fileCount, totalChars, status);
 
   if (missing.length) {
     loadContextContents(missing).then(() => {
@@ -1578,19 +1609,105 @@ async function resetPrompt() {
 }
 
 async function generateChatPack() {
-  await ensurePromptProtocols();
+  let livePromptAssets;
+  let promptSelection;
+  try {
+    await ensurePromptProtocols();
+    promptSelection = captureChatPackPromptSelection();
+    livePromptAssets = await fetchSelectedLivePromptAssets();
+  } catch (error) {
+    els.learningStatus.textContent = `飞书最新 Prompt 读取失败，本轮未生成也未复制：${error.message || "未知错误"}`;
+    return;
+  }
+  if (!sameChatPackPromptSelection(promptSelection)) {
+    els.learningStatus.textContent = "Prompt 选择在读取期间发生变化，本轮已停止，未生成也未复制；请重新生成。";
+    return;
+  }
   if (!els.metaPrompt.value.trim()) setAutoAssembledPrompt();
   if (chatPackContextEnabled()) {
-    await generateContext();
-    if (!state.context) return;
+    const contextReady = await generateContext();
+    if (!contextReady) return;
   }
-  const chatPack = buildChatPack();
+  if (!sameChatPackPromptSelection(promptSelection)) {
+    els.learningStatus.textContent = "Prompt 选择在生成期间发生变化，本轮已停止，未生成也未复制；请重新生成。";
+    return;
+  }
+  logPromptFetchEvidence(livePromptAssets);
+  const chatPack = buildChatPack({ livePromptAssets });
   const copied = await copyText(chatPack, "Chat Pack 已生成并复制。");
-  const usageResult = await recordGeneratedUsage();
+  const usageResult = await recordGeneratedUsage(livePromptAssets, promptSelection);
   if (usageResult.warning) {
     els.learningStatus.textContent = `${copied ? "Chat Pack 已生成并复制。" : "Chat Pack 已生成。"}${usageResult.warning}`;
   }
   if (copied) showToast("已复制到剪贴板，请去 ai chat");
+}
+
+function managedPromptUnavailableReason(item) {
+  const managed = item?.managedAsset || item?.managedPrompt;
+  if (state.runtime?.target === "public" && managed?.unavailable) {
+    return managed.unavailable_reason || "公开静态版无法读取飞书受治理 Prompt。";
+  }
+  return "";
+}
+
+async function fetchSelectedLivePromptAssets() {
+  const selected = [
+    activeDialogueSubtype(),
+    ...selectedEnhancers().filter((enhancer) => enhancer.group !== "length")
+  ].filter(Boolean);
+  const managed = selected
+    .map((item) => ({ item, asset: item.managedAsset || item.managedPrompt }))
+    .filter(({ asset }) => asset?.prompt_id);
+  if (!managed.length) return {};
+
+  const unavailable = managed.find(({ item, asset }) => managedPromptUnavailableReason(item) || asset.unavailable);
+  if (unavailable) {
+    throw new Error(managedPromptUnavailableReason(unavailable.item) || unavailable.asset.unavailable_reason || "此 Prompt 在当前构建中不可用。");
+  }
+  if (state.runtime?.target !== "local") {
+    throw new Error("当前运行环境无法读取受治理 Prompt 的飞书最新版本。");
+  }
+
+  const promptIds = [...new Set(managed.map(({ asset }) => asset.prompt_id))];
+  const response = await fetch("api/chatpack/prompts/latest", {
+    method: "POST",
+    cache: "no-store",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ prompt_ids: promptIds })
+  });
+  let payload;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new Error(`实时读取接口返回无效 JSON（HTTP ${response.status}）。`);
+  }
+  if (!response.ok) throw new Error(payload.error || `实时读取接口失败（HTTP ${response.status}）。`);
+  const assets = payload?.assets;
+  if (!assets || typeof assets !== "object" || Array.isArray(assets) ||
+      Object.keys(assets).length !== promptIds.length || promptIds.some((id) => !Object.hasOwn(assets, id))) {
+    throw new Error("实时读取接口未返回全部所需 Prompt；本轮已停止。");
+  }
+  for (const promptId of promptIds) {
+    const asset = assets[promptId];
+    if (!asset || asset.contract_version !== "prompt-asset/v1" || asset.prompt_id !== promptId ||
+        !Number.isInteger(asset.prompt_revision) || asset.prompt_revision < 0 ||
+        typeof asset.content !== "string" || !asset.content.trim() ||
+        !/^[a-f0-9]{64}$/.test(asset.prompt_sha256) || !asset.prompt_fetched_at ||
+        Number.isNaN(Date.parse(asset.prompt_fetched_at))) {
+      throw new Error(`飞书返回的 Prompt ${promptId} 不完整；本轮已停止。`);
+    }
+  }
+  return assets;
+}
+
+function logPromptFetchEvidence(assets) {
+  const evidence = Object.values(assets || {}).map((asset) => ({
+    prompt_id: asset.prompt_id,
+    revision: asset.prompt_revision,
+    sha256: asset.prompt_sha256,
+    fetched_at: asset.prompt_fetched_at
+  }));
+  if (evidence.length) console.info("Learn-X Feishu Prompt latest", evidence);
 }
 
 function createUsageEventId() {
@@ -1607,26 +1724,20 @@ function readBrowserUsageStore() {
   return emptyUsageStore("browser");
 }
 
-async function recordGeneratedUsage() {
+async function recordGeneratedUsage(livePromptAssets = {}, promptSelection = captureChatPackPromptSelection()) {
   if (!chatPackContextEnabled()) return { recorded: false };
-  const subtype = activeDialogueSubtype();
-  if (!subtype) return { recorded: false };
-  const enhancerIds = selectedEnhancers()
-    .filter((enhancer) => enhancer.group !== "length")
-    .map((enhancer) => enhancer.id);
+  if (!promptSelection.subtypeId) return { recorded: false };
+  const { subtypeId, enhancerIds } = promptSelection;
   const month = currentShanghaiMonth();
-  const managedVersions = Object.fromEntries([
-    subtype.managedAsset,
-    ...selectedEnhancers().filter((enhancer) => enhancer.group !== "length").map((enhancer) => enhancer.managedAsset)
-  ].filter(Boolean).map((asset) => [asset.prompt_id, {
+  const managedVersions = Object.fromEntries(Object.values(livePromptAssets).map((asset) => [asset.prompt_id, {
     month,
-    revision: asset.revision,
-    sha256: asset.sha256,
-    synced_at: asset.synced_at
+    revision: asset.prompt_revision,
+    sha256: asset.prompt_sha256,
+    fetched_at: asset.prompt_fetched_at
   }]));
 
   if (state.runtime.target === "local") {
-    const payload = { eventId: createUsageEventId(), month, subtypeId: subtype.id, enhancerIds, ...(Object.keys(managedVersions).length ? { managedVersions } : {}) };
+    const payload = { eventId: createUsageEventId(), month, subtypeId, enhancerIds, ...(Object.keys(managedVersions).length ? { managedVersions } : {}) };
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         const response = await fetch("api/chatpack/usage", {
@@ -1645,7 +1756,7 @@ async function recordGeneratedUsage() {
   const write = async () => {
     const store = readBrowserUsageStore();
     const monthCounts = store.months[month] || emptyMonthCounts();
-    addUsageCount(monthCounts, "subtypes", subtype.id);
+    addUsageCount(monthCounts, "subtypes", subtypeId);
     for (const enhancerId of enhancerIds) addUsageCount(monthCounts, "enhancers", enhancerId);
     if (Object.keys(managedVersions).length) monthCounts.managedVersions = { ...(monthCounts.managedVersions || {}), ...managedVersions };
     store.months[month] = monthCounts;
@@ -1675,14 +1786,18 @@ async function copyChatPackUsage() {
   if (copied) showToast("使用记录已复制，请发送给 Learn-X");
 }
 
-function buildChatPack() {
+function buildChatPack({ livePromptAssets = {} } = {}) {
   const question = els.currentQuestion.value.trim() || "（未填写）";
   const questionReference = buildQuestionReference(question);
   const dialogueType = activeDialogueType();
   const dialogueSubtype = activeDialogueSubtype();
   const enhancers = selectedEnhancers();
   const lengthEnhancer = activeLengthEnhancer(enhancers);
-  const prompt = getCurrentPrompt();
+  const livePrompt = renderLiveSelectedPromptAssets(livePromptAssets);
+  const deferredPromptNote = !Object.keys(livePromptAssets).length && hasSelectedManagedPrompt()
+    ? "（受治理 Prompt 将在本地生成时从飞书读取最新正文；此预览不含其正文。）"
+    : "";
+  const prompt = [getCurrentPrompt(), livePrompt, deferredPromptNote].filter(Boolean).join("\n\n---\n\n");
   const emptyPrompt = isEmptyPromptSelection(dialogueType, dialogueSubtype);
   const contextEnabled = chatPackContextEnabled();
   const typeSystem = renderTypeSystem(dialogueType, dialogueSubtype, enhancers, emptyPrompt);
@@ -1842,6 +1957,11 @@ function selectedContextFiles() {
 async function loadContextContents(files) {
   return Promise.all(
     files.map(async (file) => {
+      if (file.live) {
+        const loaded = await getJson(`api/file?path=${encodeURIComponent(file.path)}`);
+        if (typeof loaded.content !== "string" || !loaded.content.trim()) throw new Error(`Core 来源内容为空：${file.path}`);
+        return { ...file, ...loaded };
+      }
       if (typeof file.content === "string") return file;
       const content = await loadContextFileContent(file);
       return { ...file, content };
@@ -1850,6 +1970,12 @@ async function loadContextContents(files) {
 }
 
 function loadContextFileContent(file) {
+  if (file.live) {
+    return getJson(`api/file?path=${encodeURIComponent(file.path)}`).then((loaded) => {
+      if (typeof loaded.content !== "string" || !loaded.content.trim()) throw new Error(`Core 来源内容为空：${file.path}`);
+      return loaded.content;
+    });
+  }
   if (typeof file.content === "string") return Promise.resolve(file.content);
   const pending = contextFileContentPromises.get(file.path);
   if (pending) return pending;
@@ -1934,12 +2060,16 @@ function renderContextAssemblyIntent(context, options = {}) {
 
 function renderContextNote(file) {
   const title = file.title && file.title !== file.path ? `《${file.title}》` : file.path;
-  return `> Context Note：${title}：${contextProfileForFile(file)}`;
+  const note = `> Context Note：${title}：${contextProfileForFile(file)}`;
+  if (!file.live) return note;
+  return `${note}\n> Core 来源证据：${file.sourceUrl} · 文档 ${file.documentId} · revision ${file.revision} · sha256 ${file.sha256} · readAt ${file.readAt}`;
 }
 
 function contextProfileForFile(file) {
   const path = file.path || "";
   if (path === "README.md") return "Learn-X 总目标、Chat Pack 定位和最小飞轮；用于校准系统初衷，避免把普通问题过度系统化。";
+  if (path === "Core/道") return "Core 正式道：长期价值与原则；只以返回的正式正文为准，不包含待整理附录。";
+  if (path === "Core/法") return "Core 薄法：跨系统原则与专业系统接口；专业领域完整方法见其权威系统。";
   if (file.layer === "memory" || path.includes("/memory/")) {
     return "用户近期输入、关注点和已沉淀判断；用于理解用户最近在做什么，但不能覆盖当前问题的新证据。";
   }
@@ -1993,6 +2123,40 @@ function demoteContextMarkdownHeadings(content) {
     const level = hashes.length + 3;
     return `${"#".repeat(level)} `;
   });
+}
+
+function hasSelectedManagedPrompt() {
+  return [activeDialogueSubtype(), ...selectedEnhancers().filter((enhancer) => enhancer.group !== "length")]
+    .some((item) => (item?.managedAsset || item?.managedPrompt)?.prompt_id);
+}
+
+function captureChatPackPromptSelection() {
+  const subtypeId = activeDialogueSubtype()?.id || null;
+  const enhancerIds = selectedEnhancers()
+    .filter((enhancer) => enhancer.group !== "length")
+    .map((enhancer) => enhancer.id);
+  return { subtypeId, enhancerIds, signature: JSON.stringify({ subtypeId, enhancerIds }) };
+}
+
+function sameChatPackPromptSelection(selection) {
+  return Boolean(selection) && captureChatPackPromptSelection().signature === selection.signature;
+}
+
+function renderLiveSelectedPromptAssets(livePromptAssets) {
+  const sections = [];
+  const subtype = activeDialogueSubtype();
+  const subtypeManaged = subtype?.managedAsset || subtype?.managedPrompt;
+  const subtypeAsset = subtypeManaged?.prompt_id ? livePromptAssets[subtypeManaged.prompt_id] : null;
+  if (subtypeAsset) sections.push(`**子类型 Prompt：${subtype.name}**\n\n${demotePromptMarkdownHeadings(subtypeAsset.content)}`);
+  for (const enhancer of selectedEnhancers().filter((item) => item.group !== "length")) {
+    const managed = enhancer.managedAsset || enhancer.managedPrompt;
+    const asset = managed?.prompt_id ? livePromptAssets[managed.prompt_id] : null;
+    if (asset) {
+      const note = enhancer.applicationNote ? `**使用说明**：${enhancer.applicationNote}\n\n` : "";
+      sections.push(`**增强器 Prompt：${enhancer.name}**\n\n${note}${demotePromptMarkdownHeadings(asset.content)}`);
+    }
+  }
+  return sections.join("\n\n---\n\n");
 }
 
 function renderChatPackPreview() {

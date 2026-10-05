@@ -3,6 +3,7 @@ import { cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildChatPackPromptPayload, buildContentPayload, buildGraphPayload, isPublicPrivatePath } from "./static-graph.mjs";
+import { readPromptAssets } from "./prompt-assets.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../..");
@@ -19,6 +20,11 @@ const graph = await buildGraphPayload({ includeContent: false, target, contextEn
 const content = await buildContentPayload({ target, contextEnabled });
 const prompts = await buildChatPackPromptPayload({ target });
 const assetReferences = new Map();
+
+if (target === "public") {
+  const promptManifest = await readPromptAssets(repoRoot, { optional: false });
+  await assertPublicArtifact(graph, content, prompts, promptManifest);
+}
 
 await rm(distRoot, { recursive: true, force: true });
 await cp(publicRoot, distRoot, {
@@ -49,8 +55,6 @@ await rewriteModuleImport(path.join(distRoot, "editor.js"), "./app.js", `./${ass
 await rewriteIndexReferences(path.join(distRoot, "index.html"), assetReferences, contextEnabled, target);
 await writeFile(path.join(distRoot, ".nojekyll"), "", "utf8");
 
-if (target === "public") assertPublicArtifact(graph);
-
 console.log(
   `Static site generated: ${path.relative(repoRoot, distRoot) || "dist"}/${target} (${graph.files.length} files, ${Object.keys(prompts.subtypes).length} Chat Pack prompts, ${Object.keys(prompts.enhancers).length} enhancers, context ${contextEnabled ? "on" : "off"}, ${assetReferences.size} hashed assets)`
 );
@@ -65,7 +69,7 @@ function resolveDistRoot(outDir) {
   return resolved;
 }
 
-function assertPublicArtifact(graphPayload) {
+async function assertPublicArtifact(graphPayload, contentPayload, promptPayload, promptManifest) {
   const exposedPaths = [
     ...(graphPayload.files || []).map((file) => file.path),
     ...(graphPayload.contextFiles || []).map((file) => file.path),
@@ -76,6 +80,40 @@ function assertPublicArtifact(graphPayload) {
   ];
   const leakedPath = exposedPaths.find(isPublicPrivatePath);
   if (leakedPath) throw new Error(`Public build exposes private path: ${leakedPath}`);
+
+  const serialized = JSON.stringify({ graph: graphPayload, content: contentPayload, prompts: promptPayload });
+  const coreSourceArtifacts = [
+    "https://ywhome.feishu.cn/wiki/BZKNwMA5KiczTFkiFAEcqUeDnXg",
+    "https://ywhome.feishu.cn/wiki/RfwBwmu6piXlM5kP0HRcFXMmn4b",
+    "W5R3d90wQoUlZRx7zNlcIffRnXf",
+    "DCdQdn4Qyor2QwxwZ6Hcnib6n89",
+    "Core/道",
+    "Core/法"
+  ];
+  const leakedCoreArtifact = coreSourceArtifacts.find((value) => serialized.includes(value));
+  if (leakedCoreArtifact) throw new Error(`Public build exposes Core source metadata: ${leakedCoreArtifact}`);
+
+  const managedPromptPaths = new Set(Object.values(promptManifest.assets || {}).map((asset) => asset.local_path.replaceAll("\\", "/")));
+  const exposedPromptPath = [
+    ...(graphPayload.chatPackConfig?.dialogueTypes || []).flatMap((type) => type.subtypes || []),
+    ...(graphPayload.chatPackConfig?.enhancers || [])
+  ].map((item) => item.promptPath).find((promptPath) => managedPromptPaths.has(promptPath));
+  if (exposedPromptPath) throw new Error(`Public build exposes governed Prompt metadata path: ${exposedPromptPath}`);
+
+  for (const [promptId, asset] of Object.entries(promptManifest.assets || {})) {
+    const promptPath = asset.local_path.replaceAll("\\", "/");
+    if (exposedPaths.includes(promptPath) || Object.hasOwn(contentPayload.files || {}, promptPath) || Object.hasOwn(contentPayload.customContextFiles || {}, promptPath)) {
+      throw new Error(`Public build exposes governed Prompt path: ${promptPath}`);
+    }
+    try {
+      const promptBody = (await readFile(path.join(repoRoot, promptPath), "utf8")).trim();
+      if (promptBody && serialized.includes(promptBody)) {
+        throw new Error(`Public build exposes governed Prompt body: ${promptId}`);
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
 }
 
 async function writeHashedFile(directory, basename, extension, content) {

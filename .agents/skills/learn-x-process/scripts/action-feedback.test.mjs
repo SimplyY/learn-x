@@ -99,7 +99,9 @@ test("ensureActionFeedbackDraft 不覆盖已有报告，核心议题缺失时标
   assert.match(await readFile(review.path, "utf8"), /未读取到短期核心议题/);
 
   const createdRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-action-feedback-created-"));
-  const created = await ensureActionFeedbackDraft({ week: "2026-W37", outputRoot: createdRoot, coreTopicsFile: path.join(repoRoot, "01_core/道/人生核心议题.md") });
+  const createdCoreTopicsFile = path.join(createdRoot, "core-topics.md");
+  await writeFile(createdCoreTopicsFile, `${CORE_DOC}\n<!-- status: fresh -->`, "utf8");
+  const created = await ensureActionFeedbackDraft({ week: "2026-W37", outputRoot: createdRoot, coreTopicsFile: createdCoreTopicsFile });
   assert.equal(created.status, "created");
 
   const unknownRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-action-feedback-unknown-status-"));
