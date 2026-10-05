@@ -20,6 +20,25 @@ test("source status merges sources atomically and reads back", async () => {
   }
 });
 
+test("concurrent collectors preserve every source status update", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-source-status-race-"));
+  const entries = [
+    ["daily", "daily.md"], ["flomo", "flomo.md"], ["weread", "weread.md"], ["jingdu", "jingdu.md"],
+    ["calendar", "calendar.md"], ["voice", "voice.md"], ["coach", "coach.md"], ["wisdom", "wisdom.md"],
+    ["wechat", "wechat.md"], ["build", "build.md"], ["build-bot", "build-bot.md"], ["health", "health.md"],
+    ["open-actions", "open-actions.md"], ["core", "core.md"]
+  ];
+  try {
+    await Promise.all(entries.map(([source, file]) => updateWeeklySourceStatus({
+      weekRoot: root, week: "2026-W32", source, status: "empty", file, count: 0, summary: "扫描完成，0条"
+    })));
+    const { sources } = await readWeeklySourceStatus(root, "2026-W32");
+    assert.deepEqual(Object.keys(sources).sort(), entries.map(([source]) => source).sort());
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("source status rejects unsafe or unknown entries", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-source-status-"));
   try {

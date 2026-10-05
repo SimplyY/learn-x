@@ -10,7 +10,7 @@
 
 - **F1** 来源状态契约 `wechat → "wechat.md"`（小写）：`learn-x-input/scripts/lib/source-status.mjs:11`（`SOURCE_FILES`）。
 - **F2** `wechat-weekly-input` 写 `WeChat.md`（大写）：`skills/wechat-weekly-input/scripts/append-wechat-captures.mjs`；旧截图存在于 `03_input/weekly/2026-W33、W34、W37/WeChat.md`。
-- **F3** 失败状态过滤按 basename 匹配且只排除「已登记且非 ready」：`learn-x-process/scripts/collect-weekly-input.mjs:115`（`filterFilesBySourceStatus`）；无状态条目的文件直接进入 input.json / Process Pack。`feishu-docs` 已有专属 fail-closed（:26–34），wechat 无。
+- **F3** 失败状态过滤按 basename 匹配且只排除「已登记且非 ready」：`learn-x-process/scripts/collect-weekly-input.mjs:115`（`filterFilesBySourceStatus`）；无状态条目的文件直接进入 input.json / Process Pack。
 - **F4** 周输入目录为 `03_input/weekly/YYYY-Www/`，单文件超限即停止（:75–82）；上限 `MAX_WEEKLY_INPUT_CHARS`（input-limits.mjs，当前 15,000）。
 - **F5** 备份整目录上传：`backup-weekly.mjs:13` `BACKUP_ROOTS = ["01_core", "03_input", "04_output"]` → 飞书云空间。
 - **F6** 现有确认口令与三阶段流程：`learn-x-weekly-automation/SKILL.md`（「周记已确认」→ 阶段 2；阶段 1 自动生成 AI 回顾与飞书周记草稿）。

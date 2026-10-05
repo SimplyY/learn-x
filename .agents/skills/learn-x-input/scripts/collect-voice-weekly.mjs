@@ -139,11 +139,12 @@ export function stripAdviceFromVoiceMarkdown(markdown) {
 
 export function compressVoiceForProcessPack(content) {
   const source = String(content).replace(/\r\n/g, "\n");
-  const firstRecord = source.search(/^## with /m);
+  const records = splitVoiceRecords(source);
+  const firstRecord = records.length ? source.indexOf(records[0]) : -1;
   if (firstRecord < 0) return stripAdviceFromVoiceMarkdown(source);
   const header = source.slice(0, firstRecord).trimEnd();
-  const records = splitVoiceRecords(source).map(compactVoiceRecord).filter(Boolean);
-  return `${header}\n\n${records.join("\n\n---\n\n")}\n`;
+  const compacted = records.map(compactVoiceRecord).filter(Boolean);
+  return `${header}\n\n${compacted.join("\n\n---\n\n")}\n`;
 }
 
 function compactVoiceRecord(markdown) {
@@ -205,11 +206,15 @@ export function voiceCompressionMetrics(source, candidate) {
 
 function splitVoiceRecords(content) {
   const source = String(content).replace(/\r\n/g, "\n");
-  const firstRecord = source.search(/^## with /m);
-  return firstRecord < 0 ? [] : source.slice(firstRecord)
-    .split(/(?=^## with )/m)
-    .map((record) => record.replace(/\n\s*---\s*$/u, "").trim())
-    .filter(Boolean);
+  const headings = [...source.matchAll(/^## .+$/gm)];
+  let starts = headings.filter((heading) => {
+    const nextHeading = headings.find((candidate) => candidate.index > heading.index);
+    const section = source.slice(heading.index, nextHeading?.index ?? source.length);
+    return /^- 录制时间：\s*\S+/m.test(section) && /^- 处理后原文字符数：\s*\d+/m.test(section);
+  });
+  if (!starts.length) starts = headings.filter((match) => /^## with /.test(match[0]));
+  return starts.map((heading, index) => source.slice(heading.index, starts[index + 1]?.index ?? source.length)
+    .replace(/\n\s*---\s*$/u, "").trim()).filter(Boolean);
 }
 
 function parseVoiceSections(text) {

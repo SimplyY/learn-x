@@ -192,7 +192,7 @@ export function extractRequiredSections(content) {
       .join("\n")
       .replace(/(?:\n\s*---\s*)+$/g, "")
       .trim();
-    const acceptedBody = key === "questionsAnswers" ? filterAnsweredQuestionAnswers(body) : body;
+    const acceptedBody = key === "questionsAnswers" ? filterAnsweredQuestionAnswers(body) : filterPlaceholderOnlyLines(body);
     if (!isSubstantiveSection(acceptedBody)) continue;
     result[key].push({ section: heading.title, text: acceptedBody });
   }
@@ -201,6 +201,24 @@ export function extractRequiredSections(content) {
   result.mungerInsights = uniqueCandidates(result.mungerInsights);
   result.questionsAnswers = uniqueCandidates(result.questionsAnswers);
   return result;
+}
+
+function filterPlaceholderOnlyLines(body) {
+  return String(body)
+    .split(/\r?\n/)
+    .filter((line) => {
+      const text = line.trim();
+      if (!text) return true;
+      const content = text
+        .replace(/^[-*+]\s+/, "")
+        .replace(/^\d+[.)、．]\s*/, "")
+        .replace(/^>\s*/, "")
+        .trim();
+      return Boolean(content) && !/^(?:todo|待补充|暂无|无|占位|x{1,3}|…+|\.{3,})[。.!！]?$/i.test(content);
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function normalizeHeading(title) {
@@ -250,7 +268,9 @@ function filterAnsweredQuestionAnswers(body) {
 }
 
 function isAnsweredQuestionEntry(lines) {
-  const textLines = lines.map((line) => line.trim()).filter(Boolean);
+  const textLines = lines
+    .map((line) => line.replace(/\*\*([^*]+)\*\*/g, "$1").replace(/__([^_]+)__/g, "$1").replace(/\*([^*]+)\*/g, "$1").trim())
+    .filter(Boolean);
   if (!textLines.length) return false;
 
   const first = textLines[0].replace(/^\d+[.)、．]\s+/, "").replace(/^[-*]\s+/, "").trim();

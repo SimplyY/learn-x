@@ -39,6 +39,7 @@ test("template keeps people-and-events as an independent evidence-first axis", a
   assert.match(template, /先做两次独立扫描/);
   assert.match(template, /截图是证据/);
   assert.match(template, /AI 推测\/待确认/);
+  assert.match(template, /不得自行翻译或创造别名/);
   assert.match(template, /没有足够材料时写/);
 });
 

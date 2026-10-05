@@ -4,7 +4,6 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { defaultWeeklyReviewWeek, isoWeekRangeShanghai, normalizeWeek } from "./collect-weread-weekly.mjs";
-import { assertWeeklyInputSize } from "./lib/input-limits.mjs";
 import { fileExists, updateWeeklySourceStatus } from "./lib/source-status.mjs";
 
 const TIMEZONE = "Asia/Shanghai";
@@ -49,7 +48,6 @@ export async function writeCalendarWeekly(options = {}) {
     if (written) {
       const tempPath = `${calendarPath}.${process.pid}-${Date.now()}.tmp`;
       const content = renderCalendarMarkdown(payload);
-      assertWeeklyInputSize(content, calendarPath);
       await mkdir(outputRoot, { recursive: true });
       await writeFile(tempPath, content, "utf8");
       await rename(tempPath, calendarPath);

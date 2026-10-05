@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { inputKindFromRelativePath, isoWeekRange } from "./collect-weekly-input.mjs";
+import { inputKindFromRelativePath, isIgnoredWeeklyInputFile, isoWeekRange } from "./collect-weekly-input.mjs";
 import { readWeeklySourceStatus } from "../../learn-x-input/scripts/lib/source-status.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -279,6 +279,7 @@ async function collectFiles(dir, context) {
       continue;
     }
     if (!entry.isFile() || entry.name.startsWith("_") || ignoredNames.has(entry.name)) continue;
+    if (context.origin === "weekly" && isIgnoredWeeklyInputFile(entry.name)) continue;
     if (!supportedExtensions.has(path.extname(entry.name).toLowerCase())) continue;
     files.push({
       absolutePath,

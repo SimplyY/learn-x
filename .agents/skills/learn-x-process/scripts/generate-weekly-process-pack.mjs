@@ -4,42 +4,35 @@ import { fileURLToPath } from "node:url";
 import { compressVoiceForProcessPack, voiceCompressionMetrics } from "../../learn-x-input/scripts/collect-voice-weekly.mjs";
 import { inputSize, MAX_VOICE_WEEKLY_INPUT_CHARS, VOICE_TARGET_RETAINED_RATIO, VOICE_TARGET_RETAINED_RATIO_RANGE } from "../../learn-x-input/scripts/lib/input-limits.mjs";
 import { SOURCE_FILES } from "../../learn-x-input/scripts/lib/source-status.mjs";
-import { defaultWeeklyReviewWeek, isoWeekRange, writeWeeklyInput } from "./collect-weekly-input.mjs";
+import { WEEKLY_SOURCE_CONFIG, compareWeeklySources, weeklySourceForFile, weeklySourceForId } from "../../learn-x-input/scripts/lib/weekly-source-config.mjs";
+import { defaultWeeklyReviewWeek, isoWeekRange, collectWeeklyInput, writeWeeklyInput } from "./collect-weekly-input.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
+const JOURNAL_INPUT = { file: "weekly.md", type: "日志", source: "飞书周记", mode: "manual", group: "stage", priority: null, blocksPack: true, note: "阶段前提：已确认目标周周记" };
 const FIXED_WEEKLY_INPUTS = [
-  { file: SOURCE_FILES.daily, type: "日志", source: "飞书日记", statusSource: "daily" },
-  { file: "weekly.md", type: "日志", source: "飞书周记", mode: "manual", note: "阶段 2 采回的人工确认周记" },
-  { file: SOURCE_FILES["feishu-docs"], type: "输入", source: "个人飞书文档", statusSource: "feishu-docs", note: "本人创建或编辑；按历史 editor ID 归因" },
-  { file: SOURCE_FILES.flomo, type: "输入", source: "Flomo", statusSource: "flomo" },
-  { file: SOURCE_FILES.weread, type: "输入", source: "微信读书", statusSource: "weread" },
-  { file: SOURCE_FILES.jingdu, type: "输入", source: "精读", statusSource: "jingdu" },
-  { file: SOURCE_FILES.wechat, type: "输入", source: "微信聊天", statusSource: "wechat", optional: true, note: "按需手工采集" },
-  { file: SOURCE_FILES.voice, type: "输入", source: "Voice-X", statusSource: "voice" },
-  { file: SOURCE_FILES.calendar, type: "计划", source: "Time-X 日历", statusSource: "calendar" },
-  { file: SOURCE_FILES.health, type: "日志", source: "Health-X", statusSource: "health" },
-  { file: SOURCE_FILES.coach, type: "行动", source: "AI Coach", statusSource: "coach" },
-  { file: SOURCE_FILES.wisdom, type: "输入", source: "智慧之门", statusSource: "wisdom" },
-  { file: SOURCE_FILES.core, type: "输入", source: "Core V1 确认复盘", statusSource: "core", optional: true, note: "Core 回流为历史认知背景（按确认周归属），非第二份独立证据" },
-  { file: "ai.md", type: "补充", source: "AI 周回顾", mode: "manual", optional: true, note: "可选；确认后进入 Process" },
-  { file: SOURCE_FILES.build, type: "复盘", source: "Codex / Code X Build", statusSource: "build" },
-  { file: SOURCE_FILES["build-bot"], type: "复盘", source: "飞书机器人 Build", statusSource: "build-bot" }
+  WEEKLY_SOURCE_CONFIG[0],
+  JOURNAL_INPUT,
+  ...WEEKLY_SOURCE_CONFIG.slice(1).map((source) => ({
+    ...source,
+    statusSource: source.id,
+    mode: source.id === "ai" || source.id === "wechat" ? "manual" : undefined,
+    optional: !source.blocksPack
+  }))
 ];
 
 export async function generateWeeklyProcessPack(options = {}) {
   const week = options.week || defaultWeeklyReviewWeek();
-  const { payload } = await writeWeeklyInput({ week, excludeUnreviewedSources: options.excludeUnreviewedSources });
-  const packPayload = omitExcludedSourcesFromPack(payload, options.excludeUnreviewedSources);
-  const sourceSummaries = buildSourceSummaries(packPayload);
-  const { items, compression } = compressWeeklyProcessItems(packPayload.items, packPayload.files);
-  const fileSummaries = buildFileSummaries(packPayload, items);
+  const { payload } = await writeWeeklyInput({ week });
+  const sourceSummaries = buildSourceSummaries(payload);
+  const { items, compression } = compressWeeklyProcessItems(payload.items, payload.files);
+  const fileSummaries = buildFileSummaries(payload, items);
   const outputRoot = path.join(repoRoot, "04_output/_dist/weekly", distWeekId(payload.week));
   const previousOutput = await readPreviousWeeklyOutput(payload.week);
   const shellPath = await ensureWeeklyOutputShell(payload.week);
 
   await mkdir(outputRoot, { recursive: true });
-  const processPack = renderProcessPack(packPayload, sourceSummaries, fileSummaries, items, compression, previousOutput);
+  const processPack = renderProcessPack(payload, sourceSummaries, fileSummaries, items, compression, previousOutput);
   const outputPath = path.join(outputRoot, "process-pack.md");
   await writeFile(outputPath, processPack, "utf8");
 
@@ -51,23 +44,6 @@ export async function generateWeeklyProcessPack(options = {}) {
     previousOutput,
     outputPath,
     shellPath
-  };
-}
-
-function omitExcludedSourcesFromPack(payload, excludedSources = []) {
-  const omittedSources = new Set(excludedSources);
-  if (!omittedSources.size) return payload;
-
-  const sourceStatuses = Object.fromEntries(
-    Object.entries(payload.sourceStatuses || {}).filter(([source]) => !omittedSources.has(source))
-  );
-  const excludedFiles = (payload.excludedFiles || []).filter((file) => !omittedSources.has(file.source));
-  return {
-    ...payload,
-    sourceStatuses,
-    excludedFiles,
-    omittedSources: [...omittedSources],
-    stats: { ...payload.stats, excludedFileCount: excludedFiles.length }
   };
 }
 
@@ -246,6 +222,9 @@ function buildInputAuditRow({ payload, definition, fileSummary, statusInfo }) {
   return {
     type: definition.type,
     source: definition.source,
+    group: definition.group || "extra",
+    priority: definition.priority,
+    blocksPack: Boolean(definition.blocksPack),
     file: definition.file,
     status,
     count: isReady && fileSummary ? (entry?.count ?? fileSummary.itemCount) : (entry?.count ?? 0),
@@ -261,32 +240,31 @@ function buildInputAuditRow({ payload, definition, fileSummary, statusInfo }) {
 }
 
 export function renderInputAuditTable(payload, fileSummaries, compression) {
-  const sourceRows = buildInputAuditRows(payload, fileSummaries, compression);
-  const flomoRow = sourceRows.find((row) => row.file === "flomo.md");
-  const rows = [
-    ...(flomoRow ? [flomoRow] : []),
-    ...sourceRows.filter((row) => row !== flomoRow)
-  ];
+  const rows = buildInputAuditRows(payload, fileSummaries, compression);
+  const flomoRow = rows.find((row) => row.file === "flomo.md");
+  const tableRows = flomoRow ? [flomoRow, ...rows.filter((row) => row !== flomoRow)] : rows;
   return [
-    "> 固定顺序：Flomo → 其余输入。输入行展示文件类型 / 来源 → 状态 → 记录/材料 → 字符链路（文件原始 → 解析清洗后有效〔去重前〕→ Process Pack 最终纳入）→ 结果；只有发生实际语义压缩时才在字符链路后标注。`ready` 才计入，`empty/failed/unavailable` 和过期旧文件均不计入。",
+    "> 周记是阶段前提，自动来源按统一配置排序。输入行展示文件原始 → 解析清洗有效（去重前）→ Process Pack 最终纳入；只有发生实际压缩时才显示比例。",
     `> 本轮需关注：${renderInputAttention(rows)}`,
     "",
-    "| 类型 / 产物 | 来源 | 文件 | 状态 | 记录/材料 | 字符链路（文件原始 → 清洗有效〔去重前〕→ 最终纳入） | 结果 |",
-    "| --- | --- | --- | --- | ---: | ---: | --- |",
-    ...rows.map((row) => {
+    "| 组别 / 优先级 | 类型 / 产物 | 来源 | 文件 | 状态 | 记录/材料 | 字符链路（文件原始 → 清洗有效〔去重前〕→ 最终纳入） | 结果 |",
+    "| --- | --- | --- | --- | --- | ---: | ---: | --- |",
+    ...tableRows.map((row) => {
       const detail = compression.files?.find((item) => item.path.endsWith(`/${row.file}`));
-      const compressionNote = detail ? `（Voice-X 压缩，保留 ${Math.round(detail.retainedRatio * 100)}%）` : "";
+      const compressionNote = detail && detail.retainedRatio < 1 ? `（Voice-X 压缩，保留 ${Math.round(detail.retainedRatio * 100)}%）` : "";
       const characterChain = row.rawChars === "—" ? "—" : `${row.rawChars} → ${row.effectiveChars} → ${row.processChars}${compressionNote}`;
       const fileCell = row.link === "—" ? row.file : row.link;
-      return `| ${row.type} | ${row.source} | ${fileCell} | ${row.status} | ${row.count} | ${characterChain} | ${escapeTableCell(row.result)} |`;
+      const group = row.group === "stage" ? "阶段前提" : `${row.blocksPack ? "重要" : "可选"} / P${row.priority}`;
+      return `| ${group} | ${row.type} | ${row.source} | ${fileCell} | ${row.status} | ${row.count} | ${characterChain} | ${escapeTableCell(row.result)} |`;
     })
   ].join("\n");
 }
 
 function renderInputAttention(rows) {
   const attention = rows
-    .filter((row) => !row.optional && (/^(empty|failed|unavailable|未发现|needs_review|待人工审核)$/.test(row.status) || row.result.startsWith("异常")))
-    .map((row) => `${row.source}（${row.file}：${row.status}）`);
+    .filter((row) => (row.blocksPack || row.priority === 0)
+      && (/^(empty|failed|unavailable|未发现|未登记|needs_review|待人工审核)/.test(row.status) || row.result.startsWith("异常")))
+    .map((row) => `${row.blocksPack ? "阻断" : "P0缺口"}：${row.source}（${row.file}：${row.status}）`);
   return attention.length ? attention.join("；") : "无";
 }
 
@@ -552,11 +530,6 @@ function parseArgs(argv) {
     if (argv[index] === "--week") {
       options.week = argv[index + 1];
       index += 1;
-    } else if (argv[index] === "--exclude-unreviewed-source") {
-      const source = argv[index + 1];
-      if (source !== "feishu-docs") throw new Error("当前只允许显式排除 feishu-docs 来源。");
-      options.excludeUnreviewedSources = [...(options.excludeUnreviewedSources || []), source];
-      index += 1;
     }
   }
   return options;
@@ -569,9 +542,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   console.log(`Weekly process pack generated: ${path.relative(repoRoot, result.outputPath)}`);
   console.log(`Previous Weekly Output baseline: ${result.previousOutput.week} (${result.previousOutput.status}) at ${result.previousOutput.relativePath}`);
   console.log(`Weekly output shell ready: ${path.relative(repoRoot, result.shellPath)}`);
-  if (result.payload.excludedFiles.some((file) => file.source === "feishu-docs" && file.status === "needs_review")) {
-    console.log("Explicit override: feishu-docs remains needs_review and its content is excluded from this Process Pack by request.");
-  }
   console.log(`Input files: ${result.payload.stats.fileCount}`);
   console.log(`Unique items: ${result.payload.stats.uniqueItemCount}`);
   console.log(`Sources: ${result.sourceSummaries.map((source) => `${source.source}:${source.itemCount}`).join(", ") || "none"}`);

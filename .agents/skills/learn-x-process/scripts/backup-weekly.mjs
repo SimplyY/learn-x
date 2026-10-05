@@ -191,7 +191,7 @@ function parseArgs(argv) {
     const arg = args[index];
     if (!arg.startsWith("--")) throw new Error(`无法识别参数：${arg}`);
     const key = arg.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
-    if (key === "help") result.help = true;
+    if (key === "help" || key === "refresh") result[key] = true;
     else {
       const value = args[++index];
       if (!value || value.startsWith("--")) throw new Error(`参数缺少值：${arg}`);
@@ -473,7 +473,7 @@ async function backup(args) {
   const config = await ensureResources(configFromArgs(args, { requireFolder: true }));
   await loadBaseFields(config);
   const existing = exactSnapshot(await listSnapshotRecords(config), week);
-  if (existing && String(existing.values?.Status || "") === "success") {
+  if (existing && String(existing.values?.Status || "") === "success" && !args.refresh) {
     return { snapshotId: week, status: "already-success", fileCount: Number(existing.values?.["File Count"] || 0), totalBytes: Number(existing.values?.["Total Bytes"] || 0), retention: await runRetention(config) };
   }
   const { files, excluded } = await collectBackupFiles(repoRoot);
@@ -565,7 +565,7 @@ async function restore(args) {
 }
 
 function printHelp() {
-  console.log(`用法：\n  npm run backup:weekly -- --week YYYY-Www\n  npm run restore:weekly -- --week YYYY-Www --target /path/to/new-directory\n\n默认行为：\n  自动查找或创建 Learn-X Backups、Learn-X Backup Index 和 Snapshots。\n\n可选 token 覆盖：\n  LEARN_X_BACKUP_DRIVE_FOLDER_TOKEN\n  LEARN_X_BACKUP_BASE_TOKEN\n  LEARN_X_BACKUP_TABLE_ID`);
+  console.log(`用法：\n  npm run backup:weekly -- --week YYYY-Www [--refresh]\n  npm run restore:weekly -- --week YYYY-Www --target /path/to/new-directory\n\n默认行为：\n  自动查找或创建 Learn-X Backups、Learn-X Backup Index 和 Snapshots。\n  --refresh：替换并读回同一 Snapshot ID 的已有快照。\n\n可选 token 覆盖：\n  LEARN_X_BACKUP_DRIVE_FOLDER_TOKEN\n  LEARN_X_BACKUP_BASE_TOKEN\n  LEARN_X_BACKUP_TABLE_ID`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

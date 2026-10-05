@@ -144,10 +144,10 @@ test("audit table has no Action Feedback row after retirement and keeps input to
   assert.doesNotMatch(table, /Action Feedback/);
   assert.doesNotMatch(table, /独立产物/);
   assert.doesNotMatch(table, /action-feedback\.md/);
-  assert.equal(buildInputAuditRows(payload, [], []).length, 16);
+  assert.equal(buildInputAuditRows(payload, [], []).length, 15);
 });
 
-test("fixed weekly input order places jingdu right after weread as a 精读 source row", () => {
+test("fixed weekly input order places jingdu after the other P1 inputs as a 精读 source row", () => {
   const payload = {
     week: "2026-W39",
     selection: { path: "03_input/weekly/2026-W39" },
@@ -163,38 +163,15 @@ test("fixed weekly input order places jingdu right after weread as a 精读 sour
   ];
   const rows = buildInputAuditRows(payload, files, { files: [] });
   const wereadIndex = rows.findIndex((row) => row.file === "weread.md");
+  const calendarIndex = rows.findIndex((row) => row.file === "calendar.md");
+  const wisdomIndex = rows.findIndex((row) => row.file === "wisdom.md");
   const jingduIndex = rows.findIndex((row) => row.file === "jingdu.md");
-  assert.ok(wereadIndex >= 0 && jingduIndex === wereadIndex + 1);
+  assert.ok(wereadIndex >= 0 && calendarIndex === wereadIndex + 1 && wisdomIndex === calendarIndex + 1 && jingduIndex === wisdomIndex + 1);
   assert.equal(rows[jingduIndex].type, "输入");
   assert.equal(rows[jingduIndex].source, "精读");
   assert.equal(rows[jingduIndex].status, "ready");
   const table = renderInputAuditTable(payload, files, { files: [] });
   assert.match(table, /\| 输入 \| 精读 \| \[jingdu\.md\]/);
-});
-
-test("weekly Process Pack registers the ready personal Feishu Docs source row", () => {
-  const payload = {
-    week: "2026-W38",
-    selection: { path: "03_input/weekly/2026-W38" },
-    sourceStatuses: {
-      "feishu-docs": { status: "ready", file: "feishu-docs.md", count: 2, summary: "2 篇本人创建或编辑文档" }
-    },
-    excludedFiles: []
-  };
-  const files = [{
-    path: "03_input/weekly/2026-W38/feishu-docs.md",
-    source: "feishu-docs",
-    itemCount: 2,
-    rawChars: 120,
-    effectiveChars: 120,
-    processChars: 120
-  }];
-
-  const row = buildInputAuditRows(payload, files, { files: [] }).find((item) => item.file === "feishu-docs.md");
-  assert.equal(row.source, "个人飞书文档");
-  assert.equal(row.status, "ready");
-  assert.equal(row.count, 2);
-  assert.equal(row.rawChars, 120);
 });
 
 test("Stage 1 automation requires a final character count for each included ready file", async () => {
@@ -206,7 +183,6 @@ test("Stage 1 automation requires a final character count for each included read
   assert.doesNotMatch(stage1Report, /在输入表后另列该草稿路径/);
   assert.match(stage1Report, /`countInputChars`（Unicode 码点数）/);
   assert.match(stage1Report, /链路写 `— → N`，不得把整格写成 `—`/);
-  assert.match(skill, /阶段 1 固定总表在 `weekly\.md` 后加入 `feishu-docs\.md`/);
 });
 
 test("weekly automation no longer creates Action Feedback at Stage 1 (retired)", async () => {

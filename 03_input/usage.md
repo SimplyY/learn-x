@@ -2,6 +2,8 @@
 
 > 本文件描述 Weekly Input 在 `_dist` 生成前的输入管理。
 
+Feishu Docs 每周输入采集已暂时停用。历史 `feishu-docs.md` 报告保留，但不会进入 Process。
+
 月度 Process 直接读取相交周的原文件，并叠加 `monthly/YYYY-M/` 下的月记及其他月度独有输入。旧 `weekly-inputs.md` 不再使用。原始文件保持完整；给 AI 的月度 Process Pack 另行执行日期过滤、元数据合并、去重和受约束的事件压缩。周记、月记草稿也只以这些已落盘文件为事实源；飞书只承载模板、草稿和人工定稿。
 
 `03_input/weekly/YYYY-Www/` 采用扁平 Markdown 结构。只保留本周确实有内容的输入文件，不预建分类目录或大量空占位。自动来源的空结果写入 `_source-status.json`，不生成新来源文件；旧文件可保留但会被状态过滤。
@@ -15,7 +17,6 @@
 | Flomo | `flomo.md` | 每周输入自动采集 |
 | 微信读书 | `weread.md` | `npm run input:weread -- --week YYYY-Www` |
 | Voice-X 核心重点 | `voice.md` | `npm run input:voice -- --week YYYY-Www` |
-| 本人飞书文档 | `feishu-docs.md` | 写入身份切换后先影子运行；人工核对通过后 `npm run input:feishu-docs -- --week YYYY-Www --activate` |
 | Time-X 随时记日历 | `calendar.md` | `npm run input:calendar -- --week YYYY-Www` |
 | Health-X 健康周报 | `health.md` | Health-X 完成飞书周报同步后自动生成 |
 | AI Coach | `coach.md`（有记录时） | 保留新增记录；0 条时不生成文件并写入状态侧车 |
@@ -56,17 +57,13 @@ rm 03_input/weekly/YYYY-Www/README.md
 - `flomo.md` 必须覆盖完整目标周；若只能部分获取，在文件中说明缺口。
 - `weread.md` 保留采集范围、时区、生成时间、统计、进度快照、个人划线和想法；不保存 ID、位置链接或额外 `_raw.json`。
 - `voice.md` 只保留目标录制周内非空的完整结构化洞察，按录制时间正序；保留核心总结、压缩原文、建议和芒格之魂洞察，不读取或复制原始文字稿。30,000 个 Unicode 字符是提示线，不是采集门槛；Voice-X 只在统一生成 Process Pack 时按约 20% 保留比例做确定性高信号压缩，查询或文档读取失败不得覆盖旧文件。
-- `feishu-docs.md` 只纳入目标 ISO 周内由本人创建或本人编辑的 Docx/Wiki 文档，不限制 owner。采集器合并“本人创建”与“本人编辑”候选，Wiki 按底层 Docx token 去重；历史快照只用于核验，临时比较文件放在仓库外并自动清理。报告只保留规范化后的目标周正文变更，不保存最新全文或全量 diff；每篇累计新增与删除不超过 3,000 个 Unicode 字符时保留精准差异，超过时由 Codex 压缩为不超过 1,500 字的核心变化摘要并附最多 3 条原句证据。仅格式/布局变化明确标出，不展开噪声 diff。报告开头必须包含范围、篇数、版本数、正文变化/格式变化/压缩数量和主要变化概览，每篇包含飞书来源链接及 revision/日期证据。临时变更载荷仅含规范化差异，放在仓库外并在报告最终化后删除。本人身份不使用环境变量：每轮先用 `lark-cli auth status --json --verify` 核验当前 `open_id`，再从本周候选自动互证历史 `editor_ids` 中的本人 editor ID，不跨 ID 空间直接比较；bot 身份的 AI 写入按 bot editor ID 计数标注「AI 代笔」。手动粘贴 AI 内容按飞书记录的账号归属。Learn-X、Voice-X、Read-X、Invest-X 和 Skills 的 AI Docx/Wiki 写入口固定用 `--as bot`，Base 写入仍按各自用户身份契约执行；首个完整 ISO 周影子核对与人工核对全部通过前，不得用 `--activate`。
 - 若历史返回同一 `revision_id` 的多个 `history_version_id`，属历史接口正常返回（同一账号短时间多次保存）；只要该 revision 的编辑者归属唯一，就按一个本人版本处理，不整单失败。编辑者归属冲突时保持 `needs_review`。
-- 同一用户账号下的人工操作和 AI 自动化写入不能单靠 editor ID 区分，因此 AI Docx/Wiki 写入者必须使用 bot 身份；发现新的 user 身份 AI 写入口时先迁移再启用采集。`feishu-docs.md` 存在但本周来源状态缺失时，Process 失败关闭，不按历史周兼容规则纳入。
 - 2026-09-22 writer 盘点：已把 Learn-X 深度研究、月度议题工作台、季度议题总览、周期洞察、长文入库，Voice-X Docx，Read-X long-read 示例，Invest-X 基金校准、委员会写回、文档迁移，以及 Skills 全局治理、Prompt 治理、ywask、thinking-group 报告写入口固定为 `--as bot`；Base 写入继续使用用户身份。仍需单独核实的路径是 Invest-X asset-report 实际发布调用、Invest-X 事件目录创建，以及 Skills 中没有脚本写入口的交互式命令。在线 Bot 写后读回已用专用 canary 验证；这些未核实路径完成前继续保持影子状态。
-- 2026-09-25 回退与 2026-09-28 纠正：`a9f8e8c` 曾把 Learn-X 深度研究等写入口回退为 `--as user` 并翻转本仓 AGENTS.md 契约，导致 feishu-docs 归因前提失效。2026-09-28 起契约统一为「AI Docx/Wiki 写入口 `--as bot`、本人手动操作与 Base 写入 `--as user`」，深度研究随批量授权迁回 bot。采集器身份门禁同日改为运行时自动互证（auth verify + 搜索 `edit_user_id` 与历史 `editor_ids` 交叉确认），不再依赖 `LEARNX_FEISHU_HUMAN_*` 环境变量。
 - `calendar.md` 来自 `Time-X｜随时记` 共享日历与用户个人日历（主日历及自有共享日历，覆盖用户手动建日程）的合并，按同时存在的定时日程数分摊重叠时间，保留目标周有效时间汇总及每个日历块的日期、起止、原始区间、标题、描述和有效投入分钟；不保存人员、地点、ID、链接或系统元数据，且不单独作为实际完成证据。读取失败时必须写明不可用，不能沿用旧统计。详见 `docs/calendar-time-allocation.md`。
 - `health.md` 只保存周度评分、核心数据和健康提示，不复制截图或原始医疗材料。
 - `coach.md` 采集器按表字段保留新增记录，并排除回顾或状态更新；0 条新增记录时不生成文件并记录 `empty`，旧文件若存在也不进入本轮。
 - `wisdom.md` 只收录目标周内的新来源事件：普通记录按 Base “创建时间”筛选，`来源标识` 以 `flomo:` 开头的记录按“Flomo创建时间”筛选，以支持目标周结束后导入的周内 Flomo 笔记。既有记录因回顾、复看或状态变化而更新时不采集；本地文件不保留 Flomo 技术 ID；0 条时记录 `empty`，失败与不可用不得伪装成 0 条。
 - 所有自动来源都遵循同一状态侧车规则：`ready` 才能被 Process / 月度流程读取，`empty/failed/unavailable/needs_review` 的旧文件只保留不计入本轮；缺失侧车兼容历史周，非法侧车失败关闭。
-- 飞书文档采集默认影子状态 `needs_review`；同一目标周必须先有成功影子结果，采集器才接受 `--activate`。Codex 必须先基于仓库外的临时变更载荷生成总览和长变更摘要，再最终化本周报告；人工核对发现列表、来源链接、精准差异和压缩摘要后，才可 `--activate` 重采并写入 `ready/empty`。这个参数代表运行者确认影子比对、writer 身份迁移和在线 canary 均已通过，脚本无法独立验证这些外部门禁。编辑者身份冲突、分页不完整、版本快照不匹配或 CLI 失败时标记 `needs_review/failed`；`needs_review/failed/unavailable` 会阻止 `process:weekly`，不能拿旧文件继续。历史 API 没有已核实的公开稳定契约和完整性保证，只能使用本次实际返回且校验通过的版本。非文本资源保留链接/占位；报告超过 15,000 字符时使用现有人工压缩审核门槛阻止 Process，不恢复全文或全量 diff。
 - `ai.md` 是确认后的 AI 对话摘要。阶段 1 默认生成暂存的 `ai.generated.md`；确认前不进入 Process，确认后才转为 `ai.md`。AI 输入只使用原有提示词和目标周范围，不发送本地周输入材料。
 - `build.md` 由 Codex Build 专项自动化或人工补充，每周输入自动采集不处理。
 - `build-bot.md` 由飞书机器人侧的 `build-bot-log` 生成或追加。提前写当周时，用户需在飞书上手动执行并自查自动化链接：https://ywhome.feishu.cn/wiki/KcTcwG90OiZh3rksu0ucvwx5nFe?table=wkfVC125gMp3snTX；非提前执行时，周日飞书自动化理论上已执行，本地周自动化只提示自查。

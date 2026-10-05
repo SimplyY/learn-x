@@ -3,7 +3,6 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { assertWeeklyInputSize } from "./lib/input-limits.mjs";
 import { fileExists, updateWeeklySourceStatus } from "./lib/source-status.mjs";
 
 const API_URL = "https://i.weread.qq.com/api/agent/gateway";
@@ -159,7 +158,6 @@ export async function writeWereadWeekly(options = {}) {
       const suffix = `${process.pid}-${Date.now()}`;
       const notesTempPath = `${notesPath}.${suffix}.tmp`;
       const content = renderMarkdown(payload);
-      assertWeeklyInputSize(content, notesPath);
       await mkdir(outputRoot, { recursive: true });
       await writeFile(notesTempPath, content, "utf8");
       await rename(notesTempPath, notesPath);

@@ -8,7 +8,8 @@ import { readWeeklySourceStatus } from "../../learn-x-input/scripts/lib/source-s
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
 const supportedExtensions = new Set([".md", ".txt", ".json", ".html", ".htm"]);
-const ignoredFileNames = new Set(["README.md", ".gitkeep", "ai.generated.md"]);
+// Retired-source reports remain on disk for history, but stay out of Process.
+const ignoredFileNames = new Set(["README.md", ".gitkeep", "ai.generated.md", "feishu-docs.md"]);
 
 export async function collectWeeklyInput(options = {}) {
   const week = options.week || defaultWeeklyReviewWeek();
@@ -21,18 +22,6 @@ export async function collectWeeklyInput(options = {}) {
   const allFiles = await collectInputFiles(weekInputRoot, root);
   const sourceStatus = await readWeeklySourceStatus(weekInputRoot, week);
   const statusEntries = Object.entries(sourceStatus.sources);
-  const feishuDocsStatus = sourceStatus.sources["feishu-docs"];
-  const feishuDocsFile = allFiles.find((file) => path.basename(file.relativePath) === "feishu-docs.md");
-  const explicitlyExcludedSources = new Set(options.excludeUnreviewedSources || []);
-  if (feishuDocsFile && !feishuDocsStatus) {
-    throw new Error("feishu-docs.md 缺少本轮来源状态，已阻止生成 Weekly Process；请重新运行飞书文档采集器。");
-  }
-  if (feishuDocsStatus && !["ready", "empty"].includes(feishuDocsStatus.status) && !explicitlyExcludedSources.has("feishu-docs")) {
-    throw new Error(`feishu-docs 来源状态为 ${feishuDocsStatus.status}，已阻止生成 Weekly Process；请先完成本人身份与版本核验后重采。`);
-  }
-  if (feishuDocsStatus?.status === "ready" && !allFiles.some((file) => path.basename(file.relativePath) === "feishu-docs.md")) {
-    throw new Error("feishu-docs 来源状态为 ready，但本轮文件缺失，已阻止生成 Weekly Process。");
-  }
   const files = filterFilesBySourceStatus(allFiles, sourceStatus.sources);
   const excludedFiles = statusEntries
     .filter(([, entry]) => entry.status !== "ready")
@@ -46,7 +35,7 @@ export async function collectWeeklyInput(options = {}) {
     const content = await readFile(file.absolutePath, "utf8");
     const rawChars = countInputChars(content);
     const maxChars = maxInputCharsForPath(file.relativePath);
-    if (rawChars > maxChars && path.basename(file.relativePath) !== "voice.md") {
+    if (rawChars > maxChars && !isWeeklyJournal(file.relativePath) && path.basename(file.relativePath) !== "voice.md") {
       oversized.push({ path: file.relativePath, chars: rawChars, maxChars });
     }
     const parsedItems = parseInputFile(content, file);
@@ -73,7 +62,7 @@ export async function collectWeeklyInput(options = {}) {
     rawItems.push(...fileItems);
   }
 
-  if (oversized.length) {
+  if (oversized.length && !options.allowOversized) {
     const details = oversized.map(({ path: filePath, chars, maxChars }) => `- ${filePath}: ${chars} 字符（上限 ${maxChars}）`).join("\n");
     throw new Error([
       `周输入超过单文件上限 ${MAX_WEEKLY_INPUT_CHARS} 字符，已停止生成 input.json / Process Pack。`,
@@ -121,8 +110,13 @@ export function filterFilesBySourceStatus(files, sources) {
 export function findOversizedWeeklyInputs(files, maxChars = MAX_WEEKLY_INPUT_CHARS) {
   return files
     .map(({ path: filePath, content }) => ({ path: filePath, chars: countInputChars(content), maxChars: path.basename(filePath) === "voice.md" ? maxInputCharsForPath(filePath) : maxChars }))
+    .filter(({ path: filePath }) => !isWeeklyJournal(filePath))
     .filter(({ chars, maxChars: limit }) => chars > limit)
     .map(({ path: filePath, chars }) => ({ path: filePath, chars }));
+}
+
+function isWeeklyJournal(filePath) {
+  return path.basename(filePath) === "weekly.md";
 }
 
 export async function writeWeeklyInput(options = {}) {
@@ -307,7 +301,7 @@ function categoryFromPathPart(part) {
 function categoryFromSourceName(source) {
   if (["daily", "weekly", "health"].includes(source)) return "log";
   if (["build", "build-bot", "research", "meeting", "chat", "feedback", "coach"].includes(source)) return "action";
-  if (["ai", "flomo", "weread", "jingdu", "reading", "podcast", "docs", "feishu-docs", "theme-read"].includes(source)) return "inbox";
+  if (["ai", "flomo", "weread", "jingdu", "reading", "podcast", "docs", "theme-read"].includes(source)) return "inbox";
   return "input";
 }
 

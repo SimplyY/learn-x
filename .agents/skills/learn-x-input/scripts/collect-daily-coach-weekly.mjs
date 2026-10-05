@@ -3,7 +3,6 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { assertWeeklyInputSize } from "./lib/input-limits.mjs";
 import { fileExists, updateWeeklySourceStatus } from "./lib/source-status.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -23,28 +22,55 @@ const COACH_TABLES = [
 export async function collectDailyCoachWeekly({ week, outputRoot = path.join(repoRoot, "03_input/weekly", week), runCli = run }) {
   const dailyPath = path.join(outputRoot, "daily.md");
   const coachPath = path.join(outputRoot, "coach.md");
+  const range = weekRange(week);
+  const failures = [];
+  let daily = null;
+  let coach = null;
+  let coachFileWritten = false;
+  await mkdir(outputRoot, { recursive: true });
+
   try {
-    const range = weekRange(week);
-    const daily = await collectDaily(range, runCli);
-    const coach = await collectCoach(range, runCli);
-    const dailyContent = renderDaily(week, range, daily);
-    const coachContent = renderCoach(week, range, coach);
-    const dailyReady = daily.records.length > 0;
-    const coachFileWritten = shouldWriteCoachFile(coach);
-    assertWeeklyInputSize(dailyContent, dailyPath);
-    assertWeeklyInputSize(coachContent, coachPath);
-    await mkdir(outputRoot, { recursive: true });
-    if (dailyReady) await atomicWrite(dailyPath, dailyContent);
-    if (coachFileWritten) await atomicWrite(coachPath, coachContent);
-    await updateWeeklySourceStatus({ weekRoot: outputRoot, week, source: "daily", status: dailyReady ? "ready" : "empty", file: "daily.md", count: daily.records.length, summary: dailyReady ? "本周有日记记录" : "本周 0 条记录，文件未生成", preservedStaleFile: !dailyReady && await fileExists(dailyPath) });
-    const coachCount = Object.values(coach.tables).reduce((sum, table) => sum + table.records.length, 0);
-    await updateWeeklySourceStatus({ weekRoot: outputRoot, week, source: "coach", status: coachFileWritten ? "ready" : "empty", file: "coach.md", count: coachCount, summary: coachFileWritten ? "本周有 AI Coach 记录" : "本周 0 条记录，文件未生成", preservedStaleFile: !coachFileWritten && await fileExists(coachPath) });
-    return { daily, coach, coachFileWritten };
+    daily = await collectDaily(range, runCli);
+    const content = renderDaily(week, range, daily);
+    const ready = daily.records.length > 0;
+    if (ready) await atomicWrite(dailyPath, content);
+    await updateWeeklySourceStatus({ weekRoot: outputRoot, week, source: "daily", status: ready ? "ready" : "empty", file: "daily.md", count: daily.records.length, summary: ready ? "本周有日记记录" : "本周 0 条记录，文件未生成", preservedStaleFile: !ready && await fileExists(dailyPath) });
   } catch (error) {
-    await updateWeeklySourceStatus({ weekRoot: outputRoot, week, source: "daily", status: "failed", file: "daily.md", count: 0, summary: `采集失败：${error.message}`, preservedStaleFile: await fileExists(dailyPath) });
-    await updateWeeklySourceStatus({ weekRoot: outputRoot, week, source: "coach", status: "failed", file: "coach.md", count: 0, summary: `采集失败：${error.message}`, preservedStaleFile: await fileExists(coachPath) });
-    throw error;
+    failures.push({ source: "daily", error });
+    await updateWeeklySourceStatus({ weekRoot: outputRoot, week, source: "daily", status: "failed", file: "daily.md", count: 0, summary: safeFailureSummary(error), preservedStaleFile: await fileExists(dailyPath) });
   }
+
+  try {
+    coach = await collectCoach(range, runCli);
+    const content = renderCoach(week, range, coach);
+    coachFileWritten = shouldWriteCoachFile(coach);
+    if (coachFileWritten) await atomicWrite(coachPath, content);
+    const count = Object.values(coach.tables).reduce((sum, table) => sum + table.records.length, 0);
+    await updateWeeklySourceStatus({ weekRoot: outputRoot, week, source: "coach", status: coachFileWritten ? "ready" : "empty", file: "coach.md", count, summary: coachFileWritten ? "本周有 AI Coach 记录" : "本周 0 条记录，文件未生成", preservedStaleFile: !coachFileWritten && await fileExists(coachPath) });
+  } catch (error) {
+    failures.push({ source: "coach", error });
+    await updateWeeklySourceStatus({ weekRoot: outputRoot, week, source: "coach", status: "failed", file: "coach.md", count: 0, summary: safeFailureSummary(error), preservedStaleFile: await fileExists(coachPath) });
+  }
+
+  if (failures.length) {
+    const summary = failures.map(({ source, error }) => `${source}:${failureDetail(error)}`).join("; ");
+    throw new Error(`日记/Coach 部分采集失败：${summary}`, { cause: failures.map(({ source, error }) => ({ source, error })) });
+  }
+  return { daily, coach, coachFileWritten };
+}
+
+function failureDetail(error) {
+  const detail = String(error?.message || "").replace(/\s+/g, " ").trim();
+  return detail || safeFailureSummary(error);
+}
+
+function safeFailureSummary(error) {
+  const code = String(error?.code || "");
+  if (/^[A-Z][A-Z0-9_]{1,30}$/.test(code)) return `采集失败（${code}）`;
+  const status = String(error?.message || "").match(/\b(?:HTTP\s*)?(401|403|404|408|429|5\d\d)\b/i)?.[1];
+  if (status) return `服务端 HTTP ${status}`;
+  if (/timeout|timed out|超时/i.test(String(error?.message || ""))) return "请求超时";
+  return "采集失败（未分类）";
 }
 
 export function shouldWriteCoachFile(data) {
@@ -156,7 +182,7 @@ function renderCoach(week, range, data) {
 }
 
 function weekRange(week) { const match = /^(\d{4})-W(\d{2})$/.exec(week); if (!match) throw new Error(`无效周：${week}`); const jan4 = new Date(Date.UTC(Number(match[1]), 0, 4)); const monday = new Date(jan4); monday.setUTCDate(jan4.getUTCDate() - ((jan4.getUTCDay() + 6) % 7) + (Number(match[2]) - 1) * 7); const date = (value) => value.toISOString().slice(0, 10); const start = date(monday); const endDate = new Date(monday); endDate.setUTCDate(monday.getUTCDate() + 7); const startExclusive = new Date(monday); startExclusive.setUTCSeconds(-1); return { start: `${start}T00:00:00+08:00`, startExclusive: `${date(startExclusive)}T23:59:59+08:00`, end: `${date(endDate)}T00:00:00+08:00` }; }
-async function atomicWrite(file, content) { assertWeeklyInputSize(content, file); const temp = `${file}.${process.pid}.tmp`; await writeFile(temp, content, "utf8"); await rename(temp, file); }
+async function atomicWrite(file, content) { const temp = `${file}.${process.pid}.tmp`; await writeFile(temp, content, "utf8"); await rename(temp, file); }
 async function run(args) { const { stdout } = await execFileAsync("lark-cli", args, { env: { ...process.env, LARKSUITE_CLI_NO_UPDATE_NOTIFIER: "1", LARKSUITE_CLI_NO_SKILLS_NOTIFIER: "1" }, maxBuffer: 16 * 1024 * 1024 }); const result = JSON.parse(stdout); if (result.ok !== true) throw new Error(result.error?.message || "lark-cli 返回失败"); return result; }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) { const week = process.argv[process.argv.indexOf("--week") + 1]; const result = await collectDailyCoachWeekly({ week }); const excluded = Object.values(result.coach.tables).reduce((sum, table) => sum + table.excludedReviewCount, 0); const retained = Object.values(result.coach.tables).reduce((sum, table) => sum + table.records.length, 0); const coachStatus = result.coachFileWritten ? "coach.md 已生成" : "coach.md 未生成（0 条记录）"; console.log(`Daily/Coach weekly inputs for ${week}: daily=${result.daily.records.length} 条，coach=${retained} 条，${coachStatus}；review 排除 ${excluded} 条。`); }

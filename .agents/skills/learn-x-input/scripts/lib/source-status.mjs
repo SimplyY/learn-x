@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { access, mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
@@ -6,13 +6,13 @@ export const SOURCE_STATUS_FILE = "_source-status.json";
 export const SOURCE_STATUSES = new Set(["ready", "empty", "needs_review", "failed", "unavailable"]);
 export const SOURCE_NAMES = new Set([
   "daily", "flomo", "weread", "jingdu", "calendar", "voice", "coach", "wisdom",
-  "wechat", "build", "build-bot", "health", "open-actions", "feishu-docs", "core"
+  "wechat", "build", "build-bot", "health", "open-actions", "core"
 ]);
 export const SOURCE_FILES = {
   daily: "daily.md", flomo: "flomo.md", weread: "weread.md", jingdu: "jingdu.md", calendar: "calendar.md",
   voice: "voice.md", coach: "coach.md", wisdom: "wisdom.md", wechat: "wechat.md",
   build: "build.md", "build-bot": "build-bot.md", health: "health.md",
-  "open-actions": "open-actions.md", "feishu-docs": "feishu-docs.md", core: "core.md"
+  "open-actions": "open-actions.md", core: "core.md"
 };
 
 function assertWeek(week) {
@@ -73,7 +73,11 @@ export function validateSourceStatusDocument(document, week) {
     throw new Error("来源状态侧车缺少 sources。");
   }
   const sources = {};
-  for (const [source, entry] of Object.entries(document.sources)) sources[source] = validateEntry(source, entry);
+  for (const [source, entry] of Object.entries(document.sources)) {
+    // Ignore retired or newer source metadata while keeping known entries strict.
+    if (!SOURCE_NAMES.has(source)) continue;
+    sources[source] = validateEntry(source, entry);
+  }
   if (typeof document.updatedAt !== "string" || !Number.isFinite(Date.parse(document.updatedAt))) {
     throw new Error("来源状态侧车更新时间非法。");
   }
@@ -106,31 +110,101 @@ export async function readWeeklySourceStatus(weekRoot, week) {
 
 export async function updateWeeklySourceStatus({ weekRoot, week, source, status, file, count = 0, summary = "", preservedStaleFile = false }) {
   assertWeek(week);
-  const now = new Date().toISOString();
-  const current = await readWeeklySourceStatus(weekRoot, week);
   const entry = validateEntry(source, {
     status,
     file,
     count,
     summary: cleanSummary(summary),
-    updatedAt: now,
+    updatedAt: new Date().toISOString(),
     preservedStaleFile
   });
   if (entry.status === "ready" && !(await fileExists(path.join(weekRoot, entry.file)))) {
     throw new Error(`ready 来源文件不存在：${entry.file}`);
   }
-  const document = {
-    version: 1,
-    week,
-    updatedAt: now,
-    sources: { ...current.sources, [source]: entry }
-  };
   await mkdir(weekRoot, { recursive: true });
   const target = path.join(weekRoot, SOURCE_STATUS_FILE);
-  const temp = `${target}.${process.pid}-${randomUUID()}.tmp`;
-  await writeFile(temp, `${JSON.stringify(document, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
-  await rename(temp, target);
-  return document;
+  const release = await acquireStatusLock(weekRoot);
+  try {
+    // Read only after acquiring the lock so concurrent collectors merge against
+    // the latest sidecar rather than overwriting one another's source entries.
+    const current = await readWeeklySourceStatus(weekRoot, week);
+    const now = new Date().toISOString();
+    const document = {
+      version: 1,
+      week,
+      updatedAt: now,
+      sources: { ...current.sources, [source]: { ...entry, updatedAt: now } }
+    };
+    const temp = `${target}.${process.pid}-${randomUUID()}.tmp`;
+    try {
+      await writeFile(temp, `${JSON.stringify(document, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+      await rename(temp, target);
+    } finally {
+      await unlink(temp).catch((error) => { if (error.code !== "ENOENT") throw error; });
+    }
+    return document;
+  } finally {
+    await release();
+  }
+}
+
+async function acquireStatusLock(weekRoot) {
+  const lockPath = path.join(weekRoot, `${SOURCE_STATUS_FILE}.lock`);
+  const reapPath = `${lockPath}.reap`;
+  const owner = JSON.stringify({ pid: process.pid, token: randomUUID(), createdAt: new Date().toISOString() });
+  const deadline = Date.now() + 30_000;
+  while (true) {
+    try {
+      const handle = await open(lockPath, "wx", 0o600);
+      try { await handle.writeFile(owner, "utf8"); } finally { await handle.close(); }
+      return async () => {
+        try {
+          const current = await readFile(lockPath, "utf8");
+          if (current === owner) await unlink(lockPath);
+        } catch (error) {
+          if (error.code !== "ENOENT") throw error;
+        }
+      };
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      await reapAbandonedStatusLock(lockPath, reapPath);
+      if (Date.now() >= deadline) throw new Error("来源状态锁等待超时；未覆盖现有状态。");
+      await new Promise((resolve) => setTimeout(resolve, 15 + Math.floor(Math.random() * 25)));
+    }
+  }
+}
+
+async function reapAbandonedStatusLock(lockPath, reapPath) {
+  let reaper;
+  try {
+    reaper = await open(reapPath, "wx", 0o600);
+    await reaper.writeFile(JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }), "utf8");
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    if (await lockOwnerIsDead(reapPath)) await unlink(reapPath).catch((unlinkError) => { if (unlinkError.code !== "ENOENT") throw unlinkError; });
+    return;
+  } finally {
+    await reaper?.close();
+  }
+  try {
+    if (await lockOwnerIsDead(lockPath)) await unlink(lockPath).catch((error) => { if (error.code !== "ENOENT") throw error; });
+  } finally {
+    await unlink(reapPath).catch((error) => { if (error.code !== "ENOENT") throw error; });
+  }
+}
+
+async function lockOwnerIsDead(file) {
+  try {
+    const raw = await readFile(file, "utf8");
+    const { pid } = JSON.parse(raw);
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    try { process.kill(pid, 0); return false; }
+    catch (error) { return error.code === "ESRCH"; }
+  } catch (error) {
+    if (error.code === "ENOENT") return false;
+    if (error instanceof SyntaxError) return false;
+    throw error;
+  }
 }
 
 export function sourceStatusForFile(sources, fileName) {

@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 
-export async function runEgoBatch(action, payload) {
+export async function runEgoBatch(action, payload, { taskName = `learn-x-v2-flomo-sync-${randomUUID()}` } = {}) {
   if (!["preflight", "apply", "close"].includes(action)) throw new Error(`Unsupported Ego batch action: ${action}`);
-  const taskName = `learn-x-flomo-sync-batch-${process.pid}`;
 const script = `
 const { createHash } = await import('node:crypto');
 const canonicalText = (value) => { let text = String(value ?? '').replaceAll(String.fromCharCode(13), '').trim(); const newline = String.fromCharCode(10); while (text.includes(newline.repeat(3))) text = text.replaceAll(newline.repeat(3), newline.repeat(2)); text = text.replaceAll(newline + newline + '>', newline + '>').replaceAll(newline + newline + '#learn-x/', newline + '#learn-x/'); const lines = text.split(newline); const listItem = (line) => /^\\s*(?:[-*+]|\\d+[.)])\\s+/.test(line); return lines.filter((line, index) => !(line === '' && listItem(lines[index - 1] ?? '') && listItem(lines[index + 1] ?? ''))).join(newline).trim(); };

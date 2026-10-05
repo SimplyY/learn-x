@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { digest, loadManifestSpecs, loadSpecs, normalizeMemoText, reconcile } from "./flomo-sync-core.mjs";
@@ -16,12 +17,13 @@ export async function syncFlomoWeekly(options = {}) {
   let syncResult;
   const taskSpaceIds = new Set();
   const closedTaskSpaceIds = [];
+  const taskSpaceName = `learn-x-v2-flomo-sync-${randomUUID()}`;
   // Keep one Ego Lite task space across preflight and per-memo read/write checkpoints.
   const runBatch = async (...args) => {
     batchTaskSpaceAttempted = true;
     let result;
     try {
-      result = await runEgoBatch(...args);
+      result = await runEgoBatch(...args, { taskName: taskSpaceName });
     } catch (error) {
       if (error.taskId) taskSpaceIds.add(error.taskId);
       throw error;
@@ -259,16 +261,16 @@ async function writeOverwriteAudit(plans) {
 const dryRunClient = { find: async () => ({ matches: [], legacy: false }) };
 
 function createEgoClient() {
-  const taskName = `learn-x-flomo-sync-${process.pid}`;
   return {
-    find: (spec) => runEgo(taskName, "find", spec),
-    read: (memo, title) => runEgo(taskName, "read", { ...memo, title }),
-    create: (content) => runEgo(taskName, "create", { content }),
-    update: (memo, content, title) => runEgo(taskName, "update", { ...memo, content, title })
+    find: (spec) => runEgo("find", spec),
+    read: (memo, title) => runEgo("read", { ...memo, title }),
+    create: (content) => runEgo("create", { content }),
+    update: (memo, content, title) => runEgo("update", { ...memo, content, title })
   };
 }
 
-async function runEgo(taskName, action, payload) {
+async function runEgo(action, payload) {
+  const taskName = `learn-x-v2-flomo-sync-${randomUUID()}`;
   const script = `
 const task = await useOrCreateTaskSpace(${JSON.stringify(taskName)});
 try {

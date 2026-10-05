@@ -52,14 +52,8 @@ const PERIOD_OUTPUTS = {
     subtypeIds: ["reflective-decision.weekly-output"],
     label: "第几周",
     emptyLabel: "暂无周输出包",
-    pattern: /^04_output\/_dist\/weekly\/(\d{4})-W(\d{2})\//,
+    pattern: /^04_output\/_dist\/weekly\/(\d{4})-W(\d{2})\/process-pack\.md$/,
     valueFromMatch: (match) => `${match[1]}-W${match[2]}`,
-    optionPatterns: [
-      {
-        pattern: /^04_output\/weekly\/(\d{4})-(\d{2})\.md$/,
-        valueFromMatch: (match) => `${match[1]}-W${match[2]}`
-      }
-    ],
     labelFromValue: (value) => {
       const match = value.match(/^(\d{4})-W(\d{2})$/);
       return match ? `${match[1]} 年第 ${Number(match[2])} 周` : value;

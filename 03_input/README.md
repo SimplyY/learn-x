@@ -39,7 +39,6 @@ Weekly 输入由周目录决定，不依赖 weekly index 或文件修改时间�
       flomo.md
       weread.md
       voice.md
-      feishu-docs.md
       calendar.md
       health.md
       coach.md
@@ -65,8 +64,7 @@ Weekly 输入由周目录决定，不依赖 weekly index 或文件修改时间�
 - `daily.md`：日记、自我状态与每日反馈。
 - `core.md`：Core V1（`/Users/yuwei/code/core`）确认复盘回流，`npm run input:core` 从 Core 确认导出生成。在目标周上海窗口内取 `frozenAt` 最新的一份，注明确认时间、覆盖周与来源哈希；无导出报缺失（可选来源，不阻断），不回退更早版本。Core 回流是历史认知背景，与底层经历同源，不构成第二份独立现实证据。
 - `weekly.md`：已人工确认后从飞书采回的周记、周复盘；草稿事实来自同周已落盘输入，不以线上周记反向补证。
-- `feishu-docs.md`：目标 ISO 周内由本人创建或本人编辑的 Docx/Wiki 文档变更报告。按历史记录中的 editor ID 归因，不按 owner 过滤；历史快照只用于比较，临时比较文件放在仓库外并自动清理，落盘只保留目标周变更，不含文档全文或全量 diff。每篇语义变更累计不超过 3,000 个 Unicode 字符时保留精准差异；超过时由 Codex 压缩为不超过 1,500 字的核心变化摘要并附原句证据。报告包含总览、来源链接和 revision/日期依据。Wiki 节点按底层 Docx token 去重。仅在写入者身份迁移、在线历史与 revision canary、用户访问验证及首个完整周影子核对通过后启用；影子运行写入 `needs_review`，不能进入 Process。
-- `feishu-docs.md` 不能使用历史周的无状态兼容：文件存在但本周来源状态缺失时，Process 必须失败关闭。若任一 AI 写入者仍以用户身份保存 Docx/Wiki，editor ID 无法区分它和本人操作，因此不能启用来源。
+- 历史 `feishu-docs.md` 周报保留在原目录，但该输入源已暂时停用且不会进入 Process。
 - `ai.md`：默认由阶段 1 通过全局 ChatGPT Web Bridge 生成暂存稿 `ai.generated.md`，用户确认后转正；桥接失败时使用自动化报告中的 fallback prompt 手动生成。
 - `flomo.md`：目标周 Flomo 内容。
 - `weread.md`：微信读书周度阅读活动、进度快照、个人划线和想法，由 `learn-x-input` 采集。
@@ -77,7 +75,6 @@ Weekly 输入由周目录决定，不依赖 weekly index 或文件修改时间�
 - `coach.md`：按表字段保留新增记录，在采集器内排除回顾、复看和推送状态更新；本周 0 条新增记录时不生成文件，但每周自动化必须报告 0 条记录。
 - `open-actions.md`：旧版 `action:feedback -- collect` 的历史兼容产物（该命令已随 Action Feedback 退役被守卫拒绝）；不属于默认周流程。
 - `wisdom.md`：智慧之门创建时间落在目标周内的新记录；既有记录的回顾、复看或状态更新不采集；本周 0 条时不生成文件，但每周自动化必须报告 0 条记录。
-- `feishu-docs.md` 采集只采用 Feishu 返回且可核对的历史项。本人身份不依赖环境变量：采集器先用 `lark-cli auth status --json --verify` 核验当前用户 `open_id`，再从本周候选自动互证本人 editor ID（候选搜索元数据 `edit_user_id` 与该文档历史 `editor_ids` 属不同 ID 空间，由同一编辑事件交叉确认；`created-by-me` 候选也可由首个历史版本的编辑者锚定）；找不到可互证候选且本周存在候选时失败关闭。bot 身份的 AI 写入按 bot editor ID 计数标注为「AI 代笔」。手动粘贴 AI 内容按飞书记录的编辑账号归属。历史列表接口没有已核实的公开稳定契约或逐次编辑完整性保证，因此不得宣称它是完整审计时间线。
 - 搜索结果同时兼容扁平字段和当前 Search v2 的 `entity_type`、`title_highlighted`、`result_meta.url/token/doc_types` 结构；`entity_type=DOC` 按 Docx 处理，其他类型字段若缺失或结构变化则失败关闭。
 - 同一 `revision_id` 对应多个 `history_version_id` 是历史接口的正常返回（同一账号短时间多次保存）：只要该 revision 的编辑者归属唯一，就按一个本人版本处理；编辑者归属冲突时仍标记 `needs_review`。
 - 采集只生成一份 Markdown 报告；图片和附件沿用文档中的链接或占位，不下载二进制文件。若报告超过 15,000 个 Unicode 字符，使用现有人工压缩审核门槛阻止 Process；不恢复全文或全量差异。
@@ -97,7 +94,7 @@ Weekly Process 会根据已知文件名在 `_dist` 中标记来源类型，但�
 - `build.md`、`build-bot.md`、`research.md`、`meeting.md`、`chat.md`、`feedback.md` 标记为行动证据；`wisdom.md` 为普通输入；`coach.md` 为采集器筛选后的 Coach 输入。
 - 未知文件名仍会作为普通 input 处理，不阻断未来扩展。
 
-支持 `.md`、`.txt`、`.json`、`.html` / `.htm` 的历史输入解析，但新周目录默认只使用 Markdown。以下划线开头的文件和 `README.md` 会被处理器忽略。`_source-status.json` 是自动来源状态侧车：`ready` 才允许对应文件进入处理；`empty` 表示“0 条记录，文件未生成”；`failed/unavailable/needs_review` 表示本轮未完成，不能把旧文件当作本轮输入。`feishu-docs` 为 `needs_review/failed/unavailable` 时，Weekly Process 直接停止，不生成部分输入包。侧车缺失时按历史兼容规则读取，格式非法时失败关闭。
+支持 `.md`、`.txt`、`.json`、`.html` / `.htm` 的历史输入解析，但新周目录默认只使用 Markdown。以下划线开头的文件、`README.md`、`ai.generated.md` 和已退役来源的历史周报会被处理器忽略。`_source-status.json` 是自动来源状态侧车：`ready` 才允许对应文件进入处理；`empty` 表示“0 条记录，文件未生成”；`failed/unavailable/needs_review` 表示本轮未完成，不能把旧文件当作本轮输入。侧车缺失时按历史兼容规则读取，格式非法时失败关闭。
 
 具体 SOP 见 [`usage.md`](./usage.md)。
 
