@@ -68,7 +68,7 @@ Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 刷新 YW Next �
 5. Skill 内部先调用确定性脚本：
 
    ```bash
-   npm run process:weekly
+   npm run process:weekly -- --week YYYY-Www
    ```
 
    未传 `--week` 时，脚本按 `Asia/Shanghai` 自动选择周报目标：周一至周五默认上一 ISO 周，周六、周日默认当前 ISO 周。用户或自动化已经解析出目标周时，必须显式传 `--week YYYY-Www`，确保阶段 1 / 2 / 3 使用同一周。
@@ -79,11 +79,19 @@ Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 刷新 YW Next �
    node .agents/skills/learn-x-process/scripts/generate-weekly-process-pack.mjs --week 2026-22
    ```
 
-   Weekly Process 对普通文件保留 15,000 Unicode 字符校验；Voice-X 的 `voice.md` 完整落盘，30,000 字符只是强提示，不阻断输入生成。统一生成 Process Pack 时先输出合并总表：Flomo 第一行，其余输入保持原顺序；输入逐来源合并状态、记录/材料数、文件原始 → 解析清洗后有效（去重前）→ Process Pack 最终纳入字符链路和结果，最后一个数字为本阶段最终纳入数。Voice-X 目标保留 10%–15%（预算中心 12.5%），按下述规则压缩；微信读书是另一项必压缩来源。普通来源默认不做语义压缩，`input:compress` 不处理 Voice-X。
+   Weekly Process 对普通文件保留 15,000 Unicode 字符提示；Voice-X 的 `voice.md` 完整落盘，30,000 字符只是强提示，不阻断输入生成。阶段 1 的准备模式先压缩 Voice-X 并生成微信读书及超长来源的候选请求。正式 Pack 统一输出合并总表：Flomo 第一行，其余输入按配置顺序；逐来源报告状态、记录/材料数及文件原始 → 清洗有效 → Pack 最终纳入字符链路。Voice-X 目标保留 10%–15%（预算中心 12.5%）；微信读书是必需语义压缩来源。`input:compress` 不处理 Voice-X，也不属于周流程快路径。
 
-   `weread.md` 中只要有划线或想法，每次生成周 Process Pack 都必须做语义压缩，不受 15,000 字符门槛影响。保持 `03_input/weekly/YYYY-Www/weread.md` 不变，并让 `input.json` 保留未做语义压缩的完整清洗内容；只压缩 Process Pack 第 7 节里的微信读书正文，不把原始划线整段搬入 Pack。先保留阅读统计、书名、作者、进度和“当前章节”快照，再按书和必要的章节归纳高信号观点：合并重复或相近划线，保留彼此独立的主张、推理链、条件、反例、风险与关键具象信息。用户自己的想法与批注要和作者观点分开，内容完整保留；不得把作者观点写成用户判断，不推导行动或 Memory，不补造含义。压缩不设固定比例，但必须形成实质缩短；不得靠删尾、机械截断或仅清理空行冒充压缩。若无法在不损失独立观点的情况下缩短，标记 `needs_review` 并停止交付，不把未压缩正文标为完成。
+   阶段 1 在来源到齐后先运行准备模式：
 
-   `generate-weekly-process-pack.mjs` 目前只自动压缩 Voice-X。生成后，Codex 必须完成微信读书语义压缩，再交付 Pack；同步更新第 2 节字符链路、第 5 节来源索引、第 6 节压缩概览和第 7 节正文。所有计数使用 `countInputChars`（Unicode 码点数）：字符链路报告文件原始 → 清洗有效 → Pack 最终纳入；`input.json` 保留完整清洗内容且未做语义压缩，不能用其字符数冒充 Pack 最终纳入数。保留书籍和必要章节归属，确保摘要可回溯到 `weread.md`。
+   ```bash
+   npm run process:weekly -- --week YYYY-Www --prepare
+   ```
+
+   准备模式只写入私有 `.preprocessing/` 缓存和候选清单，不生成正式 `input.json` 或 Process Pack。Voice-X 在此阶段做确定性压缩；微信读书和超过普通来源字符阈值的材料生成绑定目标周、来源哈希、采集器版本与规则版本的语义压缩请求，由 Codex 按来源原文完成候选并写入清单指定位置，再运行一次 `--prepare` 校验。保留 `03_input/weekly/YYYY-Www/` 原始文件不变。
+
+   微信读书有划线或想法时必须语义压缩，不受 15,000 字符门槛影响。保留阅读统计、书名、作者、进度和“当前章节”快照；按书和必要章节归纳高信号观点，合并重复划线，保留独立主张、推理链、条件、反例、风险和关键具象信息。用户想法与作者观点分开且完整保留；不推导行动或 Memory。压缩须实质缩短，不能靠删尾或机械截断；无法安全缩短时标记 `needs_review` 并停止交付。
+
+   确认周记后，正常快路径直接运行 `npm run input:weekly -- --week YYYY-Www` 和 `npm run process:weekly -- --week YYYY-Www`。最终脚本核验缓存哈希、来源状态、跨来源去重和两张来源汇报表，统一计算最终纳入字符数，再写正式 `input.json`、Process Pack 与 Output 最小壳。缓存失效时只重做变化来源的准备；不得在 Pack 生成后手工修统计或临时做语义压缩。所有计数使用 `countInputChars`（Unicode 码点数），分别报告来源正文、上周对照和完整 Pack 字符数；周记永不压缩。
 
    `智慧之门` 的增值源是飞书 Base；采集入口读取结构化字段，并把 `长篇内容、原始内容` 做自适应高信号抽取：以每条约 300 Unicode 字符为中心，通常保留 200-500 字，预算根据独立核心判断、因果/模型结构、结论、边界、风险和与参考字段的关联度有限调整；短内容不硬扩，长内容不超过 500。只把压缩内容写入本地，原文不落盘。因此 `wisdom.md`、`input.json` 和 Process Pack 保持同一内容口径；需要核查长篇原文时回到 Base 链接。各来源仍记录原始字符数与纳入字符数，避免把材料体量和实际纳入上下文混为一谈。
 

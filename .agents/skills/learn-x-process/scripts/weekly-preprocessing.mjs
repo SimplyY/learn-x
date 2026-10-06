@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { compressVoiceForProcessPack } from "../../learn-x-input/scripts/collect-voice-weekly.mjs";
 import { inputSize, MAX_WEEKLY_INPUT_CHARS } from "../../learn-x-input/scripts/lib/input-limits.mjs";
@@ -80,7 +80,9 @@ export async function prepareWeeklyProcessInputs({ week, repoRoot, payload }) {
         ruleVersion: WEEKLY_PREPROCESS_RULE_VERSION,
         candidatePath: path.relative(repoRoot, candidateFile).split(path.sep).join("/"),
         required,
-        reason: missing ? (isWeread ? "semantic-compression-required" : "over-limit-candidate-required") : error.message
+        reason: missing
+          ? (isWeread ? "semantic-compression-required" : "over-limit-candidate-required")
+          : "candidate-invalid-or-stale"
       });
       if (!required) exclusions.push({ sourceId: snapshot.sourceId, sourcePath: file.path, reason: missing ? "preprocessing-not-ready" : "candidate-invalid" });
       continue;
@@ -103,7 +105,7 @@ export async function prepareWeeklyProcessInputs({ week, repoRoot, payload }) {
   const temp = `${manifestPath}.${process.pid}-${randomUUID()}.tmp`;
   await writeFile(temp, `${JSON.stringify(manifest, null, 2)}\n`, { flag: "wx" });
   try { await rename(temp, manifestPath); }
-  finally { await import("node:fs/promises").then(({ unlink }) => unlink(temp).catch((error) => { if (error.code !== "ENOENT") throw error; })); }
+  finally { await unlink(temp).catch((error) => { if (error.code !== "ENOENT") throw error; }); }
   return { manifest, manifestPath, requests, exclusions };
 }
 
@@ -146,6 +148,11 @@ export async function loadWeeklyPreparation({ week, repoRoot, payload }) {
   if (!manifest.completeForPack) {
     const required = (manifest.requests || []).filter((request) => request.required).map((request) => request.sourcePath);
     if (required.length) throw new Error(`weekly-preprocessing-required: ${required.join(", ")}; prepare candidates and rerun --prepare`);
+  }
+  const preparedVoiceIds = new Set((manifest.preparedItems || []).filter((item) => item.kind === "voice").map((item) => item.itemId));
+  const missingVoice = payload.items.filter((item) => item.path.endsWith("/voice.md") && !preparedVoiceIds.has(item.id));
+  if (missingVoice.length) {
+    throw new Error(`weekly-preprocessing-required: voice cache missing for ${missingVoice.map((item) => item.id).join(", ")}; rerun --prepare`);
   }
   return { manifest, manifestPath };
 }

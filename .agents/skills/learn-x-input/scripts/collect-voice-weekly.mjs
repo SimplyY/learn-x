@@ -99,7 +99,9 @@ export async function writeVoiceWeekly(options = {}) {
       await writeFile(tempPath, content, "utf8");
       await rename(tempPath, notesPath);
     }
-    const summary = written ? `本周有 ${payload.records.length} 条新版 AI 洞察` : `本周没有可采集的新版 AI 洞察（pending ${payload.counts.pending}，legacy ${payload.counts.legacy}）`;
+    const summary = written
+      ? `完整扫描完成，本周有 ${payload.records.length} 条新版 AI 洞察；范围 ${payload.range.start} 至 ${payload.range.endExclusive}`
+      : `完整扫描 ${payload.range.start} 至 ${payload.range.endExclusive} 完成；下界已覆盖：是；0 条，确认无匹配（pending ${payload.counts.pending}，legacy ${payload.counts.legacy}）`;
     await updateWeeklySourceStatus({ weekRoot: outputRoot, week, source: "voice", status: written ? "ready" : "empty", file: "voice.md", count: payload.records.length, summary, preservedStaleFile: !written && await fileExists(notesPath) });
     return { payload, notesPath: written ? notesPath : null };
   } catch (error) {

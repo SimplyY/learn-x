@@ -19,7 +19,11 @@ const COACH_TABLES = [
   { name: "项目", fields: ["项目名", "状态", "项目类型", "创建时间", "更新时间", "备注", "产出链接", "阻塞与风险", "当前阶段", "优先级", "下一步", "当前方案"], filterField: "创建时间" },
 ];
 
-export async function collectDailyCoachWeekly({ week, outputRoot = path.join(repoRoot, "03_input/weekly", week), runCli = run }) {
+export async function collectDailyCoachWeekly({ week, outputRoot = path.join(repoRoot, "03_input/weekly", week), runCli = run, sources = ["daily", "coach"] }) {
+  const requested = new Set(sources);
+  if (!requested.size || [...requested].some((source) => !["daily", "coach"].includes(source))) {
+    throw new Error("sources must contain daily and/or coach");
+  }
   const dailyPath = path.join(outputRoot, "daily.md");
   const coachPath = path.join(outputRoot, "coach.md");
   const range = weekRange(week);
@@ -29,7 +33,7 @@ export async function collectDailyCoachWeekly({ week, outputRoot = path.join(rep
   let coachFileWritten = false;
   await mkdir(outputRoot, { recursive: true });
 
-  try {
+  if (requested.has("daily")) try {
     daily = await collectDaily(range, runCli);
     const content = renderDaily(week, range, daily);
     const ready = daily.records.length > 0;
@@ -40,7 +44,7 @@ export async function collectDailyCoachWeekly({ week, outputRoot = path.join(rep
     await updateWeeklySourceStatus({ weekRoot: outputRoot, week, source: "daily", status: "failed", file: "daily.md", count: 0, summary: safeFailureSummary(error), preservedStaleFile: await fileExists(dailyPath) });
   }
 
-  try {
+  if (requested.has("coach")) try {
     coach = await collectCoach(range, runCli);
     const content = renderCoach(week, range, coach);
     coachFileWritten = shouldWriteCoachFile(coach);
@@ -185,4 +189,15 @@ function weekRange(week) { const match = /^(\d{4})-W(\d{2})$/.exec(week); if (!m
 async function atomicWrite(file, content) { const temp = `${file}.${process.pid}.tmp`; await writeFile(temp, content, "utf8"); await rename(temp, file); }
 async function run(args) { const { stdout } = await execFileAsync("lark-cli", args, { env: { ...process.env, LARKSUITE_CLI_NO_UPDATE_NOTIFIER: "1", LARKSUITE_CLI_NO_SKILLS_NOTIFIER: "1" }, maxBuffer: 16 * 1024 * 1024 }); const result = JSON.parse(stdout); if (result.ok !== true) throw new Error(result.error?.message || "lark-cli 返回失败"); return result; }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) { const week = process.argv[process.argv.indexOf("--week") + 1]; const result = await collectDailyCoachWeekly({ week }); const excluded = Object.values(result.coach.tables).reduce((sum, table) => sum + table.excludedReviewCount, 0); const retained = Object.values(result.coach.tables).reduce((sum, table) => sum + table.records.length, 0); const coachStatus = result.coachFileWritten ? "coach.md 已生成" : "coach.md 未生成（0 条记录）"; console.log(`Daily/Coach weekly inputs for ${week}: daily=${result.daily.records.length} 条，coach=${retained} 条，${coachStatus}；review 排除 ${excluded} 条。`); }
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const args = process.argv.slice(2);
+  const week = args[args.indexOf("--week") + 1];
+  const sourceIndex = args.indexOf("--source");
+  const source = sourceIndex < 0 ? "both" : args[sourceIndex + 1];
+  const sources = source === "both" ? ["daily", "coach"] : [source];
+  const result = await collectDailyCoachWeekly({ week, sources });
+  const dailyCount = result.daily?.records.length;
+  const coachCount = result.coach ? Object.values(result.coach.tables).reduce((sum, table) => sum + table.records.length, 0) : undefined;
+  const excludedReviewCount = result.coach ? Object.values(result.coach.tables).reduce((sum, table) => sum + table.excludedReviewCount, 0) : undefined;
+  console.log(JSON.stringify({ week, sources, dailyCount, coachCount, coachFileWritten: result.coachFileWritten, excludedReviewCount }));
+}

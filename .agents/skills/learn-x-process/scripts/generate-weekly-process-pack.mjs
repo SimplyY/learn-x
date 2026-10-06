@@ -1,11 +1,13 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHash, randomUUID } from "node:crypto";
 import { compressVoiceForProcessPack, voiceCompressionMetrics } from "../../learn-x-input/scripts/collect-voice-weekly.mjs";
-import { inputSize, MAX_VOICE_WEEKLY_INPUT_CHARS, VOICE_TARGET_RETAINED_RATIO, VOICE_TARGET_RETAINED_RATIO_RANGE } from "../../learn-x-input/scripts/lib/input-limits.mjs";
-import { SOURCE_FILES } from "../../learn-x-input/scripts/lib/source-status.mjs";
+import { countInputChars, inputSize, MAX_VOICE_WEEKLY_INPUT_CHARS, VOICE_TARGET_RETAINED_RATIO, VOICE_TARGET_RETAINED_RATIO_RANGE } from "../../learn-x-input/scripts/lib/input-limits.mjs";
 import { WEEKLY_SOURCE_CONFIG, compareWeeklySources, weeklySourceForFile, weeklySourceForId } from "../../learn-x-input/scripts/lib/weekly-source-config.mjs";
-import { defaultWeeklyReviewWeek, isoWeekRange, collectWeeklyInput, writeWeeklyInput } from "./collect-weekly-input.mjs";
+import { defaultWeeklyReviewWeek, isoWeekRange, collectWeeklyInput } from "./collect-weekly-input.mjs";
+import { validateAiReview } from "./monthly-process-input.mjs";
+import { loadWeeklyPreparation, prepareWeeklyProcessInputs } from "./weekly-preprocessing.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
@@ -23,21 +25,35 @@ const FIXED_WEEKLY_INPUTS = [
 
 export async function generateWeeklyProcessPack(options = {}) {
   const week = options.week || defaultWeeklyReviewWeek();
-  const { payload } = await writeWeeklyInput({ week });
-  const sourceSummaries = buildSourceSummaries(payload);
-  const { items, compression } = compressWeeklyProcessItems(payload.items, payload.files);
-  const fileSummaries = buildFileSummaries(payload, items);
-  const outputRoot = path.join(repoRoot, "04_output/_dist/weekly", distWeekId(payload.week));
-  const previousOutput = await readPreviousWeeklyOutput(payload.week);
-  const shellPath = await ensureWeeklyOutputShell(payload.week);
+  const root = options.repoRoot || repoRoot;
+  const payload = await collectWeeklyInput({ week, repoRoot: root, allowOversized: true });
+  const outputRoot = path.join(root, "04_output/_dist/weekly", distWeekId(payload.week));
 
+  if (options.prepare) {
+    const preparation = await prepareWeeklyProcessInputs({ week: payload.week, repoRoot: root, payload });
+    return { payload, preparation, outputRoot, prepared: true };
+  }
+
+  const gate = await validateWeeklyProcessInputs({ week: payload.week, repoRoot: root, payload });
+  if (gate.length) throw new Error(`weekly-process-blocked:\n${gate.map((item) => `- ${item}`).join("\n")}`);
+
+  const { manifest, manifestPath } = await loadWeeklyPreparation({ week: payload.week, repoRoot: root, payload });
+  const { processPayload, items, compression } = applyWeeklyPreparation(payload, manifest);
+  const sourceSummaries = buildSourceSummaries(processPayload);
+  const fileSummaries = buildFileSummaries(processPayload, items);
+  const previousOutput = await readPreviousWeeklyOutput(payload.week, root);
+  const processPack = renderProcessPack(processPayload, sourceSummaries, fileSummaries, items, compression, previousOutput);
   await mkdir(outputRoot, { recursive: true });
-  const processPack = renderProcessPack(payload, sourceSummaries, fileSummaries, items, compression, previousOutput);
+  const inputPath = path.join(outputRoot, "input.json");
   const outputPath = path.join(outputRoot, "process-pack.md");
-  await writeFile(outputPath, processPack, "utf8");
+  const shellPath = await ensureWeeklyOutputShell(payload.week, root);
+  await atomicWrite(inputPath, `${JSON.stringify(payload, null, 2)}\n`);
+  await atomicWrite(outputPath, processPack);
 
   return {
     payload,
+    processPayload,
+    manifestPath,
     sourceSummaries,
     fileSummaries,
     compression,
@@ -45,6 +61,169 @@ export async function generateWeeklyProcessPack(options = {}) {
     outputPath,
     shellPath
   };
+}
+
+export async function validateWeeklyProcessInputs({ week, repoRoot: root = repoRoot, payload }) {
+  const byFile = new Map(payload.files.map((file) => [path.basename(file.path), file]));
+  const status = payload.sourceStatuses || {};
+  const issues = [];
+  const targetWeek = distWeekId(week);
+
+  const daily = status.daily;
+  if (daily?.status !== "ready" || (daily.count ?? 0) < 1 || !byFile.has("daily.md")) {
+    issues.push(`日记 daily.md 必须为 ready 且至少有一条有效记录（当前 ${daily?.status || "未登记"}，${daily?.count ?? 0} 条）`);
+  }
+
+  const flomo = status.flomo;
+  if (flomo?.status === "ready") {
+    if ((flomo.count ?? 0) < 1 || !byFile.has("flomo.md")) issues.push("Flomo 标记 ready，但没有有效记录或 flomo.md");
+  } else if (!(flomo?.status === "empty" && flomo.count === 0 && hasTrustedEmptyScan(flomo.summary))) {
+    issues.push(`Flomo flomo.md 必须完整采集成功（允许有完整扫描证据的零条结果；当前 ${flomo?.status || "未登记"}）`);
+  }
+
+  const voice = status.voice;
+  if (voice?.status === "ready") {
+    if ((voice.count ?? 0) < 1 || !byFile.has("voice.md")) {
+      issues.push("Voice 标记 ready，但没有有效记录或 voice.md");
+    } else {
+      const text = await readFile(path.join(root, byFile.get("voice.md").path), "utf8");
+      const voiceWeek = text.match(/^# Voice-X 核心重点｜(\d{4}-W\d{2})$/m)?.[1];
+      if (voiceWeek !== targetWeek) issues.push(`Voice-X 目标周标记缺失或不匹配（应为 ${targetWeek}）`);
+    }
+  } else if (!(voice?.status === "empty" && voice.count === 0 && hasTrustedEmptyScan(voice.summary))) {
+    issues.push(`Voice voice.md 必须完整采集成功（允许有完整扫描证据的零条结果；当前 ${voice?.status || "未登记"}）`);
+  }
+
+  const aiFile = byFile.get("ai.md");
+  if (!aiFile) {
+    issues.push("AI 周回顾 ai.md 缺失，Process Pack 需要有效 AI 回顾");
+  } else {
+    const text = await readFile(path.join(root, aiFile.path), "utf8");
+    const validation = validateAiReview(text);
+    if (!validation.valid) issues.push(`AI 周回顾结构无效（${validation.reasons.join(", ")}）`);
+    const aiSidecarPath = path.join(root, "03_input/weekly", targetWeek, "_ai-generated.json");
+    let aiSidecar;
+    try { aiSidecar = JSON.parse(await readFile(aiSidecarPath, "utf8")); }
+    catch (error) { if (error.code !== "ENOENT") issues.push("AI 周回顾运行状态侧车无法验证"); }
+    if (aiSidecar) {
+      if (aiSidecar.status !== "confirmed" || aiSidecar.targetWeek !== targetWeek) issues.push(`AI 周回顾未确认为目标周 ${targetWeek}`);
+    } else {
+      const declaredWeek = text.match(/^# .*?(\d{4}-W\d{2})\s*$/m)?.[1];
+      if (declaredWeek !== targetWeek) issues.push(`AI 周回顾目标周标记缺失或不匹配（应为 ${targetWeek}）`);
+    }
+  }
+
+  const weeklyFile = byFile.get("weekly.md");
+  if (!weeklyFile) {
+    issues.push("已确认的目标周周记 weekly.md 缺失");
+  } else {
+    const text = await readFile(path.join(root, weeklyFile.path), "utf8");
+    const weekTag = text.match(/(?:目标周|覆盖周|目标覆盖周)[：:]\s*(\d{4}-W\d{2})/i)?.[1];
+    if (text.includes("【待优化】AI 基础草稿")) issues.push("weekly.md 仍带有未确认草稿标记");
+    if (weekTag !== targetWeek) issues.push(`weekly.md 目标周标记缺失或不匹配（应为 ${targetWeek}）`);
+    if (!hasSubstantiveWeeklyJournal(text)) issues.push("weekly.md 只有模板、占位或空内容，不能作为已确认周记");
+  }
+
+  return issues;
+}
+
+function hasTrustedEmptyScan(summary) {
+  const text = String(summary || "");
+  return /(?:完整扫描|完整查询|全量查询|完整分页)/.test(text)
+    && /(?:下界已覆盖|范围已覆盖)[：:]\s*是/.test(text)
+    && /(?:0\s*条|零条|无匹配)/.test(text);
+}
+
+function hasSubstantiveWeeklyJournal(content) {
+  const lines = String(content).split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/^#{1,6}\s/.test(line))
+    .filter((line) => !/^(?:来源|目标周|覆盖周|目标覆盖范围|写作日标题|定位依据|采集时间)[：:]/.test(line))
+    .filter((line) => !/^(?:[-*]\s*)?(?:待补充|待填写|xx+|todo|暂无)[。.!！?？]?$/i.test(line));
+  return lines.some((line) => countInputChars(line.replace(/[`*_>#|]/g, "").trim()) >= 12);
+}
+
+function applyWeeklyPreparation(payload, manifest) {
+  const exclusions = new Map((manifest.exclusions || []).map((item) => [item.sourcePath, item.reason]));
+  const preparedByItem = new Map((manifest.preparedItems || []).filter((item) => item.itemId).map((item) => [item.itemId, item]));
+  const preparedByPath = new Map((manifest.preparedItems || []).filter((item) => !item.itemId).map((item) => [item.path, item]));
+  const replacedPaths = new Set(preparedByPath.keys());
+  const rawItems = payload.items.filter((item) => !exclusions.has(item.path) && !replacedPaths.has(item.path));
+  const items = rawItems.map((item) => {
+    const prepared = preparedByItem.get(item.id);
+    if (prepared) return { ...item, text: prepared.text, preparedKind: prepared.kind };
+    if (item.path.endsWith("/voice.md")) throw new Error(`weekly-preprocessing-required: voice cache missing for ${item.path}; rerun --prepare`);
+    return item;
+  });
+  for (const [filePath, prepared] of preparedByPath) {
+    if (exclusions.has(filePath)) continue;
+    const first = payload.items.find((item) => item.path === filePath);
+    if (first) items.push({ ...first, id: `${filePath}#prepared`, text: prepared.text, preparedKind: prepared.kind });
+  }
+  const uniqueItems = dedupeWeeklyProcessItems(items);
+  const includedFiles = payload.files;
+  const processPayload = {
+    ...payload,
+    files: includedFiles,
+    items: uniqueItems,
+    preprocessing: { exclusions: [...exclusions].map(([sourcePath, reason]) => ({ sourcePath, reason })) },
+    stats: {
+      ...payload.stats,
+      fileCount: includedFiles.length,
+      itemCount: items.length,
+      uniqueItemCount: uniqueItems.length,
+      duplicateCount: items.length - uniqueItems.length
+    }
+  };
+  const voiceItems = uniqueItems.filter((item) => item.path.endsWith("/voice.md"));
+  const voiceSourceChars = payload.files.filter((file) => file.path.endsWith("/voice.md")).reduce((sum, file) => sum + (file.rawChars || 0), 0);
+  const voiceOutputChars = voiceItems.reduce((sum, item) => sum + inputSize(item.text).chars, 0);
+  const compression = {
+    sourceCount: voiceItems.length,
+    sourceChars: voiceSourceChars,
+    outputChars: voiceOutputChars,
+    retainedRatio: voiceSourceChars ? Number((voiceOutputChars / voiceSourceChars).toFixed(3)) : 0,
+    reductionRatio: voiceSourceChars ? Number((1 - voiceOutputChars / voiceSourceChars).toFixed(3)) : 0,
+    targetRetainedRatio: VOICE_TARGET_RETAINED_RATIO,
+    targetRetainedRatioRange: VOICE_TARGET_RETAINED_RATIO_RANGE,
+    warnings: voiceSourceChars > MAX_VOICE_WEEKLY_INPUT_CHARS
+      ? [`Voice.md 原始内容 ${voiceSourceChars} 字符，超过提示线 ${MAX_VOICE_WEEKLY_INPUT_CHARS} 字符；已使用预处理缓存。`]
+      : [],
+    files: voiceItems.map((item) => {
+      const original = payload.items.find((candidate) => candidate.id === item.id);
+      return {
+        path: item.path,
+        ...voiceCompressionMetrics(original?.text || "", item.text).overall,
+        sourceChars: inputSize(original?.text || "").chars
+      };
+    })
+  };
+  return { processPayload, items: uniqueItems, compression };
+}
+
+export function dedupeWeeklyProcessItems(items) {
+  const seen = new Map();
+  for (const item of items) {
+    const fingerprint = createItemFingerprint(item.text);
+    if (!seen.has(fingerprint)) {
+      seen.set(fingerprint, { ...item, fingerprint, duplicateSources: [] });
+      continue;
+    }
+    seen.get(fingerprint).duplicateSources.push(item.path);
+  }
+  return [...seen.values()];
+}
+
+function createItemFingerprint(text) {
+  return createHash("sha256").update(String(text).toLowerCase().replace(/\s+/g, "")).digest("hex");
+}
+
+async function atomicWrite(filePath, content) {
+  const temp = `${filePath}.${process.pid}-${randomUUID()}.tmp`;
+  await writeFile(temp, content, { encoding: "utf8", flag: "wx" });
+  try { await rename(temp, filePath); }
+  finally { await unlink(temp).catch((error) => { if (error.code !== "ENOENT") throw error; }); }
 }
 
 export function renderProcessPack(payload, sourceSummaries, fileSummaries, items, compression, previousOutput = {}) {
@@ -95,7 +274,7 @@ export function renderProcessPack(payload, sourceSummaries, fileSummaries, items
     "",
     "## 7. 材料正文",
     "",
-    renderFileMaterials(items, fileSummaries),
+    renderFileMaterials(items, fileSummaries, payload.preprocessing),
     "",
     "## 9. 上周 Weekly Output（仅作对照）",
     "",
@@ -207,8 +386,11 @@ function buildInputAuditRow({ payload, definition, fileSummary, statusInfo }) {
   const link = present ? localFileLink(filePath, definition.file) : "—";
 
   let result;
+  const preparedExclusion = payload.preprocessing?.exclusions?.find((item) => item.sourcePath === fileSummary?.path);
   if (entry && entry.status !== "ready") {
     result = `排除：${entry.summary || entry.status}${stale}`;
+  } else if (preparedExclusion) {
+    result = `排除：预处理未就绪（${preparedExclusion.reason}）`;
   } else if (entry?.status === "ready" && !hasMaterial) {
     result = "异常：状态为 ready，但没有可纳入的有效材料";
   } else if (isReady) {
@@ -226,7 +408,7 @@ function buildInputAuditRow({ payload, definition, fileSummary, statusInfo }) {
     priority: definition.priority,
     blocksPack: Boolean(definition.blocksPack),
     file: definition.file,
-    status,
+    status: preparedExclusion ? `${status}（预处理排除）` : status,
     count: isReady && fileSummary ? (entry?.count ?? fileSummary.itemCount) : (entry?.count ?? 0),
     rawChars: isReady && fileSummary ? fileSummary.rawChars : "—",
     effectiveChars: isReady && fileSummary ? fileSummary.effectiveChars : "—",
@@ -241,15 +423,13 @@ function buildInputAuditRow({ payload, definition, fileSummary, statusInfo }) {
 
 export function renderInputAuditTable(payload, fileSummaries, compression) {
   const rows = buildInputAuditRows(payload, fileSummaries, compression);
-  const flomoRow = rows.find((row) => row.file === "flomo.md");
-  const tableRows = flomoRow ? [flomoRow, ...rows.filter((row) => row !== flomoRow)] : rows;
   return [
     "> 周记是阶段前提，自动来源按统一配置排序。输入行展示文件原始 → 解析清洗有效（去重前）→ Process Pack 最终纳入；只有发生实际压缩时才显示比例。",
     `> 本轮需关注：${renderInputAttention(rows)}`,
     "",
     "| 组别 / 优先级 | 类型 / 产物 | 来源 | 文件 | 状态 | 记录/材料 | 字符链路（文件原始 → 清洗有效〔去重前〕→ 最终纳入） | 结果 |",
     "| --- | --- | --- | --- | --- | ---: | ---: | --- |",
-    ...tableRows.map((row) => {
+    ...rows.map((row) => {
       const detail = compression.files?.find((item) => item.path.endsWith(`/${row.file}`));
       const compressionNote = detail && detail.retainedRatio < 1 ? `（Voice-X 压缩，保留 ${Math.round(detail.retainedRatio * 100)}%）` : "";
       const characterChain = row.rawChars === "—" ? "—" : `${row.rawChars} → ${row.effectiveChars} → ${row.processChars}${compressionNote}`;
@@ -317,6 +497,7 @@ function renderCompressionSummary(compression) {
 function renderSourceStatuses(payload) {
   const rows = Object.entries(payload.sourceStatuses || {})
     .filter(([source]) => !payload.omittedSources?.includes(source))
+    .sort(([left], [right]) => (weeklySourceForId(left)?.order ?? Number.MAX_SAFE_INTEGER) - (weeklySourceForId(right)?.order ?? Number.MAX_SAFE_INTEGER))
     .map(([source, entry]) => {
     const usable = entry.status === "ready" ? "计入" : "排除";
     const stale = entry.preservedStaleFile ? "旧文件已保留但过期" : "无旧文件";
@@ -339,8 +520,8 @@ function inclusiveRangeEnd(exclusiveEnd) {
   return date.toISOString().slice(0, 10);
 }
 
-async function ensureWeeklyOutputShell(weekId) {
-  const outputPath = path.join(repoRoot, "04_output/weekly", `${outputWeekId(weekId)}.md`);
+async function ensureWeeklyOutputShell(weekId, root = repoRoot) {
+  const outputPath = path.join(root, "04_output/weekly", `${outputWeekId(weekId)}.md`);
   await mkdir(path.dirname(outputPath), { recursive: true });
 
   let existing = "";
@@ -364,7 +545,7 @@ async function ensureWeeklyOutputShell(weekId) {
   return outputPath;
 }
 
-function buildSourceSummaries(payload) {
+export function buildSourceSummaries(payload) {
   const bySource = new Map();
   for (const file of payload.files) {
     const key = `${file.category}:${file.source}`;
@@ -399,10 +580,10 @@ function buildSourceSummaries(payload) {
     bySource.get(key).itemCount += 1;
   }
 
-  return [...bySource.values()].sort((a, b) => `${a.category}/${a.source}`.localeCompare(`${b.category}/${b.source}`, "zh-Hans-CN"));
+  return [...bySource.values()].sort(compareWeeklySources);
 }
 
-function buildFileSummaries(payload, processItems = payload.items) {
+export function buildFileSummaries(payload, processItems = payload.items) {
   const byPath = new Map();
   for (const file of payload.files) {
     byPath.set(file.path, {
@@ -430,7 +611,7 @@ function buildFileSummaries(payload, processItems = payload.items) {
     }
   }
 
-  return [...byPath.values()].sort((a, b) => a.shortPath.localeCompare(b.shortPath, "zh-Hans-CN"));
+  return [...byPath.values()].sort(compareWeeklySources);
 }
 
 function renderSourceCoverage(sourceSummaries) {
@@ -453,7 +634,7 @@ function renderSourceIndex(fileSummaries) {
 
   const rows = fileSummaries.map((file, index) => {
     const sourceId = sourceFileId(index);
-    return `| ${sourceId} | ${file.category} | ${file.source} | ${localFileLink(file.path)} | ${file.itemCount} | ${file.rawChars} → ${file.processChars} |`;
+    return `| ${sourceId} | ${file.category} | ${file.source} | ${localFileLink(file.path)} | ${file.itemCount} | ${file.rawChars} → ${file.effectiveChars} → ${file.processChars} |`;
   });
 
   return [
@@ -475,7 +656,7 @@ function escapeTableCell(value) {
   return String(value ?? "").replaceAll("|", "／").replace(/[\r\n]+/g, " ").trim();
 }
 
-function renderFileMaterials(items, fileSummaries) {
+function renderFileMaterials(items, fileSummaries, preprocessing = {}) {
   if (!items.length) return "- 本周没有有效材料。";
 
   const itemsByPath = new Map();
@@ -487,7 +668,10 @@ function renderFileMaterials(items, fileSummaries) {
   return fileSummaries.map((file, index) => {
     const sourceId = sourceFileId(index);
     const fileItems = itemsByPath.get(file.path) || [];
-    const body = fileItems.length === 1
+    const excluded = preprocessing.exclusions?.find((item) => item.sourcePath === file.path);
+    const body = excluded
+      ? `- 排除：预处理未就绪（${excluded.reason}）。原始输入保留在 \`${file.path}\`。`
+      : fileItems.length === 1
       ? renderTextBlock(fileItems[0].text)
       : fileItems.map((item) => [
         `#### ${item.title}`,
@@ -527,6 +711,7 @@ function renderTextBlock(text) {
 function parseArgs(argv) {
   const options = {};
   for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] === "--prepare") options.prepare = true;
     if (argv[index] === "--week") {
       options.week = argv[index + 1];
       index += 1;
@@ -538,17 +723,27 @@ function parseArgs(argv) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const result = await generateWeeklyProcessPack(parseArgs(process.argv.slice(2)));
 
-  console.log(`Weekly input pack generated: 04_output/_dist/weekly/${distWeekId(result.payload.week)}/input.json`);
-  console.log(`Weekly process pack generated: ${path.relative(repoRoot, result.outputPath)}`);
-  console.log(`Previous Weekly Output baseline: ${result.previousOutput.week} (${result.previousOutput.status}) at ${result.previousOutput.relativePath}`);
-  console.log(`Weekly output shell ready: ${path.relative(repoRoot, result.shellPath)}`);
-  console.log(`Input files: ${result.payload.stats.fileCount}`);
-  console.log(`Unique items: ${result.payload.stats.uniqueItemCount}`);
-  console.log(`Sources: ${result.sourceSummaries.map((source) => `${source.source}:${source.itemCount}`).join(", ") || "none"}`);
-  const attention = Object.entries(result.payload.sourceStatuses || {})
-    .filter(([, entry]) => entry.status !== "ready")
-    .map(([source, entry]) => `${source}:${entry.status}（${entry.summary}）`);
-  console.log(`Input attention: ${attention.join("；") || "none"}`);
+  if (result.prepared) {
+    console.log(`Weekly preprocessing manifest: ${path.relative(repoRoot, result.preparation.manifestPath)}`);
+    console.log(`Preparation requests: ${result.preparation.requests.length}`);
+    console.log(`Pack-blocking preparation: ${result.preparation.requests.filter((request) => request.required).length}`);
+    console.log(`Optional exclusions: ${result.preparation.exclusions.length}`);
+    for (const request of result.preparation.requests) {
+      console.log(`Candidate required (${request.required ? "blocks Pack" : "optional"}): ${request.sourcePath} -> ${request.candidatePath} (${request.reason})`);
+    }
+  } else {
+    console.log(`Weekly input pack generated: 04_output/_dist/weekly/${distWeekId(result.payload.week)}/input.json`);
+    console.log(`Weekly process pack generated: ${path.relative(repoRoot, result.outputPath)}`);
+    console.log(`Previous Weekly Output baseline: ${result.previousOutput.week} (${result.previousOutput.status}) at ${result.previousOutput.relativePath}`);
+    console.log(`Weekly output shell ready: ${path.relative(repoRoot, result.shellPath)}`);
+    console.log(`Input files: ${result.payload.stats.fileCount}`);
+    console.log(`Unique items: ${result.processPayload.stats.uniqueItemCount}`);
+    console.log(`Sources: ${result.sourceSummaries.map((source) => `${source.source}:${source.itemCount}`).join(", ") || "none"}`);
+    const attention = Object.entries(result.payload.sourceStatuses || {})
+      .filter(([, entry]) => entry.status !== "ready")
+      .map(([source, entry]) => `${source}:${entry.status}（${entry.summary}）`);
+    console.log(`Input attention: ${attention.join("；") || "none"}`);
+  }
 }
 
 function distWeekId(weekId) {

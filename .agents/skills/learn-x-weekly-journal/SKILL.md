@@ -22,6 +22,13 @@ node /Users/yuwei/code/skills/prompt-governance/scripts/fetch-prompt.mjs learn-x
 
 - 写入并回读确认目标段落后，使用同一次 `lark-cli docs +fetch --detail with-ids` 返回的底层 `document_id` 作为导航链接路径：`https://ywhome.feishu.cn/docx/<document_id>#<target-block-id>`。目标 fragment 必须来自本次回读确认的目标周标题；若 CLI 提供该标题实际 `#share-...` fragment，可替换 block ID fragment。
 - 固定周记文档的 Wiki 节点 URL 可用于读写定位，但不能把其 `/wiki/<node-token>` 路径与 block ID 拼成导航链接。Ego Lite 受控验证表明 Wiki 路径带 fragment 不滚到目标，`/docx/<document_id>#<block-id>` 会滚到目标段落。
+- 每次新建草稿后，用写入后回读确认的目标标题 block ID 和底层 document ID 固化周记采回锚点；不要复用旧锚点。执行：
+
+  ```bash
+  npm run input:weekly-anchor -- --week YYYY-Www --write-date YYYY-MM-DD --target-title "M.D" --target-block-id <block-id> --document-id <document-id>
+  ```
+
+  锚点冲突或读回目标不唯一时停止并报告，不覆盖既有锚点。
 
 ### Flomo 最近笔记
 

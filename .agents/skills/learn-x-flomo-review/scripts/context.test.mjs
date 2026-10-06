@@ -1,0 +1,47 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { completedPeriods, buildReviewContext, validateEvidence, sha256, substantive } from './context.mjs';
+
+test('completed weeks/months remain correct at New Year and exclude current periods', () => {
+  assert.deepEqual(completedPeriods('2026-01-01'), { weeks: ['2025-W52', '2025-W51', '2025-W50', '2025-W49'], months: ['2025-12', '2025-11'] });
+  assert.deepEqual(completedPeriods('2026-10-06'), { weeks: ['2026-W40', '2026-W39', '2026-W38', '2026-W37'], months: ['2026-09', '2026-08'] });
+  assert.equal(substantive('# Output\n\nTODO'), false);
+  assert.equal(substantive('# Weekly Output\n\n' + '- [ ] 待补充：本周总览与下周计划。\n'.repeat(12)), false);
+  assert.equal(substantive('# Monthly Output\n\n' + '1. TODO: fill in the monthly summary.\n'.repeat(12)), false);
+  assert.equal(substantive('# Weekly Output\n\n- [ ] 待补充：下一步。\n' + '本周真实事情与现实反馈。'.repeat(20)), true);
+});
+test('realistic H4-H6 Output is read in full; live Dao failure has no stale fallback', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flomo-context-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const write = async (p, text) => { await mkdir(path.dirname(path.join(root, p)), { recursive: true }); await writeFile(path.join(root, p), text); };
+  const output = '#### 周输出\n\n' + '本周真实事情与现实反馈。'.repeat(20) + '\n##### 核心纪要\n长期判断和新证据。';
+  await write('04_output/weekly/2026-40.md', output);
+  await write('04_output/monthly/2026-09.md', '# 月输出\n\n' + '本月值得投入与持续检验的事。'.repeat(20));
+  await write('01_core/memory/2026-Q3.memory.md', '# Memory\n已确认的经历。');
+  const dao = '# 道\n守火，见光，成河。';
+  const context = await buildReviewContext(root, { date: '2026-10-06', readDao: async () => ({ kind: 'dao', content: dao, revision: 7, sha256: sha256(dao) }) });
+  assert.equal(context.materials.find(x => x.role === 'weekly').content, output);
+  assert.equal(context.manifest.missing.length, 6);
+  validateEvidence([{ relevance: 'strong', contextEvidence: [{ path: '04_output/weekly/2026-40.md', quote: '长期判断和新证据。' }] }], context);
+  assert.throws(() => validateEvidence([{ relevance: 'strong', contextEvidence: [{ path: 'Core/道', quote: '守火，见光，成河。' }] }], context), /needs-output/);
+  assert.throws(() => validateEvidence([{ contextEvidence: [{ path: 'Core/道', quote: '编造的长期价值选择' }] }], context), /untraceable/);
+  await assert.rejects(() => buildReviewContext(root, { date: '2026-10-06', readDao: async () => { throw Error('read-failed'); } }), /read-failed/);
+  const profile = '# 人物理解\n旧版已成功导出，不是本月最新版本。';
+  await write('01_core/ChatGPT-自我阅读版.md', profile + '\n');
+  await write('04_output/_dist/monthly/2026-08/chatgpt-understanding.json', JSON.stringify({ status: 'succeeded', completedAt: '2026-09-04T02:37:19Z', outputSha256: { self: sha256(profile.trim()) } }));
+  await write('04_output/_dist/monthly/2026-09/chatgpt-understanding.json', JSON.stringify({ status: 'needs_review', completedAt: '2026-10-01T08:06:14Z' }));
+  const readDao = async () => ({ kind: 'dao', content: dao, revision: 7, sha256: sha256(dao) });
+  const refreshed = await buildReviewContext(root, { date: '2026-10-06', readDao });
+  const meta = refreshed.materials.find(m => m.role === 'profile');
+  assert.equal(meta.exportPeriod, '2026-08');
+  assert.equal(meta.exportedAt, '2026-09-04T02:37:19Z');
+  assert.equal(meta.freshness, 'verified-last-successful-export');
+  await rm(path.join(root, '04_output/monthly/2026-09.md'));
+  const partial = await buildReviewContext(root, { date: '2026-10-06', readDao });
+  assert.equal(partial.materials.some(m => m.role === 'monthly'), false);
+  assert.equal(partial.manifest.missing.filter(m => m.role === 'monthly').length, 2);
+  await rm(path.join(root, '04_output/weekly/2026-40.md'));
+  await assert.rejects(() => buildReviewContext(root, { date: '2026-10-06', readDao }), /weekly-and-monthly-context-missing/);
+});

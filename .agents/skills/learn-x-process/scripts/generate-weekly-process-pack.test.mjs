@@ -3,7 +3,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { buildInputAuditRows, classifyWeeklyOutput, compressWeeklyProcessItems, previousWeeklyPeriod, readPreviousWeeklyOutput, renderInputAuditTable, renderProcessPack } from "./generate-weekly-process-pack.mjs";
+import { buildInputAuditRows, classifyWeeklyOutput, compressWeeklyProcessItems, generateWeeklyProcessPack, previousWeeklyPeriod, readPreviousWeeklyOutput, renderInputAuditTable, renderProcessPack, validateWeeklyProcessInputs } from "./generate-weekly-process-pack.mjs";
+import { updateWeeklySourceStatus } from "../../learn-x-input/scripts/lib/source-status.mjs";
 
 test("weekly Process Pack no longer embeds Action Feedback (retired, Core V1 owns weekly action review)", () => {
   const pack = renderProcessPack({
@@ -74,7 +75,98 @@ test("weekly comparison reports missing, empty, and shell baselines without fall
   assert.equal(classifyWeeklyOutput(placeholderTemplate), "shell");
 });
 
-test("compresses Voice-X once at Process Pack time and reports the overall ratio", () => {
+test("prepare mode writes only private preprocessing state; failed mandatory gates create no Pack artifacts", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-weekly-prepare-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const weekDir = path.join(root, "03_input/weekly", week);
+  const outputDir = path.join(root, "04_output/_dist/weekly", week);
+  await mkdir(weekDir, { recursive: true });
+  await writeFile(path.join(root, "package.json"), JSON.stringify({ type: "module", scripts: {} }), "utf8");
+  await writeFile(path.join(weekDir, "daily.md"), "2026-09-28\n日记有一条足够长的记录。", "utf8");
+
+  const prepared = await generateWeeklyProcessPack({ week, repoRoot: root, prepare: true });
+  assert.equal(prepared.prepared, true);
+  assert.equal(prepared.preparation.requests.length, 0);
+  await assert.rejects(readFile(path.join(outputDir, "input.json")), { code: "ENOENT" });
+  await assert.rejects(readFile(path.join(outputDir, "process-pack.md")), { code: "ENOENT" });
+  await assert.rejects(readFile(path.join(root, "04_output/weekly/2026-40.md")), { code: "ENOENT" });
+  assert.ok(prepared.preparation.manifestPath.endsWith("/.preprocessing/manifest.json"));
+
+  await assert.rejects(generateWeeklyProcessPack({ week, repoRoot: root }), /weekly-process-blocked:/);
+  await assert.rejects(readFile(path.join(outputDir, "input.json")), { code: "ENOENT" });
+  await assert.rejects(readFile(path.join(outputDir, "process-pack.md")), { code: "ENOENT" });
+  await assert.rejects(readFile(path.join(root, "04_output/weekly/2026-40.md")), { code: "ENOENT" });
+});
+
+test("confirmed target week with ready required inputs and verified empty sources assembles from cached preprocessing", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-weekly-fast-path-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const weekDir = path.join(root, "03_input/weekly", week);
+  const outputDir = path.join(root, "04_output/_dist/weekly", week);
+  await mkdir(weekDir, { recursive: true });
+  await writeFile(path.join(root, "package.json"), JSON.stringify({ type: "module", scripts: {} }), "utf8");
+
+  await writeFile(path.join(weekDir, "daily.md"), "2026-09-28\n日记记录了本周的真实事项和判断。", "utf8");
+  await writeFile(path.join(weekDir, "ai.md"), [
+    `# AI 周回顾｜${week}`,
+    `目标回顾周期：${week}`,
+    "## 具体的人和事",
+    "本周发生了值得回顾的具体事情。",
+    "## 本周议题",
+    "本周形成了一个有证据的判断。",
+    "## 精华议题摘要",
+    "保留核心问题与答案。",
+    "## 核心洞察与判断变化",
+    "写清楚判断如何变化。"
+  ].join("\n\n"), "utf8");
+  await writeFile(path.join(weekDir, "weekly.md"), [
+    `# 周记输入｜${week}`,
+    `目标周：${week}`,
+    "目标覆盖范围：2026-09-28 至 2026-10-04",
+    "写作日标题：10.5",
+    "定位依据：目标周日期与覆盖范围匹配",
+    "采集时间：2026-10-05T00:00:00.000Z",
+    "来源：https://example.invalid/weekly",
+    "## 本周记录",
+    "这是一段已确认的周记正文，包含足够具体的事实和思考。"
+  ].join("\n\n"), "utf8");
+  await writeFile(path.join(weekDir, "voice.md"), [
+    `# Voice-X 核心重点｜${week}`,
+    "- 来源：Voice-X",
+    "- 采集范围：2026-09-28 至 2026-10-05",
+    "- 分页：已完成（1 页）",
+    "",
+    "## 中文录音标题",
+    "- 录制时间：2026-09-29T10:00:00+08:00",
+    "- 处理后原文字符数：4000",
+    "- AI 洞察字符数：3000",
+    "",
+    "### 核心总结",
+    "记录了清晰的核心判断、证据、边界和行动。".repeat(80),
+    "### 芒格之魂洞察",
+    "从多个思维模型交叉验证风险与长期结果。".repeat(60)
+  ].join("\n"), "utf8");
+  await writeFile(path.join(weekDir, "_ai-generated.json"), JSON.stringify({ schemaVersion: 1, targetWeek: week, status: "confirmed" }), "utf8");
+
+  await updateWeeklySourceStatus({ weekRoot: weekDir, week, source: "daily", status: "ready", file: "daily.md", count: 1, summary: "目标周有日记", preservedStaleFile: false });
+  await updateWeeklySourceStatus({ weekRoot: weekDir, week, source: "flomo", status: "empty", file: "flomo.md", count: 0, summary: "完整扫描 2026-09-28 至 2026-10-05 完成；下界已覆盖：是；0 条，确认无匹配", preservedStaleFile: false });
+  await updateWeeklySourceStatus({ weekRoot: weekDir, week, source: "voice", status: "ready", file: "voice.md", count: 1, summary: "完整扫描完成，本周有 1 条新版 AI 洞察", preservedStaleFile: false });
+
+  const gatePayload = (await import("./collect-weekly-input.mjs")).collectWeeklyInput({ week, repoRoot: root, allowOversized: true });
+  assert.deepEqual(await validateWeeklyProcessInputs({ week, repoRoot: root, payload: await gatePayload }), []);
+  await generateWeeklyProcessPack({ week, repoRoot: root, prepare: true });
+  const result = await generateWeeklyProcessPack({ week, repoRoot: root });
+  assert.equal(result.processPayload.week, week);
+  assert.equal(result.processPayload.preprocessing.exclusions.length, 0);
+  const pack = await readFile(result.outputPath, "utf8");
+  assert.match(pack, /2026-W40/);
+  assert.match(pack, /Voice-X/);
+  assert.ok((await readFile(path.join(outputDir, "input.json"), "utf8")).includes("处理后原文字符数：4000"));
+});
+
+test("deterministically compresses structured Voice-X records and reports the final ratio", () => {
   const source = [
     "# Voice-X 核心重点｜2026-W36", "", "## with 测试", "",
     "## 核心总结", "", "关键事实与行动反馈。".repeat(500), "",
@@ -116,8 +208,9 @@ test("renders the full source-to-final character chain with failures and compres
   assert.match(table, /\| 类型 \/ 产物 \| 来源 \| 文件 \| 状态 \|/);
   assert.match(table, /字符链路（文件原始 → 清洗有效〔去重前〕→ 最终纳入）/);
   const tableRows = table.split("\n").filter((line) => /^\|/.test(line)).slice(2);
-  assert.match(tableRows[0], /\| Flomo \| \[flomo\.md\]/);
-  assert.match(tableRows[1], /\| 飞书日记 \| \[daily\.md\]/);
+  assert.match(tableRows[0], /\| 重要 \/ P0 \| 日志 \| 飞书日记 \| \[daily\.md\]/);
+  assert.match(tableRows[1], /\| 阶段前提 \| 日志 \| 飞书周记 \| weekly\.md/);
+  assert.match(tableRows[2], /\| 重要 \/ P0 \| 输入 \| Flomo \| \[flomo\.md\]/);
   assert.doesNotMatch(table, /Action Feedback/);
   assert.doesNotMatch(table, /独立产物/);
   assert.match(table, /采集失败：页面不可用/);
@@ -172,6 +265,17 @@ test("fixed weekly input order places jingdu after the other P1 inputs as a 精�
   assert.equal(rows[jingduIndex].status, "ready");
   const table = renderInputAuditTable(payload, files, { files: [] });
   assert.match(table, /\| 输入 \| 精读 \| \[jingdu\.md\]/);
+});
+
+test("Stage 2 delivers an execution-scope preview without exposing not-yet-generated Memory", async () => {
+  const skill = await readFile(new URL("../../learn-x-weekly-automation/SKILL.md", import.meta.url), "utf8");
+  const stage2 = skill.slice(skill.indexOf("## 阶段 2"), skill.indexOf("## 阶段 3"));
+  assert.match(stage2, /执行授权范围预览/);
+  assert.match(stage2, /不展示尚未生成的记忆内容/);
+  assert.match(stage2, /不构成授权/);
+  assert.match(stage2, /最终确认卡/);
+  assert.doesNotMatch(stage2, /Action Feedback/);
+  assert.doesNotMatch(stage2, /拟迁移条目：[^\n]+/);
 });
 
 test("Stage 1 automation requires a final character count for each included ready file", async () => {

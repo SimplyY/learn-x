@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "timezone": "Asia/Shanghai",
+  "schedule": "20:00",
+  "delivery": {
+    "groupName": "learn-x",
+    "chatId": "oc_846411e4168e681d7f7b491c837163fd",
+    "ownerId": "ou_3b941de65bd00d683d262a3c35dfd94d",
+    "profile": "cli_aab030a473f8dcd2"
+  }
+}
