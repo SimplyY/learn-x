@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
-  canRetrySource, classifyWeeklyFailure, createWeeklyRetryState,
+  canRetrySource, classifyOutcome, classifyWeeklyFailure, createWeeklyRetryState,
   recordWeeklyStage, runWeeklyRetrySupervisor
 } from "./weekly-retry-supervisor.mjs";
 import { WEEKLY_SOURCE_CONFIG } from "../../learn-x-input/scripts/lib/weekly-source-config.mjs";
@@ -13,8 +13,25 @@ test("classifies recoverable network faults separately from login, schema, and u
   assert.deepEqual(classifyWeeklyFailure("ECONNRESET"), { errorClass: "network-transient", retryable: true, retryAfterMs: 20 * 60_000 });
   assert.equal(classifyWeeklyFailure("login expired").retryable, false);
   assert.equal(classifyWeeklyFailure("field contract mismatch").errorClass, "source-contract-mismatch");
-  assert.equal(classifyWeeklyFailure("observer-window-ended", { sourceId: "ai" }).errorClass, "ai-submission-state-uncertain");
-  assert.equal(classifyWeeklyFailure("ECONNRESET", { sourceId: "ai" }).retryable, false);
+  assert.equal(classifyWeeklyFailure("observer-window-ended", { sourceId: "ai" }).errorClass, "unknown-failure");
+  assert.equal(classifyWeeklyFailure("ECONNRESET", { sourceId: "ai" }).retryable, true);
+});
+
+test("AI retries only a confirmed preflight network failure and observes uncertain submissions", () => {
+  assert.deepEqual(classifyOutcome("ai", {
+    status: "failed", error: "ECONNRESET", diagnostics: { rateLimitPhase: "preflight" }
+  }), { status: "failed", errorClass: "network-transient", retryable: true, retryAfterMs: 20 * 60_000 });
+  assert.equal(classifyOutcome("ai", {
+    status: "failed", error: "login-required", diagnostics: { rateLimitPhase: "preflight" }
+  }).retryable, false);
+  assert.equal(classifyOutcome("ai", {
+    status: "failed", error: "field contract mismatch", diagnostics: { rateLimitPhase: "preflight" }
+  }).errorClass, "source-contract-mismatch");
+  assert.equal(classifyOutcome("ai", {
+    status: "failed", error: "ECONNRESET", diagnostics: { rateLimitPhase: "submit" }
+  }).status, "needs_review");
+  assert.equal(classifyOutcome("ai", { status: "failed", error: "bridge-timeout" }).errorClass, "ai-submission-state-uncertain");
+  assert.equal(classifyOutcome("ai", { status: "needs_review", error: "observer-window-ended" }).retryable, false);
 });
 
 test("records measured Stage 2 and Stage 3 card timings without storing content", async (t) => {
@@ -112,6 +129,129 @@ test("07:00 rescue consumes one extra eligible attempt without resetting earlier
   assert.equal(result.mode, "rescue");
 });
 
+test("07:00 rescue runs a safe collector left pending by a bounded 05:00 run exactly once", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-rescue-pending-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const weekRoot = path.join(root, "03_input/weekly/2026-W40");
+  await mkdir(weekRoot, { recursive: true });
+  const state = createWeeklyRetryState("2026-W40");
+  for (const source of WEEKLY_SOURCE_CONFIG) state.sources[source.id].status = source.collector ? "succeeded" : "recheck-only";
+  state.sources.calendar = { ...state.sources.calendar, status: "pending", attempts: 0, rescueUsed: false };
+  await writeFile(path.join(weekRoot, "_weekly-retry-state.json"), `${JSON.stringify(state)}\n`);
+  const calls = [];
+  const result = await runWeeklyRetrySupervisor({
+    week: "2026-W40", mode: "rescue", repoRoot: root,
+    now: () => Date.parse("2026-10-05T07:00:00.000+08:00"),
+    readOutcome: async () => null,
+    runSource: async (source) => { calls.push(source.id); return { status: "ready", count: 1 }; }
+  });
+  assert.deepEqual(calls, ["calendar"]);
+  assert.equal(result.sources.calendar.attempts, 1);
+  assert.equal(result.sources.calendar.rescueUsed, true);
+});
+
+test("07:00 rescue preserves Flomo-before-Wisdom dependency and marks both bounded starts", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-rescue-wisdom-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const weekRoot = path.join(root, "03_input/weekly/2026-W40");
+  await mkdir(weekRoot, { recursive: true });
+  const state = createWeeklyRetryState("2026-W40");
+  for (const source of WEEKLY_SOURCE_CONFIG) state.sources[source.id].status = source.collector ? "succeeded" : "recheck-only";
+  state.sources.flomo = { ...state.sources.flomo, status: "pending", attempts: 0, rescueUsed: false };
+  state.sources.wisdom = { ...state.sources.wisdom, status: "pending", attempts: 0, rescueUsed: false };
+  await writeFile(path.join(weekRoot, "_weekly-retry-state.json"), `${JSON.stringify(state)}\n`);
+  const calls = [];
+  const result = await runWeeklyRetrySupervisor({
+    week: "2026-W40", mode: "rescue", repoRoot: root,
+    now: () => Date.parse("2026-10-05T07:00:00.000+08:00"),
+    readOutcome: async () => null,
+    runSource: async (source) => { calls.push(source.id); return { status: "ready", count: 1 }; }
+  });
+  assert.deepEqual(calls, ["flomo", "wisdom"]);
+  assert.equal(result.sources.flomo.rescueUsed, true);
+  assert.equal(result.sources.wisdom.rescueUsed, true);
+});
+
+test("07:00 rescue waits for the persisted nextRetryAt and respects its bounded window", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-rescue-cooldown-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const weekRoot = path.join(root, "03_input/weekly/2026-W40");
+  await mkdir(weekRoot, { recursive: true });
+  const state = createWeeklyRetryState("2026-W40");
+  for (const source of WEEKLY_SOURCE_CONFIG) state.sources[source.id].status = source.collector ? "succeeded" : "recheck-only";
+  state.sources.daily = {
+    ...state.sources.daily, status: "failed", attempts: 5, retries: 4, rescueUsed: false,
+    lastErrorClass: "network-transient", nextRetryAt: "2026-10-05T07:10:00.000+08:00"
+  };
+  await writeFile(path.join(weekRoot, "_weekly-retry-state.json"), `${JSON.stringify(state)}\n`);
+  let current = Date.parse("2026-10-05T07:00:00.000+08:00");
+  const waits = [];
+  let calls = 0;
+  await runWeeklyRetrySupervisor({
+    week: "2026-W40", mode: "rescue", repoRoot: root, maxDurationMs: 20 * 60_000,
+    now: () => current,
+    sleep: async (ms) => { waits.push(ms); current += ms; },
+    readOutcome: async () => null,
+    runSource: async () => { calls += 1; return { status: "ready", count: 1 }; }
+  });
+  assert.deepEqual(waits, [10 * 60_000]);
+  assert.equal(calls, 1);
+
+  const lateRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-rescue-late-"));
+  t.after(() => rm(lateRoot, { recursive: true, force: true }));
+  const lateWeekRoot = path.join(lateRoot, "03_input/weekly/2026-W40");
+  await mkdir(lateWeekRoot, { recursive: true });
+  const lateState = createWeeklyRetryState("2026-W40");
+  for (const source of WEEKLY_SOURCE_CONFIG) lateState.sources[source.id].status = source.collector ? "succeeded" : "recheck-only";
+  lateState.sources.daily = {
+    ...lateState.sources.daily, status: "failed", attempts: 5, rescueUsed: false,
+    lastErrorClass: "network-transient", nextRetryAt: "2026-10-05T08:00:00.000+08:00"
+  };
+  await writeFile(path.join(lateWeekRoot, "_weekly-retry-state.json"), `${JSON.stringify(lateState)}\n`);
+  let lateNow = Date.parse("2026-10-05T07:00:00.000+08:00");
+  let lateCalls = 0;
+  const bounded = await runWeeklyRetrySupervisor({
+    week: "2026-W40", mode: "rescue", repoRoot: lateRoot, maxDurationMs: 20 * 60_000,
+    now: () => lateNow,
+    sleep: async (ms) => { lateNow += ms; },
+    readOutcome: async () => null,
+    runSource: async () => { lateCalls += 1; return { status: "ready", count: 1 }; }
+  });
+  const lateSaved = JSON.parse(await readFile(path.join(lateWeekRoot, "_weekly-retry-state.json"), "utf8"));
+  assert.equal(lateCalls, 0);
+  assert.equal(lateSaved.sources.daily.rescueUsed, false);
+  assert.equal(bounded.sources.daily.nextRetryAt, "2026-10-05T08:00:00.000+08:00");
+  assert.ok(lateSaved.diagnostics.some((event) => event.outcome === "bounded-window-ending" || event.outcome === "bounded-window-ended"));
+});
+
+test("rescue waits for a running initial invocation, then reads its persisted state", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-rescue-active-lock-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const weekRoot = path.join(root, "03_input/weekly/2026-W40");
+  await mkdir(weekRoot, { recursive: true });
+  const state = createWeeklyRetryState("2026-W40");
+  for (const source of WEEKLY_SOURCE_CONFIG) state.sources[source.id].status = source.collector ? "succeeded" : "recheck-only";
+  state.sources.daily = {
+    ...state.sources.daily, status: "failed", attempts: 1, lastErrorClass: "network-transient",
+    nextRetryAt: "2026-10-05T07:00:00.000+08:00"
+  };
+  await writeFile(path.join(weekRoot, "_weekly-retry-state.json"), `${JSON.stringify(state)}\n`);
+  const lockPath = path.join(weekRoot, "_weekly-retry-state.lock");
+  await writeFile(lockPath, JSON.stringify({ pid: process.pid, token: "active-initial" }));
+  let current = Date.parse("2026-10-05T07:00:00.000+08:00");
+  const waits = [];
+  let calls = 0;
+  await runWeeklyRetrySupervisor({
+    week: "2026-W40", mode: "rescue", repoRoot: root, maxDurationMs: 60_000,
+    now: () => current,
+    sleep: async (ms) => { waits.push(ms); current += ms; await rm(lockPath, { force: true }); },
+    readOutcome: async () => null,
+    runSource: async () => { calls += 1; return { status: "ready", count: 1 }; }
+  });
+  assert.deepEqual(waits, [30_000]);
+  assert.equal(calls, 1);
+});
+
 test("07:00 rescue ignores stale success sidecars and records only a diagnostic hypothesis", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-stale-sidecar-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -149,6 +289,42 @@ test("07:00 rescue ignores stale success sidecars and records only a diagnostic 
   assert.equal(failure.hypothesis, "network-transient");
   assert.equal(failure.errorSignal, "ECONNRESET");
   assert.doesNotMatch(JSON.stringify(events), /private-note|example\.invalid|token/);
+});
+
+test("only one concurrent invocation reclaims a dead run lock", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-lock-reaper-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const weekRoot = path.join(root, "03_input/weekly/2026-W40");
+  await mkdir(weekRoot, { recursive: true });
+  const state = createWeeklyRetryState("2026-W40");
+  for (const source of WEEKLY_SOURCE_CONFIG) state.sources[source.id].status = source.collector ? "succeeded" : "recheck-only";
+  state.sources.daily = {
+    ...state.sources.daily,
+    status: "failed", attempts: 1, lastAttemptAt: "2026-10-05T06:30:00.000+08:00",
+    lastErrorClass: "network-transient", nextRetryAt: "2026-10-05T06:50:00.000+08:00"
+  };
+  await writeFile(path.join(weekRoot, "_weekly-retry-state.json"), `${JSON.stringify(state)}\n`);
+  await writeFile(path.join(weekRoot, "_weekly-retry-state.lock"), JSON.stringify({ pid: 2_147_483_647, token: "dead-owner" }));
+
+  let releaseSource;
+  let enteredSource;
+  const sourceEntered = new Promise((resolve) => { enteredSource = resolve; });
+  const sourceBlocked = new Promise((resolve) => { releaseSource = resolve; });
+  let calls = 0;
+  const options = {
+    week: "2026-W40", repoRoot: root, maxDurationMs: 60_000,
+    now: () => Date.parse("2026-10-05T07:00:00.000+08:00"),
+    readOutcome: async () => null,
+    runSource: async () => { calls += 1; enteredSource(); await sourceBlocked; return { status: "ready", count: 1 }; }
+  };
+  const first = runWeeklyRetrySupervisor(options);
+  await sourceEntered;
+  const second = await runWeeklyRetrySupervisor({ ...options, runSource: async () => { calls += 100; return { status: "ready" }; } });
+  assert.equal(second.skipped, "supervisor-already-running");
+  releaseSource();
+  const firstResult = await first;
+  assert.equal(firstResult.sources.daily.status, "succeeded");
+  assert.equal(calls, 1);
 });
 
 test("AI work interrupted with no confirmed result is observed as needs_review and never resubmitted", async (t) => {

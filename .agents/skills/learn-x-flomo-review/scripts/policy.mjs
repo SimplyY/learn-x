@@ -1,5 +1,10 @@
 const DAY = 86400000;
 const OCCUPIED = new Set(['reserved', 'sending', 'delivered', 'needs_review']);
+export const MIN_REVIEW_ITEMS = 3;
+export const TARGET_MIN_REVIEW_ITEMS = 5;
+export const MAX_REVIEW_ITEMS = 8;
+export const MAX_PAIR_OVERLAP = 5;
+export const MAX_WINDOW_REPEATS = 10;
 
 function fail(reason) { throw new Error(`flomo-review-${reason}`); }
 function dayTime(date) {
@@ -101,9 +106,9 @@ function budgets(byWeek) {
   for (let i = 0; i < entries.length; i++) for (let j = i + 1; j < entries.length; j++) {
     const overlap = [...entries[i][1]].filter((key) => entries[j][1].has(key)).length;
     pairOverlaps.push({ weeks: [entries[i][0], entries[j][0]], overlap });
-    if (overlap > 5) fail('pair-overlap-exceeds-5');
+    if (overlap > MAX_PAIR_OVERLAP) fail(`pair-overlap-exceeds-${MAX_PAIR_OVERLAP}`);
   }
-  if (repeats > 10) fail('four-week-repeats-exceed-10');
+  if (repeats > MAX_WINDOW_REPEATS) fail(`four-week-repeats-exceed-${MAX_WINDOW_REPEATS}`);
   return { repeats, pairOverlaps };
 }
 function addGroups(byWeek, week, groups) {
@@ -130,7 +135,7 @@ function ageStatistics(byWeek, week, index, date) {
 
 export function validateSelection({ date, items, notes, ledger }) {
   dayTime(date);
-  if (!Array.isArray(items) || items.length < 3 || items.length > 6) fail('selection-count-must-be-3-to-6');
+  if (!Array.isArray(items) || items.length < MIN_REVIEW_ITEMS || items.length > MAX_REVIEW_ITEMS) fail('selection-count-must-be-3-to-8');
   const index = catalogIndex(notes);
   const byWeek = exposure({ date, ledger, index });
   const normalized = items.map((item, position) => {
@@ -173,7 +178,7 @@ export function simulateSupply({ notes, startDate, days = 28 }) {
   if (![7, 28].includes(days)) fail('simulation-days-must-be-7-or-28');
   const first = dayTime(startDate);
   const eligible = eligibleNotes({ date: startDate, notes, ledger: { batches: {} } });
-  const minimum = days === 28 ? 74 : 21;
+  const minimum = days === 28 ? TARGET_MIN_REVIEW_ITEMS * 28 - MAX_WINDOW_REPEATS : TARGET_MIN_REVIEW_ITEMS * 7;
   if (eligible.length < minimum) return { possible: false, reason: 'insufficient-distinct-quality-supply', uniqueQualified: eligible.length, minimum, schedule: [] };
   const ledger = { batches: {} };
   const counts = new Map();
@@ -191,9 +196,9 @@ export function simulateSupply({ notes, startDate, days = 28 }) {
         byWeek = next;
         items.push({ noteKey: note.noteKey, groupKey: note.groupKey });
       } catch { continue; }
-      if (items.length === 3) break;
+      if (items.length === TARGET_MIN_REVIEW_ITEMS) break;
     }
-    if (items.length < 3) return { possible: false, reason: 'constraint-supply-exhausted', date, uniqueQualified: eligible.length, minimum, schedule };
+    if (items.length < TARGET_MIN_REVIEW_ITEMS) return { possible: false, reason: 'constraint-supply-exhausted', date, uniqueQualified: eligible.length, minimum, schedule };
     for (const item of items) counts.set(item.groupKey, (counts.get(item.groupKey) || 0) + 1);
     ledger.batches[date] = { date, status: 'delivered', items };
     schedule.push({ date, week: isoWeek(date), items, ...budgets(byWeek) });

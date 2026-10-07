@@ -79,7 +79,7 @@ Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 刷新 YW Next �
    node .agents/skills/learn-x-process/scripts/generate-weekly-process-pack.mjs --week 2026-22
    ```
 
-   Weekly Process 对普通文件保留 15,000 Unicode 字符提示；Voice-X 的 `voice.md` 完整落盘，30,000 字符只是强提示，不阻断输入生成。阶段 1 的准备模式先压缩 Voice-X 并生成微信读书及超长来源的候选请求。正式 Pack 统一输出合并总表：Flomo 第一行，其余输入按配置顺序；逐来源报告状态、记录/材料数及文件原始 → 清洗有效 → Pack 最终纳入字符链路。Voice-X 目标保留 10%–15%（预算中心 12.5%）；微信读书是必需语义压缩来源。`input:compress` 不处理 Voice-X，也不属于周流程快路径。
+   Weekly Process 对普通文件保留 15,000 Unicode 字符提示；Voice-X 的 `voice.md` 完整落盘，30,000 字符只是强提示，不阻断输入生成。阶段 1 的准备模式先压缩 Voice-X 并生成微信读书及超长来源的候选请求。正式 Pack 统一输出合并总表：输入按来源配置顺序，已确认周记作为阶段前提行单列；逐来源报告状态、记录/材料数及文件原始 → 清洗有效 → Pack 最终纳入字符链路。Voice-X 目标保留 10%–15%（预算中心 12.5%）；微信读书是必需语义压缩来源。`input:compress` 不处理 Voice-X，也不属于周流程快路径。
 
    阶段 1 在来源到齐后先运行准备模式：
 

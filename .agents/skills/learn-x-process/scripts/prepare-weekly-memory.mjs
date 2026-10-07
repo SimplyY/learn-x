@@ -5,7 +5,6 @@ import { defaultWeeklyReviewWeek } from "./collect-weekly-input.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
-const weeklyRoot = path.join(repoRoot, "04_output/weekly");
 const NON_ANSWER_MARKERS = new Set([
   "跳过", "主动跳过", "选择跳过", "先跳过", "本周跳过", "本周主动跳过", "本周选择跳过", "本周先跳过",
   "这周跳过", "这周主动跳过", "本次跳过", "本次主动跳过", "这次跳过", "这次主动跳过", "略过",
@@ -27,12 +26,13 @@ const CONTRASTED_NON_ANSWER = /(?:而是|但是|不过|但|却)(?:(?:本题|这�
 
 export async function prepareWeeklyMemory(options = {}) {
   const week = normalizeWeekId(options.week || defaultWeeklyReviewWeek());
+  const root = options.repoRoot || repoRoot;
   const quarter = quarterFromIsoWeek(week);
-  const weeklyPath = path.join(weeklyRoot, `${outputWeekFileId(week)}.md`);
+  const weeklyPath = path.join(root, "04_output/weekly", `${outputWeekFileId(week)}.md`);
   const content = await readFile(weeklyPath, "utf8");
   const candidates = extractMemoryCandidates(content);
-  const candidatePack = renderCandidatePack(week, quarter, weeklyPath, candidates);
-  const candidatesRoot = path.join(repoRoot, "04_output/_dist/weekly", distWeekId(week));
+  const candidatePack = renderCandidatePack(week, quarter, weeklyPath, candidates, root);
+  const candidatesRoot = path.join(root, "04_output/_dist/weekly", distWeekId(week));
 
   await mkdir(candidatesRoot, { recursive: true });
   const outputPath = path.join(candidatesRoot, "memory-candidates.md");
@@ -113,7 +113,7 @@ function isObservationSection(title) {
   return /道\s*\/\s*法\s*\/\s*术|道候选|法候选|术候选|器候选|候选观察/.test(title);
 }
 
-function renderCandidatePack(week, quarter, weeklyPath, candidates) {
+function renderCandidatePack(week, quarter, weeklyPath, candidates, root = repoRoot) {
   return [
     `# Learn-X Memory Candidates｜${memoryWeekSectionId(week)}`,
     "",
@@ -122,7 +122,7 @@ function renderCandidatePack(week, quarter, weeklyPath, candidates) {
     "",
     "## 处理信息",
     "",
-    `- Weekly Output：\`${path.relative(repoRoot, weeklyPath).split(path.sep).join("/")}\``,
+    `- Weekly Output：\`${path.relative(root, weeklyPath).split(path.sep).join("/")}\``,
     `- 输出目标：\`01_core/memory/${quarter}.memory.md\``,
     `- 建议小节：\`## ${memoryWeekSectionId(week)}\``,
     "",

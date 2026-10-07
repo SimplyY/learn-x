@@ -73,7 +73,19 @@ test("占位洞察即使传入 send 也只预览，不调用 Bridge", async (t) 
   let calls = 0; const result = await runPeriodicInsight({ repoRoot: root, taskId: "weekly-review", target: "2026-08", send: true, confirm: true, runBridge: async () => { calls += 1; } }); assert.equal(result.status, "preview"); assert.equal(result.reason, "production-not-ready"); assert.equal(calls, 0);
 });
 
-test("芒格输出必须包含目标周期和六层结构", () => { const task = { id: "munger-soul" }; const target = { id: "2026-08" }; const valid = `2026-08 候选洞察 ${"证据 ".repeat(30)}\n## 底层\n证据\n## 第二层\n证据\n## 第三层\n证据\n## 第四层\n证据\n## 第五层\n证据\n## 顶层\n证据`; validateGeneratedOutput(valid, task, target); assert.throws(() => validateGeneratedOutput("2026-08 候选洞察", task, target), /过短|六层/); });
+test("芒格输出必须包含目标周期和六层结构", () => {
+  const task = { id: "munger-soul" };
+  const target = { id: "2026-08" };
+  const evidence = "证据 ".repeat(30);
+  const valid = `2026-08 候选洞察 ${evidence}\n## 底层\n证据\n## 第二层\n证据\n## 第三层\n证据\n## 第四层\n证据\n## 第五层\n证据\n## 顶层\n证据`;
+  const actualMungerFormat = `2026-08 候选洞察 ${evidence}\n## 一、底层｜基础层\n证据\n## 二、第二层｜跨域联系\n证据\n## 三、第三层｜反转假设\n证据\n## 四、第四层｜尺度切换\n证据\n## 五、第五层｜简化支点\n证据\n## 六、顶层｜整合\n证据`;
+  validateGeneratedOutput(valid, task, target);
+  validateGeneratedOutput(actualMungerFormat, task, target);
+  assert.throws(() => validateGeneratedOutput(actualMungerFormat.replace("## 三、第三层｜反转假设\n证据\n", ""), task, target), /六层/);
+  assert.throws(() => validateGeneratedOutput(actualMungerFormat.replace("## 一、底层｜基础层", "## 一、底层模型｜基础层"), task, target), /六层/);
+  assert.throws(() => validateGeneratedOutput(`2026-08 候选洞察 ${evidence}\n正文提到底层、第二层、第三层、第四层、第五层和顶层，但没有按层分节。`, task, target), /六层/);
+  assert.throws(() => validateGeneratedOutput("2026-08 候选洞察", task, target), /过短|六层/);
+});
 
 test("归档恢复使用注入的 Lark 传输并保留幂等节点", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-periodic-archive-")); t.after(() => rm(root, { recursive: true, force: true }));

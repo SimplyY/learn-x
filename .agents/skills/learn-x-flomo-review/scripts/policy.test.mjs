@@ -33,7 +33,7 @@ test('Shanghai end-of-day age includes today and exact 30/365 day boundaries', (
   assert.throws(() => ageBand('2026-02-30T08:00:00+08:00', date), /invalid-created-at/);
 });
 
-test('three to six quality-current notes; extras require strong relevance and source evidence', () => {
+test('three to eight quality-current notes; extras require strong relevance and source evidence', () => {
   const catalog = notes();
   const selection = items(catalog);
   selection[2].relevance = 'background';
@@ -44,7 +44,9 @@ test('three to six quality-current notes; extras require strong relevance and so
   assert.equal(result.ageObserved.total, 0);
   assert.ok(result.age.deviations.length);
   assert.throws(() => validateSelection({ date: '2026-10-06', notes: catalog, items: selection.slice(0, 2) }), /count/);
-  assert.throws(() => validateSelection({ date: '2026-10-06', notes: catalog, items: items(catalog, [0, 1, 2, 3, 4, 5, 6]) }), /count/);
+  const eight = items(catalog, [0, 1, 2, 3, 4, 5, 6, 7]);
+  assert.equal(validateSelection({ date: '2026-10-06', notes: catalog, items: eight }).items.length, 8);
+  assert.throws(() => validateSelection({ date: '2026-10-06', notes: catalog, items: items(catalog, [0, 1, 2, 3, 4, 5, 6, 7, 8]) }), /count/);
   const extra = items(catalog, [0, 1, 2, 3]); extra[3].relevance = 'background';
   assert.throws(() => validateSelection({ date: '2026-10-06', notes: catalog, items: extra }), /extra-item-must-be-strong/);
   const noEvidence = items(catalog); noEvidence[0].contextEvidence = [];
@@ -68,7 +70,8 @@ test('same-week duplicate groups and alias identity remain occupied after edits 
   ledger.batches['2026-10-05'].items[0].noteKey = 'lost-old-key';
   assert.ok(!eligibleNotes({ date: '2026-10-06', notes: catalog, ledger }).some((n) => n.groupKey === catalog[0].groupKey));
   const duplicate = { ...catalog[90], noteKey: 'copy', groupKey: catalog[90].groupKey };
-  const duplicateItems = [items(catalog)[0], { ...items(catalog)[0], noteKey: 'copy' }, items(catalog)[2]];
+  const duplicateItems = items(catalog);
+  duplicateItems[1] = { ...duplicateItems[0], noteKey: 'copy' };
   assert.throws(() => validateSelection({ date: '2026-10-06', notes: [...catalog, duplicate], items: duplicateItems }), /same-week-repeat/);
 });
 
@@ -83,13 +86,13 @@ test('pair overlap allows five, rejects six, and releases the fifth week', () =>
 test('four-week repetition allows ten, rejects eleven independently of pair overlap', () => {
   const catalog = notes();
   const ledger = history(catalog, [
-    ['2026-09-14', [0, 1, 2, 3, 4]], ['2026-09-15', [5, 6, 7, 8, 9]],
-    ['2026-09-21', [0, 1, 2, 3, 4]], ['2026-09-22', [10, 11, 12, 13, 14]],
-    ['2026-09-28', [0, 1, 2, 3, 10]], ['2026-09-29', [15, 16, 17, 18, 19]]
+    ['2026-09-14', [0, 1, 2, 3, 4, 5]],
+    ['2026-09-21', [0, 1, 2, 6, 7, 8]],
+    ['2026-09-28', [0, 3, 6, 9, 10, 11]]
   ]);
-  const valid = validateSelection({ date: '2026-10-06', notes: catalog, ledger, items: items(catalog) });
+  const valid = validateSelection({ date: '2026-10-06', notes: catalog, ledger, items: items(catalog, [0, 1, 2, 3]) });
   assert.equal(valid.repeats, 10);
-  assert.throws(() => validateSelection({ date: '2026-10-06', notes: catalog, ledger, items: items(catalog, [0, 90, 91]) }), /four-week-repeats-exceed-10/);
+  assert.throws(() => validateSelection({ date: '2026-10-06', notes: catalog, ledger, items: items(catalog, [0, 1, 2, 3, 4]) }), /four-week-repeats-exceed-10/);
 });
 
 test('reserved, sending, delivered and needs_review block date and weekly exposures; failed releases them', () => {
@@ -129,26 +132,26 @@ test('eligibility excludes unscored, stale, low-quality and invalid or future-da
   assert.throws(() => validateSelection({ date: '2026-10-06', notes: notes(), items: malformed }), /missing-recommendation-reason/);
 });
 
-test('capacity simulation proves 70 impossible and 74 feasible over four complete ISO weeks', () => {
-  const impossible = simulate28Days({ notes: notes(70), startDate: '2026-10-05' });
+test('capacity simulation proves 129 impossible and 130 feasible over four complete ISO weeks', () => {
+  const impossible = simulate28Days({ notes: notes(129), startDate: '2026-10-05' });
   assert.equal(impossible.possible, false);
-  assert.equal(impossible.minimum, 74);
-  const possible = simulate28Days({ notes: notes(74), startDate: '2026-10-05' });
+  assert.equal(impossible.minimum, 130);
+  const possible = simulate28Days({ notes: notes(130), startDate: '2026-10-05' });
   assert.equal(possible.possible, true);
   assert.equal(possible.schedule.length, 28);
   assert.equal(possible.schedule.at(-1).repeats, 10);
   for (const day of possible.schedule) {
-    assert.equal(day.items.length, 3);
+    assert.equal(day.items.length, 5);
     assert.ok(day.repeats <= 10);
     assert.ok(day.pairOverlaps.every((pair) => pair.overlap <= 5));
   }
-  assert.equal(simulateSupply({ notes: notes(20), startDate: '2026-10-05', days: 7 }).possible, false);
-  assert.equal(simulateSupply({ notes: notes(21), startDate: '2026-10-05', days: 7 }).possible, true);
+  assert.equal(simulateSupply({ notes: notes(34), startDate: '2026-10-05', days: 7 }).possible, false);
+  assert.equal(simulateSupply({ notes: notes(35), startDate: '2026-10-05', days: 7 }).possible, true);
 });
 
 test('28-day capacity simulations cross ISO year and non-Monday start without reset errors', () => {
   for (const startDate of ['2026-12-21', '2026-10-06']) {
-    const result = simulate28Days({ notes: notes(74), startDate });
+    const result = simulate28Days({ notes: notes(130), startDate });
     assert.equal(result.possible, true);
     assert.equal(result.schedule.length, 28);
   }

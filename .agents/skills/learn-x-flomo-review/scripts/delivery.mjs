@@ -160,12 +160,13 @@ function messageContent(content) {
 
 function legacyReceiptReady(value) {
   const bots = [...(value.botSenderIds ?? []), ...(value.botSenderId ? [value.botSenderId] : [])];
-  return /^[a-f0-9]{64}$/.test(value.markdownSha256 ?? '') && typeof value.attachmentPath === 'string' && value.attachmentPath.length > 0 && /^[a-f0-9]{64}$/.test(value.attachmentSha256 ?? '') && /^file_[A-Za-z0-9_-]+$/.test(value.attachmentKey ?? '') && bots.length > 0;
+  const keys = [value.uploadKey, value.attachmentKey].filter(key => key !== undefined);
+  return /^[a-f0-9]{64}$/.test(value.markdownSha256 ?? '') && typeof value.attachmentPath === 'string' && value.attachmentPath.length > 0 && /^[a-f0-9]{64}$/.test(value.attachmentSha256 ?? '') && keys.length > 0 && keys.every(key => /^file_[A-Za-z0-9_-]+$/.test(key ?? '')) && bots.length > 0;
 }
 
 function receiptFormat(value) {
   const hasCard = Boolean(value.cardContentSha256 || value.expectedCard || value.card);
-  const hasLegacy = Boolean(value.markdownSha256 || value.attachmentKey);
+  const hasLegacy = Boolean(value.markdownSha256 || value.attachmentKey || value.uploadKey);
   if (hasCard && hasLegacy) throw new DeliveryError('receipt-format-ambiguous');
   if (hasCard) return 'card';
   if (hasLegacy && legacyReceiptReady(value)) return 'legacy-markdown';
@@ -199,7 +200,7 @@ function verifyMessage(message, { chatId, messageId, cardContentSha256: expected
 async function originalAttachment(attachmentPath, expectedSha256) {
   const filePath = await realpath(attachmentPath);
   const info = await stat(filePath);
-  if (!filePath.endsWith('.md') || !info.isFile() || !info.size) throw new DeliveryError('attachment-invalid');
+  if (!filePath.endsWith('.md') || !info.isFile() || !info.size || info.size > 30 * 1024 * 1024) throw new DeliveryError('attachment-invalid');
   const attachmentSha256 = hash(await readFile(filePath));
   if (expectedSha256 && attachmentSha256 !== expectedSha256) throw new DeliveryError('attachment-original-hash-mismatch');
   return { attachmentPath: filePath, attachmentSha256, cwd: path.dirname(filePath) };
@@ -211,7 +212,7 @@ async function verifyDownloadedAttachment(message, original) {
   if (keys.length !== 1) throw new DeliveryError('attachment-readback-not-unique');
   if (!Array.isArray(message.resources) || message.resources.length !== 1 || message.resource_errors?.length) throw new DeliveryError('attachment-download-missing-or-not-unique');
   const resource = message.resources[0];
-  if (resource.message_id !== message.message_id || resource.type !== 'file' || resource.key !== keys[0]) throw new DeliveryError('attachment-resource-mismatch');
+  if (resource.error || resource.message_id !== message.message_id || resource.type !== 'file' || resource.key !== keys[0]) throw new DeliveryError('attachment-resource-mismatch');
   if (typeof resource.local_path !== 'string') throw new DeliveryError('attachment-resource-path-invalid');
   const downloadRoot = path.join(original.cwd, 'lark-im-resources');
   const actualPath = await realpath(path.resolve(original.cwd, resource.local_path));
@@ -231,31 +232,43 @@ async function readDownloadedMessage(runCli, messageId, cwd) {
   return messages[0];
 }
 
-export async function sendRecommendation({ chatId, card, idempotencyKey, botSenderId, botSenderIds, profile, runCli = runLarkCli }) {
+export async function sendRecommendation({ chatId, markdown, attachmentPath, attachmentSha256, dateMarker, idempotencyKey, botSenderId, botSenderIds, profile, onUploaded, runCli = runLarkCli }) {
   runCli = useProfile(runCli, profile);
   assertId(chatId, 'oc_', 'chat-id-invalid');
-  const content = JSON.stringify(card);
-  const expectedCardSha256 = cardContentSha256(content);
-  let messageId;
+  let messageId, sendAttempted = false;
   try {
-    if (!/^[A-Za-z0-9:_-]{1,50}$/.test(idempotencyKey ?? '')) throw new DeliveryError('send-input-invalid');
-    const sent = dataOf(await call(runCli, ['im', '+messages-send', '--chat-id', chatId, '--msg-type', 'interactive', '--content', content, '--idempotency-key', idempotencyKey, ...BOT_ARGS]));
+    const bots = [...(botSenderIds ?? []), ...(botSenderId ? [botSenderId] : [])];
+    if (typeof markdown !== 'string' || !markdown.trim() || !attachmentPath || !bots.length || !/^[A-Za-z0-9:_-]{1,50}$/.test(idempotencyKey ?? '')) throw new DeliveryError('send-input-invalid');
+    dateMarker ??= markdown.split(/\r?\n/).find(line => /^回顾日期：\d{4}-\d{2}-\d{2}$/.test(line.trim()))?.trim();
+    const date = dateMarker?.match(/^回顾日期：(\d{4}-\d{2}-\d{2})$/)?.[1];
+    const time = Date.parse(`${date}T00:00:00Z`);
+    if (!Number.isFinite(time) || new Date(time).toISOString().slice(0, 10) !== date || !markdown.split(/\r?\n/).some(line => normalizeMessageMarkdown(line) === dateMarker)) throw new DeliveryError('date-marker-invalid');
+    if (messageContent(markdown).attachments.length) throw new DeliveryError('markdown-contains-attachment');
+    const original = await originalAttachment(attachmentPath, attachmentSha256);
+    const markdownSha256 = hash(normalizeMessageMarkdown(markdown));
+    const uploaded = dataOf(await call(runCli, ['im', 'files', 'create', '--data', JSON.stringify({ file_type: 'stream', file_name: path.basename(original.attachmentPath) }), '--file', `file=./${path.basename(original.attachmentPath)}`, ...BOT_ARGS], { cwd: original.cwd }));
+    assertId(uploaded.file_key, 'file_', 'uploaded-file-key-invalid');
+    if (onUploaded) await onUploaded({ uploadKey: uploaded.file_key, attachmentSha256: original.attachmentSha256, attachmentPath: original.attachmentPath, markdownSha256 });
+    // A callback or concurrent edit must not change the original after its hash was persisted.
+    await originalAttachment(original.attachmentPath, original.attachmentSha256);
+    sendAttempted = true;
+    const sent = dataOf(await call(runCli, ['im', '+messages-send', '--chat-id', chatId, '--markdown', markdown, '--attachment', uploaded.file_key, '--idempotency-key', idempotencyKey, ...BOT_ARGS], { cwd: original.cwd }));
     messageId = sent.message_id;
     assertId(messageId, 'om_', 'sent-message-id-missing');
     if (sent.chat_id !== chatId) throw new DeliveryError('sent-chat-mismatch');
-    const message = await readDownloadedMessage(runCli, messageId);
-    const receipt = verifyMessage(message, { chatId, messageId, cardContentSha256: expectedCardSha256, botSenderId, botSenderIds });
-    return { ...receipt, idempotencyKey };
+    const message = await readDownloadedMessage(runCli, messageId, original.cwd);
+    const receipt = verifyLegacyMessage(message, { chatId, messageId, markdownSha256, dateMarker, botSenderId, botSenderIds });
+    return { ...receipt, ...await verifyDownloadedAttachment(message, original), uploadKey: uploaded.file_key, idempotencyKey };
   } catch (error) {
-    throw new DeliveryError(error.code ?? 'send-result-uncertain', { uncertain: true, ...(messageId ? { messageId } : {}) });
+    throw new DeliveryError(error.code ?? 'send-result-uncertain', { uncertain: sendAttempted, ...(messageId ? { messageId } : {}) });
   }
 }
 
-export async function recoverRecommendation({ chatId, messageId, idempotencyKey, dateMarker, expectedCard, cardContentSha256: expectedCardSha256, expectedMarkdown, markdownSha256, attachmentPath, attachmentSha256, attachmentKey, sendStartedAt, botSenderId, botSenderIds, profile, runCli = runLarkCli }) {
+export async function recoverRecommendation({ chatId, messageId, idempotencyKey, dateMarker, expectedCard, cardContentSha256: expectedCardSha256, expectedMarkdown, markdownSha256, attachmentPath, attachmentSha256, uploadKey, attachmentKey, sendStartedAt, botSenderId, botSenderIds, profile, runCli = runLarkCli }) {
   runCli = useProfile(runCli, profile);
   assertId(chatId, 'oc_', 'chat-id-invalid');
   let format;
-  try { format = receiptFormat({ expectedCard, cardContentSha256: expectedCardSha256, markdownSha256, attachmentPath, attachmentSha256, attachmentKey, botSenderId, botSenderIds }); }
+  try { format = receiptFormat({ expectedCard, cardContentSha256: expectedCardSha256, markdownSha256, attachmentPath, attachmentSha256, uploadKey, attachmentKey, botSenderId, botSenderIds }); }
   catch (error) { throw new DeliveryError(error.code === 'receipt-format-ambiguous' ? error.code : 'recovery-input-invalid'); }
   expectedCardSha256 ??= expectedCard ? cardContentSha256(expectedCard) : undefined;
   const expectedHash = format === 'card' ? expectedCardSha256 : markdownSha256;
@@ -282,8 +295,9 @@ export async function recoverRecommendation({ chatId, messageId, idempotencyKey,
     if (exact.length !== 1) throw new DeliveryError('recovery-multiple-matches');
     const message = messageId ? exact[0] : await readDownloadedMessage(runCli, exact[0].message_id, original?.cwd);
     if (format === 'legacy-markdown') {
+      // Upload keys can be rebased by Feishu. Recover the actual message key by verifying downloaded bytes.
       const receipt = verifyLegacyMessage(message, { chatId, messageId: exact[0].message_id, markdownSha256, dateMarker, botSenderId, botSenderIds });
-      return { status: 'delivered', matched: true, ...receipt, ...await verifyDownloadedAttachment(message, original) };
+      return { status: 'delivered', matched: true, ...receipt, ...await verifyDownloadedAttachment(message, original), ...(uploadKey ? { uploadKey } : {}) };
     }
     const receipt = verifyMessage(message, { chatId, messageId: exact[0].message_id, cardContentSha256: expectedCardSha256, dateMarker, botSenderId, botSenderIds });
     return { status: 'delivered', matched: true, ...receipt };
@@ -322,9 +336,9 @@ function feedbackEvents(message, batch, ownerId) {
   const items = batchItems(batch);
   const events = [];
   for (const clause of clauses) {
-    const match = clause.match(/^第\s*([1-6一二三四五六])\s*条\s*(有帮助|跳过|已回顾)[!！]?$/);
+    const match = clause.match(/^第\s*([1-8一二三四五六七八])\s*条\s*(有帮助|跳过|已回顾)[!！]?$/);
     if (!match) continue;
-    const number = /^[1-6]$/.test(match[1]) ? Number(match[1]) : '一二三四五六'.indexOf(match[1]) + 1;
+    const number = /^[1-8]$/.test(match[1]) ? Number(match[1]) : '一二三四五六七八'.indexOf(match[1]) + 1;
     const item = items.find((candidate) => candidate.number === number);
     if (!item?.noteKey) continue;
     if (message.updated === true && !message.update_time) throw new DeliveryError('feedback-edit-version-missing');

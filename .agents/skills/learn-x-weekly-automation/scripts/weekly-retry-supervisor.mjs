@@ -32,9 +32,6 @@ export function createWeeklyRetryState(week) {
 
 export function classifyWeeklyFailure(message, { sourceId = "", code = "" } = {}) {
   const value = `${code} ${message}`.toLowerCase();
-  if (sourceId === "ai") {
-    return { errorClass: "ai-submission-state-uncertain", retryable: false, retryAfterMs: 0 };
-  }
   if (/permission|forbidden|unauthori[sz]ed|login|captcha|user.control|bootstrap.permission|scope|identity/.test(value)) {
     return { errorClass: "permission-or-human-control", retryable: false, retryAfterMs: 0 };
   }
@@ -52,9 +49,15 @@ export function classifyWeeklyFailure(message, { sourceId = "", code = "" } = {}
 }
 
 export function canRetrySource(source, entry, mode, now = Date.now()) {
-  if (!source || !entry || entry.status !== "failed" || !entry.lastErrorClass || entry.nextRetryAt == null || Date.parse(entry.nextRetryAt) > now) return false;
+  if (!source || !entry) return false;
+  if (mode === "rescue") {
+    if (entry.rescueUsed || source.retries < 0 || !source.collector || source.queue === "external" || source.queue === "manual") return false;
+    if (entry.status === "pending" && entry.attempts === 0) return true;
+    if (entry.status !== "failed" || !entry.lastErrorClass || entry.nextRetryAt == null || Date.parse(entry.nextRetryAt) > now) return false;
+    return isRetryableClass(entry.lastErrorClass);
+  }
+  if (entry.status !== "failed" || !entry.lastErrorClass || entry.nextRetryAt == null || Date.parse(entry.nextRetryAt) > now) return false;
   if (!isRetryableClass(entry.lastErrorClass)) return false;
-  if (mode === "rescue") return !entry.rescueUsed && source.retries >= 0 && source.collector && source.queue !== "external" && source.queue !== "manual";
   return entry.attempts <= source.retries;
 }
 
@@ -66,6 +69,15 @@ export function classifyOutcome(sourceId, outcome) {
     return { status: "needs_review", errorClass: sourceId === "ai" ? "ai-submission-state-uncertain" : "manual-review-required", retryable: false, retryAfterMs: 0 };
   }
   const failure = classifyWeeklyFailure(`${outcome?.error || ""} ${outcome?.summary || ""}`, { sourceId, code: outcome?.code });
+  if (sourceId === "ai") {
+    const phase = outcome?.diagnostics?.rateLimitPhase;
+    const reason = `${outcome?.error || ""} ${outcome?.summary || ""}`;
+    const ambiguousSubmission = outcome?.timedOut || ["submit", "observe"].includes(phase)
+      || /bridge-timeout|bridge-result-missing|observer-window-ended|observer-timeout|snapshot-mismatch|submit-timeout|submission-state-uncertain/i.test(reason);
+    if (ambiguousSubmission || (failure.retryable && phase !== "preflight")) {
+      return { status: "needs_review", errorClass: "ai-submission-state-uncertain", retryable: false, retryAfterMs: 0 };
+    }
+  }
   return { status: "failed", ...failure };
 }
 
@@ -84,9 +96,18 @@ export async function runWeeklyRetrySupervisor({
   if (!["initial", "rescue"].includes(mode)) throw new Error("mode must be initial or rescue");
   const weekRoot = path.join(repoRoot, "03_input/weekly", normalizedWeek);
   const statePath = path.join(weekRoot, STATE_FILE);
-  const lock = await tryAcquireRunLock(path.join(weekRoot, LOCK_FILE));
-  if (!lock) return { week: normalizedWeek, mode, skipped: "supervisor-already-running" };
   const startedAt = now();
+  const lockPath = path.join(weekRoot, LOCK_FILE);
+  let lock = await tryAcquireRunLock(lockPath);
+  let lockWaitMs = 0;
+  while (!lock && mode === "rescue" && now() - startedAt < maxDurationMs) {
+    const waitMs = Math.min(30_000, maxDurationMs - (now() - startedAt));
+    if (waitMs <= 0) break;
+    await sleep(waitMs);
+    lockWaitMs += waitMs;
+    lock = await tryAcquireRunLock(lockPath);
+  }
+  if (!lock) return { week: normalizedWeek, mode, skipped: "supervisor-already-running", waitedMs: lockWaitMs };
   let state;
   let saveQueue = Promise.resolve();
   const save = () => {
@@ -111,6 +132,7 @@ export async function runWeeklyRetrySupervisor({
     state ||= createWeeklyRetryState(normalizedWeek);
     await reconcileInterruptedRuns(state, { now: now(), mode, event, readOutcome });
     await absorbCurrentSuccesses(state, { readOutcome, now: now(), event });
+    if (lockWaitMs) event({ step: "retry-rescue-wait", outcome: "waited-for-active-run", durationMs: lockWaitMs, evidence: STATE_FILE });
     await save();
 
     if (mode === "initial") {
@@ -140,7 +162,30 @@ export async function runWeeklyRetrySupervisor({
     }
 
     if (mode === "rescue") {
-      const dueRescue = WEEKLY_SOURCE_CONFIG.filter((source) => canRetrySource(source, state.sources[source.id], mode, now()) && (source.id !== "wisdom" || state.sources.flomo?.status === "succeeded"));
+      let dueRescue = [];
+      while (now() - startedAt < maxDurationMs) {
+        dueRescue = WEEKLY_SOURCE_CONFIG.filter((source) => canRetrySource(source, state.sources[source.id], mode, now()) && (source.id !== "wisdom" || state.sources.flomo?.status === "succeeded"));
+        if (dueRescue.length) break;
+        const pendingTimes = WEEKLY_SOURCE_CONFIG
+          .filter((source) => source.collector && source.queue !== "external" && source.queue !== "manual"
+            && (source.id !== "wisdom" || state.sources.flomo?.status === "succeeded"))
+          .map((source) => state.sources[source.id])
+          .filter((entry) => entry.status === "failed" && !entry.rescueUsed && isRetryableClass(entry.lastErrorClass) && Number.isFinite(Date.parse(entry.nextRetryAt)))
+          .map((entry) => Date.parse(entry.nextRetryAt));
+        if (!pendingTimes.length) break;
+        const remainingMs = maxDurationMs - (now() - startedAt);
+        const untilNext = Math.max(0, Math.min(...pendingTimes) - now());
+        const waitMs = Math.min(untilNext, remainingMs);
+        if (!waitMs) break;
+        event({ step: "retry-wait", attemptKind: "rescue", outcome: waitMs < untilNext ? "bounded-window-ending" : "waiting", delayMs: waitMs, evidence: STATE_FILE });
+        await save();
+        await sleep(waitMs);
+        if (waitMs < untilNext) break;
+      }
+      if (!dueRescue.length && now() - startedAt >= maxDurationMs) {
+        event({ step: "retry-rescue", outcome: "bounded-window-ended", evidence: STATE_FILE });
+        await save();
+      }
       for (const source of dueRescue) state.sources[source.id].rescueUsed = true;
       if (dueRescue.length) await save();
       await runBatch(dueRescue, "rescue", { state, now, runSource, readOutcome, save, event, mode, week: normalizedWeek, repoRoot });
@@ -186,7 +231,7 @@ async function runDependentWisdomFirst(context) {
   const entry = context.state.sources.wisdom;
   if (context.state.sources.flomo?.status !== "succeeded" || entry?.status !== "pending" || entry.attempts !== 0) return;
   const source = WEEKLY_SOURCE_CONFIG.find((item) => item.id === "wisdom");
-  await runBatch([source], "first", context);
+  await runBatch([source], context.mode === "rescue" ? "rescue" : "first", context);
 }
 
 async function runOneSource(source, kind, context) {
@@ -312,7 +357,13 @@ export async function readCurrentSourceOutcome(source, week, repoRoot = defaultR
     try {
       const sidecar = JSON.parse(await readFile(path.join(weekRoot, "_ai-generated.json"), "utf8"));
       if (sidecar.targetWeek !== normalizeWeek(week)) return { status: "failed", error: "ai-target-week-mismatch" };
-      return { status: sidecar.status, error: sidecar.reason || sidecar.errorClass || "", updatedAt: sidecar.confirmedAt || sidecar.completedAt || sidecar.startedAt };
+      return {
+        status: sidecar.status,
+        error: sidecar.reason || sidecar.errorClass || "",
+        code: sidecar.code,
+        diagnostics: sidecar.diagnostics,
+        updatedAt: sidecar.confirmedAt || sidecar.completedAt || sidecar.startedAt
+      };
     } catch (error) {
       if (error.code === "ENOENT") return null;
       return { status: "failed", error: "ai-status-sidecar-invalid" };
@@ -465,23 +516,50 @@ async function tryAcquireRunLock(lockPath) {
     };
   } catch (error) {
     if (error.code !== "EEXIST") throw error;
-    let current;
-    try { current = JSON.parse(await readFile(lockPath, "utf8")); }
-    catch {
-      const lockStat = await stat(lockPath).catch(() => null);
-      if (lockStat && Date.now() - lockStat.mtimeMs > 60_000) {
-        await rm(lockPath, { force: true });
-        return tryAcquireRunLock(lockPath);
-      }
-      return null;
-    }
-    try { process.kill(Number(current.pid), 0); return null; }
-    catch (probeError) {
-      if (probeError.code !== "ESRCH") return null;
-      await rm(lockPath, { force: true });
-      return tryAcquireRunLock(lockPath);
-    }
+    if (await reapAbandonedRunLock(lockPath)) return tryAcquireRunLock(lockPath);
+    return null;
   }
+}
+
+async function reapAbandonedRunLock(lockPath) {
+  const reaperPath = `${lockPath}.reap`;
+  const owner = { pid: process.pid, token: randomUUID(), createdAt: new Date().toISOString() };
+  let handle;
+  try {
+    handle = await open(reaperPath, "wx", 0o600);
+    await handle.writeFile(JSON.stringify(owner), "utf8");
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    if (await isDeadRunLockOwner(reaperPath)) await rm(reaperPath, { force: true });
+    return false;
+  } finally {
+    await handle?.close();
+  }
+  try {
+    if (!await isDeadRunLockOwner(lockPath)) return false;
+    await rm(lockPath, { force: true });
+    return true;
+  } finally {
+    try {
+      const current = JSON.parse(await readFile(reaperPath, "utf8"));
+      if (current.token === owner.token) await rm(reaperPath, { force: true });
+    } catch (error) { if (error.code !== "ENOENT") throw error; }
+  }
+}
+
+async function isDeadRunLockOwner(lockPath) {
+  let current;
+  try { current = JSON.parse(await readFile(lockPath, "utf8")); }
+  catch (error) {
+    if (error.code === "ENOENT") return false;
+    if (!(error instanceof SyntaxError)) throw error;
+    const lockStat = await stat(lockPath).catch((statError) => statError.code === "ENOENT" ? null : Promise.reject(statError));
+    return Boolean(lockStat && Date.now() - lockStat.mtimeMs > 60_000);
+  }
+  const pid = Number(current?.pid);
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return false; }
+  catch (error) { return error.code === "ESRCH"; }
 }
 
 async function atomicWrite(filePath, content) {

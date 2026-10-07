@@ -3,8 +3,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { scanArchive, hashBody } from './catalog.mjs';
-import { validateSelection, eligibleNotes, simulate28Days, activeWeeks } from './policy.mjs';
-import { preflightDelivery, sendRecommendation, recoverRecommendation, collectFeedback, cardContentSha256 } from './delivery.mjs';
+import { validateSelection, eligibleNotes, simulateSupply, isoWeek, activeWeeks, MIN_REVIEW_ITEMS, TARGET_MIN_REVIEW_ITEMS, MAX_REVIEW_ITEMS } from './policy.mjs';
+import { preflightDelivery, sendRecommendation, recoverRecommendation, collectFeedback, normalizeMessageMarkdown } from './delivery.mjs';
 import { buildReviewContext, validateEvidence, sha256, shanghaiDate, validDate } from './context.mjs';
 
 export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
@@ -79,13 +79,17 @@ export async function prepareReview(root = repoRoot, date = shanghaiDate(), opti
   const packet = { schemaVersion: 1, date, contextHash: context.contextHash, catalogHash: catalogHash(catalog), context,
     notes: eligible.map(({ noteKey, groupKey, createdAt, bodyHash, quality, source }) => ({ noteKey, groupKey, createdAt, bodyHash, quality, source })),
     feedback: Object.values(ledger.feedback).filter(e => !e.superseded && eligible.some(n => n.noteKey === e.noteKey)),
-    instruction: '完整读取上下文；选择3–6条，3条保底允许高质量背景关联，额外只强匹配。复读每条原文，引用真实上下文。回顾理由不超过12个字，背景关联标注计入总长。输出{date,contextHash,catalogHash,items:[{noteKey,bodyHash,relevance:strong|background,reason,contextEvidence:[{path,quote}]}]}。无3条合格候选时报告blocked，不凑数。' };
+    instruction: `完整读取上下文；常规目标选择${TARGET_MIN_REVIEW_ITEMS}–${MAX_REVIEW_ITEMS}条。先选与近期周/月Output强匹配的高质量笔记；前三条可使用高质量长期背景关联并说明关联，第4–${MAX_REVIEW_ITEMS}条必须强匹配。若只有${MIN_REVIEW_ITEMS}–${TARGET_MIN_REVIEW_ITEMS - 1}条同时满足质量与对应序号上下文要求，可少于目标数量发送，必须填写countDeviationReason说明未达到${TARGET_MIN_REVIEW_ITEMS}条的质量或匹配原因；不得为了达到目标降低质量。按整周年龄统计优化近30天与近365天软比例；比例偏离时必须填ageDeviationReason解释，不得为配比降低质量。少于${MIN_REVIEW_ITEMS}条则报告blocked，不凑数。复读每条原文，引用真实上下文。输出{date,contextHash,catalogHash,countDeviationReason,ageDeviationReason,items:[{noteKey,bodyHash,relevance:strong|background,reason,contextEvidence:[{path,quote}]}]}。` };
   const directory = path.join(p.runtime, date); await atomicJson(path.join(directory, 'request.json'), packet);
   return { date, qualifiedEligible: eligible.length, contextHash: packet.contextHash, catalogHash: packet.catalogHash, requestPath: path.join(directory, 'request.json'), missing: context.manifest.missing };
 }
 export function renderReview(decision, notes) {
   const title = `# Flomo 回顾｜${decision.date}`, message = [title, ''], full = [title, ''];
-  const elements = [];
+  if (decision.items.length < TARGET_MIN_REVIEW_ITEMS) {
+    const note = `本日符合质量与上下文要求的笔记不足${TARGET_MIN_REVIEW_ITEMS}条，实际推荐${decision.items.length}条。原因：${decision.countDeviationReason.trim()}`;
+    message.push(note, '');
+    full.push(note, '');
+  }
   for (const [index, item] of decision.items.entries()) {
     const note = notes.find(n => n.noteKey === item.noteKey), summary = note.quality.summary;
     const link = note.source.url ? `[Flomo原文](${note.source.url})` : '原文见随附Markdown';
@@ -93,35 +97,11 @@ export function renderReview(decision, notes) {
     const date = shanghaiDate(new Date(note.createdAt));
     const quote = [...note.body].slice(0, 220).join('');
     const source = note.source.url ? `[Flomo原文](${note.source.url})` : '';
-    const itemElements = [
-      { tag: 'markdown', content: `**${index + 1}. ${escapeCardMarkdown(summary)}**` },
-      { tag: 'markdown', content: `<font color='grey'>${date}</font>`, text_size: 'notation' },
-      { tag: 'markdown', content: quote.split('\n').map(x => `> ${escapeCardMarkdown(x)}`).join('\n') },
-      { tag: 'markdown', content: `<font color='grey'>理由：${escapeCardMarkdown(reviewReason(item))}</font>`, text_size: 'notation' },
-      ...(source ? [{ tag: 'markdown', content: source, text_size: 'notation' }] : []),
-    ];
-    elements.push({ tag: 'column_set', flex_mode: 'none', columns: [
-      { tag: 'column', width: 'weighted', weight: 1, elements: itemElements },
-    ] });
     message.push(heading, '', `创建日期：${date} · ${link}`, '', ...quote.split('\n').map(x => `> ${x}`), '', `回顾理由：${reviewReason(item)}`, '');
     full.push(heading, '', `创建日期：${date}`, `来源：${note.source.url || `${note.source.path}:${note.source.line}`}`, '', note.body, '', `回顾理由：${item.reason}`, '', '---', '');
   }
   message.push('可以回复本条消息：“第2条有帮助”“第1条跳过”或“第3条已回顾”。', '', `回顾日期：${decision.date}`);
-  const card = {
-    schema: '2.0',
-    config: { width_mode: 'default' },
-    header: { title: { tag: 'plain_text', content: `Flomo 回顾｜${decision.date}` }, template: 'blue' },
-    body: { direction: 'vertical', vertical_spacing: 'large', elements: [
-      ...elements,
-      { tag: 'markdown', content: `<font color='grey'>回复“第1条有帮助”“第2条跳过”或“第3条已回顾”｜回顾日期：${decision.date}</font>`, text_size: 'notation' },
-    ] },
-  };
-  return { markdown: `${message.join('\n')}\n`, fullMarkdown: `${full.join('\n')}\n`, card };
-}
-
-function escapeCardMarkdown(value) {
-  return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/([*_~\[\]()#`|])/g, '\\$1');
+  return { markdown: `${message.join('\n')}\n`, fullMarkdown: `${full.join('\n')}\n` };
 }
 export async function inspectDecision(root, decision, { freshContext = false, contextOptions = {} } = {}) {
   const p = paths(root), catalog = await readJson(p.catalog), ledger = assertLedger(await readJson(p.ledger, emptyLedger()));
@@ -134,8 +114,8 @@ export async function inspectDecision(root, decision, { freshContext = false, co
     const note = catalog.notes.find(n => n.noteKey === item.noteKey);
     if (!note || hashBody(note.body) !== note.bodyHash) throw Error('note-body-hash-invalid');
   }
-  assertReviewReasons(decision);
   const stats = validateSelection({ date: decision.date, items: decision.items, notes: catalog.notes, ledger });
+  if (decision.items.length < TARGET_MIN_REVIEW_ITEMS && (typeof decision.countDeviationReason !== 'string' || !decision.countDeviationReason.trim())) throw Error('count-shortfall-needs-reason');
   if (stats.age.deviations.length && !decision.ageDeviationReason?.trim()) throw Error('age-deviation-needs-reason');
   stats.age.deviationReason = stats.age.deviations.length ? decision.ageDeviationReason.trim() : null;
   return { catalog, ledger, context, stats, ...renderReview(decision, catalog.notes) };
@@ -162,18 +142,30 @@ export async function sendReview(root, decision, { now = new Date(), deliveryOpt
     const attachmentPath = path.join(dir, 'review.md'); await writeFile(attachmentPath, check.fullMarkdown, { mode: 0o600 });
     const batch = { date: decision.date, status: 'reserved', contextHash: decision.contextHash, catalogHash: decision.catalogHash,
       items: decision.items.map(i => ({ ...i, groupKey: check.catalog.notes.find(n => n.noteKey === i.noteKey).groupKey })),
+      ...(decision.items.length < TARGET_MIN_REVIEW_ITEMS ? { countDeviationReason: decision.countDeviationReason.trim() } : {}),
       stats: check.stats, chatId: config.delivery.chatId, profile: preflight.profile, botSenderId: preflight.botSenderId, botSenderIds: preflight.botSenderIds, idempotencyKey: `learn-x-flomo-review:${decision.date}`,
-      markdown: check.markdown, card: check.card, cardContentSha256: cardContentSha256(check.card), attachmentPath, attachmentSha256: sha256(check.fullMarkdown), createdAt: now.toISOString() };
+      markdown: check.markdown, markdownSha256: sha256(normalizeMessageMarkdown(check.markdown)), attachmentPath, attachmentSha256: sha256(check.fullMarkdown), createdAt: now.toISOString() };
     check.ledger.batches[decision.date] = batch; await atomicJson(p.ledger, check.ledger);
     batch.status = 'sending'; batch.sendStartedAt = new Date().toISOString(); await atomicJson(p.ledger, check.ledger);
     try {
-      const sent = await sendRecommendation({ chatId: batch.chatId, card: check.card, idempotencyKey: batch.idempotencyKey, profile: batch.profile, botSenderId: batch.botSenderId, botSenderIds: batch.botSenderIds, ...deliveryOptions });
+      const sent = await sendRecommendation({ chatId: batch.chatId, markdown: batch.markdown, attachmentPath: batch.attachmentPath, attachmentSha256: batch.attachmentSha256,
+        dateMarker: `回顾日期：${batch.date}`, idempotencyKey: batch.idempotencyKey, profile: batch.profile, botSenderId: batch.botSenderId, botSenderIds: batch.botSenderIds,
+        onUploaded: async receipt => { Object.assign(batch, receipt); await atomicJson(p.ledger, check.ledger); }, ...deliveryOptions });
       Object.assign(batch, sent, { status: 'delivered', deliveredAt: new Date().toISOString() });
       await atomicJson(p.ledger, check.ledger);
       return { date: batch.date, status: batch.status, count: batch.items.length, messageId: batch.messageId };
     } catch (error) {
       batch.status = error.uncertain === false ? 'failed' : 'needs_review';
       batch.error = error.message; if (error.messageId) batch.messageId = error.messageId;
+      if (batch.status === 'failed') {
+        batch.failedAt = new Date().toISOString();
+        check.ledger.failures ??= [];
+        if (!Array.isArray(check.ledger.failures)) throw Error('ledger-failures-invalid');
+        check.ledger.failures.push({ date: batch.date, createdAt: batch.createdAt, failedAt: batch.failedAt, error: batch.error,
+          countDeviationReason: batch.countDeviationReason ?? null, ageDeviationReason: batch.stats?.age?.deviationReason ?? null,
+          items: batch.items.map(item => ({ ...item })), stats: batch.stats, contextHash: batch.contextHash, catalogHash: batch.catalogHash,
+          markdownSha256: batch.markdownSha256, attachmentSha256: batch.attachmentSha256 });
+      }
       await atomicJson(p.ledger, check.ledger); throw error;
     }
   });
@@ -183,11 +175,6 @@ function reviewReason(item) {
   return item.relevance === 'background' ? `${item.reason}（背景）` : item.reason;
 }
 
-function assertReviewReasons(decision) {
-  for (const item of decision.items) {
-    if ([...reviewReason(item)].length > 12) throw Error('review-reason-too-long');
-  }
-}
 export async function recoverReview(root, date, deliveryOptions = {}) {
   return withLock(root, async () => {
     const p = paths(root), ledger = assertLedger(await readJson(p.ledger, emptyLedger())), batch = ledger.batches[validDate(date)];
@@ -241,6 +228,31 @@ export async function feedbackReview(root, { date = shanghaiDate(), targetDate, 
     return { checkedBatches: batches.length, events: result.events.length, newEvents, newObservations, totalFeedback: Object.keys(current.feedback).length };
   });
 }
+export async function simulateCapacity(root = repoRoot, startDate = shanghaiDate(), days = 28) {
+  const catalog = await readJson(paths(root).catalog);
+  const simulation = simulateSupply({ notes: catalog.notes, startDate, days });
+  const counts = simulation.schedule.map(day => day.items.length);
+  const overlaps = simulation.schedule.flatMap(day => day.pairOverlaps.map(pair => pair.overlap));
+  const report = {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    startDate,
+    days,
+    possible: simulation.possible,
+    targetDailyCountRange: [TARGET_MIN_REVIEW_ITEMS, MAX_REVIEW_ITEMS],
+    ...(simulation.reason ? { reason: simulation.reason } : {}),
+    ...(simulation.date ? { failedDate: simulation.date } : {}),
+    uniqueQualified: simulation.uniqueQualified,
+    minimum: simulation.minimum,
+    scheduledDays: simulation.schedule.length,
+    dailyCountRange: counts.length ? [Math.min(...counts), Math.max(...counts)] : [],
+    maximumRepeatCount: Math.max(0, ...simulation.schedule.map(day => day.repeats)),
+    maximumPairOverlap: Math.max(0, ...overlaps),
+  };
+  const reportPath = path.join(paths(root).runtime, `capacity-${days}-verified-${isoWeek(startDate)}.json`);
+  await atomicJson(reportPath, report);
+  return { ...report, reportPath };
+}
 async function main(argv) {
   const [command] = argv, arg = key => argv[argv.indexOf(key) + 1], date = argv.includes('--date') ? validDate(arg('--date')) : shanghaiDate();
   const p = paths();
@@ -258,7 +270,7 @@ async function main(argv) {
   }
   if (command === 'recover') return recoverReview(repoRoot, date);
   if (command === 'feedback') return feedbackReview(repoRoot, { date, targetDate: argv.includes('--target-date') ? arg('--target-date') : undefined });
-  if (command === 'simulate') return simulate28Days({ notes: (await readJson(p.catalog)).notes, startDate: date });
+  if (command === 'simulate') return simulateCapacity(repoRoot, date, argv.includes('--days') ? Number(arg('--days')) : 28);
   if (command === 'status') {
     const c = await readJson(p.catalog, { notes: [], excluded: [] }), l = assertLedger(await readJson(p.ledger, emptyLedger()));
     return { notes: c.notes.length, qualified: c.notes.filter(n => n.quality?.score >= 3 && n.quality.bodyHash === n.bodyHash).length, excluded: c.excluded.length, batches: Object.values(l.batches).map(({ date, status, messageId }) => ({ date, status, messageId })), feedback: Object.keys(l.feedback).length };

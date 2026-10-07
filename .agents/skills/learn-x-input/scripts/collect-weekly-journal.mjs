@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { link, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,7 +17,7 @@ export async function recordWeeklyJournalAnchor({ week, writeDate, targetTitle, 
   const normalizedWeek = normalizeWeek(week);
   const expected = expectedJournalDates(normalizedWeek);
   if (writeDate !== expected.writeDate) throw new Error(`weekly-journal-anchor-invalid: write date must be ${expected.writeDate}`);
-  if (typeof targetTitle !== "string" || !targetTitle.includes(expected.shortTitle)) {
+  if (typeof targetTitle !== "string" || !hasExpectedJournalDate(targetTitle, expected.shortTitle)) {
     throw new Error(`weekly-journal-anchor-invalid: target title must include ${expected.shortTitle}`);
   }
   if (!/^[A-Za-z0-9_-]{6,}$/.test(String(targetBlockId || ""))) throw new Error("weekly-journal-anchor-invalid: target block id is missing or malformed");
@@ -39,15 +39,33 @@ export async function recordWeeklyJournalAnchor({ week, writeDate, targetTitle, 
   await mkdir(weekDir, { recursive: true });
   try {
     const current = JSON.parse(await readFile(anchorPath, "utf8"));
-    if (current.schemaVersion !== 1 || current.week !== normalizedWeek || current.documentUrl !== WEEKLY_JOURNAL_DOCUMENT_URL
-      || current.documentId !== documentId || current.targetBlockId !== targetBlockId || current.targetTitle !== targetTitle.trim()) {
-      throw new Error("weekly-journal-anchor-conflict: an existing anchor points to a different target; preserve it and inspect the journal before replacing");
-    }
+    assertSameAnchorTarget(current, anchor);
+    return { anchor: current, anchorPath, unchanged: true };
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
-  await atomicWrite(anchorPath, `${JSON.stringify(anchor, null, 2)}\n`);
+  const tempPath = `${anchorPath}.${process.pid}-${randomUUID()}.tmp`;
+  await writeFile(tempPath, `${JSON.stringify(anchor, null, 2)}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
+  try {
+    await link(tempPath, anchorPath);
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    const current = JSON.parse(await readFile(anchorPath, "utf8"));
+    assertSameAnchorTarget(current, anchor);
+    return { anchor: current, anchorPath, unchanged: true };
+  } finally {
+    await unlink(tempPath).catch((error) => { if (error.code !== "ENOENT") throw error; });
+  }
   return { anchor, anchorPath };
+}
+
+function assertSameAnchorTarget(current, requested) {
+  if (current.schemaVersion !== 1 || current.week !== requested.week || current.documentUrl !== requested.documentUrl
+    || current.documentId !== requested.documentId || current.targetBlockId !== requested.targetBlockId
+    || current.targetTitle !== requested.targetTitle || current.writeDate !== requested.writeDate
+    || current.coverage?.start !== requested.coverage.start || current.coverage?.end !== requested.coverage.end) {
+    throw new Error("weekly-journal-anchor-conflict: an existing anchor points to a different target; preserve it and inspect the journal before replacing");
+  }
 }
 
 export async function collectConfirmedWeeklyJournal({ week, repoRoot: root = repoRoot, fetchSection = fetchWeeklyJournalSection }) {
@@ -128,9 +146,14 @@ function validateAnchor(anchor, week) {
   if (!anchor || anchor.schemaVersion !== 1 || anchor.week !== week || anchor.documentUrl !== WEEKLY_JOURNAL_DOCUMENT_URL
     || typeof anchor.documentId !== "string" || typeof anchor.targetBlockId !== "string"
     || !anchor.coverage || anchor.coverage.start !== expected.start || anchor.coverage.end !== expected.end
-    || anchor.writeDate !== expected.writeDate || typeof anchor.targetTitle !== "string" || !anchor.targetTitle.includes(expected.shortTitle)) {
+    || anchor.writeDate !== expected.writeDate || typeof anchor.targetTitle !== "string" || !hasExpectedJournalDate(anchor.targetTitle, expected.shortTitle)) {
     throw new Error("weekly-journal-anchor-invalid: week, target document, title, or coverage did not match");
   }
+}
+
+function hasExpectedJournalDate(title, shortTitle) {
+  const escaped = shortTitle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|[^\\d])${escaped}(?!\\d)`).test(title);
 }
 
 function expectedJournalDates(week) {

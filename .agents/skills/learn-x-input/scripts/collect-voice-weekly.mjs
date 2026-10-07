@@ -100,8 +100,8 @@ export async function writeVoiceWeekly(options = {}) {
       await rename(tempPath, notesPath);
     }
     const summary = written
-      ? `完整扫描完成，本周有 ${payload.records.length} 条新版 AI 洞察；范围 ${payload.range.start} 至 ${payload.range.endExclusive}`
-      : `完整扫描 ${payload.range.start} 至 ${payload.range.endExclusive} 完成；下界已覆盖：是；0 条，确认无匹配（pending ${payload.counts.pending}，legacy ${payload.counts.legacy}）`;
+      ? `完整扫描 ${payload.range.start} 至 ${payload.range.endExclusive} 完成；下界已覆盖：是；${payload.records.length} 条新版 AI 洞察（分页 ${payload.pagination.pages} 页）`
+      : `完整扫描 ${payload.range.start} 至 ${payload.range.endExclusive} 完成；下界已覆盖：是；0 条，确认无匹配（pending ${payload.counts.pending}，legacy ${payload.counts.legacy}；分页 ${payload.pagination.pages} 页）`;
     await updateWeeklySourceStatus({ weekRoot: outputRoot, week, source: "voice", status: written ? "ready" : "empty", file: "voice.md", count: payload.records.length, summary, preservedStaleFile: !written && await fileExists(notesPath) });
     return { payload, notesPath: written ? notesPath : null };
   } catch (error) {
@@ -116,6 +116,8 @@ export function renderVoiceMarkdown(payload) {
     "",
     `- 来源：${payload.source}`,
     `- 采集范围：${payload.range.start} 至 ${payload.range.endExclusive}（不含结束时刻）`,
+    `- 完整扫描：${payload.pagination.complete ? "是" : "否"}`,
+    "- 下界已覆盖：是",
     `- 时区：${payload.timezone}`,
     `- 生成时间：${payload.generatedAt}`,
     `- 记录数：${payload.records.length}`,

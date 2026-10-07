@@ -66,6 +66,7 @@ export async function prepareWeeklyProcessInputs({ week, repoRoot, payload }) {
         throw new Error("candidate-version-mismatch");
       }
       const candidateChars = inputSize(value.text).chars;
+      if (isOversized && candidateChars > MAX_WEEKLY_INPUT_CHARS) throw new Error("candidate-still-over-limit");
       const reduction = file.effectiveChars ? 1 - candidateChars / file.effectiveChars : 0;
       const minimumReduction = isWeread && file.effectiveChars <= MAX_WEEKLY_INPUT_CHARS ? 0.01 : 0.05;
       if (reduction < minimumReduction) throw new Error("candidate-not-shorter-enough");
@@ -82,9 +83,11 @@ export async function prepareWeeklyProcessInputs({ week, repoRoot, payload }) {
         required,
         reason: missing
           ? (isWeread ? "semantic-compression-required" : "over-limit-candidate-required")
+          : error.message === "candidate-still-over-limit"
+            ? "candidate-not-within-limit"
           : "candidate-invalid-or-stale"
       });
-      if (!required) exclusions.push({ sourceId: snapshot.sourceId, sourcePath: file.path, reason: missing ? "preprocessing-not-ready" : "candidate-invalid" });
+      if (!required) exclusions.push({ sourceId: snapshot.sourceId, sourcePath: file.path, reason: missing ? "preprocessing-not-ready" : error.message === "candidate-still-over-limit" ? "candidate-not-within-limit" : "candidate-invalid" });
       continue;
     }
     preparedItems.push({ path: file.path, sourceHash, kind: isWeread ? "weread" : "over-limit", text: candidate.text, candidateChars: candidate.candidateChars, reductionRatio: candidate.reductionRatio });

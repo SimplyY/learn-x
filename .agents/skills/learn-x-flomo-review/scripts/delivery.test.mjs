@@ -68,44 +68,146 @@ async function downloaded(attachmentPath, root = message(), { resource = {}, byt
 const reviewCard = (content = markdown) => ({ schema: '2.0', body: { elements: [{ tag: 'markdown', content }] } });
 const cardMessage = (card, extra = {}) => message({ msg_type: 'interactive', content: JSON.stringify(card), resources: [], ...extra });
 
-test('single Card 2.0 send reads back canonical body, bot and chat without attachment upload', async () => {
-  const card = reviewCard(), calls = [];
+test('one post attaches complete Markdown and persists upload before send, then verifies changed attachment key bytes', async (t) => {
+  const attachmentPath = await attachment(t), calls = [];
+  let persisted;
   const runCli = async (args, options) => {
     calls.push({ args, options });
-    if (args[1] === '+messages-send') return envelope({ message_id: 'om_root', chat_id: chatId });
-    if (args[1] === '+messages-mget') return envelope({ messages: [cardMessage(card)] });
+    assert.equal(options.cwd, path.dirname(await realpath(attachmentPath)));
+    if (args[1] === 'files') {
+      assert.equal(args[2], 'create');
+      assert.deepEqual(JSON.parse(args[args.indexOf('--data') + 1]), {file_type:'stream',file_name:'review.md'});
+      assert.equal(args[args.indexOf('--file') + 1], 'file=./review.md');
+      return envelope({file_key:'file_upload'});
+    }
+    if (args[1] === '+messages-send') { assert.ok(persisted); return envelope({ message_id: 'om_root', chat_id: chatId }); }
+    if (args[1] === '+messages-mget') { assert.ok(args.includes('--download-resources')); return envelope({ messages: [await downloaded(attachmentPath,message({content:`${markdown}\n<file key="file_message" name="review.md"/>`}))] }); }
     throw Error('unexpected');
   };
-  const result = await sendRecommendation({ chatId, card, idempotencyKey, botSenderId: appId, runCli });
+  const result = await sendRecommendation({ chatId, markdown, attachmentPath, idempotencyKey, botSenderId: appId, onUploaded: async(value)=>{persisted=value;}, runCli });
   assert.equal(result.messageId, 'om_root');
   assert.equal(result.readback, true);
-  assert.equal(result.cardContentSha256, cardContentSha256(card));
+  assert.equal(result.markdownSha256,legacyTextHash);
+  assert.equal(result.attachmentReadback,true);
+  assert.equal(result.attachmentKey,'file_message');
+  assert.equal(persisted.uploadKey,'file_upload');
+  assert.equal(persisted.attachmentKey,undefined);
+  assert.equal(result.uploadKey,'file_upload');
+  assert.equal(result.attachmentSha256,createHash('sha256').update(await readFile(attachmentPath)).digest('hex'));
   assert.equal(calls.filter(({ args }) => args[1] === '+messages-send').length, 1);
   const send = calls.find(({ args }) => args[1] === '+messages-send').args;
-  assert.equal(send[send.indexOf('--msg-type') + 1], 'interactive');
-  assert.equal(send[send.indexOf('--content') + 1], JSON.stringify(card));
+  assert.equal(send[send.indexOf('--markdown') + 1],markdown);
+  assert.equal(send[send.indexOf('--attachment') + 1],'file_upload');
+  assert.equal(send[send.indexOf('--idempotency-key') + 1],idempotencyKey);
+  assert.ok(!send.includes('--content'));
+  assert.ok(calls.every(({args})=>args[args.indexOf('--as')+1]==='bot'));
 });
 
 for (const [name, mismatch] of [
-  ['body', { content: JSON.stringify(reviewCard(`${markdown} 被修改`)) }],
+  ['body', { content: `${markdown} 被修改\n<file key="file_upload"/>` }],
   ['recipient', { chat_id: 'oc_wrong' }],
   ['sender', { sender: { id: 'cli_wrong', sender_type: 'app' } }],
   ['deletion', { deleted: true }],
 ]) test(`readback ${name} mismatch remains uncertain and never resends`, async (t) => {
-  const card = reviewCard();
+  const attachmentPath = await attachment(t);
   let sends = 0;
   const runCli = async (args) => {
+    if (args[1] === 'files') return envelope({file_key:'file_upload'});
     if (args[1] === '+messages-send') { sends++; return envelope({ message_id: 'om_root', chat_id: chatId }); }
-    return envelope({ messages: [cardMessage(card, mismatch)] });
+    return envelope({ messages: [await downloaded(attachmentPath,message(mismatch))] });
   };
-  await assert.rejects(sendRecommendation({ chatId, card, idempotencyKey, botSenderId: appId, runCli }), (error) => error.uncertain === true && error.messageId === 'om_root');
+  await assert.rejects(sendRecommendation({ chatId, markdown, attachmentPath, idempotencyKey, botSenderId: appId, runCli }), (error) => error.uncertain === true && error.messageId === 'om_root');
   assert.equal(sends, 1);
 });
 
-test('send timeout is uncertain and invalid input never sends', async () => {
-  const runCli = async () => { throw Error('timeout'); };
-  await assert.rejects(sendRecommendation({ chatId, card: reviewCard(), idempotencyKey, runCli }), (error) => error.uncertain === true);
-  await assert.rejects(sendRecommendation({ chatId, markdown, idempotencyKey, runCli: async () => { throw Error('must-not-send'); } }), { code: 'card-content-invalid' });
+test('send timeout is uncertain and invalid input never uploads or sends', async (t) => {
+  const attachmentPath=await attachment(t);let sends=0;
+  const runCli = async(args)=>{if(args[1]==='files')return envelope({file_key:'file_upload'});sends++;throw Error('timeout');};
+  await assert.rejects(sendRecommendation({ chatId, markdown, attachmentPath, idempotencyKey, botSenderId:appId, runCli }), {uncertain:true});
+  assert.equal(sends,1);
+  await assert.rejects(sendRecommendation({ chatId, markdown, idempotencyKey, runCli: async () => { throw Error('must-not-send'); } }), { code: 'send-input-invalid',uncertain:false });
+});
+
+test('timeout without message ID recovers using persisted uploadKey and original hashes despite message key rebasing',async(t)=>{
+  const attachmentPath=await attachment(t);let persisted,sends=0;
+  await assert.rejects(sendRecommendation({chatId,markdown,attachmentPath,idempotencyKey,botSenderId:appId,
+    onUploaded:async value=>{persisted=value;},
+    runCli:async(args)=>{if(args[1]==='files')return envelope({file_key:'file_upload'});sends++;throw Error('timeout-after-submission');}
+  }),error=>error.uncertain===true&&error.messageId===undefined);
+  assert.equal(persisted.uploadKey,'file_upload');
+  assert.equal(persisted.attachmentKey,undefined);
+  const input={chatId,idempotencyKey,dateMarker:'回顾日期：2026-10-06',expectedMarkdown:markdown,sendStartedAt:now.toISOString(),botSenderId:appId,...persisted};
+  const root=message({content:`${markdown}\n<file key="file_message"/>`});
+  const calls=[];
+  const recover=async(bytes)=>recoverRecommendation({...input,runCli:async(args,options)=>{
+    calls.push(args[1]);
+    if(args[1]==='+chat-messages-list')return envelope({messages:[root],has_more:false});
+    assert.equal(args[1],'+messages-mget');assert.ok(args.includes('--download-resources'));
+    assert.equal(options.cwd,path.dirname(await realpath(attachmentPath)));
+    return envelope({messages:[await downloaded(attachmentPath,root,{bytes})]});
+  }});
+  const result=await recover();
+  assert.equal(result.status,'delivered');assert.equal(result.messageId,'om_root');
+  assert.equal(result.uploadKey,'file_upload');assert.equal(result.attachmentKey,'file_message');
+  assert.equal(result.attachmentSha256,persisted.attachmentSha256);assert.equal(result.attachmentReadback,true);
+  assert.deepEqual(calls,['+chat-messages-list','+messages-mget']);
+  await assert.rejects(recover('错误的附件\n'),{code:'attachment-bytes-hash-mismatch',uncertain:true});
+  assert.equal(sends,1);
+  assert.ok(calls.every(command=>['+chat-messages-list','+messages-mget'].includes(command)));
+});
+
+for (const [name,extra,code] of [
+  ['different bytes',{bytes:'另一份完整原文\n'},'attachment-bytes-hash-mismatch'],
+  ['resource belongs to another message',{resource:{message_id:'om_other'}},'attachment-resource-mismatch'],
+  ['resource key differs from post attachment',{resource:{key:'file_other'}},'attachment-resource-mismatch'],
+  ['image instead of file',{resource:{type:'image'}},'attachment-resource-mismatch'],
+  ['explicit resource download error',{resource:{error:true}},'attachment-resource-mismatch'],
+  ['wrong byte size',{resource:{size_bytes:1}},'attachment-resource-size-invalid'],
+  ['empty downloaded bytes',{bytes:''},'attachment-resource-size-invalid'],
+]) test(`post send rejects ${name} and never resends`,async(t)=>{
+  const attachmentPath=await attachment(t);let sends=0;
+  await assert.rejects(sendRecommendation({chatId,markdown,attachmentPath,idempotencyKey,botSenderId:appId,runCli:async(args)=>{
+    if(args[1]==='files')return envelope({file_key:'file_upload'});
+    if(args[1]==='+messages-send'){sends++;return envelope({message_id:'om_root',chat_id:chatId});}
+    return envelope({messages:[await downloaded(attachmentPath,message(),extra)]});
+  }}),{code,uncertain:true,messageId:'om_root'});
+  assert.equal(sends,1);
+});
+
+for(const kind of ['missing-resource','duplicate-resource','outside-root','duplicate-attachment'])test(`post send rejects ${kind}`,async(t)=>{
+  const attachmentPath=await attachment(t);let sends=0;
+  await assert.rejects(sendRecommendation({chatId,markdown,attachmentPath,idempotencyKey,botSenderId:appId,runCli:async(args)=>{
+    if(args[1]==='files')return envelope({file_key:'file_upload'});
+    if(args[1]==='+messages-send'){sends++;return envelope({message_id:'om_root',chat_id:chatId});}
+    const root=message();
+    if(kind==='duplicate-attachment')root.content+='\n<file key="file_extra"/>';
+    const fixture=await downloaded(attachmentPath,root,kind==='outside-root'?{localPath:path.join(path.dirname(attachmentPath),'outside.md')}:{});
+    if(kind==='missing-resource')delete fixture.resources;
+    if(kind==='duplicate-resource')fixture.resources.push(fixture.resources[0]);
+    return envelope({messages:[fixture]});
+  }}),{code:kind==='outside-root'?'attachment-resource-path-outside-download-root':kind==='duplicate-attachment'?'attachment-readback-missing':'attachment-download-missing-or-not-unique',uncertain:true});
+  assert.equal(sends,1);
+});
+
+for(const kind of ['upload-timeout','bad-upload-key','persist-failed','changed-original'])test(`${kind} never submits a post and is a definite unsent failure`,async(t)=>{
+  const attachmentPath=await attachment(t);let sends=0;
+  await assert.rejects(sendRecommendation({chatId,markdown,attachmentPath,idempotencyKey,botSenderId:appId,
+    onUploaded:async()=>{if(kind==='persist-failed')throw Error('cannot-persist');if(kind==='changed-original')await writeFile(attachmentPath,'已修改\n');},
+    runCli:async(args)=>{if(args[1]==='files'){if(kind==='upload-timeout')throw Error('upload-timeout');return envelope({file_key:kind==='bad-upload-key'?'invalid':'file_upload'});}sends++;throw Error('must-not-send');}
+  }),{uncertain:false});
+  assert.equal(sends,0);
+});
+
+for(const [name,body] of [['missing-date','内容'],['invalid-date',`${markdown}\n回顾日期：2026-02-30`]])test(`post refuses ${name} before upload`,async(t)=>{
+  const attachmentPath=await attachment(t);let calls=0;
+  await assert.rejects(sendRecommendation({chatId,markdown:body,attachmentPath,dateMarker:name==='invalid-date'?'回顾日期：2026-02-30':undefined,idempotencyKey,botSenderId:appId,runCli:async()=>{calls++;throw Error('must-not-call');}}),{code:'date-marker-invalid',uncertain:false});
+  assert.equal(calls,0);
+});
+
+test('card-only input cannot use the new send entrypoint',async()=>{
+  let calls=0;
+  await assert.rejects(sendRecommendation({chatId,card:reviewCard(),idempotencyKey,botSenderId:appId,runCli:async()=>{calls++;throw Error('must-not-call');}}),{code:'send-input-invalid',uncertain:false});
+  assert.equal(calls,0);
 });
 
 test('recovery checks exact date, expected canonical hash, configured sender and bounded complete time window', async (t) => {
@@ -143,6 +245,13 @@ test('feedback binds verified root and note ordinal, accepts explicit owner clau
   assert.equal(result.events.length, 3);
   assert.deepEqual(result.events.map((event) => [event.noteKey, event.feedback]), [['note_b', '有帮助'], ['note_a', '跳过'], ['note_c', '已回顾']]);
   assert.ok(result.events.every((event) => event.replyId === 'om_reply' && event.rootMessageId === 'om_root'));
+});
+
+test('feedback accepts Arabic and Chinese ordinals for recommendations seven and eight', async () => {
+  const batch = { ...feedbackBatch(), items: Array.from({ length: 8 }, (_, index) => ({ number: index + 1, noteKey: `note_${index + 1}` })) };
+  const result = await collectFeedback({ batches: [batch], ownerId, runCli: feedbackMock([reply({ content: '第7条已回顾；第八条跳过' })]) });
+  assert.equal(result.complete, true);
+  assert.deepEqual(result.events.map(({ number, noteKey, feedback }) => [number, noteKey, feedback]), [[7, 'note_7', '已回顾'], [8, 'note_8', '跳过']]);
 });
 
 test('feedback edited message uses update_time; missing edit version fails collection', async () => {
@@ -257,12 +366,13 @@ test('strict canonicalization preserves ordinal and decimal content',()=>{
   assert.equal(normalizeMessageMarkdown('## 1. **苹果**'),normalizeMessageMarkdown('**1. 苹果**'));
 });
 
-for (const [name,body,wrongBody] of [['ordinal','1.苹果\n2.香蕉','2.苹果\n1.香蕉'],['decimal','1.5%','2.5%']]) test(`readback refuses changed ${name} content`,async()=>{
-  const card=reviewCard(body);let sends=0;
-  await assert.rejects(sendRecommendation({chatId,card,idempotencyKey,botSenderId:appId,runCli:async(args)=>{
+for (const [name,body,wrongBody] of [['ordinal','1.苹果\n2.香蕉','2.苹果\n1.香蕉'],['decimal','1.5%','2.5%']]) test(`readback refuses changed ${name} content`,async(t)=>{
+  const attachmentPath=await attachment(t);let sends=0;
+  await assert.rejects(sendRecommendation({chatId,markdown:`${body}\n回顾日期：2026-10-06`,attachmentPath,idempotencyKey,botSenderId:appId,runCli:async(args)=>{
+    if(args[1]==='files')return envelope({file_key:'file_upload'});
     if(args[1]==='+messages-send'){sends++;return envelope({message_id:'om_root',chat_id:chatId});}
-    return envelope({messages:[cardMessage(reviewCard(wrongBody))]});
-  }}),{code:'card-content-hash-mismatch',uncertain:true});
+    return envelope({messages:[await downloaded(attachmentPath,message({content:`${wrongBody}\n回顾日期：2026-10-06\n<file key="file_upload"/>`}))]});
+  }}),{code:'message-content-hash-mismatch',uncertain:true});
   assert.equal(sends,1);
 });
 

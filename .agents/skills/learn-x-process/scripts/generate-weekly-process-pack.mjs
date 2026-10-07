@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
 import { compressVoiceForProcessPack, voiceCompressionMetrics } from "../../learn-x-input/scripts/collect-voice-weekly.mjs";
+import { isoWeekRangeShanghai } from "../../learn-x-input/scripts/collect-weread-weekly.mjs";
 import { countInputChars, inputSize, MAX_VOICE_WEEKLY_INPUT_CHARS, VOICE_TARGET_RETAINED_RATIO, VOICE_TARGET_RETAINED_RATIO_RANGE } from "../../learn-x-input/scripts/lib/input-limits.mjs";
 import { WEEKLY_SOURCE_CONFIG, compareWeeklySources, weeklySourceForFile, weeklySourceForId } from "../../learn-x-input/scripts/lib/weekly-source-config.mjs";
 import { defaultWeeklyReviewWeek, isoWeekRange, collectWeeklyInput } from "./collect-weekly-input.mjs";
@@ -76,8 +77,10 @@ export async function validateWeeklyProcessInputs({ week, repoRoot: root = repoR
 
   const flomo = status.flomo;
   if (flomo?.status === "ready") {
-    if ((flomo.count ?? 0) < 1 || !byFile.has("flomo.md")) issues.push("Flomo 标记 ready，但没有有效记录或 flomo.md");
-  } else if (!(flomo?.status === "empty" && flomo.count === 0 && hasTrustedEmptyScan(flomo.summary))) {
+    const file = byFile.get("flomo.md");
+    if ((flomo.count ?? 0) < 1 || !file) issues.push("Flomo 标记 ready，但没有有效记录或 flomo.md");
+    else await validateFlomoReady({ root, file, status: flomo, week: targetWeek, issues });
+  } else if (!(flomo?.status === "empty" && flomo.count === 0 && hasTrustedEmptyScan(flomo.summary, targetWeek, "flomo"))) {
     issues.push(`Flomo flomo.md 必须完整采集成功（允许有完整扫描证据的零条结果；当前 ${flomo?.status || "未登记"}）`);
   }
 
@@ -87,10 +90,9 @@ export async function validateWeeklyProcessInputs({ week, repoRoot: root = repoR
       issues.push("Voice 标记 ready，但没有有效记录或 voice.md");
     } else {
       const text = await readFile(path.join(root, byFile.get("voice.md").path), "utf8");
-      const voiceWeek = text.match(/^# Voice-X 核心重点｜(\d{4}-W\d{2})$/m)?.[1];
-      if (voiceWeek !== targetWeek) issues.push(`Voice-X 目标周标记缺失或不匹配（应为 ${targetWeek}）`);
+      await validateVoiceReady({ text, status: voice, week: targetWeek, issues });
     }
-  } else if (!(voice?.status === "empty" && voice.count === 0 && hasTrustedEmptyScan(voice.summary))) {
+  } else if (!(voice?.status === "empty" && voice.count === 0 && hasTrustedEmptyScan(voice.summary, targetWeek, "voice"))) {
     issues.push(`Voice voice.md 必须完整采集成功（允许有完整扫描证据的零条结果；当前 ${voice?.status || "未登记"}）`);
   }
 
@@ -127,11 +129,62 @@ export async function validateWeeklyProcessInputs({ week, repoRoot: root = repoR
   return issues;
 }
 
-function hasTrustedEmptyScan(summary) {
+async function validateFlomoReady({ root, file, status, week, issues }) {
+  const text = await readFile(path.join(root, file.path), "utf8");
+  const range = expectedSourceRange(week, "flomo");
+  if (!text.includes(`# Flomo 周输入｜${week}`)) issues.push(`Flomo 目标周标记缺失或不匹配（应为 ${week}）`);
+  if (!text.includes(`- 采集范围：${range.start} 至 ${range.endExclusive}（不含结束时刻）`)
+    || !hasCompleteScanSummary(status.summary, range, status.count)) issues.push("Flomo 扫描范围、完整扫描状态或下界证据与目标周不匹配");
+  if (!text.includes("- 完整扫描：是") || !text.includes("- 下界已覆盖：是")) issues.push("Flomo 文件缺少完整扫描或下界覆盖证据");
+  const fileCount = Number(text.match(/^- 目标周记录：\s*(\d+)\s*$/m)?.[1]);
+  const sidecarCount = Number(status.count);
+  const pageCount = Number(text.match(/^- 分页：已完成（(\d+) 页）$/m)?.[1]);
+  const summaryPages = Number(String(status.summary || "").match(/分页\s*(\d+)\s*页/)?.[1]);
+  const recordCount = (text.match(/^## \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/gm) || []).length;
+  if (!Number.isInteger(sidecarCount) || fileCount !== sidecarCount || recordCount !== sidecarCount) issues.push("Flomo 文件记录数与来源状态侧车不一致");
+  if (!Number.isInteger(pageCount) || pageCount < 1 || summaryPages !== pageCount) issues.push("Flomo 分页完整性与来源状态侧车不一致");
+}
+
+async function validateVoiceReady({ text, status, week, issues }) {
+  const range = expectedSourceRange(week, "voice");
+  if (!text.includes(`# Voice-X 核心重点｜${week}`)) issues.push(`Voice-X 目标周标记缺失或不匹配（应为 ${week}）`);
+  if (!text.includes(`- 采集范围：${range.start} 至 ${range.endExclusive}（不含结束时刻）`)
+    || !hasCompleteScanSummary(status.summary, range, status.count)) issues.push("Voice-X 扫描范围、完整扫描状态或下界证据与目标周不匹配");
+  if (!text.includes("- 完整扫描：是") || !text.includes("- 下界已覆盖：是")) issues.push("Voice-X 文件缺少完整扫描或下界覆盖证据");
+  const fileCount = Number(text.match(/^- 记录数：\s*(\d+)\s*$/m)?.[1]);
+  const sidecarCount = Number(status.count);
+  const recordCount = (text.match(/^- 录制时间：/gm) || []).length;
+  const pageCount = Number(text.match(/^- 分页：已完成（(\d+) 页）$/m)?.[1]);
+  const summaryPages = Number(String(status.summary || "").match(/分页\s*(\d+)\s*页/)?.[1]);
+  if (!Number.isInteger(sidecarCount) || fileCount !== sidecarCount || recordCount !== sidecarCount) issues.push("Voice-X 文件记录数与来源状态侧车不一致");
+  if (!Number.isInteger(pageCount) || pageCount < 1 || summaryPages !== pageCount) issues.push("Voice-X 分页完整性与来源状态侧车不一致");
+}
+
+function hasTrustedEmptyScan(summary, week, source) {
   const text = String(summary || "");
-  return /(?:完整扫描|完整查询|全量查询|完整分页)/.test(text)
+  const range = expectedSourceRange(week, source);
+  const expectedRange = `完整扫描 ${range.start} 至 ${range.endExclusive} 完成`;
+  return text.includes(expectedRange)
     && /(?:下界已覆盖|范围已覆盖)[：:]\s*是/.test(text)
-    && /(?:0\s*条|零条|无匹配)/.test(text);
+    && /(?:0\s*条|零条|无匹配)/.test(text)
+    && Number(text.match(/分页\s*(\d+)\s*页/)?.[1]) >= 1;
+}
+
+function hasCompleteScanSummary(summary, range, count) {
+  const text = String(summary || "");
+  return text.includes(`完整扫描 ${range.start} 至 ${range.endExclusive} 完成`)
+    && /(?:下界已覆盖|范围已覆盖)[：:]\s*是/.test(text)
+    && new RegExp(`(?:^|[；; ])${Number(count)} 条`).test(text);
+}
+
+function expectedSourceRange(week, source) {
+  const { startEpoch, endEpoch } = isoWeekRangeShanghai(week);
+  const format = (epoch, seconds) => new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", ...(seconds ? { second: "2-digit" } : {}), hourCycle: "h23"
+  }).format(new Date(epoch * 1000));
+  const withSeconds = source === "voice";
+  return { start: format(startEpoch, withSeconds), endExclusive: format(endEpoch, withSeconds) };
 }
 
 function hasSubstantiveWeeklyJournal(content) {
@@ -417,7 +470,10 @@ function buildInputAuditRow({ payload, definition, fileSummary, statusInfo }) {
     result,
     link,
     note: entry?.summary || definition.note || "",
-    optional: Boolean(definition.optional)
+    optional: Boolean(definition.optional),
+    trustedEmpty: Boolean(entry?.status === "empty" && entry.count === 0
+      && ["flomo", "voice"].includes(statusInfo?.source)
+      && hasTrustedEmptyScan(entry.summary, payload.week, statusInfo.source))
   };
 }
 
@@ -442,7 +498,7 @@ export function renderInputAuditTable(payload, fileSummaries, compression) {
 
 function renderInputAttention(rows) {
   const attention = rows
-    .filter((row) => (row.blocksPack || row.priority === 0)
+    .filter((row) => !row.trustedEmpty && (row.blocksPack || row.priority === 0)
       && (/^(empty|failed|unavailable|未发现|未登记|needs_review|待人工审核)/.test(row.status) || row.result.startsWith("异常")))
     .map((row) => `${row.blocksPack ? "阻断" : "P0缺口"}：${row.source}（${row.file}：${row.status}）`);
   return attention.length ? attention.join("；") : "无";

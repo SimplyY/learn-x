@@ -82,3 +82,25 @@ test("refuses replacing a different saved journal anchor for the same week", asy
     targetBlockId: "blkDifferent2026W40", documentId: "docWeeklyJournal01", repoRoot: root
   }), /different target/);
 });
+
+test("atomically preserves one target when conflicting anchor writes race", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-weekly-journal-anchor-race-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const attempts = await Promise.allSettled([
+    recordWeeklyJournalAnchor({
+      week: "2026-W40", writeDate: "2026-10-05", targetTitle: "10.5",
+      targetBlockId: "blkTargetRaceA", documentId: "docWeeklyJournal01", repoRoot: root
+    }),
+    recordWeeklyJournalAnchor({
+      week: "2026-W40", writeDate: "2026-10-05", targetTitle: "10.5",
+      targetBlockId: "blkTargetRaceB", documentId: "docWeeklyJournal01", repoRoot: root
+    })
+  ]);
+  assert.equal(attempts.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(attempts.filter((result) => result.status === "rejected" && /different target/.test(result.reason.message)).length, 1);
+
+  await assert.rejects(recordWeeklyJournalAnchor({
+    week: "2026-W40", writeDate: "2026-10-05", targetTitle: "110.50",
+    targetBlockId: "blkTargetSubstring", documentId: "docWeeklyJournal01", repoRoot: root
+  }), /target title must include/);
+});

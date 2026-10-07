@@ -135,7 +135,10 @@ test("confirmed target week with ready required inputs and verified empty source
   await writeFile(path.join(weekDir, "voice.md"), [
     `# Voice-X 核心重点｜${week}`,
     "- 来源：Voice-X",
-    "- 采集范围：2026-09-28 至 2026-10-05",
+    "- 采集范围：2026-09-28 00:00:00 至 2026-10-05 00:00:00（不含结束时刻）",
+    "- 完整扫描：是",
+    "- 下界已覆盖：是",
+    "- 记录数：1",
     "- 分页：已完成（1 页）",
     "",
     "## 中文录音标题",
@@ -151,8 +154,8 @@ test("confirmed target week with ready required inputs and verified empty source
   await writeFile(path.join(weekDir, "_ai-generated.json"), JSON.stringify({ schemaVersion: 1, targetWeek: week, status: "confirmed" }), "utf8");
 
   await updateWeeklySourceStatus({ weekRoot: weekDir, week, source: "daily", status: "ready", file: "daily.md", count: 1, summary: "目标周有日记", preservedStaleFile: false });
-  await updateWeeklySourceStatus({ weekRoot: weekDir, week, source: "flomo", status: "empty", file: "flomo.md", count: 0, summary: "完整扫描 2026-09-28 至 2026-10-05 完成；下界已覆盖：是；0 条，确认无匹配", preservedStaleFile: false });
-  await updateWeeklySourceStatus({ weekRoot: weekDir, week, source: "voice", status: "ready", file: "voice.md", count: 1, summary: "完整扫描完成，本周有 1 条新版 AI 洞察", preservedStaleFile: false });
+  await updateWeeklySourceStatus({ weekRoot: weekDir, week, source: "flomo", status: "empty", file: "flomo.md", count: 0, summary: "完整扫描 2026-09-28 00:00 至 2026-10-05 00:00 完成；下界已覆盖：是；0 条，确认无匹配（分页 1 页）", preservedStaleFile: false });
+  await updateWeeklySourceStatus({ weekRoot: weekDir, week, source: "voice", status: "ready", file: "voice.md", count: 1, summary: "完整扫描 2026-09-28 00:00:00 至 2026-10-05 00:00:00 完成；下界已覆盖：是；1 条新版 AI 洞察（分页 1 页）", preservedStaleFile: false });
 
   const gatePayload = (await import("./collect-weekly-input.mjs")).collectWeeklyInput({ week, repoRoot: root, allowOversized: true });
   assert.deepEqual(await validateWeeklyProcessInputs({ week, repoRoot: root, payload: await gatePayload }), []);
@@ -164,6 +167,48 @@ test("confirmed target week with ready required inputs and verified empty source
   assert.match(pack, /2026-W40/);
   assert.match(pack, /Voice-X/);
   assert.ok((await readFile(path.join(outputDir, "input.json"), "utf8")).includes("处理后原文字符数：4000"));
+
+  const voicePath = path.join(weekDir, "voice.md");
+  const validVoice = await readFile(voicePath, "utf8");
+  await writeFile(voicePath, validVoice.replace("- 下界已覆盖：是", "- 下界已覆盖：否"));
+  assert.ok((await validateWeeklyProcessInputs({ week, repoRoot: root, payload: await gatePayload })).some((issue) => issue.includes("Voice-X 文件缺少完整扫描或下界覆盖证据")));
+  await writeFile(voicePath, validVoice);
+  const statusMismatchPayload = await gatePayload;
+  statusMismatchPayload.sourceStatuses.voice.count = 2;
+  assert.ok((await validateWeeklyProcessInputs({ week, repoRoot: root, payload: statusMismatchPayload })).some((issue) => issue.includes("Voice-X 文件记录数与来源状态侧车不一致")));
+  statusMismatchPayload.sourceStatuses.voice.count = 1;
+  statusMismatchPayload.sourceStatuses.flomo.summary = "完整扫描 2026-09-21 00:00 至 2026-09-28 00:00 完成；下界已覆盖：是；0 条，确认无匹配（分页 1 页）";
+  assert.ok((await validateWeeklyProcessInputs({ week, repoRoot: root, payload: statusMismatchPayload })).some((issue) => issue.includes("Flomo flomo.md 必须完整采集成功")));
+
+  await writeFile(path.join(weekDir, "flomo.md"), [
+    `# Flomo 周输入｜${week}`,
+    "- 采集范围：2026-09-28 00:00 至 2026-10-05 00:00（不含结束时刻）",
+    "- 完整扫描：是",
+    "- 下界已覆盖：是",
+    "- 扫描记录：1",
+    "- 分页：已完成（1 页）",
+    "- 目标周记录：1",
+    "",
+    "## 2026-09-29 10:00",
+    "- 来源：https://example.invalid/memo",
+    "",
+    "本周记录了一项有事实和判断的真实工作。"
+  ].join("\n"));
+  await updateWeeklySourceStatus({ weekRoot: weekDir, week, source: "flomo", status: "ready", file: "flomo.md", count: 1, summary: "完整扫描 2026-09-28 00:00 至 2026-10-05 00:00 完成；下界已覆盖：是；1 条（分页 1 页）", preservedStaleFile: false });
+  const readyFlomoPayload = await (await import("./collect-weekly-input.mjs")).collectWeeklyInput({ week, repoRoot: root, allowOversized: true });
+  assert.deepEqual(await validateWeeklyProcessInputs({ week, repoRoot: root, payload: readyFlomoPayload }), []);
+  readyFlomoPayload.sourceStatuses.flomo.count = 2;
+  assert.ok((await validateWeeklyProcessInputs({ week, repoRoot: root, payload: readyFlomoPayload })).some((issue) => issue.includes("Flomo 文件记录数与来源状态侧车不一致")));
+
+  const longJournalPath = path.join(weekDir, "weekly.md");
+  const longJournal = `${await readFile(longJournalPath, "utf8")}\n\n${"这段确认过的周记原文需要完整保留，不经过压缩。".repeat(800)}\n\n超长周记原文末尾核验标记。`;
+  await writeFile(longJournalPath, longJournal);
+  const longJournalPayload = await (await import("./collect-weekly-input.mjs")).collectWeeklyInput({ week, repoRoot: root, allowOversized: true });
+  assert.ok(longJournalPayload.files.find((file) => file.path.endsWith("/weekly.md")).rawChars > 15_000);
+  assert.deepEqual(await validateWeeklyProcessInputs({ week, repoRoot: root, payload: longJournalPayload }), []);
+  await generateWeeklyProcessPack({ week, repoRoot: root, prepare: true });
+  await generateWeeklyProcessPack({ week, repoRoot: root });
+  assert.match(await readFile(path.join(outputDir, "process-pack.md"), "utf8"), /超长周记原文末尾核验标记/);
 });
 
 test("deterministically compresses structured Voice-X records and reports the final ratio", () => {
@@ -287,6 +332,8 @@ test("Stage 1 automation requires a final character count for each included read
   assert.doesNotMatch(stage1Report, /在输入表后另列该草稿路径/);
   assert.match(stage1Report, /`countInputChars`（Unicode 码点数）/);
   assert.match(stage1Report, /链路写 `— → N`，不得把整格写成 `—`/);
+  assert.match(skill, /重要来源缺失，阶段 1 必须等待 07:00 补试执行器结束后再决定/);
+  assert.match(skill, /日记及全部阻断 Process Pack 的重要来源已成功时，可以在 07:00 前提前生成/);
 });
 
 test("weekly automation no longer creates Action Feedback at Stage 1 (retired)", async () => {
@@ -303,7 +350,7 @@ test("weekly automation no longer creates Action Feedback at Stage 1 (retired)",
   assert.match(stage2, /回读 Process Pack 第 9 节/);
   assert.match(stage2, /上一 ISO 周.*完整的 `04_output\/weekly\/YYYY-WW\.md`/);
   assert.match(stage2, /阶段 2 汇报只报告上一周 Output 的周期、状态和绝对可点击文件链接，不复述旧 Output 正文或旧问答/);
-  assert.match(stage2, /Flomo 第一行，其余输入按原固定顺序/);
+  assert.match(stage2, /按来源配置顺序，已确认周记作为阶段前提行单列/);
 });
 
 test("Stage 3 prepares candidates before one confirmation and generates the image after Memory", async () => {
@@ -333,6 +380,7 @@ test("Stage 3 prepares candidates before one confirmation and generates the imag
   assert.doesNotMatch(skill, /ljg-card/);
   assert.doesNotMatch(skill, /~\/Downloads\/Learn-X-周报/);
   assert.match(stage2, /确认卡缺少图片路径、备份目的地或 Flomo 目的地时，不得请求确认或执行任何写入/);
+  assert.match(stage2, /备份载荷（`01_core\/`、`03_input\/`、`04_output\/`、`05_library\/`）/);
 });
 
 test("complete Weekly Output prompt defines facts, memory candidates, comparison and machine contracts", async () => {

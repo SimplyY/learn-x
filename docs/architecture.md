@@ -1,6 +1,6 @@
 # Architecture Truth｜Learn-X
 
-> 回答「系统现在真实是什么样」。由技术架构与规划节点在架构变化时增量维护。首次建立：2026-09-24（Case：[wechat-evidence-source](cases/wechat-evidence-source/case.md)）。最后核对：2026-10-03（Case：[Core 道法真源迁移](../../core/docs/cases/2026-10-core-dao-fa/case.md)）。
+> 回答「系统现在真实是什么样」。由技术架构与规划节点在架构变化时增量维护。首次建立：2026-09-24（Case：[wechat-evidence-source](cases/wechat-evidence-source/case.md)）。最后核对：2026-10-07（Case：[周记自动化效率优化](cases/2026-10-weekly-workflow-efficiency/case.md)）。
 
 ## 定位
 
@@ -24,7 +24,7 @@ Learn-X 是个人 AI native 知行进化系统：输入（证据与反馈）→ 
 ```
 
 - 来源状态契约（`learn-x-input/scripts/lib/source-status.mjs`）：每来源一个状态（`ready/empty/needs_review/failed/unavailable`）＋规范文件名（`SOURCE_FILES`，wechat → `wechat.md`、jingdu → `jingdu.md`）。消费方按状态过滤输入文件。
-- 周自动化（`learn-x-weekly-automation`）：阶段 1 采集自动来源并生成草稿 → 用户口令「周记已确认」进阶段 2 生成 `_dist` → 「继续」进阶段 3 验证后写 Memory。`jingdu.md` 由外部 Code X 精读自动化在飞书交互后按外部拥有者模式写回（写文件 + `npm run input:source-status`），阶段 1/2 清单已纳入，缺失或 empty 不阻塞但提示缺口。
+- 周自动化（`learn-x-weekly-automation`）：05:00运行有界来源重试与预处理，重要来源齐全时可提前生成周记草稿；若仍缺重要来源，07:00补查完成后日记有效即可生成草稿，缺口仍阻断 Process Pack。执行状态写入周目录侧车并由同周锁保护；CLI最多3路并行、浏览器单队列。确认周记后，`input:weekly`按已保存飞书段落锚点窄范围采回，`process:weekly`复用绑定来源哈希和规则版本的缓存快速组装，不压缩周记。Process Pack交付时显示不含记忆内容、也不构成授权的收尾范围预览；Chat Pack完成后阶段3生成真实Memory候选并与完整执行范围合成一次确认卡。`jingdu.md` 由外部 Code X 精读自动化在飞书交互后按外部拥有者模式写回（写文件 + `npm run input:source-status`），缺失或 empty 不阻断但提示缺口。
 - 备份（`learn-x-process/scripts/backup-weekly.mjs`）：`BACKUP_ROOTS = ["01_core", "03_input", "04_output", "05_library"]` 整目录上传飞书云空间并存快照索引；restore 按 manifest.roots 子集校验（兼容旧 3 根归档）。
 - 现有微信入口（`wechat-weekly-input`）：仅人工截图转临时 JSON，追加为 `WeChat.md`（大写），不读取微信本体。
 
@@ -44,5 +44,16 @@ Learn-X 是个人 AI native 知行进化系统：输入（证据与反馈）→ 
 1. **文件名大小写冲突**：`wechat-weekly-input` 写 `WeChat.md`，来源状态契约为 `wechat.md`；失败状态过滤按 basename 匹配，旧截图文件可绕过按文件名执行的失败状态排除。
 2. **未登记文件直接进入 Process Pack**：`filterFilesBySourceStatus` 只排除「已登记且非 ready」的文件；无状态条目的新文件（如新生成器写的 `WeChat.md`）会全量进入周输入。
 3. **备份整目录上传**：周备份把整个 `03_input` 上传云端；待审（`needs_review`）微信内容若不做校验会随备份外发，需在消费与备份两侧同时校验状态与哈希。
-4. **单文件输入上限**：周输入单文件超过上限（当前 15,000 字符）即停止生成 Process Pack，需人工压缩——微信派生材料必须报告省略量而非静默截断。
+4. **单文件输入上限**：普通输入的 15,000 字符限制由预处理候选控制；超限候选不能进入 Pack，合格的可选来源可明确排除。确认版 `weekly.md` 完整纳入且不压缩；Voice-X按独立压缩规则处理。
 5. 微信 Evidence Source 的覆盖与新鲜度边界见 [ADR 0001](adr/0001-wechat-evidence-freshness-coverage.md)：绝对覆盖保持「未证实」。
+
+周记自动化隔离端到端模拟与全仓 `npm test` 421/421 已核验；真实飞书锚点读回、Ego Lite全量Flomo扫描、05/07本机任务实际唤醒、一分钟正常交付和连续三周用户参与时间仍需运行证据。
+
+## Flomo 每日回顾
+
+- Flomo 来源仍由周度 Ego Lite 采集写入 `03_input/weekly/YYYY-Www/flomo.md`；每周来源状态通过完整性门禁后，周自动化 Skill 调用 `npm run flomo:review -- archive` 更新私有累计目录 `03_input/_archives/flomo/catalog.json`。这代表已知历史归档加可信周增量，不代表远端全量或历史编辑同步。
+- `.agents/skills/learn-x-flomo-review` 从最近周/月 Output、实时正式《道》、活跃 Memory 与个人理解材料构建上下文；模型以5–8条为常规目标选择高质量回顾候选，质量不足时不凑数（3–4条需说明原因，少于3条不推送），Node 校验原文哈希、身份、质量分≥3、同周零重复、滚动四周重叠与重复预算。入选原文与反馈只写私有 `_dist`，不自动改写 Core、Memory、道或 Flomo。
+- 新交付使用单条 Feishu post 并附当日完整 Markdown。发送前核验 bot、接收成员、profile 与频率；上传key与消息附件key分开保存；发送后读回正文及下载附件字节SHA。`needs_review`只读恢复，不自动重发。2026-10-06 有一批真实3条回顾完成消息和附件读回。
+- 当前本地目录646条，其中504条质量分≥3且正文哈希仍有效；远端全量覆盖未证实。以2026-10-12为起点的7日与28日容量模拟均可行，分别要求至少35与130条合格独立笔记。
+- 原生本地自动化`learn-x-flomo-20-00`已启用，按UTC 12:00调度（Asia/Shanghai 20:00），指向Learn-X项目；创建时实时成员与发送频率预检通过。首次定时唤醒和实际5–8条发送尚未观察。
+- 首个完整自然周的连续送达、5–8条推荐质量和真人反馈仍待未来真实运行观察；已启用自动化的首次唤醒尚未发生，因此不得将配置成功等同于端到端验收完成。
