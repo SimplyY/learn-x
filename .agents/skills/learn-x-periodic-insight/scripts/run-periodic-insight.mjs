@@ -22,7 +22,7 @@ export async function runPeriodicInsight(options = {}) {
   const context = await buildInsightContext({ repoRoot, taskId, target: options.target || "auto", range: options.range || policy.defaultRange, from: options.from, to: options.to, now: options.now || new Date() });
   const outputRoot = path.join(repoRoot, "04_output/_dist/periodic-insights", taskId, context.target?.id || "unresolved");
   await mkdir(outputRoot, { recursive: true });
-  const paths = { context: path.join(outputRoot, "context.md"), manifest: path.join(outputRoot, "manifest.json"), generated: path.join(outputRoot, "result.generated.md"), state: path.join(outputRoot, "state.json") };
+  const paths = { context: path.join(outputRoot, "context.md"), manifest: path.join(outputRoot, "manifest.json"), generated: path.join(outputRoot, "result.generated.md"), unvalidated: path.join(outputRoot, "result.unvalidated.md"), state: path.join(outputRoot, "state.json") };
   const releaseLock = await acquireRunLock(path.join(outputRoot, ".run.lock"));
   if (!releaseLock) { const current = await readJson(paths.state); return current ? { ...current, paths } : { schemaVersion: 1, taskId, status: "needs_review", reason: "run-in-progress", paths }; }
   try {
@@ -31,8 +31,25 @@ export async function runPeriodicInsight(options = {}) {
     if (options.force && (!options.send || !options.confirm)) throw new Error("force-requires-send-confirm");
     const previous = await readJson(paths.state);
     if (previous && !new Set(["preview", "submitted", "generated", "archive_pending", "completed", "needs_review", "skipped"]).has(previous.status)) throw new Error("unknown-periodic-insight-state");
+    if (previous?.status === "completed" && !options.force) {
+      let generatedText;
+      try { generatedText = await readFile(paths.generated, "utf8"); }
+      catch (error) { if (error.code !== "ENOENT") throw error; }
+      const intact = previous.runKey === runKey && previous.target?.id === context.target.id && previous.target?.kind === context.target.kind && Boolean(previous.runId && previous.conversationUrl && previous.completedAt && previous.archive?.documentToken) && previous.archive?.published?.status === "published" && Boolean(generatedText) && previous.outputSha256 === sha256(generatedText);
+      if (intact) return { ...previous, paths };
+      const review = { ...previous, status: "needs_review", reason: "completed-output-integrity-failed", updatedAt: new Date().toISOString() }; await writeJson(paths.state, review); return { ...review, paths };
+    }
     const retryablePromptReadFailure = previous?.status === "needs_review" && String(previous.reason || "").startsWith("latest-prompt-read-failed:");
     if ((previous?.status === "submitted" || (previous?.status === "needs_review" && !retryablePromptReadFailure)) && !options.force) return { ...previous, paths };
+    if (options.archive && ["generated", "archive_pending"].includes(previous?.status)) {
+      let generatedText;
+      try { generatedText = await readFile(paths.generated, "utf8"); }
+      catch (error) { if (error.code !== "ENOENT") throw error; }
+      let reason = !generatedText ? "generated-output-missing" : previous.runKey !== runKey || previous.target?.id !== context.target.id || previous.target?.kind !== context.target.kind ? "generated-run-key-mismatch" : previous.outputSha256 !== sha256(generatedText) ? "generated-output-integrity-mismatch" : null;
+      if (!reason) { try { validateGeneratedOutput(generatedText, task, context.target); } catch { reason = "generated-output-invalid"; } }
+      if (reason) { const pending = { ...previous, status: "archive_pending", reason, updatedAt: new Date().toISOString() }; await writeJson(paths.state, pending); return { ...pending, paths }; }
+      return archiveIfRequested({ ...options, repoRoot, task, context, paths, state: previous });
+    }
     await writeFile(paths.context, context.content, "utf8"); await writeJson(paths.manifest, context.manifest);
     let promptAssets;
     let prompt;
@@ -78,7 +95,7 @@ export async function runPeriodicInsight(options = {}) {
     const bridgeReason = result?.reason || (bridgeExitFailure ? (bridge.exit.timedOut ? "bridge-timeout" : bridge.exit.error ? "bridge-process-error" : "bridge-exit-nonzero") : bridge?.exit?.error || (!result?.conversationUrl ? "missing-conversation-url" : "bridge-result-invalid"));
     const outputHashMatches = result?.outputSha256 === sha256(result?.text || "");
     if (bridgeExitFailure || result?.status !== "succeeded" || !result.runId || !String(result.text || "").trim() || result.format !== "markdown" || !result.conversationUrl || result.verification !== "live-dom+snapshot" || !outputHashMatches) { const review = { ...submitted, status: "needs_review", runId: result?.runId, conversationUrl: result?.conversationUrl, reason: bridgeReason, updatedAt: new Date().toISOString() }; await writeJson(paths.state, review); return { ...review, paths }; }
-    try { validateGeneratedOutput(result.text, task, context.target); } catch (error) { const review = { ...submitted, status: "needs_review", runId: result.runId, conversationUrl: result.conversationUrl, outputSha256: sha256(result.text), reason: `invalid-output:${error.message}`, updatedAt: new Date().toISOString() }; await writeJson(paths.state, review); return { ...review, paths }; }
+    try { validateGeneratedOutput(result.text, task, context.target); } catch (error) { await writeFile(paths.unvalidated, result.text, "utf8"); const review = { ...submitted, status: "needs_review", runId: result.runId, conversationUrl: result.conversationUrl, outputSha256: sha256(result.text), unvalidatedPath: paths.unvalidated, reason: `invalid-output:${error.message}`, updatedAt: new Date().toISOString() }; await writeJson(paths.state, review); return { ...review, paths }; }
     const generatedText = renderGenerated(result.text, task, context.target, result.conversationUrl); await writeFile(paths.generated, generatedText, "utf8");
     const generated = { ...submitted, status: "generated", runId: result.runId, conversationUrl: result.conversationUrl, outputSha256: sha256(generatedText), generatedAt: new Date().toISOString() }; await writeJson(paths.state, generated);
     return archiveIfRequested({ ...options, repoRoot, task, context, paths, state: generated });
@@ -88,7 +105,7 @@ export async function runPeriodicInsight(options = {}) {
 async function archiveIfRequested({ repoRoot, task, context, paths, state, archive, runLark, publishDoc }) {
   if (!archive) return { ...state, paths };
   const pending = { ...state, status: "archive_pending", archiveStartedAt: new Date().toISOString() }; await writeJson(paths.state, pending);
-  try { const archived = await archiveResult({ repoRoot, task, target: context.target, content: await readFile(paths.generated, "utf8"), runLark, state, publishDoc }); const completed = { ...pending, status: "completed", archive: archived, completedAt: new Date().toISOString() }; await writeJson(paths.state, completed); return { ...completed, paths }; }
+  try { const archived = await archiveResult({ repoRoot, task, target: context.target, content: await readFile(paths.generated, "utf8"), runLark, state, publishDoc }); const completedAt = new Date().toISOString(); const completed = { ...pending, status: "completed", archive: archived, completedAt, updatedAt: completedAt }; delete completed.reason; await writeJson(paths.state, completed); return { ...completed, paths }; }
   catch (error) { const failed = { ...pending, ...(error?.archive ? { archive: error.archive } : {}), status: "archive_pending", reason: String(error?.message || error), updatedAt: new Date().toISOString() }; await writeJson(paths.state, failed); return { ...failed, paths }; }
 }
 
@@ -96,7 +113,7 @@ export async function setupWiki({ runLark = runLarkJson, repoRoot = defaultRepoR
   if (!confirm) throw new Error("setup-wiki-requires-confirm");
   const listed = await runLark(["wiki", "+space-list", "--page-all", "--as", "user", "--format", "json"]); const spaces = listed?.data?.spaces || []; const matches = spaces.filter((space) => space.name === "Learn-X 周期洞察");
   if (matches.length > 1) throw new Error("同名 Learn-X 周期洞察 知识库多于一个，停止人工裁决");
-  const space = matches[0] || await runLark(["wiki", "+space-create", "--name", "Learn-X 周期洞察", "--description", "Learn-X 周期洞察候选阅读归档", "--as", "user", "--format", "json"]); const data = space?.data || space;
+  const space = matches[0] || await runLark(["wiki", "+space-create", "--name", "Learn-X 周期洞察", "--description", "Learn-X 周期洞察候选阅读归档", "--as", "bot", "--format", "json"]); const data = space?.data || space;
   const visibility = data.visibility ?? data.visibility_type; const openSharing = data.open_sharing ?? data.openSharing; if (visibility !== "private") throw new Error("知识库可见性未确认是 private"); if (openSharing !== "closed") throw new Error("知识库公开分享未确认关闭");
   const spaceId = data.space_id || data.spaceId; if (!spaceId) throw new Error("知识库缺少 space_id"); const record = { name: "Learn-X 周期洞察", spaceId, visibility, openSharing, updatedAt: new Date().toISOString() }; const file = path.join(repoRoot, "04_output/_dist/periodic-insights/wiki.json"); await mkdir(path.dirname(file), { recursive: true }); await writeJson(file, record); return record;
 }
@@ -119,7 +136,7 @@ export async function archiveResult({ repoRoot = defaultRepoRoot, task, target, 
 }
 
 function renderGenerated(text, task, target, conversationUrl) { return [`# ${task.name}｜${target.id}`, ``, `- 目标周期：${target.id}`, `- 运行键：${task.id}:${target.kind}:${target.id}`, `- 运行结果：候选洞察`, conversationUrl ? `- ChatGPT 会话：${conversationUrl}` : "", ``, String(text).trim(), ""].filter(Boolean).join("\n"); }
-export function validateGeneratedOutput(text, task, target) { const value = String(text || "").trim(); if (!isSubstantive(value)) throw new Error("输出为空壳或过短"); if (!value.includes("候选洞察")) throw new Error("缺少候选洞察标记"); if (!value.includes(target.id)) throw new Error("缺少目标周期"); if (task.id === "munger-soul" && ["底层", "第二层", "第三层", "第四层", "第五层", "顶层"].some((heading) => !hasLayerLabel(value, heading))) throw new Error("芒格之魂六层结构不完整"); }
+export function validateGeneratedOutput(text, task, target) { const value = String(text || "").trim(); if (!isSubstantive(value)) throw new Error("输出为空壳或过短"); if (!value.includes("候选洞察")) throw new Error("缺少候选洞察标记"); if (!value.includes(target.id)) throw new Error("缺少目标周期"); if (task.id === "munger-soul") { const layers = [["底层", "第一层"], ["第二层"], ["第三层"], ["第四层"], ["第五层"], ["顶层", "第六层"]]; const missing = layers.filter((aliases) => !aliases.some((heading) => hasLayerLabel(value, heading))).map(([canonical]) => canonical); if (missing.length) throw new Error(`芒格之魂六层结构不完整：缺少${missing.join("、")}`); } }
 export function exitCodeForResult(command, result) { if (command === "setup-wiki") return 0; return ["preview", "skipped", "completed"].includes(result?.status) ? 0 : 2; }
 function hasLayerLabel(value, layer) { const escaped = layer.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); return new RegExp(`(?:^|\\n)\\s*(?:#{1,6}\\s*)?(?:[一二三四五六\\d]+[、.．)）]\\s*)?(?:\\*\\*)?${escaped}(?:\\*\\*)?(?:\\s*[：:、（(｜|]|\\s*$)`, "m").test(value); }
 async function renderFeishu(content, outputPath, title) { const inputPath = `${outputPath}.md`; await writeFile(inputPath, content, "utf8"); try { await execFile("python3", [renderer, "--input", inputPath, "--output", outputPath, "--title", title], { maxBuffer: 4 * 1024 * 1024 }); } finally { await unlink(inputPath).catch(() => {}); } }
@@ -142,7 +159,7 @@ async function acquireRunLock(lockPath) {
   }
 }
 function processAlive(pid) { try { process.kill(pid, 0); return true; } catch (error) { return error.code === "EPERM"; } }
-async function findPreservableState(repoRoot, taskId, targetId) { const taskRoot = path.join(repoRoot, "04_output/_dist/periodic-insights", taskId); let names; try { names = await readdir(taskRoot); } catch (error) { if (error.code === "ENOENT") return null; throw error; } const candidates = []; for (const name of names) { if (targetId && name !== targetId) continue; const statePath = path.join(taskRoot, name, "state.json"); const state = await readJson(statePath); if (state && ["submitted", "needs_review", "generated", "archive_pending"].includes(state.status)) candidates.push({ state, paths: { context: path.join(taskRoot, name, "context.md"), manifest: path.join(taskRoot, name, "manifest.json"), generated: path.join(taskRoot, name, "result.generated.md"), state: statePath } }); } const timestamp = (state) => state.updatedAt || state.completedAt || state.generatedAt || state.submittedAt || ""; return candidates.sort((a, b) => String(timestamp(b.state)).localeCompare(String(timestamp(a.state))))[0] || null; }
+async function findPreservableState(repoRoot, taskId, targetId) { const taskRoot = path.join(repoRoot, "04_output/_dist/periodic-insights", taskId); let names; try { names = await readdir(taskRoot); } catch (error) { if (error.code === "ENOENT") return null; throw error; } const candidates = []; for (const name of names) { if (targetId && name !== targetId) continue; const statePath = path.join(taskRoot, name, "state.json"); const state = await readJson(statePath); if (state && ["submitted", "needs_review", "generated", "archive_pending"].includes(state.status)) candidates.push({ state, paths: { context: path.join(taskRoot, name, "context.md"), manifest: path.join(taskRoot, name, "manifest.json"), generated: path.join(taskRoot, name, "result.generated.md"), unvalidated: path.join(taskRoot, name, "result.unvalidated.md"), state: statePath } }); } const timestamp = (state) => state.updatedAt || state.completedAt || state.generatedAt || state.submittedAt || ""; return candidates.sort((a, b) => String(timestamp(b.state)).localeCompare(String(timestamp(a.state))))[0] || null; }
 async function exists(filePath) { try { await stat(filePath); return true; } catch (error) { if (error.code === "ENOENT") return false; throw error; } }
 function sha256(value) { return createHash("sha256").update(String(value || ""), "utf8").digest("hex"); }
 function normalizeMarkdown(value) { return String(value || "").replace(/^<title>[^<]*<\/title>/i, "").replace(/&nbsp;/g, " ").replace(/[\s`*_>#\-~]+/g, "").trim(); }

@@ -86,6 +86,7 @@ test("records raw and effective character counts for each Process file", async (
     const result = await collectWeeklyInput({ repoRoot: root, week: "2026-W29" });
     assert.equal(result.files.length, 1);
     assert.ok(result.files[0].rawChars > 0);
+    assert.match(result.files[0].rawHash, /^[a-f0-9]{64}$/);
     assert.ok(result.files[0].effectiveChars > 0);
     assert.equal(result.files[0].effectiveChars, result.items[0].text.length);
   } finally {

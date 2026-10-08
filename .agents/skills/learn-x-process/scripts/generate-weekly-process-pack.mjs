@@ -14,7 +14,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
 const JOURNAL_INPUT = { file: "weekly.md", type: "日志", source: "飞书周记", mode: "manual", group: "stage", priority: null, blocksPack: true, note: "阶段前提：已确认目标周周记" };
 const FIXED_WEEKLY_INPUTS = [
-  WEEKLY_SOURCE_CONFIG[0],
+  { ...WEEKLY_SOURCE_CONFIG[0], statusSource: WEEKLY_SOURCE_CONFIG[0].id },
   JOURNAL_INPUT,
   ...WEEKLY_SOURCE_CONFIG.slice(1).map((source) => ({
     ...source,
@@ -44,6 +44,7 @@ export async function generateWeeklyProcessPack(options = {}) {
   const fileSummaries = buildFileSummaries(processPayload, items);
   const previousOutput = await readPreviousWeeklyOutput(payload.week, root);
   const processPack = renderProcessPack(processPayload, sourceSummaries, fileSummaries, items, compression, previousOutput);
+  const metrics = measureProcessPackMetrics(items, fileSummaries, processPayload.preprocessing, previousOutput, processPack);
   await mkdir(outputRoot, { recursive: true });
   const inputPath = path.join(outputRoot, "input.json");
   const outputPath = path.join(outputRoot, "process-pack.md");
@@ -59,6 +60,7 @@ export async function generateWeeklyProcessPack(options = {}) {
     fileSummaries,
     compression,
     previousOutput,
+    metrics,
     outputPath,
     shellPath
   };
@@ -250,7 +252,19 @@ function applyWeeklyPreparation(payload, manifest) {
         ...voiceCompressionMetrics(original?.text || "", item.text).overall,
         sourceChars: inputSize(original?.text || "").chars
       };
-    })
+    }),
+    semanticFiles: (manifest.preparedItems || [])
+      .filter((item) => item.kind !== "voice" && Number.isFinite(item.candidateChars))
+      .map((item) => {
+        const source = payload.files.find((file) => file.path === item.path);
+        return {
+          path: item.path,
+          kind: item.kind,
+          sourceChars: source?.effectiveChars || 0,
+          candidateChars: item.candidateChars,
+          retainedRatio: source?.effectiveChars ? Number((item.candidateChars / source.effectiveChars).toFixed(3)) : 0
+        };
+      })
   };
   return { processPayload, items: uniqueItems, compression };
 }
@@ -280,7 +294,8 @@ async function atomicWrite(filePath, content) {
 }
 
 export function renderProcessPack(payload, sourceSummaries, fileSummaries, items, compression, previousOutput = {}) {
-  return [
+  const metrics = measureProcessPackMetrics(items, fileSummaries, payload.preprocessing, previousOutput);
+  const pack = [
     `# Learn-X Process Pack｜${payload.week}`,
     "",
     "> 这是给 AI Chat 生成最终 Weekly Output 的上下文材料包；行动与反馈直接来自第 7 节各来源材料正文。",
@@ -303,6 +318,10 @@ export function renderProcessPack(payload, sourceSummaries, fileSummaries, items
     `- 去重后材料数：${payload.stats.uniqueItemCount}`,
     `- 去重数量：${payload.stats.duplicateCount}`,
     `- 状态侧车排除的文件：${payload.stats.excludedFileCount}`,
+    `- 来源正文总字符：${metrics.sourceBodyChars}`,
+    `- 上周对照字符：${metrics.previousOutputChars}`,
+    "- 完整 Pack 字符：0",
+    "> 字符按 Unicode 码点计数；来源正文只计第 7 节最终纳入正文（含已确认周记），不含索引、标题和代码围栏；上周对照单独计数。完整 Pack 包含全部正文、表格、说明与计数行。",
     `- JSON 中间材料：\`04_output/_dist/weekly/${distWeekId(payload.week)}/input.json\``,
     "",
     "## 2. 输入与压缩总表",
@@ -323,7 +342,7 @@ export function renderProcessPack(payload, sourceSummaries, fileSummaries, items
     "",
     "## 6. 统一压缩概览",
     "",
-    renderCompressionSummary(compression),
+    renderCompressionSummary(compression, fileSummaries),
     "",
     "## 7. 材料正文",
     "",
@@ -333,6 +352,26 @@ export function renderProcessPack(payload, sourceSummaries, fileSummaries, items
     "",
     renderPreviousWeeklyOutput(previousOutput)
   ].join("\n");
+  // The reported total includes its own digits; settle that digit width before publishing.
+  const baseChars = countInputChars(pack) - 1;
+  let packChars = baseChars + 1;
+  let nextChars = baseChars + String(packChars).length;
+  while (nextChars !== packChars) {
+    packChars = nextChars;
+    nextChars = baseChars + String(packChars).length;
+  }
+  return pack.replace(/^- 完整 Pack 字符：0$/m, `- 完整 Pack 字符：${packChars}`);
+}
+
+function measureProcessPackMetrics(items, fileSummaries, preprocessing = {}, previousOutput = {}, processPack = "") {
+  const visiblePaths = new Set(fileSummaries.map((file) => file.path));
+  const excludedPaths = new Set(preprocessing?.exclusions?.map((entry) => entry.sourcePath) || []);
+  return {
+    sourceBodyChars: items.filter((item) => visiblePaths.has(item.path) && !excludedPaths.has(item.path))
+      .reduce((sum, item) => sum + countInputChars(materialText(item.text)), 0),
+    previousOutputChars: previousOutput.status === "ready" ? countInputChars(String(previousOutput.content || "").trim()) : 0,
+    packChars: countInputChars(processPack)
+  };
 }
 
 export async function readPreviousWeeklyOutput(weekId, root = repoRoot) {
@@ -479,20 +518,30 @@ function buildInputAuditRow({ payload, definition, fileSummary, statusInfo }) {
 
 export function renderInputAuditTable(payload, fileSummaries, compression) {
   const rows = buildInputAuditRows(payload, fileSummaries, compression);
+  const stage = rows.find((row) => row.group === "stage");
+  const characterChain = (row) => {
+    const detail = [...(compression.files || []), ...(compression.semanticFiles || [])].find((item) => item.path.endsWith(`/${row.file}`));
+    const label = detail?.kind === "weread" ? "微信读书语义压缩" : detail?.kind === "over-limit" ? "超长输入语义压缩" : "Voice-X 压缩";
+    const compressionNote = detail && detail.retainedRatio < 1 ? `（${label}，候选保留 ${Math.round(detail.retainedRatio * 100)}%）` : "";
+    return row.rawChars === "—" ? "—" : `${row.rawChars} → ${row.effectiveChars} → ${row.processChars}${compressionNote}`;
+  };
+  const fileCell = (row) => row.link === "—" ? row.file : row.link;
+  const sourceTable = (title, groupRows) => [
+    `### ${title}`,
+    "",
+    "| 优先级 | 类型 / 产物 | 来源 | 文件 | 状态 | 记录/材料 | 字符链路（文件原始 → 清洗有效〔去重前〕→ 最终纳入） | 结果 |",
+    "| --- | --- | --- | --- | --- | ---: | ---: | --- |",
+    ...groupRows.map((row) => `| ${row.priority == null ? "—" : `P${row.priority}`} | ${row.type} | ${row.source} | ${fileCell(row)} | ${row.status} | ${row.count} | ${characterChain(row)} | ${escapeTableCell(row.result)} |`)
+  ].join("\n");
   return [
     "> 周记是阶段前提，自动来源按统一配置排序。输入行展示文件原始 → 解析清洗有效（去重前）→ Process Pack 最终纳入；只有发生实际压缩时才显示比例。",
     `> 本轮需关注：${renderInputAttention(rows)}`,
     "",
-    "| 组别 / 优先级 | 类型 / 产物 | 来源 | 文件 | 状态 | 记录/材料 | 字符链路（文件原始 → 清洗有效〔去重前〕→ 最终纳入） | 结果 |",
-    "| --- | --- | --- | --- | --- | ---: | ---: | --- |",
-    ...rows.map((row) => {
-      const detail = compression.files?.find((item) => item.path.endsWith(`/${row.file}`));
-      const compressionNote = detail && detail.retainedRatio < 1 ? `（Voice-X 压缩，保留 ${Math.round(detail.retainedRatio * 100)}%）` : "";
-      const characterChain = row.rawChars === "—" ? "—" : `${row.rawChars} → ${row.effectiveChars} → ${row.processChars}${compressionNote}`;
-      const fileCell = row.link === "—" ? row.file : row.link;
-      const group = row.group === "stage" ? "阶段前提" : `${row.blocksPack ? "重要" : "可选"} / P${row.priority}`;
-      return `| ${group} | ${row.type} | ${row.source} | ${fileCell} | ${row.status} | ${row.count} | ${characterChain} | ${escapeTableCell(row.result)} |`;
-    })
+    stage ? `**阶段前提：** ${stage.source}｜${fileCell(stage)}｜${stage.status}｜${stage.count} 条材料｜字符链路 ${characterChain(stage)}｜${stage.result}` : "",
+    "",
+    sourceTable("重要来源", rows.filter((row) => row.group === "important")),
+    "",
+    sourceTable("可选来源", rows.filter((row) => row.group !== "important" && row.group !== "stage"))
   ].join("\n");
 }
 
@@ -537,16 +586,26 @@ export function compressWeeklyProcessItems(items, files = []) {
   };
 }
 
-function renderCompressionSummary(compression) {
-  if (!compression.sourceCount) return "- 本周没有 Voice-X 内容需要统一压缩。";
+function renderCompressionSummary(compression, fileSummaries = []) {
+  const voiceFiles = compression.files || [];
+  const semanticFiles = compression.semanticFiles || [];
+  if (!compression.sourceCount && !semanticFiles.length) return "- 本周没有来源需要语义压缩。";
   const [minimumRetainedRatio, maximumRetainedRatio] = compression.targetRetainedRatioRange || VOICE_TARGET_RETAINED_RATIO_RANGE;
+  const summaries = [];
+  if (compression.sourceCount) summaries.push(`- Voice-X：整体原始 ${compression.sourceChars} 字符 → Process Pack ${compression.outputChars} 字符；整体保留比例 ${Math.round(compression.retainedRatio * 100)}%，整体压缩幅度 ${Math.round(compression.reductionRatio * 100)}%；目标保留 ${Math.round(minimumRetainedRatio * 100)}%–${Math.round(maximumRetainedRatio * 100)}%（压缩预算中心 ${Math.round(compression.targetRetainedRatio * 1000) / 10}%）。`);
+  for (const file of semanticFiles) {
+    const label = file.kind === "weread" ? "微信读书语义压缩" : "超长输入语义压缩";
+    summaries.push(`- ${label}：${file.path} 有效原文 ${file.sourceChars} 字符 → 候选 ${file.candidateChars} 字符，候选保留 ${Math.round(file.retainedRatio * 100)}%。`);
+  }
+  const finalChars = new Map(fileSummaries.map((file) => [file.path, file.processChars]));
   return [
-    `- Voice-X：整体原始 ${compression.sourceChars} 字符 → Process Pack ${compression.outputChars} 字符；整体保留比例 ${Math.round(compression.retainedRatio * 100)}%，整体压缩幅度 ${Math.round(compression.reductionRatio * 100)}%；目标保留 ${Math.round(minimumRetainedRatio * 100)}%–${Math.round(maximumRetainedRatio * 100)}%（压缩预算中心 ${Math.round(compression.targetRetainedRatio * 1000) / 10}%）。`,
-    ...compression.warnings.map((warning) => `- 强提示：${warning}`),
+    ...summaries,
+    ...(compression.warnings || []).map((warning) => `- 强提示：${warning}`),
     "",
-    "| 文件 | 原始字符 | 纳入 Process Pack 字符 | 保留比例 |",
-    "| --- | ---: | ---: | ---: |",
-    ...compression.files.map((file) => `| ${file.path} | ${file.sourceChars} | ${file.candidateChars} | ${Math.round(file.retainedRatio * 100)}% |`)
+    "| 文件 | 来源原文字符 | 压缩候选字符 | 最终纳入 Pack 字符 | 候选保留比例 |",
+    "| --- | ---: | ---: | ---: | ---: |",
+    ...voiceFiles.map((file) => `| ${file.path} | ${file.sourceChars} | ${file.candidateChars} | ${finalChars.get(file.path) ?? 0} | ${Math.round(file.retainedRatio * 100)}% |`),
+    ...semanticFiles.map((file) => `| ${file.path} | ${file.sourceChars} | ${file.candidateChars} | ${finalChars.get(file.path) ?? 0} | ${Math.round(file.retainedRatio * 100)}% |`)
   ].join("\n");
 }
 
@@ -641,6 +700,7 @@ export function buildSourceSummaries(payload) {
 
 export function buildFileSummaries(payload, processItems = payload.items) {
   const byPath = new Map();
+  const excludedPaths = new Set(payload.preprocessing?.exclusions?.map((entry) => entry.sourcePath) || []);
   for (const file of payload.files) {
     byPath.set(file.path, {
       path: file.path,
@@ -658,10 +718,10 @@ export function buildFileSummaries(payload, processItems = payload.items) {
   }
 
   for (const item of processItems) {
-    if (!byPath.has(item.path)) continue;
+    if (!byPath.has(item.path) || excludedPaths.has(item.path)) continue;
     const file = byPath.get(item.path);
     file.itemCount += 1;
-    file.processChars += inputSize(item.text).chars;
+    file.processChars += countInputChars(materialText(item.text));
     if (file.samples.length < 2) {
       file.samples.push(`${item.title}: ${truncateInline(item.text, 120)}`);
     }
@@ -758,10 +818,14 @@ function truncateInline(text, maxLength) {
 }
 
 function renderTextBlock(text) {
-  const normalized = String(text).replace(/[ \t]+$/gm, "");
+  const normalized = materialText(text);
   const longestFence = Math.max(2, ...[...normalized.matchAll(/`+/g)].map((match) => match[0].length));
   const fence = "`".repeat(longestFence + 1);
   return [fence, normalized, fence].join("\n");
+}
+
+function materialText(text) {
+  return String(text).replace(/[ \t]+$/gm, "");
 }
 
 function parseArgs(argv) {
@@ -781,6 +845,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 
   if (result.prepared) {
     console.log(`Weekly preprocessing manifest: ${path.relative(repoRoot, result.preparation.manifestPath)}`);
+    if (result.preparation.superseded) console.log("Preparation request superseded by a newer source generation; preserved the newer manifest.");
     console.log(`Preparation requests: ${result.preparation.requests.length}`);
     console.log(`Pack-blocking preparation: ${result.preparation.requests.filter((request) => request.required).length}`);
     console.log(`Optional exclusions: ${result.preparation.exclusions.length}`);
@@ -794,6 +859,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.log(`Weekly output shell ready: ${path.relative(repoRoot, result.shellPath)}`);
     console.log(`Input files: ${result.payload.stats.fileCount}`);
     console.log(`Unique items: ${result.processPayload.stats.uniqueItemCount}`);
+    console.log(`Source body chars: ${result.metrics.sourceBodyChars}; previous Output chars: ${result.metrics.previousOutputChars}; complete Pack chars: ${result.metrics.packChars}`);
     console.log(`Sources: ${result.sourceSummaries.map((source) => `${source.source}:${source.itemCount}`).join(", ") || "none"}`);
     const attention = Object.entries(result.payload.sourceStatuses || {})
       .filter(([, entry]) => entry.status !== "ready")

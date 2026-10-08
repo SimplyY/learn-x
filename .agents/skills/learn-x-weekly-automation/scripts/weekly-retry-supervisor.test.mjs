@@ -61,6 +61,41 @@ test("collects Flomo before the dependent review import and Wisdom Gate source",
   assert.ok(calls.indexOf("wisdom") > calls.indexOf("flomo"));
 });
 
+test("prepares the local input snapshot after each successful collection", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-prepare-source-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const collected = [];
+  const prepared = [];
+  const events = [];
+  await runWeeklyRetrySupervisor({
+    week: "2026-W40", repoRoot: root, maxDurationMs: 1_000,
+    now: () => Date.parse("2026-10-05T05:00:00.000+08:00"),
+    readOutcome: async () => null,
+    runSource: async (source) => { collected.push(source.id); return { status: "ready", count: 1 }; },
+    prepareInputs: async (source) => { prepared.push(source.id); },
+    onEvent: (event) => events.push(event)
+  });
+
+  assert.deepEqual([...prepared].sort(), [...collected].sort());
+  assert.ok(events.some((event) => event.step === "weekly-preprocess" && event.sourceId === "daily" && event.outcome === "succeeded"));
+});
+
+test("preprocessing failure is diagnostic and does not relabel a successful source", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-prepare-failure-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const result = await runWeeklyRetrySupervisor({
+    week: "2026-W40", repoRoot: root, maxDurationMs: 1_000,
+    now: () => Date.parse("2026-10-05T05:00:00.000+08:00"),
+    readOutcome: async () => null,
+    runSource: async () => ({ status: "ready", count: 1 }),
+    prepareInputs: async (source) => { if (source.id === "daily") throw new Error("candidate-version-mismatch"); }
+  });
+
+  const state = JSON.parse(await readFile(path.join(root, "03_input/weekly/2026-W40/_weekly-retry-state.json"), "utf8"));
+  assert.equal(result.sources.daily.status, "succeeded");
+  assert.ok(state.diagnostics.some((event) => event.step === "weekly-preprocess" && event.sourceId === "daily" && event.outcome === "failed"));
+});
+
 test("important source retries at 20-minute intervals up to four times after the initial attempt", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-important-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -222,6 +257,43 @@ test("07:00 rescue waits for the persisted nextRetryAt and respects its bounded 
   assert.equal(lateSaved.sources.daily.rescueUsed, false);
   assert.equal(bounded.sources.daily.nextRetryAt, "2026-10-05T08:00:00.000+08:00");
   assert.ok(lateSaved.diagnostics.some((event) => event.outcome === "bounded-window-ending" || event.outcome === "bounded-window-ended"));
+});
+
+test("07:00 rescue handles every eligible source as its own cooldown expires", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-rescue-staggered-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const weekRoot = path.join(root, "03_input/weekly/2026-W40");
+  await mkdir(weekRoot, { recursive: true });
+  const state = createWeeklyRetryState("2026-W40");
+  for (const source of WEEKLY_SOURCE_CONFIG) state.sources[source.id].status = source.collector ? "succeeded" : "recheck-only";
+  for (const [sourceId, minute] of [["daily", "10"], ["core", "15"]]) {
+    state.sources[sourceId] = {
+      ...state.sources[sourceId], status: "failed", attempts: 5, rescueUsed: false,
+      lastErrorClass: "network-transient", nextRetryAt: `2026-10-05T07:${minute}:00.000+08:00`
+    };
+  }
+  await writeFile(path.join(weekRoot, "_weekly-retry-state.json"), `${JSON.stringify(state)}\n`);
+
+  let current = Date.parse("2026-10-05T07:00:00.000+08:00");
+  const waits = [];
+  const calls = [];
+  const result = await runWeeklyRetrySupervisor({
+    week: "2026-W40", mode: "rescue", repoRoot: root, maxDurationMs: 20 * 60_000,
+    now: () => current,
+    sleep: async (ms) => { waits.push(ms); current += ms; },
+    readOutcome: async () => null,
+    runSource: async (source) => { calls.push(source.id); return { status: "ready", count: 1 }; }
+  });
+
+  const saved = JSON.parse(await readFile(path.join(weekRoot, "_weekly-retry-state.json"), "utf8"));
+  assert.deepEqual(waits, [10 * 60_000, 5 * 60_000]);
+  assert.deepEqual(calls, ["daily", "core"]);
+  assert.equal(saved.sources.daily.attempts, 6);
+  assert.equal(saved.sources.core.attempts, 6);
+  assert.equal(saved.sources.daily.rescueUsed, true);
+  assert.equal(saved.sources.core.rescueUsed, true);
+  assert.equal(result.sources.daily.status, "succeeded");
+  assert.equal(result.sources.core.status, "succeeded");
 });
 
 test("rescue waits for a running initial invocation, then reads its persisted state", async (t) => {

@@ -10,7 +10,8 @@ export const WEEKLY_SOURCE_CONFIG = Object.freeze([
   { id: "core", file: SOURCE_FILES.core, type: "输入", source: "Core V1 确认复盘", group: "optional", priority: 0, blocksPack: false, retries: 2, queue: "cli", collector: "input:core" },
   { id: "weread", file: SOURCE_FILES.weread, type: "输入", source: "微信读书", group: "optional", priority: 1, blocksPack: false, retries: 2, queue: "cli", collector: "input:weread" },
   { id: "calendar", file: SOURCE_FILES.calendar, type: "计划", source: "Time-X 日历", group: "optional", priority: 1, blocksPack: false, retries: 2, queue: "cli", collector: "input:calendar" },
-  { id: "wisdom", file: SOURCE_FILES.wisdom, type: "输入", source: "智慧之门", group: "optional", priority: 1, blocksPack: false, retries: 2, queue: "cli", collector: "input:wisdom", dependsOn: ["flomo", "flomo-review-import"] },
+  // The source job also performs an Ego Lite Flomo review import, so it shares the single browser lane.
+  { id: "wisdom", file: SOURCE_FILES.wisdom, type: "输入", source: "智慧之门", group: "optional", priority: 1, blocksPack: false, retries: 2, queue: "browser", collector: "input:wisdom", dependsOn: ["flomo", "flomo-review-import"] },
   { id: "jingdu", file: SOURCE_FILES.jingdu, type: "输入", source: "精读", group: "optional", priority: 1, blocksPack: false, retries: 2, queue: "manual", collector: null },
   { id: "coach", file: SOURCE_FILES.coach, type: "行动", source: "AI Coach", group: "optional", priority: 2, blocksPack: false, retries: 2, queue: "cli", collector: "input:coach" },
   { id: "build", file: SOURCE_FILES.build, type: "复盘", source: "Codex / Code X Build", group: "optional", priority: 2, blocksPack: false, retries: 0, queue: "external", collector: null },

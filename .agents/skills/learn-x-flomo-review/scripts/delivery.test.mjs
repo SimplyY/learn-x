@@ -204,10 +204,18 @@ for(const [name,body] of [['missing-date','内容'],['invalid-date',`${markdown}
   assert.equal(calls,0);
 });
 
-test('card-only input cannot use the new send entrypoint',async()=>{
-  let calls=0;
-  await assert.rejects(sendRecommendation({chatId,card:reviewCard(),idempotencyKey,botSenderId:appId,runCli:async()=>{calls++;throw Error('must-not-call');}}),{code:'send-input-invalid',uncertain:false});
-  assert.equal(calls,0);
+test('card-only input sends interactive content and verifies exact readback',async()=>{
+  const card=reviewCard(`回顾日期：2026-10-06`),calls=[];
+  const result=await sendRecommendation({chatId,card,idempotencyKey,botSenderId:appId,runCli:async args=>{
+    calls.push(args);
+    if(args[1]==='+messages-send') return envelope({message_id:'om_root',chat_id:chatId});
+    if(args[1]==='+messages-mget') return envelope({messages:[cardMessage(card)]});
+    throw Error('unexpected-call');
+  }});
+  assert.deepEqual(calls[0].slice(0,8),['im','+messages-send','--chat-id',chatId,'--msg-type','interactive','--content',JSON.stringify(card)]);
+  assert.equal(result.messageId,'om_root');
+  assert.equal(result.cardContentSha256,cardContentSha256(card));
+  assert.equal(result.readback,true);
 });
 
 test('recovery checks exact date, expected canonical hash, configured sender and bounded complete time window', async (t) => {

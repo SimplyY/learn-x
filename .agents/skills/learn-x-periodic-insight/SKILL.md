@@ -23,7 +23,7 @@ Context 默认最近一年，目标对象与历史范围分开；芒格之魂目
 
 装配规则（来源优先级、历史骨架去重、Flomo 过滤、预算顺序、Manifest 结构、失败恢复）以 `docs/PERIODIC_INSIGHTS.md` 为准；`life-core` 依赖每周 `npm run sync:life-core` 维护 `03_input/_mirrors/人生核心议题.md` 镜像，镜像缺失或 stale 时 Context 仍可运行，但 Manifest 会显式标记。该镜像是输入背景，不属于 Core 正式道法。
 
-同一目标由本地运行锁串行，锁异常时失败关闭；`submitted`、`needs_review` 或结果归属不确定时只读状态，不重发。Bridge 只走已登录 Ego Lite；飞书只使用用户身份，写入后必须读回；洞察是候选阅读材料，不自动修改 Memory、Core 正式道法、核心议题或 Flomo。
+同一目标由本地运行锁串行，锁异常时失败关闭；完整性校验通过的 `completed` 目标在预览中直接返回既有状态，不因背景输入后续变化重复告警；完成状态缺少本地完整产物时转为 `needs_review`。`submitted`、`needs_review` 或结果归属不确定时只读状态，不重发。`invalid-output` 的已返回文本保存在本地待复核产物中，状态仍为 `needs_review`，不得自动归档。`generated`/`archive_pending` 的有效产物可只续归档，不重新读取 Prompt 或调用 Bridge。Bridge 只走已登录 Ego Lite；飞书 Docx/Wiki 写入遵循项目身份契约，固定使用 `bot`，写入后必须读回；洞察是候选阅读材料，不自动修改 Memory、Core 正式道法、核心议题或 Flomo。
 
 CLI 仅将 `preview`、`skipped`、`completed` 作为成功退出；`needs_review` 和 `archive_pending` 返回非零，便于自动化发现未完成状态。
 

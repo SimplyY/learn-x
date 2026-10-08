@@ -57,6 +57,7 @@ export async function collectWeeklyInput(options = {}) {
     file.modifiedAt = info.mtime.toISOString();
     file.size = info.size;
     file.rawChars = rawChars;
+    file.rawHash = createHash("sha256").update(content).digest("hex");
     file.effectiveChars = fileItems.reduce((total, item) => total + inputSize(item.text).chars, 0);
     activeFiles.push(file);
     rawItems.push(...fileItems);

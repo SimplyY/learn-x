@@ -1,8 +1,9 @@
 const DAY = 86400000;
 const OCCUPIED = new Set(['reserved', 'sending', 'delivered', 'needs_review']);
-export const MIN_REVIEW_ITEMS = 3;
-export const TARGET_MIN_REVIEW_ITEMS = 5;
-export const MAX_REVIEW_ITEMS = 8;
+export const MIN_REVIEW_ITEMS = 5;
+export const TARGET_MIN_REVIEW_ITEMS = 6;
+export const MAX_REVIEW_ITEMS = 7;
+export const MAX_REVIEW_REASON_CHARS = 15;
 export const MAX_PAIR_OVERLAP = 5;
 export const MAX_WINDOW_REPEATS = 10;
 
@@ -47,22 +48,25 @@ export function ageBand(createdAt, date) {
 function catalogIndex(notes) {
   if (!Array.isArray(notes)) fail('invalid-catalog');
   const byKey = new Map();
-  const groups = new Map();
   const byGroup = new Map();
+  const groupMembersByKey = new Map();
   for (const note of notes) {
     if (!note || typeof note.noteKey !== 'string' || !note.noteKey || typeof note.groupKey !== 'string' || !note.groupKey) fail('unknown-identity');
     if ((note.aliases != null && !Array.isArray(note.aliases)) || (note.groupAliases != null && !Array.isArray(note.groupAliases))) fail('invalid-catalog-aliases');
     for (const key of [note.noteKey, ...(note.aliases || [])]) {
-      if (byKey.has(key) && byKey.get(key).groupKey !== note.groupKey) fail('ambiguous-alias');
+      if (byKey.has(key) && byKey.get(key) !== note) fail('ambiguous-alias');
       byKey.set(key, note);
     }
-    if (!groups.has(note.groupKey)) groups.set(note.groupKey, note);
+    const members = groupMembersByKey.get(note.groupKey) || new Map();
+    members.set(note.noteKey, note);
+    groupMembersByKey.set(note.groupKey, members);
     for (const group of [note.groupKey, ...(note.groupAliases || [])]) {
       if (byGroup.has(group) && byGroup.get(group).groupKey !== note.groupKey) fail('ambiguous-group-alias');
       byGroup.set(group, note);
     }
   }
-  return { byKey, groups, byGroup };
+  const groupMembers = new Map([...groupMembersByKey].map(([group, members]) => [group, [...members.values()]]));
+  return { byKey, byGroup, groupMembers };
 }
 function qualified(note) {
   return typeof note.body === 'string' && note.body.trim() && typeof note.bodyHash === 'string'
@@ -72,6 +76,7 @@ function qualified(note) {
 function exposure({ date, ledger = { batches: {} }, index }) {
   const weeks = activeWeeks(date);
   const byWeek = new Map(weeks.map((week) => [week, new Set()]));
+  const ageNotesByWeek = new Map(weeks.map((week) => [week, new Map()]));
   const current = ledger.batches?.[date];
   if (current && OCCUPIED.has(current.status)) fail('date-already-occupied');
   for (const [key, batch] of Object.entries(ledger.batches || {})) {
@@ -94,9 +99,10 @@ function exposure({ date, ledger = { batches: {} }, index }) {
       const set = byWeek.get(week);
       if (set.has(note.groupKey)) fail('history-same-week-repeat');
       set.add(note.groupKey);
+      if (byNote) ageNotesByWeek.get(week).set(note.groupKey, byNote);
     }
   }
-  return byWeek;
+  return { byWeek, ageNotesByWeek };
 }
 function budgets(byWeek) {
   const entries = [...byWeek];
@@ -119,9 +125,21 @@ function addGroups(byWeek, week, groups) {
   }
   return next;
 }
-function ageStatistics(byWeek, week, index, date) {
+function ageStatistics(byWeek, week, index, date, exactNotes = new Map()) {
   const counts = { recent: 0, year: 0, older: 0 };
-  for (const group of byWeek.get(week)) counts[ageBand(index.groups.get(group).createdAt, date)]++;
+  for (const group of byWeek.get(week)) {
+    const exact = exactNotes.get(group);
+    let band;
+    if (exact) band = ageBand(exact.createdAt, date);
+    else {
+      const candidates = index.groupMembers.get(group) || [];
+      const possibleBands = new Set(candidates.map((note) => ageBand(note.createdAt, date)));
+      if (possibleBands.size !== 1) fail('age-identity-ambiguous');
+      band = possibleBands.values().next().value;
+    }
+    if (!Object.hasOwn(counts, band)) fail('age-identity-unknown');
+    counts[band]++;
+  }
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   const recentRatio = total ? counts.recent / total : 0;
   const nearYearRatio = total ? (counts.recent + counts.year) / total : 0;
@@ -135,9 +153,9 @@ function ageStatistics(byWeek, week, index, date) {
 
 export function validateSelection({ date, items, notes, ledger }) {
   dayTime(date);
-  if (!Array.isArray(items) || items.length < MIN_REVIEW_ITEMS || items.length > MAX_REVIEW_ITEMS) fail('selection-count-must-be-3-to-8');
+  if (!Array.isArray(items) || items.length < MIN_REVIEW_ITEMS || items.length > MAX_REVIEW_ITEMS) fail(`selection-count-must-be-${MIN_REVIEW_ITEMS}-to-${MAX_REVIEW_ITEMS}`);
   const index = catalogIndex(notes);
-  const byWeek = exposure({ date, ledger, index });
+  const { byWeek } = exposure({ date, ledger, index });
   const normalized = items.map((item, position) => {
     if (!item || typeof item !== 'object') fail('invalid-selection-item');
     const note = index.byKey.get(item.noteKey);
@@ -154,13 +172,15 @@ export function validateSelection({ date, items, notes, ledger }) {
   const week = isoWeek(date);
   const next = addGroups(byWeek, week, normalized.map((item) => item.groupKey));
   const delivered = exposure({ date, index, ledger: { batches: Object.fromEntries(Object.entries(ledger?.batches || {}).filter(([, batch]) => batch.status === 'delivered')) } });
-  return { date, week, items: normalized, ...budgets(next), age: { ...ageStatistics(addGroups(delivered, week, normalized.map((item) => item.groupKey)), week, index, date), basis: 'delivered-plus-proposed' }, ageObserved: { ...ageStatistics(delivered, week, index, date), basis: 'delivered-only' } };
+  const proposedAgeNotes = new Map(delivered.ageNotesByWeek.get(week));
+  for (const item of normalized) proposedAgeNotes.set(item.groupKey, index.byKey.get(item.noteKey));
+  return { date, week, items: normalized, ...budgets(next), age: { ...ageStatistics(addGroups(delivered.byWeek, week, normalized.map((item) => item.groupKey)), week, index, date, proposedAgeNotes), basis: 'delivered-plus-proposed' }, ageObserved: { ...ageStatistics(delivered.byWeek, week, index, date, delivered.ageNotesByWeek.get(week)), basis: 'delivered-only' } };
 }
 export const normalizeSelection = validateSelection;
 
 export function eligibleNotes({ date, notes, ledger }) {
   const index = catalogIndex(notes);
-  const byWeek = exposure({ date, ledger, index });
+  const { byWeek } = exposure({ date, ledger, index });
   budgets(byWeek);
   const seen = new Set();
   return notes.filter((note) => {
@@ -186,7 +206,7 @@ export function simulateSupply({ notes, startDate, days = 28 }) {
   const index = catalogIndex(notes);
   for (let i = 0; i < days; i++) {
     const date = dateString(first + i * DAY);
-    let byWeek = exposure({ date, ledger, index });
+    let byWeek = exposure({ date, ledger, index }).byWeek;
     const candidates = eligibleNotes({ date, notes, ledger }).sort((a, b) => (counts.get(a.groupKey) || 0) - (counts.get(b.groupKey) || 0) || a.noteKey.localeCompare(b.noteKey));
     const items = [];
     for (const note of candidates) {

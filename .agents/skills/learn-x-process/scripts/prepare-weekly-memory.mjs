@@ -1,10 +1,12 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defaultWeeklyReviewWeek } from "./collect-weekly-input.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
+const MEMORY_APPROVAL_BACKUP_ROOTS = ["01_core", "03_input", "04_output", "05_library"];
 const NON_ANSWER_MARKERS = new Set([
   "跳过", "主动跳过", "选择跳过", "先跳过", "本周跳过", "本周主动跳过", "本周选择跳过", "本周先跳过",
   "这周跳过", "这周主动跳过", "本次跳过", "本次主动跳过", "这次跳过", "这次主动跳过", "略过",
@@ -52,6 +54,81 @@ export async function prepareWeeklyMemory(options = {}) {
       core: candidates.core.length
     }
   };
+}
+
+export async function bindWeeklyMemoryApproval({ week, repoRoot: root = repoRoot } = {}) {
+  const normalizedWeek = normalizeWeekId(week);
+  const quarter = quarterFromIsoWeek(normalizedWeek);
+  const directory = path.join(root, "04_output/_dist/weekly", distWeekId(normalizedWeek));
+  const files = {
+    weeklyOutput: path.join(root, "04_output/weekly", `${outputWeekFileId(normalizedWeek)}.md`),
+    candidates: path.join(directory, "memory-candidates.md"),
+    proposal: path.join(directory, "memory-proposed.md"),
+    currentMemoryTarget: path.join(root, "01_core/memory", `${quarter}.memory.md`)
+  };
+  const hashes = Object.fromEntries(await Promise.all(Object.entries(files).map(async ([key, file]) => [key, key === "currentMemoryTarget" ? await hashOptionalFile(file) : sha256(await readFile(file, "utf8"))])));
+  const payload = {
+    schemaVersion: 1,
+    week: normalizedWeek,
+    quarter,
+    hashes,
+    scope: memoryApprovalScope(normalizedWeek, quarter)
+  };
+  const fingerprint = sha256(JSON.stringify(payload));
+  const manifestPath = path.join(directory, "_memory-approval.json");
+  await writeFile(manifestPath, `${JSON.stringify({ ...payload, fingerprint }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  await chmod(manifestPath, 0o600);
+  return { week: normalizedWeek, fingerprint, hashes, scope: payload.scope, manifestPath };
+}
+
+export async function verifyWeeklyMemoryApproval({ week, fingerprint, repoRoot: root = repoRoot } = {}) {
+  const normalizedWeek = normalizeWeekId(week);
+  const directory = path.join(root, "04_output/_dist/weekly", distWeekId(normalizedWeek));
+  const manifestPath = path.join(directory, "_memory-approval.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  const { fingerprint: storedFingerprint, ...payload } = manifest;
+  if (manifest.schemaVersion !== 1 || manifest.week !== normalizedWeek
+    || storedFingerprint !== fingerprint || sha256(JSON.stringify(payload)) !== storedFingerprint) {
+    throw new Error("memory-approval-fingerprint-mismatch");
+  }
+  const expectedScope = memoryApprovalScope(normalizedWeek, quarterFromIsoWeek(normalizedWeek));
+  if (JSON.stringify(manifest.scope) !== JSON.stringify(expectedScope)) throw new Error("memory-approval-scope-mismatch");
+
+  const files = {
+    weeklyOutput: path.join(root, "04_output/weekly", `${outputWeekFileId(normalizedWeek)}.md`),
+    candidates: path.join(directory, "memory-candidates.md"),
+    proposal: path.join(directory, "memory-proposed.md"),
+    currentMemoryTarget: path.join(root, "01_core/memory", `${manifest.quarter}.memory.md`)
+  };
+  let currentHashes;
+  try {
+    currentHashes = Object.fromEntries(await Promise.all(Object.entries(files).map(async ([key, file]) => [key, key === "currentMemoryTarget" ? await hashOptionalFile(file) : sha256(await readFile(file, "utf8"))])));
+  } catch {
+    throw new Error("memory-approval-stale: approved source or proposal is missing");
+  }
+  if (JSON.stringify(currentHashes) !== JSON.stringify(manifest.hashes)) throw new Error("memory-approval-stale: weekly output, candidates, or proposed memory changed");
+  return { verified: true, week: normalizedWeek, fingerprint: storedFingerprint, manifestPath };
+}
+
+function memoryApprovalScope(week, quarter) {
+  return {
+    memoryPath: `01_core/memory/${quarter}.memory.md`,
+    imagePath: `04_output/_dist/weekly/${memoryWeekSectionId(week)}/weekly-core.png`,
+    backupRoots: MEMORY_APPROVAL_BACKUP_ROOTS,
+    backupDestination: "Learn-X Backups / Learn-X Backup Index / Snapshots",
+    ywnext: "refresh from confirmed 01_core/memory/*.memory.md",
+    flomo: [`03_input/weekly/${memoryWeekSectionId(week)}/weekly.md`, `01_core/memory/${quarter}.memory.md`]
+  };
+}
+
+function sha256(value) { return createHash("sha256").update(String(value), "utf8").digest("hex"); }
+
+async function hashOptionalFile(file) {
+  try { return sha256(await readFile(file, "utf8")); }
+  catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
 }
 
 export function extractMemoryCandidates(content) {
@@ -229,9 +306,9 @@ function normalizeHeading(title) {
 }
 
 function requiredSectionKey(title) {
-  if (title === "全文核心重点纪要") return "coreSummary";
-  if (title === "芒格之魂的洞察") return "mungerInsights";
   const compact = String(title).replace(/\s+/g, "");
+  if (/^全文核心重点纪要(?:$|[（(:：—–-])/.test(compact)) return "coreSummary";
+  if (/^芒格之魂的洞察(?:$|[（(:：—–-])/.test(compact)) return "mungerInsights";
   if ((compact.includes("最值得思考") && compact.includes("问题")) || /问题(?:与|和|及)(?:回答|答案)/.test(compact)) return "questionsAnswers";
   return "";
 }
@@ -281,20 +358,28 @@ function isAnsweredQuestionEntry(lines) {
     .replace(/^问题(?:\s*[一二三四五六七八九十\d]+)?\s*[：:]\s*/, "");
   if (!isSubstantiveText(questionText)) return false;
 
-  for (let index = 0; index < textLines.length; index += 1) {
-    const line = textLines[index].replace(/^\d+[.)、．]\s+/, "").replace(/^[-*]\s+/, "").trim();
-    const answer = line.match(/^(?:回答|答案|A)\s*[：:]\s*(.*)$/i);
-    if (answer) {
-      const continuation = answer[1] || textLines.slice(index + 1).find((next) => next.trim()) || "";
-      if (isSubstantiveAnswer(continuation)) return true;
-    }
+  const inlineAnswer = questionMark >= 0
+    ? first.slice(questionMark + 1).replace(/^\s*(?:回答|答案|A)\s*[：:]\s*/i, "").trim()
+    : "";
+  if (isSubstantiveAnswer(inlineAnswer)) return true;
 
-    const questionMark = Math.max(line.lastIndexOf("？"), line.lastIndexOf("?"));
-    if (questionMark >= 0 && isSubstantiveAnswer(line.slice(questionMark + 1).replace(/^(?:回答|答案|A)\s*[：:]\s*/i, ""))) {
-      return true;
-    }
+  const answerIndex = textLines.slice(1).findIndex((line) => /^(?:[-*+]\s*)?(?:回答|答案|A)\s*[：:]/i.test(line));
+  if (answerIndex < 0) return false;
+  const absoluteAnswerIndex = answerIndex + 1;
+  const answerLine = textLines[absoluteAnswerIndex].replace(/^[-*+]\s*/, "");
+  const answer = answerLine.replace(/^(?:回答|答案|A)\s*[：:]\s*/i, "").trim();
+  if (isSubstantiveAnswer(answer)) return true;
+  if (answer) return false;
+
+  // Empty explicit answers must not absorb a following tracking/background field.
+  // A plain continuation or bullet list directly below `回答：` is a valid multiline answer.
+  const continuation = [];
+  for (const line of textLines.slice(absoluteAnswerIndex + 1)) {
+    const normalized = line.replace(/^[-*+]\s*/, "").trim();
+    if (/^(?:背景(?:补充)?|上下文|下周跟踪|跟踪|下一步|备注|补充|状态|原因|证据)\s*[：:]/.test(normalized)) break;
+    continuation.push(normalized);
   }
-  return false;
+  return isSubstantiveAnswer(continuation.join("\n"));
 }
 
 function isSubstantiveAnswer(value) {
@@ -342,14 +427,14 @@ function isPlaceholderList(body) {
   return lines.length > 0 && lines.every((line) => /^\d+[.)、．]\s*x+$/i.test(line));
 }
 
-function quarterFromIsoWeek(weekId) {
+export function quarterFromIsoWeek(weekId) {
   const { year, week } = parseWeekId(weekId);
   const jan4 = new Date(Date.UTC(year, 0, 4));
   const jan4Day = jan4.getUTCDay() || 7;
   const start = new Date(jan4);
   start.setUTCDate(jan4.getUTCDate() - jan4Day + 1 + (week - 1) * 7);
   const quarter = Math.floor(start.getUTCMonth() / 3) + 1;
-  return `${year}-Q${quarter}`;
+  return `${start.getUTCFullYear()}-Q${quarter}`;
 }
 
 function normalizeWeekId(weekId) {
@@ -415,22 +500,38 @@ function parseArgs(argv) {
     if (argv[index] === "--week") {
       options.week = argv[index + 1];
       index += 1;
+    } else if (argv[index] === "--bind-approval") {
+      options.bindApproval = true;
+    } else if (argv[index] === "--verify-approval") {
+      options.verifyApproval = true;
+    } else if (argv[index] === "--fingerprint") {
+      options.fingerprint = argv[index + 1];
+      index += 1;
     }
   }
   return options;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const result = await prepareWeeklyMemory(parseArgs(process.argv.slice(2)));
-
-  console.log(`Weekly memory candidates generated: ${path.relative(repoRoot, result.outputPath)}`);
-  console.log(`Quarterly memory target: 01_core/memory/${result.quarter}.memory.md`);
-  console.log(`Core summary sections: ${result.counts.coreSummary}`);
-  console.log(`Munger insight sections: ${result.counts.mungerInsights}`);
-  console.log(`Question and answer sections: ${result.counts.questionsAnswers}`);
-  console.log(`Checked items: ${result.counts.checked}`);
-  console.log(`Explicit markers: ${result.counts.explicit}`);
-  console.log(`Core clues: ${result.counts.core}`);
+  const options = parseArgs(process.argv.slice(2));
+  if (options.bindApproval && options.verifyApproval) throw new Error("choose one approval operation");
+  if (options.bindApproval) {
+    const result = await bindWeeklyMemoryApproval(options);
+    console.log(JSON.stringify({ status: "bound", ...result }));
+  } else if (options.verifyApproval) {
+    const result = await verifyWeeklyMemoryApproval(options);
+    console.log(JSON.stringify(result));
+  } else {
+    const result = await prepareWeeklyMemory(options);
+    console.log(`Weekly memory candidates generated: ${path.relative(repoRoot, result.outputPath)}`);
+    console.log(`Quarterly memory target: 01_core/memory/${result.quarter}.memory.md`);
+    console.log(`Core summary sections: ${result.counts.coreSummary}`);
+    console.log(`Munger insight sections: ${result.counts.mungerInsights}`);
+    console.log(`Question and answer sections: ${result.counts.questionsAnswers}`);
+    console.log(`Checked items: ${result.counts.checked}`);
+    console.log(`Explicit markers: ${result.counts.explicit}`);
+    console.log(`Core clues: ${result.counts.core}`);
+  }
 }
 
 function distWeekId(weekId) {

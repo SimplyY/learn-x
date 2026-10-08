@@ -1,6 +1,49 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { extractRequiredSections } from "./prepare-weekly-memory.mjs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { bindWeeklyMemoryApproval, extractRequiredSections, quarterFromIsoWeek, verifyWeeklyMemoryApproval } from "./prepare-weekly-memory.mjs";
+
+test("assigns an ISO week to the quarter of its real Monday date", () => {
+  assert.equal(quarterFromIsoWeek("2026-W01"), "2025-Q4");
+  assert.equal(quarterFromIsoWeek("2026-W02"), "2026-Q1");
+});
+
+test("binds one approval fingerprint to the source, exact proposed content, and fixed destinations", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-memory-approval-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const proposalRoot = path.join(root, "04_output/_dist/weekly/2026-W40");
+  await mkdir(proposalRoot, { recursive: true });
+  await mkdir(path.join(root, "04_output/weekly"), { recursive: true });
+  await writeFile(path.join(root, "04_output/weekly/2026-40.md"), "# Confirmed Weekly Output\n\nA source-backed conclusion.\n");
+  await writeFile(path.join(proposalRoot, "memory-candidates.md"), "# Verified candidates\n\nCandidate A.\n");
+  await writeFile(path.join(proposalRoot, "memory-proposed.md"), "## 2026-W40\n\nExact approved memory payload.\n");
+  await mkdir(path.join(root, "01_core/memory"), { recursive: true });
+  await writeFile(path.join(root, "01_core/memory/2026-Q3.memory.md"), "# Existing quarterly memory\n");
+
+  const binding = await bindWeeklyMemoryApproval({ week: "2026-W40", repoRoot: root });
+  assert.match(binding.fingerprint, /^[a-f0-9]{64}$/);
+  assert.equal(binding.scope.memoryPath, "01_core/memory/2026-Q3.memory.md");
+  assert.equal(binding.scope.imagePath, "04_output/_dist/weekly/2026-W40/weekly-core.png");
+  assert.deepEqual(binding.scope.backupRoots, ["01_core", "03_input", "04_output", "05_library"]);
+  assert.deepEqual(binding.scope.flomo, ["03_input/weekly/2026-W40/weekly.md", "01_core/memory/2026-Q3.memory.md"]);
+  assert.equal((await verifyWeeklyMemoryApproval({ week: "2026-W40", fingerprint: binding.fingerprint, repoRoot: root })).verified, true);
+
+  await writeFile(path.join(proposalRoot, "memory-proposed.md"), "## 2026-W40\n\nChanged after approval.\n");
+  await assert.rejects(
+    verifyWeeklyMemoryApproval({ week: "2026-W40", fingerprint: binding.fingerprint, repoRoot: root }),
+    /memory-approval-stale/
+  );
+
+  await writeFile(path.join(proposalRoot, "memory-proposed.md"), "## 2026-W40\n\nExact approved memory payload.\n");
+  const rebound = await bindWeeklyMemoryApproval({ week: "2026-W40", repoRoot: root });
+  await writeFile(path.join(root, "01_core/memory/2026-Q3.memory.md"), "# Concurrently changed memory\n");
+  await assert.rejects(
+    verifyWeeklyMemoryApproval({ week: "2026-W40", fingerprint: rebound.fingerprint, repoRoot: root }),
+    /memory-approval-stale/
+  );
+});
 
 test("extracts numbered core-summary and Munger sections with multiline content", () => {
   const result = extractRequiredSections(`# Weekly
@@ -95,6 +138,22 @@ test("supports a renamed question-and-answer heading", () => {
   assert.match(result.questionsAnswers[0].text, /问题：[\s\S]*回答：/);
 });
 
+test("accepts purpose notes on confirmed memory headings", () => {
+  const result = extractRequiredSections(`# Weekly
+
+## 全文核心重点纪要（纳入本周 Memory）
+
+本周核心判断。
+
+## 芒格之魂的洞察（纳入洞察候选池）
+
+反转假设。
+`);
+
+  assert.equal(result.coreSummary.length, 1);
+  assert.equal(result.mungerInsights.length, 1);
+});
+
 test("does not migrate unanswered questions", () => {
   const result = extractRequiredSections(`# Weekly
 
@@ -128,6 +187,59 @@ test("filters mixed question-and-answer sections to answered entries only", () =
   assert.match(result.questionsAnswers[0].text, /什么值得继续[\s\S]*保留可验证的行动/);
   assert.match(result.questionsAnswers[0].text, /什么需要验证[\s\S]*先做一个小实验/);
   assert.doesNotMatch(result.questionsAnswers[0].text, /什么需要放弃/);
+});
+
+test("does not treat background questions or blank-answer followups as answers", () => {
+  const result = extractRequiredSections(`# Weekly
+
+## 本周最值得思考的问题与回答
+
+1. 问题：这件事现在要推进吗？
+   背景补充：为什么？因为目前缺少关键证据。
+   回答：
+   下周跟踪：继续等反馈。
+
+2. 问题：何时可以开始？
+   背景补充：为什么要现在开始？已有小范围验证。
+   回答：先完成一个低成本试验。
+`);
+
+  assert.equal(result.questionsAnswers.length, 1);
+  assert.match(result.questionsAnswers[0].text, /何时可以开始[\s\S]*先完成一个低成本试验/);
+  assert.doesNotMatch(result.questionsAnswers[0].text, /这件事现在要推进|下周跟踪/);
+});
+
+test("accepts list-prefixed labels and multiline answers without promoting tracking fields", () => {
+  const result = extractRequiredSections(`# Weekly
+
+## 本周最值得思考的问题与回答
+
+1. 什么值得继续？
+   - 回答：保留可验证的行动。
+     再用小实验确认边界。
+
+2. 什么应该先做？
+   回答：
+   - 先完成成本最低的验证。
+   - 再根据结果决定是否扩展。
+
+3. 什么留待下周？
+   回答：
+   下周跟踪：等反馈后再判断。
+
+4. 什么先不做？
+   回答：主动跳过
+   当前只是提出这个问题，后续再看。
+
+5. 什么还没想好？
+   回答：todo
+   以后再补充完整想法。
+`);
+
+  assert.equal(result.questionsAnswers.length, 1);
+  assert.match(result.questionsAnswers[0].text, /什么值得继续[\s\S]*保留可验证的行动[\s\S]*确认边界/);
+  assert.match(result.questionsAnswers[0].text, /什么应该先做[\s\S]*最低的验证[\s\S]*是否扩展/);
+  assert.doesNotMatch(result.questionsAnswers[0].text, /什么留待下周|下周跟踪|什么先不做|什么还没想好/);
 });
 
 test("rejects placeholder answers", () => {

@@ -45,6 +45,55 @@ test("all archive roots, H2/H3 and split month headings preserve full bodies and
   assert.equal(result.notes.find((note) => /月归档/.test(note.body)).createdAt, "2026-01-01T09:00:00+08:00");
 });
 
+test("identity backfill links an unambiguous legacy note without changing its body", async (t) => {
+  const { root, put } = await fixture(t);
+  const file = "03_input/monthly/2026-9/flomo.md";
+  const body = "历史正文保持原样。";
+  await put(file, memo(body, null, "## 2026-09-28 09:00"));
+  const identity = { memoId: "REMOTE-ID", timeMs: Date.parse("2026-09-28T09:00:00+08:00"), bodyHash: hashBody(body) };
+  await put("03_input/_archives/flomo/identity-backfill.json", JSON.stringify({ schemaVersion: 1, complete: true, lowerBoundCovered: true, identities: [identity] }));
+  const linked = await scanArchive(root);
+  assert.equal(linked.notes[0].memoId, "REMOTE-ID");
+  assert.equal(linked.notes[0].bodyHash, identity.bodyHash);
+  assert.equal(linked.notes[0].source.path, file);
+  assert.equal(linked.notes[0].source.url, "https://v.flomoapp.com/mine/?memo_id=REMOTE-ID");
+
+  await put("03_input/_archives/flomo/identity-backfill.json", JSON.stringify({ schemaVersion: 1, complete: true, lowerBoundCovered: true, identities: [identity, { ...identity, memoId: "OTHER-ID" }] }));
+  const ambiguous = await scanArchive(root);
+  assert.equal(ambiguous.notes[0].memoId, null);
+  assert.equal(ambiguous.notes[0].source.url, null);
+});
+
+test("source-like handwritten body lines are preserved and Learn-X tags remain excluded", async (t) => {
+  const { root, put } = await fixture(t);
+  const file = "03_input/monthly/2026-9/flomo.md";
+  await put(file, [
+    memo("来源：一次散步后的观察\n后来我把它和工作里的判断联系起来。", null, "## 2026-09-28 09:00"),
+    "---",
+    memo("来源：#LEARN-X\n这是 Learn-X 自动生成内容，不应进入候选库。", null, "## 2026-09-29 09:00"),
+    "---",
+    memo("- Source: https://example.com/essay\n这行也是正文，不是 Flomo 身份元数据。", null, "## 2026-09-30 09:00"),
+    "---",
+    memo("来源：我的引用 https://v.flomoapp.com/mine/?memo_id=MIXED-ID 并不是导出元数据\n这段来源说明必须原样保留。", null, "## 2026-10-01 09:00"),
+    "---",
+    memo("来源：https://v.flomoapp.com/mine/?memo_id=TAGGED-ID #LEARN-X\n带标签的来源样正文不可入库。", null, "## 2026-10-02 09:00"),
+    "---",
+    memo("标准来源元数据后面的完整正文。", "VALID-ID", "## 2026-10-03 09:00"),
+    "---",
+    "## 2026-10-04 09:00\n\n- 来源：[Flomo](https://v.flomoapp.com/mine/?memo_id=MARKDOWN-ID)\n\nMarkdown 来源元数据后面的正文。",
+  ].join("\n\n"));
+
+  const result = await scanArchive(root);
+  assert.equal(result.notes.length, 5);
+  assert.ok(result.notes.some((note) => note.body.startsWith("来源：一次散步后的观察\n")));
+  assert.ok(result.notes.some((note) => note.body.startsWith("- Source: https://example.com/essay\n")));
+  assert.ok(result.notes.some((note) => note.body.startsWith("来源：我的引用 https://v.flomoapp.com/mine/?memo_id=MIXED-ID")));
+  assert.ok(result.notes.some((note) => note.memoId === "VALID-ID" && note.body === "标准来源元数据后面的完整正文。"));
+  assert.ok(result.notes.some((note) => note.memoId === "MARKDOWN-ID" && note.body === "Markdown 来源元数据后面的正文。"));
+  assert.equal(result.excluded.filter((item) => item.reason === "learn-x-tag").length, 2);
+  assert.equal(result.notes.some((note) => note.memoId === "MIXED-ID" || note.memoId === "TAGGED-ID"), false);
+});
+
 test("filters parent and child learn-x tags case insensitively, generated notes, user excluded tags", async (t) => {
   const { root, put } = await fixture(t);
   const bodies = ["文本 #LEARN-X", "文本#Learn-X/周记", "Learn-X 周记｜W40\n原文", "文本 #不回顾", "文本 #不洞察", "文本 #AI洞察", "我手写讨论 Learn-X 周记的输入设计，发现减少重复处理更有效。", "#learn-xtra 这是一个不同标签。", "这首短诗保留它的审美表达。"];

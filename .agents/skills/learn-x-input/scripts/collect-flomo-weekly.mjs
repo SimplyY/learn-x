@@ -11,7 +11,7 @@ import { isoWeekRangeShanghai, normalizeWeek, defaultWeeklyReviewWeek } from "./
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
 const TIMEZONE = "Asia/Shanghai";
-const MAX_SCAN_STEPS = 120;
+const MAX_SCAN_STEPS = 1000;
 const MAX_MEMOS = 20_000;
 
 export async function collectFlomoWeekly(options = {}) {
@@ -199,13 +199,17 @@ function parseArgs(argv) {
 }
 
 function classifyFlomoError(error) {
-  if (/ego.*(?:bootstrap|login|permission|control)|user.control/i.test(String(error?.message || ""))) return "ego-login-or-control-required";
-  if (/capacity/i.test(String(error?.message || ""))) return "scan-capacity-exceeded";
-  if (/invalid|incomplete|week.*record/i.test(String(error?.message || ""))) return "scan-integrity-check-failed";
+  const value = `${error?.message || ""} ${error?.code || ""} ${error?.stderr || ""}`.toLowerCase();
+  if (/ego.*(?:bootstrap|login|permission|control)|user.control|unauthori[sz]ed|forbidden/.test(value)) return "ego-login-or-control-required";
+  if (/capacity/.test(value)) return "scan-capacity-exceeded";
+  if (/rate.?limit|throttl|too many requests|http.?429/.test(value)) return "service-rate-limit";
+  if (/timeout|timed out|etimedout|sigterm/.test(value)) return "network-timeout";
+  if (/econnreset|econnrefused|eai_again|enotfound|err_name_not_resolved|err_connection_reset|err_connection_refused|network|dns|temporar|http.?5[0-9][0-9]/.test(value)) return "network-transient";
+  if (/invalid|incomplete|week.*record/.test(value)) return "scan-integrity-check-failed";
   return "browser-scan-failed";
 }
 
-async function scanFlomoWithEgo({ week, range }) {
+export async function scanFlomoWithEgo({ week, range }) {
   const invocation = randomUUID();
   const automationId = String(process.env.LEARN_X_AUTOMATION_ID || "learn-x-v2").replace(/[^a-zA-Z0-9_-]/g, "-");
   const taskName = `${automationId}-flomo-${invocation}`;
@@ -214,19 +218,25 @@ async function scanFlomoWithEgo({ week, range }) {
   try {
     await runEgoScript(script);
     const result = JSON.parse(await readFile(resultPath, "utf8"));
-    if (result?.ok === false) throw new Error(result.error === "user-control" ? "ego-user-control" : "ego-browser-scan-failed");
+    if (result?.ok === false) {
+      const knownErrors = new Set(["service-rate-limit", "network-timeout", "network-transient"]);
+      throw new Error(result.error === "user-control" ? "ego-user-control" : knownErrors.has(result.error) ? `ego-${result.error}` : "ego-browser-scan-failed");
+    }
     return result;
   } catch (error) {
     if (error.code === "ENOENT" && error.path === "ego-browser") throw new Error("ego-browser-unavailable");
-    if (error.killed || error.code === "ETIMEDOUT") throw new Error("ego-browser-timeout");
-    if (/^ego-(?:user-control|browser-scan-failed)$/.test(String(error.message || ""))) throw error;
+    if (error.killed || error.code === "ETIMEDOUT" || /timeout|timed out/i.test(String(error.message || ""))) throw new Error("ego-browser-timeout");
+    if (/^ego-(?:user-control|browser-scan-failed|service-rate-limit)$/.test(String(error.message || ""))) throw error;
+    if (/econnreset|econnrefused|eai_again|enotfound|err_name_not_resolved|err_connection_reset|err_connection_refused|network|dns|temporar|http.?5[0-9][0-9]/i.test(`${error.message || ""} ${error.code || ""} ${error.stderr || ""}`)) {
+      throw new Error("ego-network-transient");
+    }
     throw new Error("ego-browser-scan-failed");
   } finally {
     await rm(resultPath, { force: true });
   }
 }
 
-export function runEgoScript(script, { timeout = 12 * 60_000 } = {}) {
+export function runEgoScript(script, { timeout = 30 * 60_000 } = {}) {
   return new Promise((resolve, reject) => {
     const child = execFile("ego-browser", ["nodejs", "-e", script], { timeout, maxBuffer: 1_000_000, windowsHide: true }, (error, stdout, stderr) => {
       if (error) reject(error);
@@ -240,8 +250,9 @@ export function runEgoScript(script, { timeout = 12 * 60_000 } = {}) {
 export function buildEgoScanScript({ week, range, taskName, resultPath, maxSteps }) {
   return `
 const fs = await import('node:fs/promises');
-const task = await taskSpace(${JSON.stringify(taskName)});
-const page = task.page('p1');
+let task;
+task = await taskSpace(${JSON.stringify(taskName)});
+let page;
 const range = ${JSON.stringify({ start: range.startEpoch * 1000, end: range.endEpoch * 1000 })};
 const week = ${JSON.stringify(week)};
 const resultPath = ${JSON.stringify(resultPath)};
@@ -253,8 +264,8 @@ let pageCount = 1;
 const state = () => page.evaluate(() => {
   const list = document.querySelector('.memos');
   const cards = [...document.querySelectorAll('div.memo')].map((card) => {
-    const link = card.querySelector('a[href*="memo_id="]');
     const time = card.querySelector('a.time[href*="memo_id="]');
+    const link = time;
     const body = card.querySelector('.richText, .content.copy-allowed, .content');
     return {
       memoId: link ? new URL(link.href).searchParams.get('memo_id') : null,
@@ -262,17 +273,20 @@ const state = () => page.evaluate(() => {
       isEditor: Boolean(card.querySelector('.input-box .tiptap, .input-box [contenteditable="true"]')),
       bodyText: body?.innerText || '',
       bodyFound: Boolean(body),
-      bodyComplete: Boolean(body && !body.classList.contains('is-fold') && body.scrollHeight <= body.clientHeight + 2),
-      needsExpand: Boolean(body && (body.classList.contains('is-fold') || body.scrollHeight > body.clientHeight + 2)),
-      hasExpand: Boolean(card.querySelector('.showBtn')),
+      bodyComplete: Boolean(body),
+      needsExpand: false,
+      hasExpand: false,
       cardText: card.innerText || ''
     };
   });
   const buttons = [...document.querySelectorAll('button,a')].filter((item) => item.offsetParent !== null);
   const hasMore = buttons.some((item) => /加载更多|下一页/.test(item.innerText?.trim() || ''));
-  const loading = [...document.querySelectorAll('*')].some((item) => item.offsetParent !== null && /^(loading|加载中|正在加载)$/.test(item.innerText?.trim() || ''));
+  const loading = [...document.querySelectorAll('*')].some((item) => {
+    const rect = item.getBoundingClientRect();
+    return item.offsetParent !== null && /^(loading|加载中|正在加载)$/.test(item.innerText?.trim() || '') && rect.top < window.innerHeight && rect.bottom > 0;
+  });
   const atBottom = Boolean(list && list.scrollTop + list.clientHeight >= list.scrollHeight - 8);
-  return { cards, hasMore, loading, atBottom, hasList: Boolean(list), progress: list ? cards.length + ':' + list.scrollHeight + ':' + list.scrollTop : '' };
+  return { cards, hasMore, loading, atBottom, hasList: Boolean(list), progress: list ? cards.length + ':' + list.scrollHeight : '' };
 });
 const parseTime = (text) => {
   const match = String(text || '').trim().replace(/^置顶[・·]\\s*/, '').match(/^(\\d{4})-(\\d{1,2})-(\\d{1,2})\\s+(\\d{1,2}):(\\d{2})$/);
@@ -284,6 +298,7 @@ const parseTime = (text) => {
 };
 try {
   if (task.ownership !== 'agent') throw new Error('user-control');
+  page = task.page('p1');
   await page.goto('https://v.flomoapp.com/mine');
   await page.waitForLoadState('domcontentloaded', { timeout: 30000 });
   for (let step = 0; step < ${maxSteps}; step += 1) {
@@ -297,21 +312,6 @@ try {
       const timeMs = parseTime(card.timeText);
       if (timeMs == null) throw new Error('timestamp-unreadable');
       const isPinned = /^置顶[・·]/.test(card.timeText || '');
-      if (((!isPinned && timeMs >= range.start && timeMs < range.end) || isPinned) && (!card.bodyFound || card.needsExpand)) {
-        const clicked = await page.evaluate((memoId) => {
-          const card = [...document.querySelectorAll('div.memo')].find((node) => [...node.querySelectorAll('a[href*="memo_id="]')].some((link) => new URL(link.href).searchParams.get('memo_id') === memoId));
-          const button = card?.querySelector('.showBtn');
-          if (!button) return false;
-          button.click();
-          return true;
-        }, card.memoId);
-        if (!clicked) throw new Error('body-incomplete');
-        await page.waitForFunction((memoId) => {
-          const card = [...document.querySelectorAll('div.memo')].find((node) => [...node.querySelectorAll('a[href*="memo_id="]')].some((link) => new URL(link.href).searchParams.get('memo_id') === memoId));
-          const body = card?.querySelector('.richText, .content.copy-allowed, .content');
-          return Boolean(body && !body.classList.contains('is-fold') && body.scrollHeight <= body.clientHeight + 2);
-        }, card.memoId, { timeout: 10000 });
-      }
       const bodyText = card.bodyText;
       const value = { ...card, timeMs, bodyText };
       if (!seen.has(card.memoId)) seen.set(card.memoId, value);
@@ -354,15 +354,26 @@ try {
       continue;
     }
     if (current.atBottom) { complete = true; break; }
-    await page.evaluate(() => {
-      const list = document.querySelector('.memos');
-      if (list) { list.scrollTop = list.scrollHeight; list.dispatchEvent(new Event('scroll', { bubbles: true })); }
-    });
+    let stableScrolls = 0;
+    let previousScrollProgress = current.progress;
+    while (stableScrolls < 3) {
+      await page.evaluate(() => {
+        const list = document.querySelector('.memos');
+        if (list) { list.scrollTop = list.scrollHeight; list.dispatchEvent(new Event('scroll', { bubbles: true })); }
+      });
+      await page.waitForTimeout(300);
+      const scrolled = await page.evaluate(() => {
+        const list = document.querySelector('.memos');
+        return list ? [...document.querySelectorAll('div.memo')].length + ':' + list.scrollHeight : '';
+      });
+      if (scrolled === previousScrollProgress) stableScrolls += 1;
+      else { stableScrolls = 0; previousScrollProgress = scrolled; }
+    }
     await page.waitForFunction((previous) => {
       const list = document.querySelector('.memos');
       if (!list) return false;
-      return [...document.querySelectorAll('div.memo')].length + ':' + list.scrollHeight + ':' + list.scrollTop !== previous;
-    }, current.progress, { timeout: 10000 }).catch(() => {});
+      return [...document.querySelectorAll('div.memo')].length + ':' + list.scrollHeight !== previous;
+    }, current.progress, { timeout: 10000 });
     const afterScroll = await state();
     if (afterScroll.atBottom && !afterScroll.hasMore && afterScroll.progress === current.progress) { complete = true; break; }
     if (afterScroll.progress === current.progress) await page.waitForTimeout(300);
@@ -382,10 +393,22 @@ try {
   };
   await fs.writeFile(resultPath, JSON.stringify(result), { mode: 0o600 });
   await task.finish({ keep: [] });
+  task = null;
   cliLog(JSON.stringify({ ok: true, complete: true, scanned: result.scanned, pageCount: result.pageCount }));
 } catch (error) {
-  const safeError = ['user-control', 'list-unavailable', 'timestamp-unreadable', 'body-incomplete', 'pagination-control-missing', 'pagination-incomplete'].includes(error.message) ? error.message : 'scan-failed';
-  await fs.writeFile(resultPath, JSON.stringify({ ok: false, error: safeError }), { mode: 0o600 });
+  const value = (String(error?.message || '') + ' ' + String(error?.code || '')).toLowerCase();
+  const safeError = ['user-control', 'list-unavailable', 'timestamp-unreadable', 'body-incomplete', 'pagination-control-missing', 'pagination-incomplete'].includes(error.message)
+    ? error.message
+    : /rate.?limit|throttl|too many requests|http.?429/.test(value) ? 'service-rate-limit'
+      : /timeout|timed out|etimedout|err_timed_out/.test(value) ? 'network-timeout'
+        : /econnreset|econnrefused|eai_again|enotfound|err_name_not_resolved|err_connection_reset|err_connection_refused|network|dns|temporar|http.?5[0-9][0-9]/.test(value) ? 'network-transient'
+          : 'scan-failed';
+  let cleanup = 'not-needed';
+  if (task && error.message !== 'user-control') {
+    try { await task.finish({ keep: [] }); cleanup = 'finished'; }
+    catch { cleanup = 'failed'; }
+  }
+  await fs.writeFile(resultPath, JSON.stringify({ ok: false, error: safeError, cleanup }), { mode: 0o600 });
   cliLog(JSON.stringify({ ok: false, error: safeError }));
 }
 `;

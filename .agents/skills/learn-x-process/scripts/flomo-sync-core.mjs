@@ -8,7 +8,7 @@ export function quarterFromWeek(weekId) {
   const jan4 = new Date(Date.UTC(Number(match[1]), 0, 4));
   const monday = new Date(jan4);
   monday.setUTCDate(jan4.getUTCDate() - ((jan4.getUTCDay() || 7) - 1) + (Number(match[2]) - 1) * 7);
-  return `${match[1]}-Q${Math.floor(monday.getUTCMonth() / 3) + 1}`;
+  return `${monday.getUTCFullYear()}-Q${Math.floor(monday.getUTCMonth() / 3) + 1}`;
 }
 
 export function normalizeWeek(weekId) {

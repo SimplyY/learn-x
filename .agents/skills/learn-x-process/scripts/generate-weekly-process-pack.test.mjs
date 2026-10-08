@@ -3,8 +3,69 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { buildInputAuditRows, classifyWeeklyOutput, compressWeeklyProcessItems, generateWeeklyProcessPack, previousWeeklyPeriod, readPreviousWeeklyOutput, renderInputAuditTable, renderProcessPack, validateWeeklyProcessInputs } from "./generate-weekly-process-pack.mjs";
+import { buildFileSummaries, buildInputAuditRows, classifyWeeklyOutput, compressWeeklyProcessItems, generateWeeklyProcessPack, previousWeeklyPeriod, readPreviousWeeklyOutput, renderInputAuditTable, renderProcessPack, validateWeeklyProcessInputs } from "./generate-weekly-process-pack.mjs";
 import { updateWeeklySourceStatus } from "../../learn-x-input/scripts/lib/source-status.mjs";
+import { WEEKLY_SOURCE_CONFIG } from "../../learn-x-input/scripts/lib/weekly-source-config.mjs";
+import { countInputChars } from "../../learn-x-input/scripts/lib/input-limits.mjs";
+
+test("source audit separates config groups in config order and keeps the journal as a stage prerequisite", () => {
+  const payload = { selection: { path: "03_input/weekly/2026-W40" }, sourceStatuses: { daily: { status: "failed", file: "daily.md", count: 0 } }, excludedFiles: [] };
+  const table = renderInputAuditTable(payload, [], { files: [] });
+  const important = table.split("### 重要来源\n")[1]?.split("### 可选来源\n")[0];
+  const optional = table.split("### 可选来源\n")[1];
+  assert.ok(important && optional);
+  for (const [group, section] of [["important", important], ["optional", optional]]) {
+    const files = [...section.matchAll(/\| ([\w-]+\.md) \|/g)].map((match) => match[1]);
+    assert.deepEqual(files, WEEKLY_SOURCE_CONFIG.filter((source) => source.group === group).map((source) => source.file));
+  }
+  assert.match(important, /daily\.md \| failed/);
+  assert.match(optional, /\| P0 \| 日志 \| Health-X/);
+  assert.match(table, /\*\*阶段前提：\*\* 飞书周记/);
+  assert.doesNotMatch(important + optional, /weekly\.md/);
+});
+
+test("Pack counts final visible source bodies, embedded comparison, and its complete Unicode text separately", () => {
+  const prefix = "03_input/weekly/2026-W40/";
+  const items = [
+    { path: `${prefix}daily.md`, title: "日记", text: "确认😀  \n两行\t", source: "daily" },
+    { path: `${prefix}weekly.md`, title: "周记", text: "整篇已确认周记🧭", source: "weekly" },
+    { path: `${prefix}weread.md`, title: "微信读书", text: "压缩后的核心结论".repeat(10), source: "weread" },
+    { path: `${prefix}health.md`, title: "排除源", text: "这个候选未就绪，不进入正文", source: "health" },
+    { path: `${prefix}absent.md`, title: "游离候选", text: "游离候选不渲染", source: "extra" }
+  ];
+  const payload = {
+    week: "2026-W40", range: { start: "2026-09-28T00:00:00Z", end: "2026-10-05T00:00:00Z" },
+    selection: { path: prefix.slice(0, -1), mode: "iso" }, generatedAt: "2026-10-05T00:00:00Z",
+    stats: {}, sourceStatuses: {}, excludedFiles: [],
+    files: items.slice(0, 4).map((item) => ({ path: item.path, source: item.source, rawChars: item.source === "weread" ? 240 : 1000, effectiveChars: item.source === "weread" ? 200 : 900 })),
+    items: [{ ...items[0], text: "原始文本".repeat(100) }],
+    preprocessing: { exclusions: [{ sourcePath: `${prefix}health.md`, reason: "候选未就绪" }] }
+  };
+  const files = buildFileSummaries(payload, items);
+  const previousOutput = { status: "ready", week: "2026-W39", content: " \n上周对照😀\n " };
+  const pack = renderProcessPack(payload, [], files, items, {
+    sourceCount: 0, files: [],
+    semanticFiles: [{ path: `${prefix}weread.md`, kind: "weread", sourceChars: 200, candidateChars: countInputChars(items[2].text), retainedRatio: countInputChars(items[2].text) / 200 }]
+  }, previousOutput);
+  const sourceChars = countInputChars("确认😀\n两行") + countInputChars(items[1].text) + countInputChars(items[2].text);
+  assert.equal(files.find((file) => file.source === "daily").processChars, countInputChars("确认😀\n两行"));
+  assert.match(pack, new RegExp(`- 来源正文总字符：${sourceChars}(?:\\n|$)`));
+  assert.match(pack, new RegExp(`- 上周对照字符：${countInputChars(previousOutput.content.trim())}(?:\\n|$)`));
+  assert.match(pack, /240 → 200 → 80（微信读书语义压缩，候选保留 40%）/);
+  assert.match(pack, /微信读书语义压缩：03_input\/weekly\/2026-W40\/weread\.md 有效原文 200 字符 → 候选 80 字符，候选保留 40%。/);
+  assert.match(pack, /\| 03_input\/weekly\/2026-W40\/weread\.md \| 200 \| 80 \| 80 \| 40% \|/);
+  assert.equal(Number(pack.match(/- 完整 Pack 字符：(\d+)/)?.[1]), countInputChars(pack));
+  assert.doesNotMatch(pack, /这个候选未就绪，不进入正文|游离候选不渲染|原始文本/);
+});
+
+test("unavailable comparison bodies and absent sources contribute zero chars", () => {
+  for (const status of ["missing", "empty", "shell"]) {
+    const pack = renderWeeklyPackWithComparison({ status, content: "不应计入的正文" });
+    assert.match(pack, /- 来源正文总字符：0\n/);
+    assert.match(pack, /- 上周对照字符：0\n/);
+    assert.equal(Number(pack.match(/- 完整 Pack 字符：(\d+)/)?.[1]), countInputChars(pack));
+  }
+});
 
 test("weekly Process Pack no longer embeds Action Feedback (retired, Core V1 owns weekly action review)", () => {
   const pack = renderProcessPack({
@@ -166,6 +227,9 @@ test("confirmed target week with ready required inputs and verified empty source
   const pack = await readFile(result.outputPath, "utf8");
   assert.match(pack, /2026-W40/);
   assert.match(pack, /Voice-X/);
+  assert.equal(result.metrics.sourceBodyChars, result.fileSummaries.reduce((sum, file) => sum + file.processChars, 0));
+  assert.equal(result.metrics.previousOutputChars, 0);
+  assert.equal(result.metrics.packChars, countInputChars(pack));
   assert.ok((await readFile(path.join(outputDir, "input.json"), "utf8")).includes("处理后原文字符数：4000"));
 
   const voicePath = path.join(weekDir, "voice.md");
@@ -252,14 +316,14 @@ test("renders the full source-to-final character chain with failures and compres
   assert.equal(rows.find((row) => row.file === "flomo.md").status, "failed");
   assert.match(table, /\| 类型 \/ 产物 \| 来源 \| 文件 \| 状态 \|/);
   assert.match(table, /字符链路（文件原始 → 清洗有效〔去重前〕→ 最终纳入）/);
-  const tableRows = table.split("\n").filter((line) => /^\|/.test(line)).slice(2);
-  assert.match(tableRows[0], /\| 重要 \/ P0 \| 日志 \| 飞书日记 \| \[daily\.md\]/);
-  assert.match(tableRows[1], /\| 阶段前提 \| 日志 \| 飞书周记 \| weekly\.md/);
-  assert.match(tableRows[2], /\| 重要 \/ P0 \| 输入 \| Flomo \| \[flomo\.md\]/);
+  const tableRows = table.split("### 重要来源\n")[1].split("### 可选来源\n")[0].split("\n").filter((line) => /^\|/.test(line)).slice(2);
+  assert.match(tableRows[0], /\| P0 \| 日志 \| 飞书日记 \| \[daily\.md\]/);
+  assert.match(tableRows[1], /\| P0 \| 输入 \| Flomo \| \[flomo\.md\]/);
+  assert.match(table, /\*\*阶段前提：\*\* 飞书周记.*weekly\.md/);
   assert.doesNotMatch(table, /Action Feedback/);
   assert.doesNotMatch(table, /独立产物/);
   assert.match(table, /采集失败：页面不可用/);
-  assert.match(table, /1000 → 1000 → 220（Voice-X 压缩，保留 22%）/);
+  assert.match(table, /1000 → 1000 → 220（Voice-X 压缩，候选保留 22%）/);
   assert.doesNotMatch(table, /仅确定性清洗|未做语义压缩/);
   assert.match(table, /build-bot\.md \| unavailable/);
   assert.match(table, /旧文件保留但过期、不计入/);
@@ -325,9 +389,11 @@ test("Stage 2 delivers an execution-scope preview without exposing not-yet-gener
 
 test("Stage 1 automation requires a final character count for each included ready file", async () => {
   const skill = await readFile(new URL("../../learn-x-weekly-automation/SKILL.md", import.meta.url), "utf8");
-  const stage1Report = skill.slice(skill.indexOf("阶段 1 汇报必须"), skill.indexOf("## 阶段 1 内"));
+  const stage1Report = skill.slice(skill.indexOf("阶段 1 汇报先给出"), skill.indexOf("## 阶段 1 内"));
 
   assert.match(stage1Report, /Action Feedback 已退役，输入表中不再有独立产物行/);
+  assert.match(stage1Report, /「重要来源」和「可选来源」两张表/);
+  assert.match(stage1Report, /`ai\.md` 是重要来源/);
   assert.doesNotMatch(stage1Report, /action:feedback/);
   assert.doesNotMatch(stage1Report, /在输入表后另列该草稿路径/);
   assert.match(stage1Report, /`countInputChars`（Unicode 码点数）/);
@@ -350,7 +416,9 @@ test("weekly automation no longer creates Action Feedback at Stage 1 (retired)",
   assert.match(stage2, /回读 Process Pack 第 9 节/);
   assert.match(stage2, /上一 ISO 周.*完整的 `04_output\/weekly\/YYYY-WW\.md`/);
   assert.match(stage2, /阶段 2 汇报只报告上一周 Output 的周期、状态和绝对可点击文件链接，不复述旧 Output 正文或旧问答/);
-  assert.match(stage2, /按来源配置顺序，已确认周记作为阶段前提行单列/);
+  assert.match(stage2, /AI 回顾缺失不阻塞日记有效时的阶段 1 周记草稿.*阶段 2 的 Process Pack 仍要求目标周有效 `ai\.md`/);
+  assert.match(stage2, /按来源配置顺序，已确认周记作为阶段前提单列/);
+  assert.match(stage2, /「重要来源」和「可选来源」两张表/);
 });
 
 test("Stage 3 prepares candidates before one confirmation and generates the image after Memory", async () => {

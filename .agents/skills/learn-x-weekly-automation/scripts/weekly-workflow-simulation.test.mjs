@@ -6,7 +6,7 @@ import test from "node:test";
 import { collectConfirmedWeeklyJournal, recordWeeklyJournalAnchor } from "../../learn-x-input/scripts/collect-weekly-journal.mjs";
 import { updateWeeklySourceStatus } from "../../learn-x-input/scripts/lib/source-status.mjs";
 import { generateWeeklyProcessPack } from "../../learn-x-process/scripts/generate-weekly-process-pack.mjs";
-import { prepareWeeklyMemory } from "../../learn-x-process/scripts/prepare-weekly-memory.mjs";
+import { bindWeeklyMemoryApproval, prepareWeeklyMemory, verifyWeeklyMemoryApproval } from "../../learn-x-process/scripts/prepare-weekly-memory.mjs";
 import { runWeeklyRetrySupervisor } from "./weekly-retry-supervisor.mjs";
 
 const week = "2026-W40";
@@ -116,9 +116,13 @@ test("simulates the weekly workflow in a temporary repo, from cooldown rescue th
   assert.match(candidateText, /用小实验替代不可检验的大改造/);
   assert.doesNotMatch(candidateText, /暂时不迁移的候选/);
   await assert.rejects(readFile(path.join(root, "01_core/memory/2026-Q3.memory.md")), { code: "ENOENT" });
+  const proposalPath = path.join(root, "04_output/_dist/weekly", week, "memory-proposed.md");
+  await writeFile(proposalPath, "## 2026-W40\n\nApproved weekly Memory payload.\n");
+  const approval = await bindWeeklyMemoryApproval({ week, repoRoot: root });
+  assert.equal((await verifyWeeklyMemoryApproval({ week, fingerprint: approval.fingerprint, repoRoot: root })).verified, true);
 
   const weeklyAutomationSkill = await readFile(new URL("../SKILL.md", import.meta.url), "utf8");
-  assert.match(weeklyAutomationSkill, /同一条阶段 2 消息交付 Process Pack 时附“执行授权范围预览”/);
+  assert.match(weeklyAutomationSkill, /Process Pack 成功生成后，在同一条阶段 2 消息中同时交付 Pack 与“执行授权范围预览”/);
   assert.match(weeklyAutomationSkill, /不展示尚未生成的记忆内容，也不构成授权/);
   assert.match(weeklyAutomationSkill, /展示真实拟迁移内容并与第二步已预览的执行范围合并为一张最终确认卡/);
   assert.match(weeklyAutomationSkill, /第二步预览必须一次列明本周 Memory 写入目标/);
@@ -129,6 +133,9 @@ test("simulates the weekly workflow in a temporary repo, from cooldown rescue th
   assert.match(weeklyAutomationSkill, /Flomo 载荷（`weekly\.md` 与季度 Memory）及目的地/);
   assert.match(weeklyAutomationSkill, /留存清理和读回校验/);
   assert.match(weeklyAutomationSkill, /图片生成和其他写入都必须等阶段 3 这一次确认/);
+  assert.match(weeklyAutomationSkill, /memory:weekly -- --week YYYY-Www --bind-approval/);
+  assert.match(weeklyAutomationSkill, /memory:weekly -- --week YYYY-Www --verify-approval/);
+  assert.match(weeklyAutomationSkill, /未答、空白、占位或明确跳过的问题及其背景都自动排除/);
 });
 
 async function writeReadyDaily(root) {

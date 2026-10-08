@@ -1,6 +1,6 @@
 # Architecture Truth｜Learn-X
 
-> 回答「系统现在真实是什么样」。由技术架构与规划节点在架构变化时增量维护。首次建立：2026-09-24（Case：[wechat-evidence-source](cases/wechat-evidence-source/case.md)）。最后核对：2026-10-07（Case：[周记自动化效率优化](cases/2026-10-weekly-workflow-efficiency/case.md)）。
+> 回答「系统现在真实是什么样」。由技术架构与规划节点在架构变化时增量维护。首次建立：2026-09-24（Case：[wechat-evidence-source](cases/wechat-evidence-source/case.md)）。最后核对：2026-10-08（Case：[周记自动化效率优化](cases/2026-10-weekly-workflow-efficiency/case.md)）。
 
 ## 定位
 
@@ -24,7 +24,7 @@ Learn-X 是个人 AI native 知行进化系统：输入（证据与反馈）→ 
 ```
 
 - 来源状态契约（`learn-x-input/scripts/lib/source-status.mjs`）：每来源一个状态（`ready/empty/needs_review/failed/unavailable`）＋规范文件名（`SOURCE_FILES`，wechat → `wechat.md`、jingdu → `jingdu.md`）。消费方按状态过滤输入文件。
-- 周自动化（`learn-x-weekly-automation`）：05:00运行有界来源重试与预处理，重要来源齐全时可提前生成周记草稿；若仍缺重要来源，07:00补查完成后日记有效即可生成草稿，缺口仍阻断 Process Pack。执行状态写入周目录侧车并由同周锁保护；CLI最多3路并行、浏览器单队列。确认周记后，`input:weekly`按已保存飞书段落锚点窄范围采回，`process:weekly`复用绑定来源哈希和规则版本的缓存快速组装，不压缩周记。Process Pack交付时显示不含记忆内容、也不构成授权的收尾范围预览；Chat Pack完成后阶段3生成真实Memory候选并与完整执行范围合成一次确认卡。`jingdu.md` 由外部 Code X 精读自动化在飞书交互后按外部拥有者模式写回（写文件 + `npm run input:source-status`），缺失或 empty 不阻断但提示缺口。
+- 周自动化（`learn-x-weekly-automation`）：05:00运行有界来源重试与预处理；重要来源首次失败后最多重试4次、可选来源最多2次，间隔至少20分钟；07:00只对仍安全可恢复的来源补试一次，不清零此前次数。执行状态和不含私人正文的诊断写入周目录侧车并由同周锁保护；CLI最多3路并行、浏览器单队列。每个来源成功后可单独触发准备流程。采集快照记录原始文件哈希，预处理缓存绑定来源哈希、generation、采集器和规则版本；过期采集候选不能覆盖更新输入。确认周记后，`input:weekly`按已保存飞书段落锚点窄范围采回，`process:weekly`复用有效缓存快速组装，不压缩周记；明确的采集子进程失败优先于 sidecar 成功状态。Process Pack 用配置排序的“重要来源 / 可选来源”两张表呈现，周记单列为阶段前提，并统一报告来源正文、上周对照及完整 Pack 字符数。交付时同条消息附不含记忆内容、也不构成授权的收尾范围预览；Chat Pack完成后阶段3生成真实Memory候选并与完整执行范围合成一次确认卡。`jingdu.md` 由外部 Code X 精读自动化在飞书交互后按外部拥有者模式写回（写文件 + `npm run input:source-status`），缺失或 empty 不阻断但提示缺口。
 - 备份（`learn-x-process/scripts/backup-weekly.mjs`）：`BACKUP_ROOTS = ["01_core", "03_input", "04_output", "05_library"]` 整目录上传飞书云空间并存快照索引；restore 按 manifest.roots 子集校验（兼容旧 3 根归档）。
 - 现有微信入口（`wechat-weekly-input`）：仅人工截图转临时 JSON，追加为 `WeChat.md`（大写），不读取微信本体。
 
@@ -47,7 +47,7 @@ Learn-X 是个人 AI native 知行进化系统：输入（证据与反馈）→ 
 4. **单文件输入上限**：普通输入的 15,000 字符限制由预处理候选控制；超限候选不能进入 Pack，合格的可选来源可明确排除。确认版 `weekly.md` 完整纳入且不压缩；Voice-X按独立压缩规则处理。
 5. 微信 Evidence Source 的覆盖与新鲜度边界见 [ADR 0001](adr/0001-wechat-evidence-freshness-coverage.md)：绝对覆盖保持「未证实」。
 
-周记自动化隔离端到端模拟与全仓 `npm test` 421/421 已核验；真实飞书锚点读回、Ego Lite全量Flomo扫描、05/07本机任务实际唤醒、一分钟正常交付和连续三周用户参与时间仍需运行证据。
+周记自动端到端模拟连续3次通过（虚拟时钟模拟20分钟冷却）；修复后的全仓 `npm test` 460/460、两个相关 Skill 校验及独立定向对抗回归102/102已通过。模拟周流程的测试体约86–189毫秒，不代表真实外部服务等待或周记交付时间。真实飞书锚点读回、Ego Lite全量Flomo扫描、05/07本机任务实际唤醒、一分钟正常交付、收尾外部读回和连续三周用户参与时间仍需运行证据。
 
 ## Flomo 每日回顾
 

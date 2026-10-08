@@ -124,6 +124,13 @@ export function createManifest(snapshotId, files, excluded, createdAt = new Date
   return { ...core, createdAt, manifestSha256: sha256Text(JSON.stringify(core)) };
 }
 
+export function canSkipSuccessfulSnapshot(existing, currentManifest, refresh = false) {
+  return !refresh
+    && String(existing?.values?.Status || "") === "success"
+    && Boolean(existing.values["Manifest SHA-256"])
+    && existing.values["Manifest SHA-256"] === currentManifest?.manifestSha256;
+}
+
 export function parseDateValue(value) {
   if (typeof value === "number") return value > 1e12 ? value : value * 1000;
   if (!value) return Number.NaN;
@@ -473,11 +480,11 @@ async function backup(args) {
   const config = await ensureResources(configFromArgs(args, { requireFolder: true }));
   await loadBaseFields(config);
   const existing = exactSnapshot(await listSnapshotRecords(config), week);
-  if (existing && String(existing.values?.Status || "") === "success" && !args.refresh) {
-    return { snapshotId: week, status: "already-success", fileCount: Number(existing.values?.["File Count"] || 0), totalBytes: Number(existing.values?.["Total Bytes"] || 0), retention: await runRetention(config) };
-  }
   const { files, excluded } = await collectBackupFiles(repoRoot);
   const manifest = createManifest(week, files, excluded);
+  if (canSkipSuccessfulSnapshot(existing, manifest, args.refresh)) {
+    return { snapshotId: week, status: "already-success", fileCount: manifest.fileCount, totalBytes: manifest.totalBytes, retention: await runRetention(config) };
+  }
   const archive = await createArchive(repoRoot, week, manifest, files);
   try {
     const existingToken = String(existing?.values?.["Drive File Token"] || "") || await findDriveFileByName(config.folderToken, archive.archiveName);

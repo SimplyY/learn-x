@@ -47,13 +47,13 @@
 
 ## 目标与状态机
 
-目标周期（例如 `2026-08`）只决定洞察对象；历史范围只提供背景。最终 Bridge Prompt 不超过 120,000 字符，超限失败关闭。同一目标由本地运行锁串行。`preview → submitted → generated → archive_pending → completed` 的状态保存哈希、Bridge runId、会话 URL、飞书节点和失败原因；提交不确定时不得自动重发。
+目标周期（例如 `2026-08`）只决定洞察对象；历史范围只提供背景。最终 Bridge Prompt 不超过 120,000 字符，超限失败关闭。同一目标由本地运行锁串行。`preview → submitted → generated → archive_pending → completed` 的状态保存哈希、Bridge runId、会话 URL、飞书节点和失败原因；提交不确定时不得自动重发。没有显式 `--force` 时，运行键、归档发布状态与本地输出哈希完整一致的 `completed` 目标无论误带哪些运行标志，均直接返回既有状态；不因背景输入变化重复告警，完整性校验失败则转为 `needs_review`。芒格之魂六层按标题语义校验，`第一层`/`第六层`分别兼容`底层`/`顶层`，标题可用全角或半角竖线作分隔。Bridge 已返回但结构校验失败时，原文保存在本地 `result.unvalidated.md` 供人工复核，状态保持 `needs_review`，不会归档或自动重发。`generated`/`archive_pending` 有效产物可直接续归档：先校验运行键、输出哈希和结构，然后只执行飞书归档，不重新读取 Prompt 或调用 Bridge。
 
-执行前 `snapshot_preflight` 校验受治理 Prompt 快照：远端有新版本自动拉取，offline 或拉取被拒时显式告警、继续用本地副本，不静默。
+每次预览或实际调用前，运行器都通过共享 `fetch-prompt` 读取受治理 Prompt latest。身份、版本、hash 或正文校验失败时记录 `needs_review` 并停止，不回退到本地旧副本，也不启动 Bridge。
 
 ## 飞书归档与恢复
 
-飞书知识库固定为独立私有空间 `Learn-X 周期洞察`，按年份和单篇文档归档，幂等键为 `taskId + targetKind + targetId`。写入后必须读回标题、运行键、实质正文和规范化哈希。失败时保留节点并续跑，不删除、不新建副本。
+飞书知识库固定为独立私有空间 `Learn-X 周期洞察`，按年份和单篇文档归档，幂等键为 `taskId + targetKind + targetId`；Docx/Wiki 写入遵循项目身份契约，固定使用 `bot`。写入后必须读回标题、运行键、实质正文和规范化哈希。失败时保留节点并续跑，不删除、不新建副本。
 
 自动化可用 CLI 退出码识别未完成状态：只有 `preview`、`skipped`、`completed` 返回成功；`needs_review`、`archive_pending` 返回非零。
 

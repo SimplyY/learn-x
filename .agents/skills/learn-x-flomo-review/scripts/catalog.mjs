@@ -5,9 +5,24 @@ import { validateSourceStatusDocument } from "../../learn-x-input/scripts/lib/so
 import { flomoTags, learnXGeneratedReason } from "../../learn-x-input/scripts/lib/flomo-filter.mjs";
 
 const ROOTS = ["03_input/weekly", "03_input/weekly-history", "03_input/monthly", "03_input/yearly"];
+const IDENTITY_BACKFILL_FILE = "03_input/_archives/flomo/identity-backfill.json";
 const SOURCE_LINE = /^[-*]?\s*(?:来源|Source|链接|URL)\s*[：:]\s*(.+)$/i;
 const DATE_HEADING = /^(#{2,3})\s+(\d{4}-\d{1,2}-\d{1,2})(?:\s+(\d{1,2}:\d{2}(?::\d{2})?)(?:\s*(Z|[+-]\d{2}:?\d{2}))?)?\s*$/;
 const TIME_HEADING = /^###\s+(\d{1,2}:\d{2}(?::\d{2})?)(?:\s*(Z|[+-]\d{2}:?\d{2}))?\s*$/;
+
+function flomoSourceMemoId(value) {
+  const source = String(value || "").trim();
+  const markdown = source.match(/^\[[^\]\r\n]*\]\((https?:\/\/[^()\s]+)\)$/);
+  const angle = source.match(/^<(https?:\/\/[^<>\s]+)>$/);
+  const bare = source.match(/^(https?:\/\/\S+)$/);
+  const candidate = markdown?.[1] || angle?.[1] || bare?.[1];
+  if (!candidate) return null;
+  let parsed;
+  try { parsed = new URL(candidate); } catch { return null; }
+  if (parsed.protocol !== "https:" || parsed.hostname !== "v.flomoapp.com" || parsed.username || parsed.password || parsed.port || parsed.hash || parsed.pathname.replace(/\/$/, "") !== "/mine") return null;
+  const ids = parsed.searchParams.getAll("memo_id");
+  return ids.length === 1 && ids[0].trim() ? ids[0] : null;
+}
 
 export function normalizeBody(body) {
   return String(body).replace(/\r\n?/g, "\n").replace(/[ \t]+$/gm, "").trim();
@@ -53,21 +68,16 @@ function parseArchive(markdown, filePath) {
     while (lines.length && (!lines.at(-1).trim() || lines.at(-1).trim() === "---")) lines.pop();
     let url = null;
     let memoId = null;
-    // Only the metadata prefix identifies this memo. Links inside its text do not.
+    // Consume only a complete, recognized Flomo identity URL; source-like prose is memo text.
     while (lines.length) {
       if (!lines[0].trim()) { lines.shift(); continue; }
       const source = lines[0].match(SOURCE_LINE);
       if (!source) break;
-      const candidate = source[1].match(/https?:\/\/[^\s<>)\]]+/)?.[0];
-      if (candidate) {
-        const parsed = new URL(candidate);
-        if (parsed.protocol === "https:" && parsed.hostname === "v.flomoapp.com" && parsed.pathname.replace(/\/$/, "") === "/mine" && parsed.searchParams.get("memo_id")) {
-          const id = parsed.searchParams.get("memo_id");
-          if (memoId && memoId !== id) current.identityConflict = true;
-          memoId = id;
-          url = `https://v.flomoapp.com/mine/?memo_id=${encodeURIComponent(id)}`;
-        }
-      }
+      const id = flomoSourceMemoId(source[1]);
+      if (!id) break;
+      if (memoId && memoId !== id) current.identityConflict = true;
+      memoId = id;
+      url = `https://v.flomoapp.com/mine/?memo_id=${encodeURIComponent(id)}`;
       lines.shift();
     }
     const body = normalizeBody(lines.join("\n"));
@@ -159,6 +169,24 @@ function completeEvidence(markdown, status, records) {
 }
 
 function sameTime(a, b) { return Date.parse(a) === Date.parse(b); }
+
+function identitySignature(timeMs, bodyHash) { return `${timeMs}:${bodyHash}`; }
+
+async function identityBackfill(repoRoot) {
+  let raw;
+  try { raw = JSON.parse(await readFile(path.join(repoRoot, IDENTITY_BACKFILL_FILE), "utf8")); }
+  catch (error) { if (error.code === "ENOENT") return null; throw error; }
+  if (raw?.schemaVersion !== 1 || raw.complete !== true || raw.lowerBoundCovered !== true || !Array.isArray(raw.identities)) throw new Error("identity-backfill-invalid");
+  const map = new Map();
+  for (const item of raw.identities) {
+    if (!item?.memoId || !Number.isInteger(item.timeMs) || !/^[0-9a-f]{64}$/.test(item.bodyHash || "")) throw new Error("identity-backfill-invalid");
+    const signature = identitySignature(item.timeMs, item.bodyHash);
+    const list = map.get(signature) || [];
+    list.push(item);
+    map.set(signature, list);
+  }
+  return map;
+}
 function uniqueSources(sources) {
   return [...new Map(sources.map((source) => [`${source.path}:${source.line}`, source])).values()].sort((a, b) => a.path.localeCompare(b.path, "en") || a.line - b.line);
 }
@@ -179,6 +207,7 @@ export async function scanArchive(repoRoot, { previous } = {}) {
   const sources = [];
   const excluded = [];
   const records = [];
+  const backfill = await identityBackfill(repoRoot);
   for (const file of await archiveFiles(repoRoot)) {
     const status = await statusFor(repoRoot, file);
     if (status && status.status !== "ready") {
@@ -199,7 +228,17 @@ export async function scanArchive(repoRoot, { previous } = {}) {
     }
     for (const memo of parsed) {
       if (memo.reason) excluded.push({ source: memo.source, memoId: memo.memoId, reason: memo.reason, count: 1 });
-      else { records.push(memo); source.included += 1; }
+      else {
+        if (!memo.memoId && backfill) {
+          const matches = backfill.get(identitySignature(Date.parse(memo.createdAt), memo.bodyHash)) || [];
+          if (matches.length === 1) {
+            memo.memoId = matches[0].memoId;
+            memo.source.url = `https://v.flomoapp.com/mine/?memo_id=${encodeURIComponent(memo.memoId)}`;
+          }
+        }
+        records.push(memo);
+        source.included += 1;
+      }
     }
   }
 

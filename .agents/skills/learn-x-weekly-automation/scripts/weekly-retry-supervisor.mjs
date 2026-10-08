@@ -89,6 +89,7 @@ export async function runWeeklyRetrySupervisor({
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   runSource = (source, context) => runConfiguredSource(source, context),
   readOutcome = (source) => readCurrentSourceOutcome(source, week, repoRoot),
+  prepareInputs,
   onEvent = () => {},
   maxDurationMs = 100 * 60_000
 } = {}) {
@@ -110,6 +111,7 @@ export async function runWeeklyRetrySupervisor({
   if (!lock) return { week: normalizedWeek, mode, skipped: "supervisor-already-running", waitedMs: lockWaitMs };
   let state;
   let saveQueue = Promise.resolve();
+  let preparationQueue = Promise.resolve();
   const save = () => {
     state.updatedAt = new Date(now()).toISOString();
     saveQueue = saveQueue.then(() => atomicWrite(statePath, `${JSON.stringify(state, null, 2)}\n`));
@@ -120,6 +122,21 @@ export async function runWeeklyRetrySupervisor({
     if (state.diagnostics.length > LOG_LIMIT) state.diagnostics.splice(0, state.diagnostics.length - LOG_LIMIT);
     onEvent(entry);
   };
+  const prepareAfterSuccess = prepareInputs ? (source) => {
+    preparationQueue = preparationQueue.then(async () => {
+      const began = now();
+      try {
+        await prepareInputs(source, { week: normalizedWeek, repoRoot });
+        event({ step: "weekly-preprocess", sourceId: source.id, durationMs: Math.max(0, now() - began), outcome: "succeeded", evidence: "04_output/_dist/weekly/<week>/.preprocessing/manifest.json" });
+      } catch (error) {
+        const errorClass = classifyWeeklyFailure(sanitizeErrorForClassification(error)).errorClass;
+        event({ step: "weekly-preprocess", sourceId: source.id, durationMs: Math.max(0, now() - began), outcome: "failed", errorClass, errorSignal: safeFailureSignal(error, errorClass), rootCauseStatus: "unconfirmed", hypothesis: errorClass, evidence: "04_output/_dist/weekly/<week>/.preprocessing/manifest.json" });
+      }
+      await save();
+    });
+    return preparationQueue;
+  } : undefined;
+  const sourceContext = () => ({ state, now, runSource, readOutcome, save, event, mode, week: normalizedWeek, repoRoot, prepareAfterSuccess, drainPreparation: () => preparationQueue });
 
   try {
     state = await loadState(statePath, normalizedWeek);
@@ -137,8 +154,8 @@ export async function runWeeklyRetrySupervisor({
 
     if (mode === "initial") {
       const dueFirst = WEEKLY_SOURCE_CONFIG.filter((source) => source.collector && source.id !== "wisdom" && state.sources[source.id]?.attempts === 0 && state.sources[source.id]?.status === "pending");
-      await runBatch(dueFirst, "first", { state, now, runSource, readOutcome, save, event, mode, week: normalizedWeek, repoRoot });
-      await runDependentWisdomFirst({ state, now, runSource, readOutcome, save, event, mode, week: normalizedWeek, repoRoot });
+      await runBatch(dueFirst, "first", sourceContext());
+      await runDependentWisdomFirst(sourceContext());
     }
 
     while (mode === "initial" && now() - startedAt < maxDurationMs) {
@@ -157,15 +174,20 @@ export async function runWeeklyRetrySupervisor({
         if (now() - startedAt >= maxDurationMs) break;
         continue;
       }
-      await runBatch(due, "retry", { state, now, runSource, readOutcome, save, event, mode, week: normalizedWeek, repoRoot });
-      await runDependentWisdomFirst({ state, now, runSource, readOutcome, save, event, mode, week: normalizedWeek, repoRoot });
+      await runBatch(due, "retry", sourceContext());
+      await runDependentWisdomFirst(sourceContext());
     }
 
     if (mode === "rescue") {
-      let dueRescue = [];
       while (now() - startedAt < maxDurationMs) {
-        dueRescue = WEEKLY_SOURCE_CONFIG.filter((source) => canRetrySource(source, state.sources[source.id], mode, now()) && (source.id !== "wisdom" || state.sources.flomo?.status === "succeeded"));
-        if (dueRescue.length) break;
+        const dueRescue = WEEKLY_SOURCE_CONFIG.filter((source) => canRetrySource(source, state.sources[source.id], mode, now()) && (source.id !== "wisdom" || state.sources.flomo?.status === "succeeded"));
+        if (dueRescue.length) {
+          for (const source of dueRescue) state.sources[source.id].rescueUsed = true;
+          await save();
+          await runBatch(dueRescue, "rescue", sourceContext());
+          await runDependentWisdomFirst(sourceContext());
+          continue;
+        }
         const pendingTimes = WEEKLY_SOURCE_CONFIG
           .filter((source) => source.collector && source.queue !== "external" && source.queue !== "manual"
             && (source.id !== "wisdom" || state.sources.flomo?.status === "succeeded"))
@@ -182,14 +204,10 @@ export async function runWeeklyRetrySupervisor({
         await sleep(waitMs);
         if (waitMs < untilNext) break;
       }
-      if (!dueRescue.length && now() - startedAt >= maxDurationMs) {
+      if (now() - startedAt >= maxDurationMs) {
         event({ step: "retry-rescue", outcome: "bounded-window-ended", evidence: STATE_FILE });
         await save();
       }
-      for (const source of dueRescue) state.sources[source.id].rescueUsed = true;
-      if (dueRescue.length) await save();
-      await runBatch(dueRescue, "rescue", { state, now, runSource, readOutcome, save, event, mode, week: normalizedWeek, repoRoot });
-      await runDependentWisdomFirst({ state, now, runSource, readOutcome, save, event, mode, week: normalizedWeek, repoRoot });
     }
 
     await save();
@@ -225,6 +243,7 @@ async function runBatch(sources, kind, context) {
     };
     await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
   }));
+  await context.drainPreparation?.();
 }
 
 async function runDependentWisdomFirst(context) {
@@ -248,18 +267,26 @@ async function runOneSource(source, kind, context) {
 
   let outcome;
   try {
-    outcome = await context.runSource(source, {
+    const result = await context.runSource(source, {
       week: context.week, repoRoot: context.repoRoot, attempt, attemptKind: kind,
       onDependencyResult: async (result) => {
         context.event({ step: "flomo-review-import", sourceId: source.id, outcome: "succeeded", ...result, evidence: "智慧之门来源键读回" });
         await context.save();
       }
     });
-    const current = await context.readOutcome(source);
-    if (freshOutcome(current, began) && ["ready", "empty", "generated", "confirmed", "needs_review"].includes(current.status)) outcome = current;
+    if (result && typeof result === "object" && typeof result.status === "string") {
+      outcome = result;
+    } else {
+      const current = await context.readOutcome(source);
+      outcome = freshOutcome(current, began) && ["ready", "empty", "generated", "confirmed", "needs_review"].includes(current.status)
+        ? current
+        : { status: "failed", error: "collector-result-missing" };
+    }
   } catch (error) {
     const current = await context.readOutcome(source).catch(() => null);
-    outcome = freshOutcome(current, began) && ["ready", "empty", "generated", "confirmed", "needs_review"].includes(current.status)
+    // ChatGPT may finish after its observer is interrupted. Recover only a
+    // confirmed AI result; other collector exceptions remain authoritative.
+    outcome = source.id === "ai" && freshOutcome(current, began) && ["generated", "confirmed"].includes(current.status)
       ? current
       : { status: "failed", error: sanitizeErrorForClassification(error), code: error?.code, timedOut: Boolean(error?.killed || error?.signal === "SIGTERM") };
   }
@@ -295,6 +322,7 @@ async function runOneSource(source, kind, context) {
     evidence: sourceStatusEvidence(source, outcome)
   });
   await context.save();
+  if (classified.status === "succeeded") context.prepareAfterSuccess?.(source);
 }
 
 export async function runConfiguredSource(source, { week, repoRoot, onDependencyResult }) {
@@ -319,7 +347,7 @@ export async function runConfiguredSource(source, { week, repoRoot, onDependency
     });
     const current = await readCurrentSourceOutcome(source, week, repoRoot);
     const updatedAt = Date.parse(current?.updatedAt || current?.confirmedAt || current?.completedAt || "");
-    if (!current || updatedAt < startedAt - 1_000 || !["ready", "empty", "generated", "confirmed", "needs_review"].includes(current.status)) {
+    if (!current || !Number.isFinite(updatedAt) || updatedAt < startedAt - 1_000 || !["ready", "empty", "generated", "confirmed", "needs_review"].includes(current.status)) {
       return { status: "failed", error: "collector-exit-without-fresh-valid-status" };
     }
     return current;
@@ -615,9 +643,18 @@ function parseArgs(argv) {
   return { week: value("--week"), mode: value("--mode", "initial") };
 }
 
+async function prepareWeeklyInputs(_source, { week, repoRoot }) {
+  const script = path.join(repoRoot, ".agents/skills/learn-x-process/scripts/generate-weekly-process-pack.mjs");
+  await execFileAsync(process.execPath, [script, "--week", week, "--prepare"], {
+    cwd: repoRoot, timeout: 2 * 60_000, maxBuffer: 2 * 1024 * 1024, windowsHide: true
+  });
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const options = parseArgs(process.argv.slice(2));
-  const operation = options.recordStage ? recordWeeklyStage(options) : runWeeklyRetrySupervisor(options);
+  const operation = options.recordStage
+    ? recordWeeklyStage(options)
+    : runWeeklyRetrySupervisor({ ...options, prepareInputs: prepareWeeklyInputs });
   operation
     .then((result) => console.log(JSON.stringify(result)))
     .catch((error) => { console.error(error.message); process.exitCode = 1; });

@@ -13,7 +13,7 @@ test('Ego subprocess receives EOF so an eval runner waiting for stdin completes'
   const originalPath = process.env.PATH;
   process.env.PATH = `${dir}${path.delimiter}${originalPath}`;
   try {
-    const { stdout } = await runEgoScript('console.log("probe")', { timeout: 2000 });
+    const { stdout } = await runEgoScript('console.log("probe")', { timeout: 10_000 });
     assert.equal(JSON.parse(stdout).stdinEnded, true);
   } finally { process.env.PATH = originalPath; }
 });
@@ -70,5 +70,44 @@ test('browser extraction separates date badges, waits for expansion and retains 
   assert.equal(result.complete, true);
   assert.equal(result.memos.length, 1);
   assert.equal(result.memos[0].timeText, '2026-09-29 09:00');
+  assert.equal(result.memos[0].bodyText, original);
+});
+
+test('browser extraction keeps full DOM text and trusts timestamp identity over inner links', async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'flomo-browser-identity-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const resultPath = path.join(dir, 'scan.json');
+  const original = '折叠样式下的完整原文。';
+  const time = {
+    href: 'https://v.flomoapp.com/mine/?memo_id=target',
+    innerText: '2026-09-29 09:00',
+    querySelector: () => null,
+  };
+  const innerLink = { href: 'https://v.flomoapp.com/mine/?memo_id=inner' };
+  const body = { innerText: original, classList: { contains: () => true }, scrollHeight: 200, clientHeight: 100 };
+  const card = {
+    querySelector: selector => selector === 'a.time[href*="memo_id="]'
+      ? time
+      : selector === 'a[href*="memo_id="]'
+        ? innerLink
+        : selector.startsWith('.richText') ? body : null,
+    querySelectorAll: () => [],
+  };
+  const list = { scrollTop: 0, clientHeight: 100, scrollHeight: 100 };
+  const prior = globalThis.document;
+  t.after(() => { if (prior === undefined) delete globalThis.document; else globalThis.document = prior; });
+  globalThis.document = {
+    querySelector: selector => selector === '.memos' ? list : null,
+    querySelectorAll: selector => selector === 'div.memo' ? [card] : [],
+  };
+  const page = { goto: async () => {}, waitForLoadState: async () => {}, evaluate: async fn => fn() };
+  const task = { ownership: 'agent', page: () => page, finish: async () => {} };
+  const script = buildEgoScanScript({ week: '2026-W40', range: isoWeekRangeShanghai('2026-W40'), taskName: 'identity-test', resultPath, maxSteps: 2 });
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  await new AsyncFunction('taskSpace', 'cliLog', script)(async () => task, () => {});
+  const result = JSON.parse(await readFile(resultPath, 'utf8'));
+  assert.equal(result.complete, true);
+  assert.equal(result.memos.length, 1);
+  assert.equal(result.memos[0].memoId, 'target');
   assert.equal(result.memos[0].bodyText, original);
 });

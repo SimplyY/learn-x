@@ -1,7 +1,7 @@
 # CASE｜Flomo 每日回顾推荐
 
 - 状态：已确认
-- 最后核对日期：2026-10-07
+- 最后核对日期：2026-10-08
 - 上下游链接：[Requirement](../../requirements/2026-10-flomo-daily-review.md) → [Plan](execution-plan.md)
 - Type: Major
 - Status: In Progress
@@ -12,9 +12,9 @@
 
 - 当前有效方案：execution-plan.md及其2026-10-07用户最新裁定；当前用户明确要求实施。
 - 最后已验证里程碑：M1真实3条推荐、post＋附件字节读回与只读反馈；M2累计库、质量覆盖、5–8条规则及7/28日模拟；M3每日自动化已启用并通过实时发送前置检查。
-- 当前阶段：ywdev完成，ywtest报告PARTIAL，ywuse已完成独立验收并判PARTIAL。遵守用户明确顺序 ywdev → ywtest → ywuse。
-- 下一步：恢复 `--as bot` 的飞书文档访问后，创建 Learn-X Flomo Usage Truth 页面、读回全文与revision并链接到README；观察2026-10-08首次定时唤醒及2026-W42完整周。首投、首周和本人反馈未验证前不改判通过。
-- 阻塞：系统使用知识库没有现存Learn-X/Flomo页面；`--as bot`读取在飞书token端点返回Forbidden。项目身份契约要求AI的Docx/Wiki写入使用bot，因此未切换user身份，也未创建未读回的页面。10月7日20:00已过，不补发。
+- 当前阶段：ywdev已完成；本轮按多个角度重跑ywtest，当前结论PARTIAL；随后完成Deep ywuse独立验收，结论PARTIAL。遵守用户明确顺序 ywdev → ywtest → ywuse。
+- 下一步：先恢复bot凭证校验，再维护Learn-X Flomo Usage Truth页面并读回正文/revision、把链接补入README；之后观察每日20:00真实5–8条投递及2026-W42完整周。首投、首周和本人反馈未验证前不改判通过。
+- 阻塞：2026-10-08 10:31再次执行 `lark-cli auth status --json --verify`，bot仍为`verify_failed`且飞书token端点返回Forbidden；user身份为ready，但项目契约要求AI的Docx/Wiki写入使用bot，故未切换身份、未创建未读回页面。当前自动化配置ACTIVE不等于已成功投递；20:00尚未到达，不手动补发。
 
 ## 来源与落点核对
 
@@ -45,6 +45,7 @@
 - 本日手动发送已经占用2026-10-06；今日日常重跑应拒绝发送，不能晚间再次推同批次。
 - `npm run test:flomo:review` 主agent复跑82/82通过（反馈撤回及过滤审查缺陷修复前的基线）；Skill quick_validate通过。此处是开发即时验证，不替代 ywtest 独立测试。
 - 2026-10-07数量规则更新后，`policy`、`review`、`delivery`、`catalog`四组Node测试合计100/100通过；真实catalog的28天最小容量模拟通过。
+- 2026-10-08数量口径进一步收敛为硬下限5条、目标6–7条、整体平均6条；诗类卡片标题改为摘要前两字加“诗”。`npm run test:flomo:review` 136/136通过。
 
 真实采集运行 `learn-x-v2-flomo-122c8a3a-a2d5-4367-a6f6-d9b1d50fb8a9` 失败：父调用退出1，本次结果文件不存在，SDK列表未出现该UUID空间。标准库导入、多行CLI求值与taskSpace文档签名正常；无法进一步确认阻塞发生于readySignal还是空间创建本体。未操作其他space33，未创建第二个替代空间，未将失败产物并入正式归档。
 
@@ -134,3 +135,28 @@
 - 只读真实Feishu路径已核验历史2026-10-06的3条post正文及Markdown附件下载字节SHA；当前成员/profile/bot和最近一分钟0条也通过。读回前后私有catalog/ledger哈希不变；本轮没有发送、改账本或改自动化。
 - 当前5–8条数量更新后的真实推荐投递、自动化首个唤醒、首个完整自然周与本人反馈均未验证；10月7日20:00已过且不补发。真实Feishu历史E2E不等于新数量端到端验收，故测试只评PARTIAL。
 - 语义质量、动态Output匹配及个人敏感内容排除仍依赖逐次完整阅读；结构容量模拟不保证每一天都有足够强匹配候选。目录保留历史归档与可信周增量，远端历史编辑/删除同步范围未证实。
+
+## ywtest 多角度复测与 ywuse 更新｜2026-10-08 10:08 Asia/Shanghai
+
+- 按当前确认的5–8条规则复核了需求、实现、调用链、当前工作树diff和既有真实回执。上一轮发现的两类缺陷已在工作树修复：目录解析只识别完整Flomo身份URL，保留来源样式正文并继续应用Learn-X标签过滤；年龄统计对入选项使用准确noteKey，历史只有分组身份且成员年龄跨档时失败关闭。新增相应回归测试。Ego子进程探针曾在繁忙测试中撞到2秒超时；将测试夹具超时提高到10秒后，独立测试者复测目标套件通过。
+- 同一独立测试者：`rtk npm run test:flomo:review` 132/132；周采集与Flomo归档联测11/11；采集器隔离3次，每次3/3；合成对抗边界7/7。协调者复跑目标套件132/132、联测11/11，以及全仓 `rtk npm test` 453/453。最终全仓运行期间相关其他工作区文件mtime未变化；测试期间更早出现的周流程短暂断言失败，后来在独立重跑中通过，根因未进一步归属到本功能。`git diff --check`和Flomo相关脚本语法检查通过。
+- 新鲜只读目录统计：646条笔记、504条合格候选；从2026-10-12起的7天与28天结构供给模拟分别需要35/130条，均可行。容量模拟只验证库存与重复预算，不代表语义匹配或真实每日供给。账本仍只有2026-10-06已送达3条的历史批次；本轮没有改catalog、ledger或发送消息。
+- 本机每日自动化配置文件仍写明ACTIVE、Learn-X项目、每天20:00 Asia/Shanghai和5–8规则；当前运行窗口尚未到20:00。最新 `lark-cli auth status --json --verify` 显示bot `verify_failed`/token Forbidden，因而新数量投递以及系统使用知识库写入不能验收。本轮不切换身份、不发送、不创建外部文档。
+- ywtest维持PARTIAL：本地策略、采集和全仓回归通过，但新规则真实飞书E2E被当前bot身份失败阻断。Deep ywuse同为PARTIAL；[Acceptance](acceptance.md)已更新到本轮证据，Usage Truth页面及README功能链接仍待bot恢复后创建/读回，2026-W42首个完整自然周与本人反馈仍待未来观察。
+
+## ywtest 多角度补正复测｜2026-10-08 10:28 Asia/Shanghai
+
+- 复测范围按三个角度展开：①推荐数量、质量与Output强匹配；②每周Flomo采集、归档和重试错误分类；③身份、重复预算、年龄归因、发送/附件读回、反馈及隐私边界。独立测试者与协调者复核了当前实现、变更diff和针对性反例。
+- 复测触发并修复两处可复现边界：不同笔记共享同组历史alias时，旧统计可能把记录归到最后一个候选；现在发现跨笔记alias歧义即失败关闭。Flomo浏览器脚本中的DNS、超时和HTTP429曾被清理成普通`scan-failed`，导致周流程丢失可重试类别；现在保留安全的错误类别，429标记`service-rate-limit`并进入20分钟冷却，冷却结束前不可重试、之后可恢复；未知错误仍按不可重试失败关闭。对应策略与采集器回归已加入。
+- 最新测试结果：`rtk npm run test:flomo:review` 133/133；周采集、归档及相邻工作流选择56/56；`collect-flomo-weekly.test.mjs` 11/11；全仓`rtk npm test` 460/460。修改脚本`node --check`、`rtk git diff --check`通过。独立测试者复核修复后的alias和浏览器DNS/超时/429/未知错误路径；未发现可复现P0/P1。
+- 本轮没有重新运行真实Flomo浏览器扫描、没有发送真实推荐、没有改动私有catalog/ledger或外部页面。10:27的只读auth复核仍为bot `verify_failed`/Forbidden，user身份虽ready但不得替代项目要求的bot。新5–8条真实投递仍未验证；当天20:00定时窗口、2026-W42完整自然周及本人反馈均未到或未取得。
+- ywtest与Deep ywuse维持`PARTIAL`。[Acceptance](acceptance.md)已更新本轮结论和证据；Usage Truth页面及README功能页链接尚未完成，须等bot身份恢复后按原方案读回验证。
+
+## ywuse 外部状态复核｜2026-10-08 10:34 Asia/Shanghai
+
+- 按 `lark-wiki` 只读流程使用 `--as user` 对目标「系统使用知识库」做全分页读取：精确命中空间，根节点4个，导航首页下1个子节点；完整树中没有 Learn-X/Flomo 功能页。README 当前只在系统分类中提到 Flomo，没有该使用页链接。这里是目录读回证据，不代表本轮读取了导航文档正文或 revision。
+- 重新读取自动化配置：`/Users/yuwei/.codex/automations/learn-x-flomo-20-00/automation.toml` 为 `ACTIVE`、`FREQ=DAILY;BYHOUR=12;BYMINUTE=0;BYSECOND=0`、本地执行；其中 project_id 与 Codex `list_projects` 返回的 Learn-X 本地项目匹配。配置状态不证明已唤醒或送达。当前上海时间10:34，今天20:00尚未到达。
+- 10:31只读身份复核仍为 bot `verify_failed`，token endpoint 返回`Forbidden`；user身份ready。按Learn-X AGENTS身份契约，不用user代写Wiki/Docx，也不执行bot `auth login`。因此未创建/编辑外部页面或更新README。
+- 私有账本聚合只显示2026-10-06既有批次：`delivered`、3条、消息读回与附件读回均为真；当前没有新5–8条推荐批次，本轮没有发送或启动Flomo浏览器扫描。
+- 当前新鲜验证：`rtk npm test` 460/460；`rtk npm run test:flomo:review` 133/133；同轮全仓测试包含周采集器11项且通过。工作树其余周流程变更继续保留，未清理或重置。
+- ywdev与多角度ywtest的本地工作已收口；ywuse报告保持`PARTIAL`。真实5–8条飞书E2E、Usage Truth页面及README链接、首个完整自然周和本人反馈仍未验证。bot credential/provider恢复后先读回并完成使用页；每日首跑与自然周证据须待真实运行产生后再更新判定。

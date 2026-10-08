@@ -79,15 +79,15 @@ Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 刷新 YW Next �
    node .agents/skills/learn-x-process/scripts/generate-weekly-process-pack.mjs --week 2026-22
    ```
 
-   Weekly Process 对普通文件保留 15,000 Unicode 字符提示；Voice-X 的 `voice.md` 完整落盘，30,000 字符只是强提示，不阻断输入生成。阶段 1 的准备模式先压缩 Voice-X 并生成微信读书及超长来源的候选请求。正式 Pack 统一输出合并总表：输入按来源配置顺序，已确认周记作为阶段前提行单列；逐来源报告状态、记录/材料数及文件原始 → 清洗有效 → Pack 最终纳入字符链路。Voice-X 目标保留 10%–15%（预算中心 12.5%）；微信读书是必需语义压缩来源。`input:compress` 不处理 Voice-X，也不属于周流程快路径。
+   Weekly Process 对普通文件保留 15,000 Unicode 字符提示；Voice-X 的 `voice.md` 完整落盘，30,000 字符只是强提示，不阻断输入生成。阶段 1 的准备模式先压缩 Voice-X 并生成微信读书及超长来源的候选请求。正式 Pack 按统一来源配置顺序输出「重要来源」和「可选来源」两张表，已确认周记作为阶段前提单列；逐来源报告状态、记录/材料数及文件原始 → 清洗有效 → Pack 最终纳入字符链路。Voice-X 目标保留 10%–15%（预算中心 12.5%）；微信读书是必需语义压缩来源。`input:compress` 不处理 Voice-X，也不属于周流程快路径。
 
-   阶段 1 在来源到齐后先运行准备模式：
+   阶段 1 的执行器在每个来源成功后立即运行准备模式；必要的语义候选由 Codex 完成后，再运行一次准备模式校验全量缓存：
 
    ```bash
    npm run process:weekly -- --week YYYY-Www --prepare
    ```
 
-   准备模式只写入私有 `.preprocessing/` 缓存和候选清单，不生成正式 `input.json` 或 Process Pack。Voice-X 在此阶段做确定性压缩；微信读书和超过普通来源字符阈值的材料生成绑定目标周、来源哈希、采集器版本与规则版本的语义压缩请求，由 Codex 按来源原文完成候选并写入清单指定位置，再运行一次 `--prepare` 校验。保留 `03_input/weekly/YYYY-Www/` 原始文件不变。
+   准备模式只写入私有 `.preprocessing/` 缓存和候选清单，不生成正式 `input.json` 或 Process Pack。Voice-X 在此阶段做确定性压缩；微信读书和超过普通来源字符阈值的材料生成绑定目标周、来源哈希、采集器版本、来源状态 generation 与规则版本的语义压缩请求，由 Codex 按来源原文完成候选并写入清单指定位置；候选 JSON 必须原样携带请求中的 `generation` 字段，再运行一次 `--prepare` 校验。过期 generation 的候选无效，较旧准备任务不得覆盖 generation 更新的缓存。保留 `03_input/weekly/YYYY-Www/` 原始文件不变。
 
    微信读书有划线或想法时必须语义压缩，不受 15,000 字符门槛影响。保留阅读统计、书名、作者、进度和“当前章节”快照；按书和必要章节归纳高信号观点，合并重复划线，保留独立主张、推理链、条件、反例、风险和关键具象信息。用户想法与作者观点分开且完整保留；不推导行动或 Memory。压缩须实质缩短，不能靠删尾或机械截断；无法安全缩短时标记 `needs_review` 并停止交付。
 

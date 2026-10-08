@@ -57,6 +57,7 @@
     "inquiry:deep-research": "node .agents/skills/learn-x-deep-research/scripts/deep-research.mjs",
     "insight:periodic": "node .agents/skills/learn-x-periodic-insight/scripts/run-periodic-insight.mjs",
     "flomo:review": "node .agents/skills/learn-x-flomo-review/scripts/review.mjs",
+    "flomo:backfill": "node .agents/skills/learn-x-input/scripts/backfill-flomo-identity.mjs",
     "test:flomo:review": "node --test .agents/skills/learn-x-flomo-review/scripts/*.test.mjs"
   },
   "dependencies": {

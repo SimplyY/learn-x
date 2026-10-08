@@ -28,6 +28,9 @@ export async function prepareWeeklyProcessInputs({ week, repoRoot, payload }) {
     const inputPath = path.join(repoRoot, file.path);
     const raw = await readFile(inputPath, "utf8");
     const sourceHash = sha256(raw);
+    if (file.rawHash && file.rawHash !== sourceHash) {
+      throw new Error(`weekly-preprocessing-input-snapshot-stale: ${file.path}; recollect inputs before preparing`);
+    }
     const status = source ? payload.sourceStatuses?.[source.id] : undefined;
     const collector = source?.collector || "manual";
     const collectorHash = await collectorVersionHash(repoRoot, pkg.scripts?.[collector]);
@@ -61,7 +64,8 @@ export async function prepareWeeklyProcessInputs({ week, repoRoot, payload }) {
       const value = JSON.parse(await readFile(candidateFile, "utf8"));
       if (value.schemaVersion !== 1 || value.week !== week || value.sourceId !== snapshot.sourceId
         || value.sourcePath !== file.path || value.sourceHash !== sourceHash
-        || value.collectorHash !== collectorHash || value.ruleVersion !== WEEKLY_PREPROCESS_RULE_VERSION
+        || value.collectorHash !== collectorHash || value.generation !== snapshot.generation
+        || value.ruleVersion !== WEEKLY_PREPROCESS_RULE_VERSION
         || typeof value.text !== "string" || !value.text.trim()) {
         throw new Error("candidate-version-mismatch");
       }
@@ -78,6 +82,7 @@ export async function prepareWeeklyProcessInputs({ week, repoRoot, payload }) {
         sourcePath: file.path,
         sourceHash,
         collectorHash,
+        generation: snapshot.generation,
         ruleVersion: WEEKLY_PREPROCESS_RULE_VERSION,
         candidatePath: path.relative(repoRoot, candidateFile).split(path.sep).join("/"),
         required,
@@ -106,6 +111,13 @@ export async function prepareWeeklyProcessInputs({ week, repoRoot, payload }) {
     exclusions
   };
   const temp = `${manifestPath}.${process.pid}-${randomUUID()}.tmp`;
+  const previousManifest = await readManifestIfPresent(manifestPath);
+  if (previousManifest && hasNewerSourceSnapshot(previousManifest, manifest)) {
+    return { manifest: previousManifest, manifestPath, requests: previousManifest.requests || [], exclusions: previousManifest.exclusions || [], superseded: true };
+  }
+  if (!await sourceSnapshotsStillMatch(repoRoot, sourceSnapshots)) {
+    return { manifest: previousManifest, manifestPath, requests, exclusions, superseded: true };
+  }
   await writeFile(temp, `${JSON.stringify(manifest, null, 2)}\n`, { flag: "wx" });
   try { await rename(temp, manifestPath); }
   finally { await unlink(temp).catch((error) => { if (error.code !== "ENOENT") throw error; }); }
@@ -163,6 +175,39 @@ export async function loadWeeklyPreparation({ week, repoRoot, payload }) {
 function sha256(value) { return createHash("sha256").update(value).digest("hex"); }
 function safeId(value) { return String(value).replace(/[^a-zA-Z0-9_-]+/g, "-"); }
 function normalizeWeek(value) { return String(value).replace(/^(\d{4})-(\d{1,2})$/, (_m, year, week) => `${year}-W${String(week).padStart(2, "0")}`); }
+
+async function readManifestIfPresent(file) {
+  try { return JSON.parse(await readFile(file, "utf8")); }
+  catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+async function sourceSnapshotsStillMatch(repoRoot, snapshots) {
+  for (const snapshot of snapshots) {
+    try {
+      const raw = await readFile(path.join(repoRoot, snapshot.sourcePath), "utf8");
+      if (sha256(raw) !== snapshot.sourceHash) return false;
+    } catch (error) {
+      if (error.code === "ENOENT") return false;
+      throw error;
+    }
+  }
+  return true;
+}
+
+function hasNewerSourceSnapshot(previousManifest, nextManifest) {
+  const previous = new Map((previousManifest.sourceSnapshots || []).map((snapshot) => [snapshot.sourceId, snapshot]));
+  return nextManifest.sourceSnapshots.some((next) => {
+    const old = previous.get(next.sourceId);
+    if (!old) return false;
+    const oldTime = Date.parse(old.generation || "");
+    const nextTime = Date.parse(next.generation || "");
+    if (Number.isFinite(oldTime) && Number.isFinite(nextTime) && oldTime > nextTime) return true;
+    return false;
+  });
+}
 
 async function collectorVersionHash(repoRoot, command) {
   if (!command) return "manual";

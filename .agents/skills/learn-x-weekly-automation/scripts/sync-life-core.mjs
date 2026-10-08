@@ -13,7 +13,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const defaultRepoRoot = path.resolve(__dirname, "../../../..");
 export const SOURCE_URL = "https://ywhome.feishu.cn/wiki/QIaQwXf07iMvqokKQf3cp3XmnMC";
 const MIRROR_RELATIVE = "03_input/_mirrors/人生核心议题.md";
-const REQUIRED_H1 = ["长期核心议题", "中期核心议题", "短期核心议题"];
+const REQUIRED_HORIZONS = ["长期", "中期", "短期"];
 // 防御性截断：即使线上附录已删除，也永远以首个 `# 附录` 一级标题为边界，附录内容不得进入本地镜像。
 const APPENDIX_RE = /^#\s*附录/m;
 // 防御性检查：未展开的内嵌 Sheet / Base / 画板 / 附件块不得进入本地镜像。
@@ -44,7 +44,10 @@ export function extractLifeCoreBody(markdown) {
   const body = value.replace(/<!--[^]*?-->/g, "").trim();
   if (RESOURCE_RE.test(body)) return { error: "unexpanded-resource-block" };
   const h1 = [...body.matchAll(/^#\s+(.+?)\s*$/gm)].map((match) => match[1].trim());
-  const missing = REQUIRED_H1.filter((heading) => !h1.includes(heading));
+  const missing = REQUIRED_HORIZONS.filter((horizon) => !h1.some((heading) => {
+    const suffix = heading.slice(horizon.length).trimStart();
+    return heading.startsWith(horizon) && (suffix.startsWith("核心议题") || suffix.startsWith("（") || suffix.startsWith("("));
+  }));
   if (missing.length) return { error: `missing-core-headings:${missing.join("/")}` };
   if (body.length < 120) return { error: "body-too-short" };
   return { body: `${body}\n` };

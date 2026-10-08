@@ -232,13 +232,26 @@ async function readDownloadedMessage(runCli, messageId, cwd) {
   return messages[0];
 }
 
-export async function sendRecommendation({ chatId, markdown, attachmentPath, attachmentSha256, dateMarker, idempotencyKey, botSenderId, botSenderIds, profile, onUploaded, runCli = runLarkCli }) {
+export async function sendRecommendation({ chatId, card, markdown, attachmentPath, attachmentSha256, dateMarker, idempotencyKey, botSenderId, botSenderIds, profile, onUploaded, runCli = runLarkCli }) {
   runCli = useProfile(runCli, profile);
   assertId(chatId, 'oc_', 'chat-id-invalid');
   let messageId, sendAttempted = false;
   try {
     const bots = [...(botSenderIds ?? []), ...(botSenderId ? [botSenderId] : [])];
-    if (typeof markdown !== 'string' || !markdown.trim() || !attachmentPath || !bots.length || !/^[A-Za-z0-9:_-]{1,50}$/.test(idempotencyKey ?? '')) throw new DeliveryError('send-input-invalid');
+    if (!bots.length || !/^[A-Za-z0-9:_-]{1,50}$/.test(idempotencyKey ?? '')) throw new DeliveryError('send-input-invalid');
+    if (card) {
+      dateMarker ??= JSON.stringify(card).match(/回顾日期：\d{4}-\d{2}-\d{2}/)?.[0];
+      if (markdown || attachmentPath || typeof dateMarker !== 'string' || card.schema !== '2.0' || !/^(?:回顾日期：)(\d{4}-\d{2}-\d{2})$/.test(dateMarker) || !JSON.stringify(card).includes(dateMarker)) throw new DeliveryError('card-send-input-invalid');
+      const cardSha256 = cardContentSha256(card);
+      sendAttempted = true;
+      const sent = dataOf(await call(runCli, ['im', '+messages-send', '--chat-id', chatId, '--msg-type', 'interactive', '--content', JSON.stringify(card), '--idempotency-key', idempotencyKey, ...BOT_ARGS]));
+      messageId = sent.message_id;
+      assertId(messageId, 'om_', 'sent-message-id-missing');
+      if (sent.chat_id !== chatId) throw new DeliveryError('sent-chat-mismatch');
+      const message = await readDownloadedMessage(runCli, messageId);
+      return { ...verifyMessage(message, { chatId, messageId, cardContentSha256: cardSha256, dateMarker, botSenderId, botSenderIds }), idempotencyKey };
+    }
+    if (typeof markdown !== 'string' || !markdown.trim() || !attachmentPath) throw new DeliveryError('send-input-invalid');
     dateMarker ??= markdown.split(/\r?\n/).find(line => /^回顾日期：\d{4}-\d{2}-\d{2}$/.test(line.trim()))?.trim();
     const date = dateMarker?.match(/^回顾日期：(\d{4}-\d{2}-\d{2})$/)?.[1];
     const time = Date.parse(`${date}T00:00:00Z`);
@@ -336,9 +349,9 @@ function feedbackEvents(message, batch, ownerId) {
   const items = batchItems(batch);
   const events = [];
   for (const clause of clauses) {
-    const match = clause.match(/^第\s*([1-8一二三四五六七八])\s*条\s*(有帮助|跳过|已回顾)[!！]?$/);
+    const match = clause.match(/^第\s*(10|十|[1-9一二三四五六七八九])\s*条\s*(有帮助|跳过|已回顾)[!！]?$/);
     if (!match) continue;
-    const number = /^[1-8]$/.test(match[1]) ? Number(match[1]) : '一二三四五六七八'.indexOf(match[1]) + 1;
+    const number = /^(?:10|十)$/.test(match[1]) ? 10 : /^[1-9]$/.test(match[1]) ? Number(match[1]) : '一二三四五六七八九'.indexOf(match[1]) + 1;
     const item = items.find((candidate) => candidate.number === number);
     if (!item?.noteKey) continue;
     if (message.updated === true && !message.update_time) throw new DeliveryError('feedback-edit-version-missing');

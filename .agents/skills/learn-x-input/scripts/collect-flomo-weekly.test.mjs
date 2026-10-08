@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { collectFlomoWeekly, parseMemoTime, validateCompleteScan } from "./collect-flomo-weekly.mjs";
+import { buildEgoScanScript, collectFlomoWeekly, parseMemoTime, validateCompleteScan } from "./collect-flomo-weekly.mjs";
 
 function scanFixture({ memos = [], pinned = [], scanned = memos.length + pinned.length, complete = true, lowerBoundCovered = true } = {}) {
   return {
@@ -93,6 +93,172 @@ test("a failed scan preserves the old file but marks the source failed so it can
   assert.equal(await readFile(path.join(outputRoot, "flomo.md"), "utf8"), old);
   assert.equal(status.sources.flomo.status, "failed");
   assert.equal(status.sources.flomo.preservedStaleFile, true);
+});
+
+test("preserves a transient Flomo transport signal for the retry supervisor", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-retry-classification-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const outputRoot = path.join(root, "03_input/weekly/2026-W40");
+
+  await assert.rejects(collectFlomoWeekly({
+    week: "2026-W40", outputRoot,
+    scan: async () => { throw new Error("EAI_AGAIN: temporary name resolution failure"); }
+  }), /flomo-weekly-network-transient/);
+  const status = JSON.parse(await readFile(path.join(outputRoot, "_source-status.json"), "utf8"));
+  assert.equal(status.sources.flomo.status, "failed");
+  assert.match(status.sources.flomo.summary, /network-transient/);
+});
+
+test("classifies HTTP 429 as a retryable Flomo service limit", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-rate-limit-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const outputRoot = path.join(root, "03_input/weekly/2026-W40");
+
+  await assert.rejects(collectFlomoWeekly({
+    week: "2026-W40", outputRoot,
+    scan: async () => { throw new Error("HTTP 429 Too Many Requests"); }
+  }), /flomo-weekly-service-rate-limit/);
+  const status = JSON.parse(await readFile(path.join(outputRoot, "_source-status.json"), "utf8"));
+  assert.equal(status.sources.flomo.status, "failed");
+  assert.match(status.sources.flomo.summary, /service-rate-limit/);
+});
+
+test("classifies network, timeout, and rate-limit errors raised inside the browser task", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-browser-errors-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const resultPath = path.join(root, "result.json");
+  const previousTaskSpace = globalThis.taskSpace;
+  const previousCliLog = globalThis.cliLog;
+  globalThis.cliLog = () => {};
+  try {
+    for (const [signal, expected] of [
+      ["net::ERR_NAME_NOT_RESOLVED", "network-transient"],
+      ["Navigation timeout of 30000 ms exceeded", "network-timeout"],
+      ["HTTP 429 Too Many Requests", "service-rate-limit"],
+      ["unexpected selector failure", "scan-failed"]
+    ]) {
+      let finishes = 0;
+      globalThis.taskSpace = async () => ({
+        ownership: "agent",
+        page: () => ({ goto: async () => { throw new Error(signal); } }),
+        finish: async () => { finishes += 1; }
+      });
+      const script = buildEgoScanScript({
+        week: "2026-W40", range: { startEpoch: 1_790_000_000, endEpoch: 1_790_100_000 },
+        taskName: "learn-x-v2-flomo-error-test", resultPath, maxSteps: 2
+      });
+      const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+      await new AsyncFunction("taskSpace", "cliLog", script)(globalThis.taskSpace, globalThis.cliLog);
+      const result = JSON.parse(await readFile(resultPath, "utf8"));
+      assert.equal(result.error, expected, signal);
+      assert.equal(result.cleanup, "finished", signal);
+      assert.equal(finishes, 1, signal);
+    }
+  } finally {
+    if (previousTaskSpace === undefined) delete globalThis.taskSpace;
+    else globalThis.taskSpace = previousTaskSpace;
+    if (previousCliLog === undefined) delete globalThis.cliLog;
+    else globalThis.cliLog = previousCliLog;
+  }
+});
+
+test("forwards sanitized browser failure classes into the weekly retry contract", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-browser-retry-contract-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const bin = path.join(root, "bin");
+  await mkdir(bin, { recursive: true });
+  const egoPath = path.join(bin, "ego-browser");
+  await writeFile(egoPath, `#!/usr/bin/env node
+const fs = require("node:fs");
+const source = process.argv.at(-1);
+const resultPath = JSON.parse(source.match(/const resultPath = ("[^"]+");/)[1]);
+fs.writeFileSync(resultPath, JSON.stringify({ ok: false, error: process.env.LEARN_X_TEST_EGO_RESULT_ERROR }), { mode: 0o600 });
+`, { mode: 0o700 });
+
+  const previousPath = process.env.PATH;
+  const previousError = process.env.LEARN_X_TEST_EGO_RESULT_ERROR;
+  process.env.PATH = `${bin}${path.delimiter}${previousPath || ""}`;
+  try {
+    for (const [browserError, expected] of [
+      ["network-transient", "network-transient"],
+      ["network-timeout", "network-timeout"],
+      ["service-rate-limit", "service-rate-limit"],
+      ["scan-failed", "browser-scan-failed"]
+    ]) {
+      const outputRoot = path.join(root, expected);
+      process.env.LEARN_X_TEST_EGO_RESULT_ERROR = browserError;
+      await assert.rejects(collectFlomoWeekly({ week: "2026-W40", outputRoot }), new RegExp(`flomo-weekly-${expected}`));
+      const status = JSON.parse(await readFile(path.join(outputRoot, "_source-status.json"), "utf8"));
+      assert.equal(status.sources.flomo.status, "failed", browserError);
+      assert.match(status.sources.flomo.summary, new RegExp(expected), browserError);
+    }
+  } finally {
+    process.env.PATH = previousPath;
+    if (previousError === undefined) delete process.env.LEARN_X_TEST_EGO_RESULT_ERROR;
+    else process.env.LEARN_X_TEST_EGO_RESULT_ERROR = previousError;
+  }
+});
+
+test("finishes only this collector's Ego task after a non-handoff scan failure", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-task-cleanup-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const resultPath = path.join(root, "result.json");
+  let finishes = 0;
+  const previousTaskSpace = globalThis.taskSpace;
+  const previousCliLog = globalThis.cliLog;
+  globalThis.taskSpace = async () => ({
+    ownership: "agent",
+    page: () => ({ goto: async () => {}, waitForLoadState: async () => {}, evaluate: async () => ({ hasList: false }) }),
+    finish: async () => { finishes += 1; }
+  });
+  globalThis.cliLog = () => {};
+  try {
+    const script = buildEgoScanScript({
+      week: "2026-W40", range: { startEpoch: 1_790_000_000, endEpoch: 1_790_100_000 },
+      taskName: "learn-x-v2-flomo-test", resultPath, maxSteps: 2
+    });
+    await import(`data:text/javascript,${encodeURIComponent(script)}`);
+  } finally {
+    if (previousTaskSpace === undefined) delete globalThis.taskSpace;
+    else globalThis.taskSpace = previousTaskSpace;
+    if (previousCliLog === undefined) delete globalThis.cliLog;
+    else globalThis.cliLog = previousCliLog;
+  }
+  const result = JSON.parse(await readFile(resultPath, "utf8"));
+  assert.equal(result.error, "list-unavailable");
+  assert.equal(result.cleanup, "finished");
+  assert.equal(finishes, 1);
+});
+
+test("does not finish the Ego task after control has passed to the user", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-task-handoff-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const resultPath = path.join(root, "result.json");
+  let finishes = 0;
+  const previousTaskSpace = globalThis.taskSpace;
+  const previousCliLog = globalThis.cliLog;
+  globalThis.taskSpace = async () => ({
+    ownership: "user",
+    page: () => { throw new Error("a handed-off page must not be accessed"); },
+    finish: async () => { finishes += 1; }
+  });
+  globalThis.cliLog = () => {};
+  try {
+    const script = buildEgoScanScript({
+      week: "2026-W40", range: { startEpoch: 1_790_000_000, endEpoch: 1_790_100_000 },
+      taskName: "learn-x-v2-flomo-handoff", resultPath, maxSteps: 2
+    });
+    await import(`data:text/javascript,${encodeURIComponent(script)}`);
+  } finally {
+    if (previousTaskSpace === undefined) delete globalThis.taskSpace;
+    else globalThis.taskSpace = previousTaskSpace;
+    if (previousCliLog === undefined) delete globalThis.cliLog;
+    else globalThis.cliLog = previousCliLog;
+  }
+  const result = JSON.parse(await readFile(resultPath, "utf8"));
+  assert.equal(result.error, "user-control");
+  assert.equal(result.cleanup, "not-needed");
+  assert.equal(finishes, 0);
 });
 
 test("rejects unknown timestamps and incomplete target-week note bodies", () => {

@@ -17,8 +17,12 @@ test("四类 fixture：附录截断边界、正常正文、异常标题、资源
   const ok = extractLifeCoreBody(body());
   assert.equal(ok.error, undefined);
   assert.ok(ok.body.startsWith("# 长期核心议题"));
+  const substantive = "来自已确认核心议题的实质内容。".repeat(12);
+  const currentSourceStructure = `# 长期（5-10 年+）：**人生命题**\n${substantive}\n# 中期（1-5 年）：**战略选择**\n${substantive}\n# 短期（2026 年）：**当下重点**\n${substantive}`;
+  assert.equal(extractLifeCoreBody(currentSourceStructure).error, undefined);
   // 异常标题：缺少核心一级标题。
   assert.match(extractLifeCoreBody("# 长期核心议题\n\n只有一段。").error, /missing-core-headings/);
+  assert.match(extractLifeCoreBody("# 长期目标\n内容\n# 中期目标\n内容\n# 短期目标\n内容").error, /missing-core-headings/);
   // 资源块：未展开 Sheet 不得落盘。
   assert.equal(extractLifeCoreBody(`${body()}\n\n<bitable token="y"/>`).error, "unexpanded-resource-block");
 });

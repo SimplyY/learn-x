@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { collectBackupFiles, createArchive, createManifest, retentionClassFor, selectAnnualRecordIds, validateArchiveEntries, validateManifest } from "./backup-weekly.mjs";
+import { canSkipSuccessfulSnapshot, collectBackupFiles, createArchive, createManifest, retentionClassFor, selectAnnualRecordIds, validateArchiveEntries, validateManifest } from "./backup-weekly.mjs";
 
 test("scans all backup roots, ignores .DS_Store and credential-like files", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-backup-test-"));
@@ -28,6 +28,33 @@ test("manifest digest is stable when only creation time changes", () => {
   const first = createManifest("2026-W34", files, [], "2026-08-17T00:00:00.000Z");
   const second = createManifest("2026-W34", files, [], "2026-08-18T00:00:00.000Z");
   assert.equal(first.manifestSha256, second.manifestSha256);
+});
+
+test("same-week successful backup skips only when current payload hashes match", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-backup-fingerprint-"));
+  try {
+    for (const directory of ["01_core", "03_input", "04_output", "05_library"]) await mkdir(path.join(root, directory), { recursive: true });
+    const target = path.join(root, "01_core/a.md");
+    await writeFile(target, "a");
+    const firstScan = await collectBackupFiles(root);
+    const firstManifest = createManifest("2026-W34", firstScan.files, firstScan.excluded);
+    const existing = { values: { Status: "success", "Manifest SHA-256": firstManifest.manifestSha256 } };
+    const unchangedScan = await collectBackupFiles(root);
+    const unchangedManifest = createManifest("2026-W34", unchangedScan.files, unchangedScan.excluded);
+
+    assert.equal(canSkipSuccessfulSnapshot(existing, unchangedManifest), true);
+
+    await writeFile(target, "b");
+    const changedScan = await collectBackupFiles(root);
+    const changedManifest = createManifest("2026-W34", changedScan.files, changedScan.excluded);
+    assert.equal(firstManifest.totalBytes, changedManifest.totalBytes, "same-size edits still change the payload fingerprint");
+    assert.notEqual(firstManifest.manifestSha256, changedManifest.manifestSha256);
+    assert.equal(canSkipSuccessfulSnapshot(existing, changedManifest), false);
+    assert.equal(canSkipSuccessfulSnapshot({ values: { Status: "failed", "Manifest SHA-256": firstManifest.manifestSha256 } }, unchangedManifest), false);
+    assert.equal(canSkipSuccessfulSnapshot(existing, unchangedManifest, true), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("creates a tar.gz archive that restores and validates against the manifest", async () => {

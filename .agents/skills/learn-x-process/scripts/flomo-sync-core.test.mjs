@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { changeMagnitude, isSubstantive, loadManifestSpecs, memoSpec, normalizeMemoText, reconcile, sanitizeFlomoSource } from "./flomo-sync-core.mjs";
+import { changeMagnitude, isSubstantive, loadManifestSpecs, memoSpec, normalizeMemoText, quarterFromWeek, reconcile, sanitizeFlomoSource } from "./flomo-sync-core.mjs";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,6 +10,11 @@ test("renders stable weekly and quarterly Flomo identifiers", () => {
   assert.match(memoSpec("memory", "2026-Q3", "记忆").content, /^Learn-X 记忆｜2026-Q3[\s\S]*#learn-x\/memory\/2026-Q3/);
   assert.match(memoSpec("weekly", "2026-W32", "正文").content, /Learn-X 同步校验：[a-f0-9]{16}/);
   assert.match(memoSpec("monthly", "2026-06", "月记").content, /^Learn-X 月记｜2026-06[\s\S]*#learn-x\/monthly\/2026-06/);
+});
+
+test("assigns week-one Flomo memory to the quarter of its real Monday date", () => {
+  assert.equal(quarterFromWeek("2026-W01"), "2025-Q4");
+  assert.equal(quarterFromWeek("2026-W02"), "2026-Q1");
 });
 
 test("removes local source metadata before preparing a Flomo memo", () => {
