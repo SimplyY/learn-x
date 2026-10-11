@@ -1,9 +1,127 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { buildEgoScanScript, collectFlomoWeekly, parseMemoTime, validateCompleteScan } from "./collect-flomo-weekly.mjs";
+import { fileURLToPath } from "node:url";
+import { buildEgoScanScript, collectFlomoFullSnapshot, collectFlomoWeekly, formatCliError, parseArgs, parseMemoTime, scanFlomoWithEgo, validateCompleteScan } from "./collect-flomo-weekly.mjs";
+
+test("parses explicit full-snapshot options and rejects invalid combinations", () => {
+  assert.deepEqual(parseArgs(["--full-snapshot", "--verify-detail", "--keep-taskspace", "--task-space-id", "98", "--task-space-name", "learn-x-v2-flomo-run1", "--resume-taskspace", "--storage-root", "/private/tmp/flomo-private", "--timeout-ms", "1800000"]), {
+    mode: "full", verifyDetail: true, keepTaskSpace: true, taskSpaceId: 98, taskSpaceName: "learn-x-v2-flomo-run1", resumeTaskSpace: true, storageRoot: "/private/tmp/flomo-private", timeout: 1800000,
+  });
+  assert.deepEqual(parseArgs(["--help"]), { help: true });
+  assert.throws(() => parseArgs(["--full-snapshot", "--week", "2026-W41"]), /不能与 --week 同时使用/);
+  assert.throws(() => parseArgs(["--timeout-ms", "0"]), /--timeout-ms/);
+  assert.throws(() => parseArgs(["--full-snapshot", "--task-space-id", "0"]), /--task-space-id/);
+  assert.throws(() => parseArgs(["--full-snapshot", "--task-space-id", "98"]), /必须同时使用/);
+  assert.throws(() => parseArgs(["--full-snapshot", "--task-space-name", "other-run"]), /必须同时使用/);
+  assert.throws(() => parseArgs(["--full-snapshot", "--resume-taskspace"]), /必须与 --keep-taskspace/);
+  assert.throws(() => parseArgs(["--full-snapshot", "--storage-root", "relative/path"]), /必须是绝对路径/);
+  assert.throws(() => parseArgs(["--resume-taskspace", "--keep-taskspace", "--task-space-id", "98", "--task-space-name", "learn-x-v2-flomo-run1"]), /仅用于 --full-snapshot/);
+  assert.throws(() => parseArgs(["--storage-root", "/private/tmp/flomo-private"]), /仅用于 --full-snapshot/);
+  assert.throws(() => parseArgs(["--unknown"]), /未知参数/);
+});
+
+test("formats long-body mismatch diagnostics without exposing memo IDs or text", () => {
+  const error = Object.assign(new Error("ego-detail-body-mismatch"), {
+    stage: "cancel-longest-editor",
+    taskSpaceId: 101,
+    detailMismatch: {
+      expectedLength: 10329,
+      editorInnerLength: 10773,
+      editorTextContentLength: 10191,
+      memoId: "private-memo-id",
+      bodyText: "private memo text",
+      innerText: {
+        commonPrefix: 10, commonSuffix: 17, expectedMiddleLength: 10302, editorMiddleLength: 10756,
+        expectedMiddleKinds: { whitespace: 641, zeroWidth: 0, han: 7956, latinOrDigit: 14, other: 1691 },
+        editorMiddleKinds: { whitespace: 1047, zeroWidth: 0, han: 7956, latinOrDigit: 50, other: 1693 },
+        editorMiddleHasUrl: false, editorMiddleHasMarkdownLink: false, editorMiddleHasHtmlTag: false,
+        unsafe: "must not print",
+      },
+    },
+  });
+  const output = formatCliError(error);
+  const details = JSON.parse(output.slice(output.indexOf("{")).trim());
+  assert.deepEqual(details.bodyMismatch, {
+    expectedLength: 10329,
+    editorInnerLength: 10773,
+    editorTextContentLength: 10191,
+    innerText: {
+      commonPrefix: 10, commonSuffix: 17, expectedMiddleLength: 10302, editorMiddleLength: 10756,
+      editorMiddleHasUrl: false, editorMiddleHasMarkdownLink: false, editorMiddleHasHtmlTag: false,
+      expectedMiddleKinds: { whitespace: 641, zeroWidth: 0, han: 7956, latinOrDigit: 14, other: 1691 },
+      editorMiddleKinds: { whitespace: 1047, zeroWidth: 0, han: 7956, latinOrDigit: 50, other: 1693 },
+    },
+  });
+  assert.doesNotMatch(output, /private-memo-id|private memo text|must not print/);
+});
+
+test("CLI help exits without starting a Flomo collection", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-help-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const bin = path.join(root, "bin");
+  const sentinel = path.join(root, "ego-was-started");
+  await mkdir(bin, { recursive: true });
+  await writeFile(path.join(bin, "ego-browser"), `#!/usr/bin/env node\nrequire("node:fs").writeFileSync(${JSON.stringify(sentinel)}, "started")\n`, { mode: 0o700 });
+  const script = fileURLToPath(new URL("./collect-flomo-weekly.mjs", import.meta.url));
+  const output = execFileSync(process.execPath, [script, "--help"], {
+    cwd: path.resolve(path.dirname(script), "../../../../"),
+    env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH || ""}` },
+    encoding: "utf8",
+  });
+  assert.match(output, /--full-snapshot/);
+  assert.match(output, /不切换日常 catalog/);
+  await assert.rejects(readFile(sentinel), { code: "ENOENT" });
+});
+
+test("CLI surfaces only allowlisted full-scan diagnostics on failure", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-cli-diagnostics-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const bin = path.join(root, "bin");
+  await mkdir(bin, { recursive: true });
+  await writeFile(path.join(bin, "ego-browser"), `#!/usr/bin/env node
+const fs = require("node:fs");
+const source = process.argv.at(-1);
+const resultPath = JSON.parse(source.match(/const resultPath = ("[^"]+");/)[1]);
+fs.writeFileSync(resultPath, JSON.stringify({
+  ok: false, error: "network-timeout", cleanup: "retained-after-error", executionFinished: true,
+  taskSpaceId: 73, taskSpaceName: "learn-x-v2-flomo-run1", taskOwnership: "agent", stage: "wait-initial-library", expectedCount: null,
+  observedUniqueIds: 0, step: -1,
+  pageDiagnostics: { host: "v.flomoapp.com", path: "/mine", pageTitleHasFlomo: false, hasMemoList: false,
+    hasCountLabel: false, libraryCount: null, memoCardCount: 0, loadingVisible: false,
+    emptyStateVisible: false, loginIndicator: true, captchaIndicator: false, privateBody: "do-not-print",
+    detail: { sheetVisible: true, routeMatches: false, targetLinkCount: 0, bodyPresent: false,
+      editorPresent: false, targetListLinkVisible: true, memoId: "do-not-print-id", bodyText: "do-not-print-body" } }
+}), { mode: 0o600 });
+`, { mode: 0o700 });
+  const script = fileURLToPath(new URL("./collect-flomo-weekly.mjs", import.meta.url));
+  let failure;
+  try {
+    execFileSync(process.execPath, [script, "--full-snapshot"], {
+      cwd: path.resolve(path.dirname(script), "../../../../"),
+      env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH || ""}` },
+      encoding: "utf8",
+    });
+  } catch (error) {
+    failure = error;
+  }
+  assert.equal(failure?.status, 1);
+  const stderr = String(failure.stderr);
+  assert.match(stderr, /^ego-network-timeout /);
+  const details = JSON.parse(stderr.slice(stderr.indexOf("{")).trim());
+  assert.equal(details.stage, "wait-initial-library");
+  assert.equal(details.taskSpaceId, 73);
+  assert.equal(details.taskSpaceName, "learn-x-v2-flomo-run1");
+  assert.equal(details.pageDiagnostics.loginIndicator, true);
+  assert.deepEqual(details.pageDiagnostics.detail, {
+    sheetVisible: true, routeMatches: false, targetLinkCount: 0, bodyPresent: false,
+    editorPresent: false, targetListLinkVisible: true,
+  });
+  assert.doesNotMatch(stderr, /do-not-print|privateBody|do-not-print-id|do-not-print-body/);
+});
 
 function scanFixture({ memos = [], pinned = [], scanned = memos.length + pinned.length, complete = true, lowerBoundCovered = true } = {}) {
   return {
@@ -196,6 +314,48 @@ fs.writeFileSync(resultPath, JSON.stringify({ ok: false, error: process.env.LEAR
     process.env.PATH = previousPath;
     if (previousError === undefined) delete process.env.LEARN_X_TEST_EGO_RESULT_ERROR;
     else process.env.LEARN_X_TEST_EGO_RESULT_ERROR = previousError;
+  }
+});
+
+test("reports Ego bootstrap denial as unavailable instead of a live scan with unconfirmed exit", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-bootstrap-denied-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const bin = path.join(root, "bin");
+  await mkdir(bin, { recursive: true });
+  await writeFile(path.join(bin, "ego-browser"), "#!/bin/sh\nprintf '%s\\n' 'Failed to connect to ego_cli bootstrap' >&2\nexit 4\n", { mode: 0o700 });
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${bin}${path.delimiter}${previousPath || ""}`;
+  try {
+    await assert.rejects(collectFlomoFullSnapshot({ taskSpaceId: 98, taskSpaceName: "learn-x-v2-flomo-run1" }), /ego-bootstrap-unavailable/);
+  } finally {
+    process.env.PATH = previousPath;
+  }
+});
+
+test("propagates safe full-scan stage diagnostics without memo content", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-stage-diagnostic-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const bin = path.join(root, "bin");
+  await mkdir(bin, { recursive: true });
+  await writeFile(path.join(bin, "ego-browser"), `#!/usr/bin/env node
+const fs = require("node:fs");
+const source = process.argv.at(-1);
+const resultPath = JSON.parse(source.match(/const resultPath = ("[^"]+");/)[1]);
+fs.writeFileSync(resultPath, JSON.stringify({ ok: false, error: "network-timeout", cleanup: "finished", stage: "wait-initial-library", expectedCount: null, observedUniqueIds: 0, step: -1 }), { mode: 0o600 });
+`, { mode: 0o700 });
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${bin}${path.delimiter}${previousPath || ""}`;
+  try {
+    await assert.rejects(scanFlomoWithEgo({ mode: "full" }), error => {
+      assert.equal(error.message, "ego-network-timeout");
+      assert.equal(error.stage, "wait-initial-library");
+      assert.equal(error.observedUniqueIds, 0);
+      assert.equal(error.step, -1);
+      assert.equal(JSON.stringify(error).includes("body"), false);
+      return true;
+    });
+  } finally {
+    process.env.PATH = previousPath;
   }
 });
 

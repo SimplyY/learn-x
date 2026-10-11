@@ -1,8 +1,8 @@
 const DAY = 86400000;
 const OCCUPIED = new Set(['reserved', 'sending', 'delivered', 'needs_review']);
 export const MIN_REVIEW_ITEMS = 5;
-export const TARGET_MIN_REVIEW_ITEMS = 6;
-export const MAX_REVIEW_ITEMS = 7;
+export const TARGET_MIN_REVIEW_ITEMS = 7;
+export const MAX_REVIEW_ITEMS = 10;
 export const MAX_REVIEW_REASON_CHARS = 15;
 export const MAX_PAIR_OVERLAP = 5;
 export const MAX_WINDOW_REPEATS = 10;
@@ -77,6 +77,8 @@ function exposure({ date, ledger = { batches: {} }, index }) {
   const weeks = activeWeeks(date);
   const byWeek = new Map(weeks.map((week) => [week, new Set()]));
   const ageNotesByWeek = new Map(weeks.map((week) => [week, new Map()]));
+  const generation = ledger.dedupeGeneration || 'legacy';
+  if (typeof generation !== 'string' || !generation) fail('invalid-dedupe-generation');
   const current = ledger.batches?.[date];
   if (current && OCCUPIED.has(current.status)) fail('date-already-occupied');
   for (const [key, batch] of Object.entries(ledger.batches || {})) {
@@ -84,6 +86,12 @@ function exposure({ date, ledger = { batches: {} }, index }) {
     if (batch.status === 'failed') continue;
     if (!OCCUPIED.has(batch.status)) fail('invalid-ledger-status');
     if (batch.date !== key) fail('ledger-date-mismatch');
+    const batchGeneration = batch.dedupeGeneration || 'legacy';
+    if (typeof batchGeneration !== 'string' || !batchGeneration) fail('invalid-batch-dedupe-generation');
+    // A source migration starts a new recommendation budget. Keep old sends in
+    // the ledger for audit and same-day occupancy, but do not carry their
+    // exposure into the new generation.
+    if (batchGeneration !== generation) continue;
     const week = isoWeek(key);
     if (!byWeek.has(week)) continue;
     if (key > date) fail('future-ledger-batch');
@@ -93,13 +101,27 @@ function exposure({ date, ledger = { batches: {} }, index }) {
       const byNote = index.byKey.get(item.noteKey);
       const byGroup = index.byGroup.get(item.groupKey);
       if (byNote && byGroup && byNote.groupKey !== byGroup.groupKey) fail('history-identity-conflict');
-      const note = byNote || byGroup;
+      let stored = null;
+      if (item.historyIdentity != null) {
+        const identity = item.historyIdentity;
+        if (!identity || typeof identity !== 'object' ||
+            typeof identity.noteKey !== 'string' || !identity.noteKey || identity.noteKey !== item.noteKey ||
+            typeof identity.groupKey !== 'string' || !identity.groupKey || identity.groupKey !== item.groupKey ||
+            typeof identity.bodyHash !== 'string' || !identity.bodyHash ||
+            !(identity.memoId == null || typeof identity.memoId === 'string' && identity.memoId) ||
+            typeof identity.createdAt !== 'string' || !identity.createdAt) fail('invalid-history-identity-snapshot');
+        ageBand(identity.createdAt, key);
+        stored = identity;
+      }
+      const note = byNote || byGroup || (stored && stored);
       if (!note) fail('unknown-history-identity');
       // Resolve aliases through the current catalog, so later merges never reset exposure.
+      const groupKey = byNote || byGroup ? note.groupKey : stored.groupKey;
       const set = byWeek.get(week);
-      if (set.has(note.groupKey)) fail('history-same-week-repeat');
-      set.add(note.groupKey);
-      if (byNote) ageNotesByWeek.get(week).set(note.groupKey, byNote);
+      if (set.has(groupKey)) fail('history-same-week-repeat');
+      set.add(groupKey);
+      const exact = stored ? { ...note, createdAt: stored.createdAt, bodyHash: stored.bodyHash, memoId: stored.memoId } : byNote;
+      if (exact) ageNotesByWeek.get(week).set(groupKey, exact);
     }
   }
   return { byWeek, ageNotesByWeek };
@@ -161,6 +183,7 @@ export function validateSelection({ date, items, notes, ledger }) {
     const note = index.byKey.get(item.noteKey);
     if (!note) fail('unknown-selection-identity');
     if (!qualified(note)) fail('quality-not-current-or-below-3');
+    if (!note.source?.url) fail('flomo-url-required');
     if (item.bodyHash !== note.bodyHash) fail('selection-body-hash-mismatch');
     ageBand(note.createdAt, date);
     if (!['strong', 'background'].includes(item.relevance)) fail('invalid-relevance');
@@ -171,7 +194,10 @@ export function validateSelection({ date, items, notes, ledger }) {
   });
   const week = isoWeek(date);
   const next = addGroups(byWeek, week, normalized.map((item) => item.groupKey));
-  const delivered = exposure({ date, index, ledger: { batches: Object.fromEntries(Object.entries(ledger?.batches || {}).filter(([, batch]) => batch.status === 'delivered')) } });
+  const delivered = exposure({ date, index, ledger: {
+    dedupeGeneration: ledger?.dedupeGeneration || 'legacy',
+    batches: Object.fromEntries(Object.entries(ledger?.batches || {}).filter(([, batch]) => batch.status === 'delivered'))
+  } });
   const proposedAgeNotes = new Map(delivered.ageNotesByWeek.get(week));
   for (const item of normalized) proposedAgeNotes.set(item.groupKey, index.byKey.get(item.noteKey));
   return { date, week, items: normalized, ...budgets(next), age: { ...ageStatistics(addGroups(delivered.byWeek, week, normalized.map((item) => item.groupKey)), week, index, date, proposedAgeNotes), basis: 'delivered-plus-proposed' }, ageObserved: { ...ageStatistics(delivered.byWeek, week, index, date, delivered.ageNotesByWeek.get(week)), basis: 'delivered-only' } };
@@ -184,7 +210,7 @@ export function eligibleNotes({ date, notes, ledger }) {
   budgets(byWeek);
   const seen = new Set();
   return notes.filter((note) => {
-    if (!qualified(note) || seen.has(note.groupKey) || byWeek.get(isoWeek(date)).has(note.groupKey)) return false;
+    if (!qualified(note) || !note.source?.url || seen.has(note.groupKey) || byWeek.get(isoWeek(date)).has(note.groupKey)) return false;
     try { ageBand(note.createdAt, date); } catch { return false; }
     try { budgets(addGroups(byWeek, isoWeek(date), [note.groupKey])); }
     catch { return false; }

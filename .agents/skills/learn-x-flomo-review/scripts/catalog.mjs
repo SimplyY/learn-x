@@ -3,6 +3,7 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { validateSourceStatusDocument } from "../../learn-x-input/scripts/lib/source-status.mjs";
 import { flomoTags, learnXGeneratedReason } from "../../learn-x-input/scripts/lib/flomo-filter.mjs";
+import { validateFullFlomoScan } from "../../learn-x-input/scripts/lib/flomo-full-snapshot.mjs";
 
 const ROOTS = ["03_input/weekly", "03_input/weekly-history", "03_input/monthly", "03_input/yearly"];
 const IDENTITY_BACKFILL_FILE = "03_input/_archives/flomo/identity-backfill.json";
@@ -47,10 +48,12 @@ function parseTime(date, time, zone = "+08:00") {
   return Number.isFinite(Date.parse(value)) ? value : null;
 }
 
-function exclusionReason(body) {
+function exclusionReason(body, explicitTags) {
   const generated = learnXGeneratedReason(body);
   if (generated) return generated;
-  const tags = flomoTags(body);
+  const tags = Array.isArray(explicitTags)
+    ? explicitTags.map((tag) => String(tag).replace(/^#+/u, "").toLowerCase())
+    : flomoTags(body);
   if (tags.some((tag) => ["不回顾", "不洞察", "ai洞察"].includes(tag) || tag.endsWith("/ai洞察"))) return "excluded-tag";
   if (!body.trim()) return "empty-body";
   if (/^(?:TODO|待补充|暂无内容|占位|内容为空|（该笔记无可提取文字）)\s*$/i.test(body.trim())) return "placeholder-body";
@@ -194,7 +197,7 @@ function localKey(memo) { return `local:${bodyHash(`${new Date(memo.createdAt).t
 function realKey(memo) { return memo.memoId ? `flomo:${memo.memoId}` : localKey(memo); }
 function previousQuality(previous, memo) {
   const q = previous?.quality;
-  return q && q.bodyHash === memo.bodyHash && q.policyVersion === "1" && Number.isInteger(q.score) && q.score >= 0 && q.score <= 4 && typeof q.summary === "string" && typeof q.reason === "string" ? { ...q } : null;
+  return q && q.bodyHash === memo.bodyHash && q.policyVersion === "1" && Number.isInteger(q.score) && q.score >= 0 && q.score <= 4 && typeof q.reason === "string" ? { ...q } : null;
 }
 
 /** Reads archive files only; callers own persistence and semantic quality assessment. */
@@ -297,5 +300,100 @@ export async function scanArchive(repoRoot, { previous } = {}) {
   for (const prior of old) if (!usedOld.has(prior) && !notes.some((note) => note.noteKey === prior.noteKey || note.aliases.includes(prior.noteKey))) excluded.push({ source: prior.source, noteKey: prior.noteKey, previousNote: prior, reason: "previous-note-not-currently-verified", count: 1 });
   notes.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.noteKey.localeCompare(b.noteKey, "en"));
   const dates = notes.map((note) => Date.parse(note.createdAt));
-  return { schemaVersion: 1, notes, excluded, sources, coverage: { archiveSnapshot: true, remoteFullCoverage: false, totalFiles: sources.length, parsedRecords: sources.filter((source) => source.status === "legacy" || source.status === "ready").reduce((sum, source) => sum + source.records, 0), noteCount: notes.length, legacyFiles: sources.filter((source) => source.status === "legacy").length, unverifiedFiles: sources.filter((source) => source.status !== "legacy" && !source.completeEvidence).length, excludedCount: excluded.reduce((sum, entry) => sum + entry.count, 0), identityConflicts: excluded.filter((entry) => /identity|conflict|ambiguous/.test(entry.reason)).length, firstCreatedAt: dates.length ? new Date(Math.min(...dates)).toISOString() : null, lastCreatedAt: dates.length ? new Date(Math.max(...dates)).toISOString() : null } };
+  return { schemaVersion: 1, sourceMode: "legacy-archive", dedupeGeneration: previous?.dedupeGeneration || "legacy", notes, excluded, sources, coverage: { archiveSnapshot: true, remoteFullCoverage: false, totalFiles: sources.length, parsedRecords: sources.filter((source) => source.status === "legacy" || source.status === "ready").reduce((sum, source) => sum + source.records, 0), noteCount: notes.length, legacyFiles: sources.filter((source) => source.status === "legacy").length, unverifiedFiles: sources.filter((source) => source.status !== "legacy" && !source.completeEvidence).length, excludedCount: excluded.reduce((sum, entry) => sum + entry.count, 0), identityConflicts: excluded.filter((entry) => /identity|conflict|ambiguous/.test(entry.reason)).length, firstCreatedAt: dates.length ? new Date(Math.min(...dates)).toISOString() : null, lastCreatedAt: dates.length ? new Date(Math.max(...dates)).toISOString() : null } };
+}
+
+/** Builds the daily catalog only from a validated Flomo online snapshot. */
+export function scanOnlineSnapshot(snapshot, { previous, sourcePath } = {}) {
+  if (!snapshot || snapshot.schemaVersion !== 1 || snapshot.sourceMode !== "flomo-online-full" ||
+      typeof snapshot.snapshotId !== "string" || !snapshot.snapshotId || !Array.isArray(snapshot.records)) {
+    throw new Error("online-snapshot-invalid");
+  }
+  if (previous && (previous.schemaVersion !== 1 || !Array.isArray(previous.notes))) throw new Error("previous-catalog-invalid");
+  const validated = validateFullFlomoScan({
+    mode: "full", complete: true, libraryCount: snapshot.coverage?.expectedCount,
+    scanned: snapshot.records.length, pageCount: snapshot.pageCount,
+    scanStartedAt: snapshot.scanStartedAt, scanFinishedAt: snapshot.scanFinishedAt,
+    termination: snapshot.termination, detailVerification: snapshot.detailVerification,
+    records: snapshot.records.map((record) => ({ ...record, bodyText: record.body, bodyComplete: true })),
+  });
+  if (!snapshot.coverage || snapshot.coverage.expectedCount !== validated.coverage.expectedCount ||
+      snapshot.coverage.observedCount !== validated.coverage.observedCount ||
+      snapshot.coverage.omittedCount !== validated.coverage.omittedCount ||
+      snapshot.coverage.status !== validated.coverage.status || snapshot.coverage.policy !== validated.coverage.policy ||
+      snapshot.coverage.ratio !== validated.coverage.ratio || snapshot.totalCount !== validated.records.length) {
+    throw new Error("online-snapshot-coverage-invalid");
+  }
+  const oldNotes = previous?.notes || [];
+  const oldExcluded = (previous?.excluded || []).map((entry) => entry.previousNote).filter(Boolean);
+  const old = [...new Map([...oldNotes, ...oldExcluded].map((note) => [note.noteKey, note])).values()];
+  if (old.some((note) => typeof note.noteKey !== "string" || !note.noteKey || typeof note.groupKey !== "string" ||
+      !note.groupKey || typeof note.body !== "string" || bodyHash(note.body) !== note.bodyHash ||
+      !Number.isFinite(Date.parse(note.createdAt)) || !Array.isArray(note.aliases) || !note.source?.path || !Number.isInteger(note.source.line))) {
+    throw new Error("previous-catalog-invalid");
+  }
+  const source = {
+    path: sourcePath || `online-snapshot:${snapshot.snapshotId}`, line: 1, url: null,
+    status: "ready", sourceMode: snapshot.sourceMode, snapshotId: snapshot.snapshotId,
+    capturedAt: snapshot.capturedAt, records: validated.records.length, included: 0,
+    coverage: structuredClone(validated.coverage),
+  };
+  const excluded = [];
+  const notes = [];
+  const usedOld = new Set();
+  const canReuseQuality = previous?.sourceMode === "flomo-online-full";
+  const byId = new Map();
+  for (const note of old) {
+    const ids = new Set([note.memoId, ...(note.aliases || []).filter((alias) => alias.startsWith("flomo:")).map((alias) => alias.slice(6))].filter(Boolean));
+    for (const id of ids) byId.set(id, [...(byId.get(id) || []), note]);
+  }
+
+  for (const [index, memo] of validated.records.entries()) {
+    const memoSource = { ...source, line: index + 1, url: memo.url };
+    const previousById = [...new Set(byId.get(memo.memoId) || [])];
+    if (previousById.length > 1) throw new Error("previous-online-identity-conflict");
+    const prior = previousById[0] || null;
+    if (prior) usedOld.add(prior);
+    const current = { ...memo, source: memoSource, reason: exclusionReason(memo.bodyText, memo.tags) };
+    const noteKey = prior?.noteKey || realKey(current);
+    const aliases = [...new Set([noteKey, `flomo:${memo.memoId}`, ...(prior?.aliases || [])])].sort();
+    const previousQualityValue = canReuseQuality ? previousQuality(prior, current) : null;
+    const note = { noteKey, memoId: memo.memoId, aliases, groupKey: prior?.groupKey || `content:${memo.bodyHash}`,
+      groupAliases: [...new Set(prior?.groupAliases || [])], createdAt: memo.createdAt, body: memo.bodyText, tags: memo.tags || [],
+      bodyHash: memo.bodyHash, source: memoSource, sources: [memoSource], quality: previousQualityValue };
+    if (current.reason) {
+      excluded.push({ source: memoSource, memoId: memo.memoId, noteKey, previousNote: note, reason: current.reason, count: 1 });
+      continue;
+    }
+    notes.push(note);
+    source.included += 1;
+  }
+
+  for (const prior of old) if (!usedOld.has(prior) && !notes.some((note) => note.noteKey === prior.noteKey || note.aliases.includes(prior.noteKey))) {
+    excluded.push({ source: prior.source, noteKey: prior.noteKey, previousNote: prior, reason: "online-note-not-present", count: 1 });
+  }
+  const groups = new Map();
+  for (const note of notes) { const group = groups.get(note.bodyHash) || []; group.push(note); groups.set(note.bodyHash, group); }
+  for (const group of groups.values()) {
+    const aliases = [...new Set(group.flatMap((note) => [note.groupKey, ...note.groupAliases]))].sort();
+    const canonical = group.find((note) => old.some((item) => item.noteKey === note.noteKey))?.groupKey || aliases[0];
+    for (const note of group) { note.groupKey = canonical; note.groupAliases = aliases.filter((alias) => alias !== canonical); }
+  }
+  notes.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.noteKey.localeCompare(b.noteKey, "en"));
+  const dates = notes.map((note) => Date.parse(note.createdAt));
+  const coverage = {
+    archiveSnapshot: false, remoteFullCoverage: validated.coverage.omittedCount === 0,
+    snapshotId: snapshot.snapshotId, capturedAt: snapshot.capturedAt,
+    status: validated.coverage.status, expectedCount: validated.coverage.expectedCount,
+    observedCount: validated.coverage.observedCount, omittedCount: validated.coverage.omittedCount,
+    ratio: validated.coverage.ratio, totalFiles: 1, parsedRecords: validated.records.length,
+    noteCount: notes.length, legacyFiles: 0, unverifiedFiles: 0,
+    excludedCount: excluded.reduce((sum, entry) => sum + entry.count, 0),
+    identityConflicts: excluded.filter((entry) => /identity|conflict|ambiguous/.test(entry.reason)).length,
+    firstCreatedAt: dates.length ? new Date(Math.min(...dates)).toISOString() : null,
+    lastCreatedAt: dates.length ? new Date(Math.max(...dates)).toISOString() : null,
+  };
+  return { schemaVersion: 1, sourceMode: snapshot.sourceMode, dedupeGeneration: previous?.dedupeGeneration || "legacy",
+    snapshot: { snapshotId: snapshot.snapshotId, capturedAt: snapshot.capturedAt, sourceMode: snapshot.sourceMode, coverage: structuredClone(validated.coverage) },
+    notes, excluded, sources: [source], coverage };
 }

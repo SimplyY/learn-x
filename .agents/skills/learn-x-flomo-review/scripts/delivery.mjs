@@ -232,16 +232,15 @@ async function readDownloadedMessage(runCli, messageId, cwd) {
   return messages[0];
 }
 
-export async function sendRecommendation({ chatId, card, markdown, attachmentPath, attachmentSha256, dateMarker, idempotencyKey, botSenderId, botSenderIds, profile, onUploaded, runCli = runLarkCli }) {
+export async function sendRecommendation({ chatId, card, dateMarker, idempotencyKey, botSenderId, botSenderIds, profile, runCli = runLarkCli }) {
   runCli = useProfile(runCli, profile);
   assertId(chatId, 'oc_', 'chat-id-invalid');
   let messageId, sendAttempted = false;
   try {
     const bots = [...(botSenderIds ?? []), ...(botSenderId ? [botSenderId] : [])];
-    if (!bots.length || !/^[A-Za-z0-9:_-]{1,50}$/.test(idempotencyKey ?? '')) throw new DeliveryError('send-input-invalid');
-    if (card) {
+    if (!card || !bots.length || !/^[A-Za-z0-9:_-]{1,50}$/.test(idempotencyKey ?? '')) throw new DeliveryError('card-only-send-required', { uncertain: false });
       dateMarker ??= JSON.stringify(card).match(/回顾日期：\d{4}-\d{2}-\d{2}/)?.[0];
-      if (markdown || attachmentPath || typeof dateMarker !== 'string' || card.schema !== '2.0' || !/^(?:回顾日期：)(\d{4}-\d{2}-\d{2})$/.test(dateMarker) || !JSON.stringify(card).includes(dateMarker)) throw new DeliveryError('card-send-input-invalid');
+    if (typeof dateMarker !== 'string' || card.schema !== '2.0' || !/^(?:回顾日期：)(\d{4}-\d{2}-\d{2})$/.test(dateMarker) || !JSON.stringify(card).includes(dateMarker)) throw new DeliveryError('card-send-input-invalid', { uncertain: false });
       const cardSha256 = cardContentSha256(card);
       sendAttempted = true;
       const sent = dataOf(await call(runCli, ['im', '+messages-send', '--chat-id', chatId, '--msg-type', 'interactive', '--content', JSON.stringify(card), '--idempotency-key', idempotencyKey, ...BOT_ARGS]));
@@ -250,7 +249,18 @@ export async function sendRecommendation({ chatId, card, markdown, attachmentPat
       if (sent.chat_id !== chatId) throw new DeliveryError('sent-chat-mismatch');
       const message = await readDownloadedMessage(runCli, messageId);
       return { ...verifyMessage(message, { chatId, messageId, cardContentSha256: cardSha256, dateMarker, botSenderId, botSenderIds }), idempotencyKey };
-    }
+  } catch (error) {
+    throw new DeliveryError(error.code ?? 'send-result-uncertain', { uncertain: sendAttempted, ...(messageId ? { messageId } : {}) });
+  }
+}
+
+export async function sendLegacyRecommendation({ chatId, markdown, attachmentPath, attachmentSha256, dateMarker, idempotencyKey, botSenderId, botSenderIds, profile, onUploaded, runCli = runLarkCli }) {
+  runCli = useProfile(runCli, profile);
+  assertId(chatId, 'oc_', 'chat-id-invalid');
+  let messageId, sendAttempted = false;
+  try {
+    const bots = [...(botSenderIds ?? []), ...(botSenderId ? [botSenderId] : [])];
+    if (!bots.length || !/^[A-Za-z0-9:_-]{1,50}$/.test(idempotencyKey ?? '')) throw new DeliveryError('send-input-invalid');
     if (typeof markdown !== 'string' || !markdown.trim() || !attachmentPath) throw new DeliveryError('send-input-invalid');
     dateMarker ??= markdown.split(/\r?\n/).find(line => /^回顾日期：\d{4}-\d{2}-\d{2}$/.test(line.trim()))?.trim();
     const date = dateMarker?.match(/^回顾日期：(\d{4}-\d{2}-\d{2})$/)?.[1];

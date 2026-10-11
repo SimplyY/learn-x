@@ -48,7 +48,7 @@ rm 03_input/weekly/YYYY-Www/README.md
 0. 自动判断目标周：未指定时，周一至周五默认处理上一 ISO 周；周六、周日默认处理当前 ISO 周。周三至周五运行时需要提示“现在仍是周中，默认处理上一周”；周六、周日处理当前周时视为提前写当周，只能声明覆盖截至运行时。
 1. 采集所有自动来源并更新 `_source-status.json`；成功空结果统一报告“0 条记录，文件未生成”，失败/不可用单独报告。此阶段不采集周记，不生成 `input.json`、`process-pack.md` 或 Weekly Output 壳。
 2. 自动化读取 `03_input/weekly/00_template/ai.md`，通过全局 ChatGPT Web Bridge 在已登录 ChatGPT 新聊天中生成 `ai.generated.md`；不发送本地周输入材料。失败时报告可手动复制的 fallback prompt。
-3. 自动化生成飞书周记草稿（Action Feedback 已退役，不再有配套草稿）。用户审核、修改；回复“周记已确认”后，自动采集确认后的 `weekly.md`，一次生成 `input.json`、Process Pack 和 Weekly Output 壳。
+3. 自动化生成飞书周记草稿（Action Feedback 已退役，不再有配套草稿）。用户审核、修改；只有用户回复“周记已确认”后才进入阶段 2。阶段 2 采集确认后的 `weekly.md`，随后仅发布唯一“新周计划”表格行到 `04_output/_dist/shared-context/current.json`（版本放在同目录 `weekly/` 下），再生成 `input.json`、Process Pack 和 Weekly Output 壳。
 4. 用户基于最新 Process Pack 完成 `04_output/weekly/YYYY-WW.md`、核心内容和 Memory 候选审核后，回复继续进入阶段 3。阶段 3 先生成并校验 `memory-candidates.md`，再展示包含正式 Memory、图片、备份、YW Next 和 Flomo 目标的唯一确认卡（Action Feedback Base 已退役）；用户确认后按“正式 Memory → ChatGPT Bridge 核心图（写入 `04_output/_dist/weekly/YYYY-Www/weekly-core.png`）→ 备份 / YW Next / Flomo”执行。公众号发布仍由用户人工完成。
 
 要求：
@@ -67,6 +67,7 @@ rm 03_input/weekly/YYYY-Www/README.md
 - `ai.md` 是确认后的 AI 对话摘要。阶段 1 默认生成暂存的 `ai.generated.md`；确认前不进入 Process，确认后才转为 `ai.md`。AI 输入只使用原有提示词和目标周范围，不发送本地周输入材料。
 - `build.md` 由 Codex Build 专项自动化或人工补充，每周输入自动采集不处理。
 - `build-bot.md` 由飞书机器人侧的 `build-bot-log` 生成或追加。提前写当周时，用户需在飞书上手动执行并自查自动化链接：https://ywhome.feishu.cn/wiki/KcTcwG90OiZh3rksu0ucvwx5nFe?table=wkfVC125gMp3snTX；非提前执行时，周日飞书自动化理论上已执行，本地周自动化只提示自查。
+- 已经通过阶段 2 确认门禁的历史 `weekly.md` 可用 `npm run publish:weekly-context -- --week YYYY-Www` 迁移发布；该命令只读本地文件，不回读飞书。不得对草稿、未确认或无法证明已确认的周记运行。
 - 阶段 3 只处理已确认的行动反馈变更、Output、Memory candidates 和季度 Memory，不重新采集输入，也不修改正式 `道/`、`法/`、`术/`。
 - 其他材料只有足够重要时才新增为 Markdown，不为空分类预建文件。
 

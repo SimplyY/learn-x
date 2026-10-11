@@ -7,10 +7,10 @@ repo_path: "/Users/yuwei/code/learn-x"
 repo_url: null
 group_info_path: "/Users/yuwei/code/learn-x/GROUP_INFO.md"
 registry_source: "live"
-registry_fetched_at: "2026-10-06T21:02:39.398Z"
+registry_fetched_at: "2026-10-11T21:01:02.179Z"
 registry_age_seconds: 0
 registry_degraded: false
-updated_at: "2026-10-06T21:02:44.534Z"
+updated_at: "2026-10-11T21:01:07.616Z"
 icon: "🧠"
 name_zh: "learn-x"
 summary: "认知进化系统。核心功能 chat pack（chat 上下文提示词） + 定期（周、月、年）复盘 IPO (输入、处理、输出)"
@@ -37,7 +37,7 @@ priority: 1
 ## 可用 Skill
 1. build-bot-log：生成每周飞书机器人 Build 复盘报告
 2. learn-x-deep-research：创建「人生核心议题/深度研究-年份」Wiki 文档
-3. learn-x-flomo-review：从Learn-X私有Flomo累计库结合最近周月
+3. learn-x-flomo-review：从Flomo线上全量快照结合最近周月
 4. learn-x-input：采集外部每周证据（微信读书阅读、划线和想法等）写入
 5. learn-x-monthly-automation：月度自动化中文工作流
 6. learn-x-monthly-journal：从 Learn-X 本地周输入和已确认周记生成安全
@@ -73,4 +73,4 @@ priority: 1
 - 链接数：3
 - Skill 扫描：正常
 - 注册表新鲜度：可用
-- 最近更新时间：2026-10-06T21:02:44.534Z
+- 最近更新时间：2026-10-11T21:01:07.616Z

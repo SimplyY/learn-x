@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { WEEKLY_SOURCE_CONFIG, weeklySourceForId } from "../../learn-x-input/scripts/lib/weekly-source-config.mjs";
 import { createWeeklyRetryState, runConfiguredSource, runWeeklyRetrySupervisor } from "./weekly-retry-supervisor.mjs";
 
 const week = "2026-W40";
+const currentRepoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const fixtureCollector = `
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -35,6 +37,12 @@ if (config.writeStatus !== false) {
 if (config.exitCode) process.stderr.write("HTTP 503 synthetic collector failure\\n");
 process.exitCode = config.exitCode || 0;
 `;
+
+test("manual Flomo npm entry goes through the shared retry supervisor", async () => {
+  const packageJson = JSON.parse(await readFile(path.join(currentRepoRoot, "package.json"), "utf8"));
+  assert.equal(packageJson.scripts["input:flomo"],
+    "node .agents/skills/learn-x-weekly-automation/scripts/weekly-retry-supervisor.mjs --mode manual --source flomo");
+});
 
 async function createFixture(t, config) {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-source-adapter-"));
@@ -120,6 +128,36 @@ test("supervisor preserves a real child collector's nonzero exit despite its suc
   assert.equal(saved.sources[source.id].status, "failed");
   assert.equal(saved.sources[source.id].attempts, 2);
   assert.equal(saved.sources[source.id].lastErrorClass, "network-transient");
+});
+
+test("Flomo adapter invokes the full-snapshot sync entry with its attempt token and retains snapshot provenance", async (t) => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-sync-adapter-"));
+  t.after(() => rm(repoRoot, { recursive: true, force: true }));
+  const syncPath = path.join(repoRoot, ".agents/skills/learn-x-input/scripts/sync-flomo-full-week.mjs");
+  await mkdir(path.dirname(syncPath), { recursive: true });
+  const attemptToken = "01234567-89ab-cdef-0123-456789abcdef";
+  await writeFile(syncPath, `
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+const args = process.argv.slice(2);
+const week = args[args.indexOf("--week") + 1];
+const token = args[args.indexOf("--attempt-token") + 1];
+const root = path.join("03_input/weekly", week);
+await mkdir(root, { recursive: true });
+await writeFile(path.join(root, "flomo.md"), "# Flomo 周输入\\n");
+const updatedAt = new Date().toISOString();
+await writeFile(path.join(root, "_source-status.json"), JSON.stringify({ version: 1, week, updatedAt, sources: { flomo: {
+  status: "ready", file: "flomo.md", count: 1, summary: "full scan fixture", updatedAt, preservedStaleFile: false
+} } }));
+console.log(JSON.stringify({ status: "ready", count: 1, attemptToken: token, snapshotId: "snapshot-fixture",
+  capturedAt: "2026-10-05T01:00:00.000Z", coverage: { expectedCount: 1, observedCount: 1, omittedCount: 0 },
+  termination: { reason: "library-count-and-stable-ids", atBottom: true } }));
+`);
+  const result = await runConfiguredSource(weeklySourceForId("flomo"), { week, repoRoot, attemptToken });
+  assert.equal(result.status, "ready");
+  assert.equal(result.snapshotId, "snapshot-fixture");
+  assert.equal(result.capturedAt, "2026-10-05T01:00:00.000Z");
+  assert.equal(result.termination.reason, "library-count-and-stable-ids");
 });
 
 for (const status of ["confirmed", "needs_review"]) {

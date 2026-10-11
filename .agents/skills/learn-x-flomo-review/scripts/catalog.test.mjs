@@ -3,7 +3,8 @@ import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { scanArchive, hashBody, normalizeBody } from "./catalog.mjs";
+import { scanArchive, scanOnlineSnapshot, hashBody, normalizeBody } from "./catalog.mjs";
+import { createOnlineFlomoSnapshot, flomoBodyHash, flomoMemoUrl } from "../../learn-x-input/scripts/lib/flomo-full-snapshot.mjs";
 
 async function fixture(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), "flomo-catalog-test-"));
@@ -333,4 +334,110 @@ test("a UTC range sharing Shanghai calendar labels is still the wrong coverage",
   const result = await scanArchive(root);
   assert.equal(result.notes.length, 0);
   assert.equal(result.excluded[0].reason, "source-integrity-unverified");
+});
+
+function onlineSnapshot(entries, expectedCount = entries.length) {
+  const records = entries.map(({ id, body, tags, createdAt = "2026-10-10T01:00:00.000Z", isPinned = false }) => ({
+    memoId: id, url: flomoMemoUrl(id), createdAt, timeText: "2026-10-10 09:00",
+    bodyText: body, bodyComplete: true, isPinned, ...(tags ? { tags } : {}),
+  }));
+  const longest = [...records].sort((a, b) => b.bodyText.length - a.bodyText.length)[0];
+  return createOnlineFlomoSnapshot({
+    mode: "full", complete: true, libraryCount: expectedCount, scanned: records.length, pageCount: 4,
+    scanStartedAt: "2026-10-11T01:00:00.000Z", scanFinishedAt: "2026-10-11T01:02:00.000Z",
+    termination: {
+      reason: expectedCount === records.length ? "library-count-and-stable-ids" : "stable-bottom-with-accepted-count-gap",
+      enumerationComplete: true, expectedCount, observedUniqueIds: records.length,
+      missingCount: expectedCount - records.length, stableScrollPasses: 2,
+      atBottom: true, hasMore: false, loading: false,
+    },
+    detailVerification: longest ? {
+      verified: true, memoId: longest.memoId, bodyLength: longest.bodyText.length,
+      bodyHash: flomoBodyHash(longest.bodyText), method: "original-link-detail-sheet-tiptap-prosemirror",
+    } : null,
+    records,
+  });
+}
+
+test("online catalog excludes exact DOM tags when rendered body text runs into the tag", () => {
+  const snapshot = onlineSnapshot([{ id: "memo-ai-insight-tag", body: "#ai洞察像投资，像价值判断", tags: ["#ai洞察"] }]);
+  const catalog = scanOnlineSnapshot(snapshot);
+  assert.equal(catalog.notes.length, 0);
+  assert.equal(catalog.excluded[0].reason, "excluded-tag");
+});
+
+test("online catalog resets legacy quality, keeps same-ID exposure through edits, and records deletions", () => {
+  const originalBody = "一次真实实验让我记录了最初的判断和后来得到的反馈。";
+  const editedBody = "一次真实实验让我记录了修改后的判断和后来得到的反馈。";
+  const legacy = {
+    schemaVersion: 1, sourceMode: "legacy-archive", dedupeGeneration: "legacy", excluded: [],
+    notes: [{ noteKey: "legacy-key", memoId: "memo-a", aliases: ["legacy-key", "flomo:memo-a"],
+      groupKey: "legacy-group", groupAliases: [], createdAt: "2026-10-10T01:00:00.000Z",
+      body: originalBody, bodyHash: hashBody(originalBody),
+      source: { path: "old-archive.md", line: 1, url: flomoMemoUrl("memo-a") },
+      quality: { score: 4, reason: "历史质量判断", quote: originalBody, bodyHash: hashBody(originalBody), policyVersion: "1" } }],
+  };
+  const first = scanOnlineSnapshot(onlineSnapshot([{ id: "memo-a", body: originalBody }]), { previous: legacy });
+  assert.equal(first.coverage.status, "complete");
+  assert.equal(first.notes[0].memoId, "memo-a");
+  assert.equal(first.notes[0].noteKey, "legacy-key");
+  assert.equal(first.notes[0].quality, null, "legacy scores must not cross the first source migration");
+  const noteKey = first.notes[0].noteKey, groupKey = first.notes[0].groupKey;
+  first.notes[0].quality = { score: 4, reason: "旧评分", quote: originalBody, bodyHash: first.notes[0].bodyHash, policyVersion: "1" };
+  const edited = scanOnlineSnapshot(onlineSnapshot([{ id: "memo-a", body: editedBody }]), { previous: first });
+  assert.equal(edited.notes[0].noteKey, noteKey);
+  assert.equal(edited.notes[0].groupKey, groupKey);
+  assert.equal(edited.notes[0].quality, null, "edited body invalidates score while preserving identity");
+  const deleted = scanOnlineSnapshot(onlineSnapshot([]), { previous: edited });
+  assert.equal(deleted.notes.length, 0);
+  assert.equal(deleted.excluded[0].reason, "online-note-not-present");
+  assert.equal(deleted.excluded[0].previousNote.memoId, "memo-a");
+});
+
+test("online catalog preserves distinct IDs with identical bodies and reports accepted coverage gaps", () => {
+  const body = "同一段原文对应两条独立的 Flomo memo 身份。";
+  const snapshot = onlineSnapshot([{ id: "memo-a", body }, { id: "memo-b", body }], 3);
+  const catalog = scanOnlineSnapshot(snapshot);
+  assert.equal(catalog.notes.length, 2);
+  assert.equal(new Set(catalog.notes.map((note) => note.memoId)).size, 2);
+  assert.equal(new Set(catalog.notes.map((note) => note.noteKey)).size, 2);
+  assert.equal(catalog.notes[0].groupKey, catalog.notes[1].groupKey);
+  assert.deepEqual(
+    [catalog.coverage.expectedCount, catalog.coverage.observedCount, catalog.coverage.omittedCount, catalog.coverage.ratio],
+    [3, 2, 1, 2 / 3],
+  );
+  assert.equal(catalog.snapshot.coverage.status, "accepted-with-gaps");
+  assert.equal(catalog.notes[0].source.url, flomoMemoUrl(catalog.notes[0].memoId));
+  assert.equal(hashBody(body), catalog.notes[0].bodyHash);
+});
+
+test("online catalog never assigns one ID-less legacy note to multiple online identities", () => {
+  const body = "历史本地归档中没有可验证 Flomo ID 的笔记。";
+  const legacy = {
+    schemaVersion: 1, sourceMode: "legacy-archive", dedupeGeneration: "legacy", excluded: [],
+    notes: [{ noteKey: "legacy-idless", memoId: null, aliases: ["legacy-idless"], groupKey: "legacy-group", groupAliases: [],
+      createdAt: "2026-10-10T01:00:00.000Z", body, bodyHash: hashBody(body),
+      source: { path: "old-archive.md", line: 1, url: null }, quality: { score: 4, bodyHash: hashBody(body), policyVersion: "1" } }],
+  };
+  const catalog = scanOnlineSnapshot(onlineSnapshot([{ id: "memo-a", body }, { id: "memo-b", body }]), { previous: legacy });
+  assert.deepEqual(catalog.notes.map((note) => note.memoId), ["memo-a", "memo-b"]);
+  assert.equal(new Set(catalog.notes.map((note) => note.noteKey)).size, 2);
+  assert.ok(catalog.notes.every((note) => note.noteKey !== "legacy-idless"));
+  assert.ok(catalog.notes.every((note) => note.quality === null), "legacy scores do not cross the source migration");
+});
+
+test("online catalog retains an excluded online identity for later rule changes", () => {
+  const body = "这条笔记曾通过质量判断，后来被用户排除。";
+  const prior = scanOnlineSnapshot(onlineSnapshot([{ id: "memo-excluded", body }]));
+  prior.notes[0].quality = { score: 4, bodyHash: hashBody(body), policyVersion: "1", reason: "历史质量判断" };
+  const excludedBody = `${body} #不回顾`;
+  const excluded = scanOnlineSnapshot(onlineSnapshot([{ id: "memo-excluded", body: excludedBody }]), { previous: prior });
+  assert.equal(excluded.notes.length, 0);
+  assert.equal(excluded.excluded[0].reason, "excluded-tag");
+  assert.equal(excluded.excluded[0].previousNote.memoId, "memo-excluded");
+  assert.equal(excluded.excluded[0].previousNote.noteKey, prior.notes[0].noteKey);
+  assert.equal(excluded.excluded[0].previousNote.quality, null, "a body edit invalidates the old score");
+  const restored = scanOnlineSnapshot(onlineSnapshot([{ id: "memo-excluded", body }]), { previous: excluded });
+  assert.equal(restored.notes[0].noteKey, prior.notes[0].noteKey);
+  assert.equal(restored.notes[0].quality, null);
 });

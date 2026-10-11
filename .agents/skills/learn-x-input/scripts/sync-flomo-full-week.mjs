@@ -1,0 +1,78 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { collectFlomoFullSnapshot, classifyFlomoError, publishFlomoSnapshotWeek } from "./collect-flomo-weekly.mjs";
+import { fileExists, updateWeeklySourceStatus } from "./lib/source-status.mjs";
+import { defaultFlomoPrivateDataRoot, readVerifiedStagedOnlineFlomoSnapshot } from "./lib/flomo-full-snapshot.mjs";
+import { normalizeWeek } from "./collect-weread-weekly.mjs";
+import { activateOnlineSnapshot, repoRoot as defaultRepoRoot } from "../../learn-x-flomo-review/scripts/review.mjs";
+
+export async function readFlomoAttemptToken(weekRoot, expectedToken) {
+  if (!/^[0-9a-f-]{36}$/i.test(String(expectedToken || ""))) throw new Error("flomo-attempt-token-required");
+  let guard;
+  try { guard = JSON.parse(await readFile(path.join(weekRoot, "_flomo-attempt.json"), "utf8")); }
+  catch (error) { if (error.code === "ENOENT" || error instanceof SyntaxError) throw new Error("flomo-attempt-token-stale"); throw error; }
+  if (guard?.active !== true || guard.token !== expectedToken) throw new Error("flomo-attempt-token-stale");
+  return true;
+}
+
+export async function syncFlomoFullWeek({ week, attemptToken, repoRoot = defaultRepoRoot, storageRoot = defaultFlomoPrivateDataRoot(),
+  collect = collectFlomoFullSnapshot, activate = activateOnlineSnapshot, publish = publishFlomoSnapshotWeek } = {}) {
+  const targetWeek = normalizeWeek(week);
+  const weekRoot = path.join(repoRoot, "03_input/weekly", targetWeek);
+  const notesPath = path.join(weekRoot, "flomo.md");
+  const checkAttempt = () => readFlomoAttemptToken(weekRoot, attemptToken);
+  await checkAttempt();
+  await updateWeeklySourceStatus({ weekRoot, week: targetWeek, source: "flomo", status: "failed", file: "flomo.md", count: 0,
+    summary: "Flomo 全量快照同步进行中；此状态不会被周输入门禁视为成功", preservedStaleFile: await fileExists(notesPath) });
+  try {
+    const stagedResult = await collect({ repoRoot, storageRoot, timeout: 30 * 60_000 });
+    const { snapshot } = await readVerifiedStagedOnlineFlomoSnapshot(stagedResult.snapshotPath);
+    await checkAttempt();
+    const activation = await activate(repoRoot, stagedResult.snapshotPath, { beforeCommit: checkAttempt });
+    await checkAttempt();
+    const weekly = await publish(snapshot, { week: targetWeek, repoRoot });
+    return { ...weekly, activation: activation.status, snapshotId: snapshot.snapshotId, capturedAt: snapshot.capturedAt,
+      coverage: snapshot.coverage, termination: snapshot.termination };
+  } catch (error) {
+    if (error?.message !== "flomo-attempt-token-stale") {
+      const reason = classifyFlomoError(error);
+      const status = reason === "ego-login-or-control-required" ? "unavailable" : "failed";
+      await updateWeeklySourceStatus({ weekRoot, week: targetWeek, source: "flomo", status, file: "flomo.md", count: 0,
+        summary: `Flomo 全量快照同步失败：${reason}；保留最近成功快照和已有周输入`, preservedStaleFile: await fileExists(notesPath) });
+    }
+    throw error;
+  }
+}
+
+export function parseSyncArgs(argv) {
+  const options = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] === "--week") options.week = argv[++index];
+    else if (argv[index] === "--attempt-token") options.attemptToken = argv[++index];
+    else if (argv[index] === "--help" || argv[index] === "-h") options.help = true;
+    else throw new Error(`unknown-argument:${argv[index]}`);
+  }
+  if (options.help) return options;
+  options.week = normalizeWeek(options.week);
+  if (!/^[0-9a-f-]{36}$/i.test(String(options.attemptToken || ""))) throw new Error("flomo-attempt-token-required");
+  return options;
+}
+
+async function main(argv = process.argv.slice(2)) {
+  const options = parseSyncArgs(argv);
+  if (options.help) {
+    console.log("Usage: node sync-flomo-full-week.mjs --week YYYY-Www --attempt-token UUID (run through weekly:retry)");
+    return { help: true };
+  }
+  const result = await syncFlomoFullWeek(options);
+  console.log(JSON.stringify(result));
+  return result;
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error?.message || "flomo-full-week-sync-failed");
+    process.exitCode = 1;
+  });
+}

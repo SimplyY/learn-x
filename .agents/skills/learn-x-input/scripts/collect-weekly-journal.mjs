@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { countInputChars } from "./lib/input-limits.mjs";
 import { defaultWeeklyReviewWeek, isoWeekRange } from "../../learn-x-process/scripts/collect-weekly-input.mjs";
+import { publishConfirmedWeeklyContext } from "./publish-weekly-context.mjs";
 
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -104,9 +105,11 @@ export async function collectConfirmedWeeklyJournal({ week, repoRoot: root = rep
     `- 目标覆盖范围：${anchor.coverage.start} 至 ${anchor.coverage.end}`,
     `- 定位依据：已确认标题 block ${anchor.targetBlockId}`
   ];
+  const revisionMarker = `- 来源 revision：${document.revision_id == null ? "unknown" : String(document.revision_id)}`;
   const output = [
     `# Confirmed weekly journal input｜${normalizedWeek}`,
     ...sourceMarker,
+    revisionMarker,
     `- 采集时间：${capturedAt}`,
     "",
     section,
@@ -123,6 +126,15 @@ export async function collectConfirmedWeeklyJournal({ week, repoRoot: root = rep
     await atomicWrite(outputPath, output);
   }
   return { week: normalizedWeek, outputPath, chars: countInputChars(section), capturedAt, documentRevision: document.revision_id ?? null };
+}
+
+export async function collectAndPublishConfirmedWeeklyJournal(options = {}) {
+  const collected = await collectConfirmedWeeklyJournal(options);
+  const sharedContext = await publishConfirmedWeeklyContext({
+    week: collected.week,
+    repoRoot: options.repoRoot ?? repoRoot
+  });
+  return { ...collected, sharedContext };
 }
 
 export async function fetchWeeklyJournalSection({ docUrl, blockId, timeoutMs = 60_000 }) {
@@ -212,6 +224,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const options = parseArgs(process.argv.slice(2));
   const result = options.recordAnchor
     ? await recordWeeklyJournalAnchor(options)
-    : await collectConfirmedWeeklyJournal(options);
+    : await collectAndPublishConfirmedWeeklyJournal(options);
   process.stdout.write(`${JSON.stringify({ ...result, anchor: result.anchor && { ...result.anchor, documentUrl: WEEKLY_JOURNAL_DOCUMENT_URL } })}\n`);
 }

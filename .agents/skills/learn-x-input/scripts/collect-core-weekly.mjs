@@ -11,7 +11,7 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isoWeekRangeShanghai, normalizeWeek, defaultWeeklyReviewWeek } from "./collect-weread-weekly.mjs";
-import { updateWeeklySourceStatus } from "./lib/source-status.mjs";
+import { fileExists, updateWeeklySourceStatus } from "./lib/source-status.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_REPO_ROOT = path.resolve(__dirname, "../../../..");
@@ -26,25 +26,31 @@ function sha256(text) {
 export async function selectCoreExport({ coreRoot, week }) {
   const range = isoWeekRangeShanghai(week);
   const exportsRoot = path.join(coreRoot, "runtime", "exports");
-  let weekDirs;
+  const confirmedWeekRoot = path.join(exportsRoot, week);
+  let exportFiles;
   try {
-    weekDirs = await readdir(exportsRoot, { withFileTypes: true });
+    exportFiles = await readdir(confirmedWeekRoot, { withFileTypes: true });
   } catch (error) {
-    if (error.code === "ENOENT") return { kind: "missing", reason: "Core 尚无任何确认导出目录（runtime/exports 不存在）", candidates: [] };
+    if (error.code === "ENOENT") return { kind: "missing", reason: `缺失：Core 确认周 ${week} 尚无导出目录`, candidates: [] };
     throw error;
   }
   const candidates = [];
   const rejected = [];
-  for (const entry of weekDirs) {
-    if (!entry.isDirectory() || !/^\d{4}-W(?:0[1-9]|[1-4]\d|5[0-3])$/.test(entry.name)) continue;
-    const metaPath = path.join(exportsRoot, entry.name, `${week}.json`);
-    const bodyPath = path.join(exportsRoot, entry.name, `${week}.md`);
+  for (const entry of exportFiles) {
+    const match = entry.isFile() && entry.name.match(/^(\d{4}-W(?:0[1-9]|[1-4]\d|5[0-3]))\.json$/);
+    if (!match) continue;
+    const reviewWeek = match[1];
+    const metaPath = path.join(confirmedWeekRoot, entry.name);
+    const bodyPath = path.join(confirmedWeekRoot, `${reviewWeek}.md`);
     let meta;
     try {
       meta = JSON.parse(await readFile(metaPath, "utf8"));
     } catch (error) {
-      if (error.code === "ENOENT") continue;
       rejected.push({ source: path.relative(coreRoot, metaPath), reason: `元数据 JSON 不可解析：${error.message}` });
+      continue;
+    }
+    if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
+      rejected.push({ source: path.relative(coreRoot, metaPath), reason: "元数据 JSON 顶层必须是对象" });
       continue;
     }
     if (meta.status !== "confirmed") {
@@ -55,8 +61,8 @@ export async function selectCoreExport({ coreRoot, week }) {
       rejected.push({ source: path.relative(coreRoot, metaPath), reason: `未知 schemaVersion=${meta.schemaVersion}` });
       continue;
     }
-    if (meta.reviewWeek !== week) {
-      rejected.push({ source: path.relative(coreRoot, metaPath), reason: `reviewWeek=${meta.reviewWeek} 与文件名 ${week} 不一致，无法归属` });
+    if (meta.reviewWeek !== reviewWeek) {
+      rejected.push({ source: path.relative(coreRoot, metaPath), reason: `reviewWeek=${meta.reviewWeek} 与文件名 ${reviewWeek} 不一致，无法归属` });
       continue;
     }
     const frozenAtRaw = String(meta.frozenAt || "");
@@ -79,9 +85,12 @@ export async function selectCoreExport({ coreRoot, week }) {
       rejected.push({ source: path.relative(coreRoot, bodyPath), reason: "正文哈希不符" });
       continue;
     }
-    candidates.push({ confirmedWeek: entry.name, metaPath, bodyPath, body, meta, frozenAt });
+    candidates.push({ confirmedWeek: week, metaPath, bodyPath, body, meta, frozenAt });
   }
   candidates.sort((a, b) => b.frozenAt - a.frozenAt);
+  if (candidates.length > 1 && candidates[0].frozenAt === candidates[1].frozenAt) {
+    return { kind: "ambiguous", reason: "多个有效确认导出的最新 frozenAt 相同，无法唯一选择", candidates, rejected };
+  }
   return { kind: candidates.length ? "ok" : "missing", reason: candidates.length ? "" : "目标周窗口内无有效确认导出", candidates, rejected };
 }
 
@@ -95,16 +104,16 @@ export async function collectCoreWeekly(options = {}) {
 
   if (result.kind !== "ok") {
     report.rejected = result.rejected;
-    await updateWeeklySourceStatus({ weekRoot, week, source: "core", status: "unavailable", file: "core.md", count: 0, summary: `缺失：${result.reason}` });
+    await updateWeeklySourceStatus({ weekRoot, week, source: "core", status: "unavailable", file: "core.md", count: 0, summary: `缺失：${result.reason}`, preservedStaleFile: await fileExists(path.join(weekRoot, "core.md")) });
     console.log(JSON.stringify({ ...report, status: "unavailable" }, null, 2));
     return { status: "unavailable", report };
   }
 
   const selected = result.candidates[0];
-  const skipped = result.candidates.slice(1).map((item) => item.confirmedWeek);
+  const skipped = result.candidates.slice(1).map((item) => item.meta.reviewWeek);
   const header = [
     "<!--",
-    `来源：Core V1 确认导出（/Users/yuwei/code/core/runtime/exports/${selected.confirmedWeek}/${week}.md）`,
+    `来源：Core V1 确认导出（/Users/yuwei/code/core/runtime/exports/${selected.confirmedWeek}/${selected.meta.reviewWeek}.md）`,
     `认知确认时间（frozenAt）：${selected.meta.frozenAt}`,
     `原始复盘覆盖周：${selected.meta.reviewWeek}`,
     `飞书周段落：${selected.meta.feishuUrl || "未提供"}`,

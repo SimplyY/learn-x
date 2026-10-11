@@ -3,7 +3,7 @@ import test from 'node:test';
 import { activeWeeks, ageBand, eligibleNotes, isoWeek, simulate28Days, simulateSupply, validateSelection } from './policy.mjs';
 
 function notes(count = 100) {
-  return Array.from({ length: count }, (_, i) => ({ noteKey: `n${String(i).padStart(3, '0')}`, groupKey: `g${i}`, aliases: [], groupAliases: [], createdAt: '2025-12-01T08:00:00+08:00', body: `Thought ${i}`, bodyHash: `hash${i}`, quality: { score: 3, bodyHash: `hash${i}`, policyVersion: '1' } }));
+  return Array.from({ length: count }, (_, i) => ({ noteKey: `n${String(i).padStart(3, '0')}`, groupKey: `g${i}`, aliases: [], groupAliases: [], createdAt: '2025-12-01T08:00:00+08:00', body: `Thought ${i}`, bodyHash: `hash${i}`, quality: { score: 3, bodyHash: `hash${i}`, policyVersion: '1' }, source: { url: `https://v.flomoapp.com/mine/?memo_id=${i}` } }));
 }
 function items(catalog, indices = [90, 91, 92, 93, 94]) {
   return indices.map((i) => ({ noteKey: catalog[i].noteKey, bodyHash: catalog[i].bodyHash, relevance: 'strong', reason: 'Useful reflection', contextEvidence: [{ path: 'weekly.md', quote: 'Confirmed context' }] }));
@@ -33,7 +33,7 @@ test('Shanghai end-of-day age includes today and exact 30/365 day boundaries', (
   assert.throws(() => ageBand('2026-02-30T08:00:00+08:00', date), /invalid-created-at/);
 });
 
-test('five-to-seven target selection supports quality-current notes and requires evidence', () => {
+test('five-to-ten selection keeps five as the floor and seven as the daily target', () => {
   const catalog = notes();
   const selection = items(catalog);
   selection[2].relevance = 'background';
@@ -43,16 +43,23 @@ test('five-to-seven target selection supports quality-current notes and requires
   assert.equal(result.age.nearYearRatio, 1);
   assert.equal(result.ageObserved.total, 0);
   assert.ok(result.age.deviations.length);
-  assert.throws(() => validateSelection({ date: '2026-10-06', notes: catalog, items: selection.slice(0, 2) }), /count-must-be-5-to-7/);
+  assert.throws(() => validateSelection({ date: '2026-10-06', notes: catalog, items: selection.slice(0, 2) }), /count-must-be-5-to-10/);
   const seven = items(catalog, [0, 1, 2, 3, 4, 5, 6]);
   assert.equal(validateSelection({ date: '2026-10-06', notes: catalog, items: seven }).items.length, 7);
-  assert.throws(() => validateSelection({ date: '2026-10-06', notes: catalog, items: items(catalog, [0, 1, 2, 3, 4, 5, 6, 7]) }), /count-must-be-5-to-7/);
+  const eight = items(catalog, [0, 1, 2, 3, 4, 5, 6, 7]);
+  assert.equal(validateSelection({ date: '2026-10-06', notes: catalog, items: eight }).items.length, 8);
+  const ten = items(catalog, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  assert.equal(validateSelection({ date: '2026-10-06', notes: catalog, items: ten }).items.length, 10);
+  assert.throws(() => validateSelection({ date: '2026-10-06', notes: catalog, items: items(catalog, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) }), /count-must-be-5-to-10/);
   const extra = items(catalog, [0, 1, 2, 3, 4]); extra[3].relevance = 'background';
   assert.throws(() => validateSelection({ date: '2026-10-06', notes: catalog, items: extra }), /extra-item-must-be-strong/);
   const noEvidence = items(catalog); noEvidence[0].contextEvidence = [];
   assert.throws(() => validateSelection({ date: '2026-10-06', notes: catalog, items: noEvidence }), /context-evidence/);
   const stale = notes(); stale[90].quality.bodyHash = 'old';
   assert.throws(() => validateSelection({ date: '2026-10-06', notes: stale, items: items(stale) }), /quality-not-current/);
+  const noUrl = notes(); noUrl[90].source = { url: null };
+  assert.throws(() => validateSelection({ date: '2026-10-06', notes: noUrl, items: items(noUrl) }), /flomo-url-required/);
+  assert.ok(!eligibleNotes({ date: '2026-10-06', notes: noUrl, ledger: { batches: {} } }).some(note => note.noteKey === 'n090'));
   const low = notes(); low[90].quality.score = 2;
   assert.throws(() => validateSelection({ date: '2026-10-06', notes: low, items: items(low) }), /quality-not-current/);
   const wrongHash = items(catalog); wrongHash[0].bodyHash = 'other';
@@ -129,6 +136,37 @@ test('reserved, sending, delivered and needs_review block date and weekly exposu
   assert.doesNotThrow(() => validateSelection({ date: '2026-10-05', notes: catalog, ledger: failed, items: items(catalog, [0, 1, 2, 3, 4]) }));
 });
 
+test('a new dedupe generation releases old exposure but keeps same-day occupancy', () => {
+  const catalog = notes();
+  const ledger = {
+    dedupeGeneration: 'online-current',
+    batches: {
+      '2026-10-05': { date: '2026-10-05', status: 'delivered', dedupeGeneration: 'legacy', items: [{ noteKey: 'retired-key', groupKey: 'retired-group' }] }
+    }
+  };
+  assert.doesNotThrow(() => validateSelection({ date: '2026-10-06', notes: catalog, ledger, items: items(catalog, [0, 1, 2, 3, 4]) }));
+  assert.throws(() => validateSelection({ date: '2026-10-05', notes: catalog, ledger, items: items(catalog) }), /date-already-occupied/);
+});
+
+test('current-generation exposure retains deleted memo identity and age from send-time history', () => {
+  const catalog = notes();
+  const ledger = {
+    dedupeGeneration: 'online-current',
+    batches: {
+      '2026-10-05': {
+        date: '2026-10-05', status: 'delivered', dedupeGeneration: 'online-current',
+        items: [{ noteKey: 'deleted-note', groupKey: 'deleted-body', historyIdentity: {
+          memoId: 'deleted-memo', noteKey: 'deleted-note', groupKey: 'deleted-body',
+          createdAt: '2020-01-01T09:00:00+08:00', bodyHash: 'deleted-hash'
+        } }]
+      }
+    }
+  };
+  const result = validateSelection({ date: '2026-10-08', notes: catalog, ledger, items: items(catalog) });
+  assert.deepEqual(result.ageObserved.counts, { recent: 0, year: 0, older: 1 });
+  assert.equal(result.ageObserved.total, 1);
+});
+
 test('unknown or conflicting active historical identity fails closed, even when selection is different', () => {
   const catalog = notes();
   const ledger = history(catalog, [['2026-10-05', [0, 1, 2]]]);
@@ -166,26 +204,26 @@ test('eligibility excludes unscored, stale, low-quality and invalid or future-da
   assert.throws(() => validateSelection({ date: '2026-10-06', notes: notes(), items: malformed }), /missing-recommendation-reason/);
 });
 
-test('capacity simulation proves 157 impossible and 158 feasible over four complete ISO weeks', () => {
-  const impossible = simulate28Days({ notes: notes(157), startDate: '2026-10-05' });
+test('capacity simulation proves 185 impossible and 186 feasible over four complete ISO weeks', () => {
+  const impossible = simulate28Days({ notes: notes(185), startDate: '2026-10-05' });
   assert.equal(impossible.possible, false);
-  assert.equal(impossible.minimum, 158);
-  const possible = simulate28Days({ notes: notes(158), startDate: '2026-10-05' });
+  assert.equal(impossible.minimum, 186);
+  const possible = simulate28Days({ notes: notes(186), startDate: '2026-10-05' });
   assert.equal(possible.possible, true);
   assert.equal(possible.schedule.length, 28);
   assert.equal(possible.schedule.at(-1).repeats, 10);
   for (const day of possible.schedule) {
-    assert.equal(day.items.length, 6);
+    assert.equal(day.items.length, 7);
     assert.ok(day.repeats <= 10);
     assert.ok(day.pairOverlaps.every((pair) => pair.overlap <= 5));
   }
-  assert.equal(simulateSupply({ notes: notes(41), startDate: '2026-10-05', days: 7 }).possible, false);
-  assert.equal(simulateSupply({ notes: notes(42), startDate: '2026-10-05', days: 7 }).possible, true);
+  assert.equal(simulateSupply({ notes: notes(48), startDate: '2026-10-05', days: 7 }).possible, false);
+  assert.equal(simulateSupply({ notes: notes(49), startDate: '2026-10-05', days: 7 }).possible, true);
 });
 
 test('28-day capacity simulations cross ISO year and non-Monday start without reset errors', () => {
   for (const startDate of ['2026-12-21', '2026-10-06']) {
-    const result = simulate28Days({ notes: notes(158), startDate });
+    const result = simulate28Days({ notes: notes(186), startDate });
     assert.equal(result.possible, true);
     assert.equal(result.schedule.length, 28);
   }

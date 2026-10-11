@@ -4,7 +4,7 @@ import { mkdtemp, writeFile, rm, realpath, mkdir, readFile } from 'node:fs/promi
 import os from 'node:os';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
-import { preflightDelivery, sendRecommendation, recoverRecommendation, collectFeedback, normalizeMessageMarkdown, cardContentSha256 } from './delivery.mjs';
+import { preflightDelivery, sendRecommendation, sendLegacyRecommendation, recoverRecommendation, collectFeedback, normalizeMessageMarkdown, cardContentSha256 } from './delivery.mjs';
 
 const chatId = 'oc_test', ownerId = 'ou_owner', appId = 'cli_workflow';
 const now = new Date('2026-10-06T12:00:00Z');
@@ -84,7 +84,7 @@ test('one post attaches complete Markdown and persists upload before send, then 
     if (args[1] === '+messages-mget') { assert.ok(args.includes('--download-resources')); return envelope({ messages: [await downloaded(attachmentPath,message({content:`${markdown}\n<file key="file_message" name="review.md"/>`}))] }); }
     throw Error('unexpected');
   };
-  const result = await sendRecommendation({ chatId, markdown, attachmentPath, idempotencyKey, botSenderId: appId, onUploaded: async(value)=>{persisted=value;}, runCli });
+  const result = await sendLegacyRecommendation({ chatId, markdown, attachmentPath, idempotencyKey, botSenderId: appId, onUploaded: async(value)=>{persisted=value;}, runCli });
   assert.equal(result.messageId, 'om_root');
   assert.equal(result.readback, true);
   assert.equal(result.markdownSha256,legacyTextHash);
@@ -116,21 +116,21 @@ for (const [name, mismatch] of [
     if (args[1] === '+messages-send') { sends++; return envelope({ message_id: 'om_root', chat_id: chatId }); }
     return envelope({ messages: [await downloaded(attachmentPath,message(mismatch))] });
   };
-  await assert.rejects(sendRecommendation({ chatId, markdown, attachmentPath, idempotencyKey, botSenderId: appId, runCli }), (error) => error.uncertain === true && error.messageId === 'om_root');
+  await assert.rejects(sendLegacyRecommendation({ chatId, markdown, attachmentPath, idempotencyKey, botSenderId: appId, runCli }), (error) => error.uncertain === true && error.messageId === 'om_root');
   assert.equal(sends, 1);
 });
 
 test('send timeout is uncertain and invalid input never uploads or sends', async (t) => {
   const attachmentPath=await attachment(t);let sends=0;
   const runCli = async(args)=>{if(args[1]==='files')return envelope({file_key:'file_upload'});sends++;throw Error('timeout');};
-  await assert.rejects(sendRecommendation({ chatId, markdown, attachmentPath, idempotencyKey, botSenderId:appId, runCli }), {uncertain:true});
+  await assert.rejects(sendLegacyRecommendation({ chatId, markdown, attachmentPath, idempotencyKey, botSenderId:appId, runCli }), {uncertain:true});
   assert.equal(sends,1);
-  await assert.rejects(sendRecommendation({ chatId, markdown, idempotencyKey, runCli: async () => { throw Error('must-not-send'); } }), { code: 'send-input-invalid',uncertain:false });
+  await assert.rejects(sendLegacyRecommendation({ chatId, markdown, idempotencyKey, runCli: async () => { throw Error('must-not-send'); } }), { code: 'send-input-invalid',uncertain:false });
 });
 
 test('timeout without message ID recovers using persisted uploadKey and original hashes despite message key rebasing',async(t)=>{
   const attachmentPath=await attachment(t);let persisted,sends=0;
-  await assert.rejects(sendRecommendation({chatId,markdown,attachmentPath,idempotencyKey,botSenderId:appId,
+  await assert.rejects(sendLegacyRecommendation({chatId,markdown,attachmentPath,idempotencyKey,botSenderId:appId,
     onUploaded:async value=>{persisted=value;},
     runCli:async(args)=>{if(args[1]==='files')return envelope({file_key:'file_upload'});sends++;throw Error('timeout-after-submission');}
   }),error=>error.uncertain===true&&error.messageId===undefined);
@@ -166,7 +166,7 @@ for (const [name,extra,code] of [
   ['empty downloaded bytes',{bytes:''},'attachment-resource-size-invalid'],
 ]) test(`post send rejects ${name} and never resends`,async(t)=>{
   const attachmentPath=await attachment(t);let sends=0;
-  await assert.rejects(sendRecommendation({chatId,markdown,attachmentPath,idempotencyKey,botSenderId:appId,runCli:async(args)=>{
+  await assert.rejects(sendLegacyRecommendation({chatId,markdown,attachmentPath,idempotencyKey,botSenderId:appId,runCli:async(args)=>{
     if(args[1]==='files')return envelope({file_key:'file_upload'});
     if(args[1]==='+messages-send'){sends++;return envelope({message_id:'om_root',chat_id:chatId});}
     return envelope({messages:[await downloaded(attachmentPath,message(),extra)]});
@@ -176,7 +176,7 @@ for (const [name,extra,code] of [
 
 for(const kind of ['missing-resource','duplicate-resource','outside-root','duplicate-attachment'])test(`post send rejects ${kind}`,async(t)=>{
   const attachmentPath=await attachment(t);let sends=0;
-  await assert.rejects(sendRecommendation({chatId,markdown,attachmentPath,idempotencyKey,botSenderId:appId,runCli:async(args)=>{
+  await assert.rejects(sendLegacyRecommendation({chatId,markdown,attachmentPath,idempotencyKey,botSenderId:appId,runCli:async(args)=>{
     if(args[1]==='files')return envelope({file_key:'file_upload'});
     if(args[1]==='+messages-send'){sends++;return envelope({message_id:'om_root',chat_id:chatId});}
     const root=message();
@@ -191,7 +191,7 @@ for(const kind of ['missing-resource','duplicate-resource','outside-root','dupli
 
 for(const kind of ['upload-timeout','bad-upload-key','persist-failed','changed-original'])test(`${kind} never submits a post and is a definite unsent failure`,async(t)=>{
   const attachmentPath=await attachment(t);let sends=0;
-  await assert.rejects(sendRecommendation({chatId,markdown,attachmentPath,idempotencyKey,botSenderId:appId,
+  await assert.rejects(sendLegacyRecommendation({chatId,markdown,attachmentPath,idempotencyKey,botSenderId:appId,
     onUploaded:async()=>{if(kind==='persist-failed')throw Error('cannot-persist');if(kind==='changed-original')await writeFile(attachmentPath,'已修改\n');},
     runCli:async(args)=>{if(args[1]==='files'){if(kind==='upload-timeout')throw Error('upload-timeout');return envelope({file_key:kind==='bad-upload-key'?'invalid':'file_upload'});}sends++;throw Error('must-not-send');}
   }),{uncertain:false});
@@ -200,7 +200,7 @@ for(const kind of ['upload-timeout','bad-upload-key','persist-failed','changed-o
 
 for(const [name,body] of [['missing-date','内容'],['invalid-date',`${markdown}\n回顾日期：2026-02-30`]])test(`post refuses ${name} before upload`,async(t)=>{
   const attachmentPath=await attachment(t);let calls=0;
-  await assert.rejects(sendRecommendation({chatId,markdown:body,attachmentPath,dateMarker:name==='invalid-date'?'回顾日期：2026-02-30':undefined,idempotencyKey,botSenderId:appId,runCli:async()=>{calls++;throw Error('must-not-call');}}),{code:'date-marker-invalid',uncertain:false});
+  await assert.rejects(sendLegacyRecommendation({chatId,markdown:body,attachmentPath,dateMarker:name==='invalid-date'?'回顾日期：2026-02-30':undefined,idempotencyKey,botSenderId:appId,runCli:async()=>{calls++;throw Error('must-not-call');}}),{code:'date-marker-invalid',uncertain:false});
   assert.equal(calls,0);
 });
 
@@ -216,6 +216,12 @@ test('card-only input sends interactive content and verifies exact readback',asy
   assert.equal(result.messageId,'om_root');
   assert.equal(result.cardContentSha256,cardContentSha256(card));
   assert.equal(result.readback,true);
+});
+
+test('markdown-only input never sends',async()=>{
+  let calls=0;
+  await assert.rejects(sendRecommendation({chatId,markdown,attachmentPath:'/tmp/review.md',idempotencyKey,botSenderId:appId,runCli:async()=>{calls++;}}),{code:'card-only-send-required',uncertain:false});
+  assert.equal(calls,0);
 });
 
 test('recovery checks exact date, expected canonical hash, configured sender and bounded complete time window', async (t) => {
@@ -376,7 +382,7 @@ test('strict canonicalization preserves ordinal and decimal content',()=>{
 
 for (const [name,body,wrongBody] of [['ordinal','1.苹果\n2.香蕉','2.苹果\n1.香蕉'],['decimal','1.5%','2.5%']]) test(`readback refuses changed ${name} content`,async(t)=>{
   const attachmentPath=await attachment(t);let sends=0;
-  await assert.rejects(sendRecommendation({chatId,markdown:`${body}\n回顾日期：2026-10-06`,attachmentPath,idempotencyKey,botSenderId:appId,runCli:async(args)=>{
+  await assert.rejects(sendLegacyRecommendation({chatId,markdown:`${body}\n回顾日期：2026-10-06`,attachmentPath,idempotencyKey,botSenderId:appId,runCli:async(args)=>{
     if(args[1]==='files')return envelope({file_key:'file_upload'});
     if(args[1]==='+messages-send'){sends++;return envelope({message_id:'om_root',chat_id:chatId});}
     return envelope({messages:[await downloaded(attachmentPath,message({content:`${wrongBody}\n回顾日期：2026-10-06\n<file key="file_upload"/>`}))]});

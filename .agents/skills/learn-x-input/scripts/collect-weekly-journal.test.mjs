@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { collectConfirmedWeeklyJournal, recordWeeklyJournalAnchor, WEEKLY_JOURNAL_DOCUMENT_URL } from "./collect-weekly-journal.mjs";
+import { collectAndPublishConfirmedWeeklyJournal, collectConfirmedWeeklyJournal, recordWeeklyJournalAnchor, WEEKLY_JOURNAL_DOCUMENT_URL } from "./collect-weekly-journal.mjs";
 
 test("records a narrow target-week anchor and collects only the anchored, confirmed section", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-weekly-journal-"));
@@ -81,6 +81,32 @@ test("refuses replacing a different saved journal anchor for the same week", asy
     week: "2026-W40", writeDate: "2026-10-05", targetTitle: "10.5",
     targetBlockId: "blkDifferent2026W40", documentId: "docWeeklyJournal01", repoRoot: root
   }), /different target/);
+});
+
+test("publishes the shared plan only after Stage 2 journal collection succeeds", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-weekly-journal-publish-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await recordWeeklyJournalAnchor({
+    week: "2026-W40", writeDate: "2026-10-05", targetTitle: "10.5",
+    targetBlockId: "blkTarget2026W40", documentId: "docWeeklyJournal01", repoRoot: root
+  });
+  const section = `## 10.5\n\n已确认周记正文，包含足够的经历事实和个人判断。\n\n| 项目 | 内容 |\n| --- | --- |\n| 新周计划 | 1. 完成计划核对 [链接](https://example.com/plan) |`;
+  const result = await collectAndPublishConfirmedWeeklyJournal({
+    week: "2026-W40",
+    repoRoot: root,
+    fetchSection: async () => ({
+      ok: true,
+      identity: "bot",
+      data: { document: { document_id: "docWeeklyJournal01", revision_id: 72, content: section } }
+    })
+  });
+
+  assert.equal(result.sharedContext.planWeek, "2026-W41");
+  const saved = await readFile(result.outputPath, "utf8");
+  assert.match(saved, /来源 revision：72/);
+  const current = JSON.parse(await readFile(result.sharedContext.currentPath, "utf8"));
+  assert.equal(current.producer, "learn-x");
+  assert.equal(current.planWeek, "2026-W41");
 });
 
 test("atomically preserves one target when conflicting anchor writes race", async (t) => {

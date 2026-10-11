@@ -78,6 +78,13 @@ Run `npm run input:daily-coach -- --week YYYY-Www` to collect the 日常记录 B
 - If all Coach tables have zero retained records, report `0 条记录，文件未生成`; this is a successful empty source, not a collection failure.
 - Preserve ordinary fields and URLs, record attachment names/counts, and exclude contact details, interview text, linked-page正文, and technical record IDs.
 
+## Confirmed Weekly Journal and Shared Plan
+
+- Run `npm run input:weekly -- --week YYYY-Www` only after the user explicitly replies `周记已确认`. A successful Stage 2 collection writes or verifies the confirmed `weekly.md`, then publishes the unique `新周计划` table row to `04_output/_dist/shared-context/current.json`; immutable versions live under `weekly/<planWeek>/`.
+- The shared version contains only that complete table row, including its nested lists, tables, and safe links. `payload.planTableRow.markdown` is the readable rendering; `html` preserves the sanitized row structure. Do not publish other journal text or AI output. The publisher validates the confirmed-file metadata, exact source-week coverage, and unique plan row before changing `current.json`.
+- `planWeek` is the ISO week containing the day after `coverage.end`. `source.sha256` identifies the exact weekly-file bytes; the source URL/revision are copied when available, and absent URL/revision stays `null` and is listed as missing. `current.json.sha256` remains the source-file hash, while `current.json.artifactSha256` verifies the exact immutable version bytes. `confirmedAt` stays `null` when no confirmation timestamp was recorded. Never use `weekly.md` collection time as confirmation time.
+- To publish a previously confirmed local file during migration, run `npm run publish:weekly-context -- --week YYYY-Www`. This command reads only the existing `03_input/weekly/YYYY-Www/weekly.md`; it does not fetch Feishu. Use it only for a file that already passed the same Stage 2 confirmation gate. Invalid candidates and older plan weeks do not replace the current pointer.
+
 ## Wisdom Gate Weekly Input
 
 Run `npm run input:wisdom -- --week YYYY-Www` to collect the 智慧之门 table (研究&学习 Base) with `lark-cli --as bot`.
