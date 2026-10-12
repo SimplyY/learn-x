@@ -151,6 +151,41 @@ export function cardContentSha256(content) {
   return hash(JSON.stringify(canonicalJSON(card)));
 }
 
+/** lark-cli renders Card 2.0 as a compact markup string in +messages-mget. */
+function renderCardReadback(card) {
+  if (!card || card.schema !== '2.0') return null;
+  const title = card.header?.title?.content;
+  const subtitle = card.header?.subtitle?.content;
+  if (typeof title !== 'string' || typeof subtitle !== 'string' || /[<>"\r\n]/.test(title + subtitle)) return null;
+  const elements = card.body?.elements;
+  if (!Array.isArray(elements)) return null;
+  const rendered = [];
+  for (const element of elements) {
+    if (element?.tag === 'markdown' && typeof element.content === 'string') rendered.push(element.content);
+    else if (element?.tag === 'hr') rendered.push('---');
+    else return null;
+  }
+  return `<card title="${title}" subtitle="${subtitle}">\n${rendered.join('\n')}\n</card>`;
+}
+
+function verifyCardContent(content, { expectedCard, expectedCardSha256 }) {
+  const card = cardJSON(content);
+  if (card) {
+    if (card.schema !== '2.0') throw new DeliveryError('card-readback-invalid');
+    const contentSha256 = cardContentSha256(card);
+    if (expectedCardSha256 && contentSha256 !== expectedCardSha256) throw new DeliveryError('card-content-hash-mismatch');
+    return { cardContentSha256: contentSha256, cardReadbackSha256: hash(typeof content === 'string' ? content : JSON.stringify(content)) };
+  }
+
+  if (typeof content !== 'string' || !content.startsWith('<card ')) throw new DeliveryError('card-readback-invalid');
+  const expectedMarkup = renderCardReadback(expectedCard);
+  if (!expectedMarkup) throw new DeliveryError('card-readback-invalid');
+  if (content !== expectedMarkup) throw new DeliveryError('card-content-hash-mismatch');
+  const contentSha256 = cardContentSha256(expectedCard);
+  if (expectedCardSha256 && contentSha256 !== expectedCardSha256) throw new DeliveryError('card-content-hash-mismatch');
+  return { cardContentSha256: contentSha256, cardReadbackSha256: hash(content) };
+}
+
 function messageContent(content) {
   const text = String(content ?? '');
   const attachments = [...text.matchAll(/<(?:file|folder)\s+[^>]*key=["']([^"']+)["'][^>]*\/?>(?:<\/file>)?/g)].map((match) => match[1]);
@@ -185,16 +220,14 @@ function verifyLegacyMessage(message, { chatId, messageId, markdownSha256, attac
   return { messageId, chatId, normalizationVersion: MESSAGE_NORMALIZATION_VERSION, markdownSha256: content.markdownSha256, attachmentKeys: content.attachments, readback: true, threadId: message.thread_id ?? null };
 }
 
-function verifyMessage(message, { chatId, messageId, cardContentSha256: expectedCardSha256, dateMarker, botSenderId, botSenderIds }) {
+function verifyMessage(message, { chatId, messageId, cardContentSha256: expectedCardSha256, expectedCard, dateMarker, botSenderId, botSenderIds }) {
   if (!message || message.message_id !== messageId || message.chat_id !== chatId || message.deleted !== false) throw new DeliveryError('message-readback-invalid');
   const allowedBots = [...(botSenderIds ?? []), ...(botSenderId ? [botSenderId] : [])];
   if (senderKind(message.sender) !== 'bot' || !senderIds(message.sender).length || (allowedBots.length && !senderIds(message.sender).some((id) => allowedBots.includes(id)))) throw new DeliveryError('message-bot-mismatch');
-  const card = cardJSON(message.content);
-  if (!card || card.schema !== '2.0') throw new DeliveryError('card-readback-invalid');
-  const contentSha256 = cardContentSha256(message.content);
-  if (expectedCardSha256 && contentSha256 !== expectedCardSha256) throw new DeliveryError('card-content-hash-mismatch');
+  if (message.msg_type !== 'interactive') throw new DeliveryError('card-message-type-mismatch');
+  const cardReceipt = verifyCardContent(message.content, { expectedCard, expectedCardSha256 });
   if (dateMarker && !String(message.content).includes(dateMarker)) throw new DeliveryError('date-marker-mismatch');
-  return { messageId, chatId, normalizationVersion: MESSAGE_NORMALIZATION_VERSION, cardContentSha256: contentSha256, readback: true, threadId: message.thread_id ?? null };
+  return { messageId, chatId, normalizationVersion: MESSAGE_NORMALIZATION_VERSION, ...cardReceipt, readback: true, threadId: message.thread_id ?? null };
 }
 
 async function originalAttachment(attachmentPath, expectedSha256) {
@@ -248,7 +281,7 @@ export async function sendRecommendation({ chatId, card, dateMarker, idempotency
       assertId(messageId, 'om_', 'sent-message-id-missing');
       if (sent.chat_id !== chatId) throw new DeliveryError('sent-chat-mismatch');
       const message = await readDownloadedMessage(runCli, messageId);
-      return { ...verifyMessage(message, { chatId, messageId, cardContentSha256: cardSha256, dateMarker, botSenderId, botSenderIds }), idempotencyKey };
+      return { ...verifyMessage(message, { chatId, messageId, cardContentSha256: cardSha256, expectedCard: card, dateMarker, botSenderId, botSenderIds }), idempotencyKey };
   } catch (error) {
     throw new DeliveryError(error.code ?? 'send-result-uncertain', { uncertain: sendAttempted, ...(messageId ? { messageId } : {}) });
   }
@@ -311,9 +344,14 @@ export async function recoverRecommendation({ chatId, messageId, idempotencyKey,
       assertComplete(response, 'recovery-messages-incomplete');
       candidates = messagesOf(response);
     }
-    const matching = candidates.filter((message) => message.message_id === messageId || (!messageId && message.chat_id === chatId && senderKind(message.sender) === 'bot' && senderIds(message.sender).some((id) => allowedBots.includes(id)) && (format === 'card' ? cardJSON(message.content) && String(message.content).includes(dateMarker) : String(message.content ?? '').split(/\r?\n/).some(line => normalizeMessageMarkdown(line) === normalizeMessageMarkdown(dateMarker)))));
+    const matching = candidates.filter((message) => message.message_id === messageId || (!messageId && message.chat_id === chatId && senderKind(message.sender) === 'bot' && senderIds(message.sender).some((id) => allowedBots.includes(id)) && (format === 'card' ? (cardJSON(message.content)?.schema === '2.0' || (typeof message.content === 'string' && message.content.startsWith('<card '))) && String(message.content).includes(dateMarker) : String(message.content ?? '').split(/\r?\n/).some(line => normalizeMessageMarkdown(line) === normalizeMessageMarkdown(dateMarker)))));
     if (!matching.length) return { status: 'not-found', matched: false, safeToResend: false };
-    const exact = matching.filter((message) => (format === 'card' ? cardContentSha256(message.content) : messageContent(message.content).markdownSha256) === expectedHash);
+    const exact = matching.filter((message) => {
+      if (format !== 'card') return messageContent(message.content).markdownSha256 === expectedHash;
+      const readback = cardJSON(message.content);
+      if (readback) return readback.schema === '2.0' && cardContentSha256(readback) === expectedHash;
+      return expectedCard && renderCardReadback(expectedCard) === message.content && cardContentSha256(expectedCard) === expectedHash;
+    });
     if (!exact.length) throw new DeliveryError('message-content-hash-mismatch');
     if (exact.length !== 1) throw new DeliveryError('recovery-multiple-matches');
     const message = messageId ? exact[0] : await readDownloadedMessage(runCli, exact[0].message_id, original?.cwd);
@@ -322,7 +360,7 @@ export async function recoverRecommendation({ chatId, messageId, idempotencyKey,
       const receipt = verifyLegacyMessage(message, { chatId, messageId: exact[0].message_id, markdownSha256, dateMarker, botSenderId, botSenderIds });
       return { status: 'delivered', matched: true, ...receipt, ...await verifyDownloadedAttachment(message, original), ...(uploadKey ? { uploadKey } : {}) };
     }
-    const receipt = verifyMessage(message, { chatId, messageId: exact[0].message_id, cardContentSha256: expectedCardSha256, dateMarker, botSenderId, botSenderIds });
+    const receipt = verifyMessage(message, { chatId, messageId: exact[0].message_id, cardContentSha256: expectedCardSha256, expectedCard, dateMarker, botSenderId, botSenderIds });
     return { status: 'delivered', matched: true, ...receipt };
   } catch (error) { throw new DeliveryError(error.code ?? 'recovery-uncertain', { uncertain: true }); }
 }
@@ -402,7 +440,7 @@ export async function collectFeedback({ batches, ownerId, profile, runCli = runL
       if (!root || root.chat_id !== batch.chatId || root.deleted !== false) throw new DeliveryError('feedback-root-invalid');
       if (root.updated === true) throw new DeliveryError('feedback-root-edited');
       const format = receiptFormat(batch);
-      if (format === 'card') verifyMessage(root, { chatId: batch.chatId, messageId: batch.messageId, cardContentSha256: batch.cardContentSha256, dateMarker: `回顾日期：${batch.date}`, botSenderId: batch.botSenderId, botSenderIds: batch.botSenderIds });
+      if (format === 'card') verifyMessage(root, { chatId: batch.chatId, messageId: batch.messageId, cardContentSha256: batch.cardContentSha256, expectedCard: batch.card, dateMarker: `回顾日期：${batch.date}`, botSenderId: batch.botSenderId, botSenderIds: batch.botSenderIds });
       else verifyLegacyMessage(root, { chatId: batch.chatId, messageId: batch.messageId, markdownSha256: batch.markdownSha256, attachmentKey: batch.attachmentKey, dateMarker: `回顾日期：${batch.date}`, botSenderId: batch.botSenderId, botSenderIds: batch.botSenderIds });
       if (!root.thread_id) {
         if (root.thread_replies?.length || root.thread_has_more || root.thread_replies_error) throw new DeliveryError('feedback-thread-id-missing');

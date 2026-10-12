@@ -6,6 +6,7 @@ import { compressVoiceForProcessPack, voiceCompressionMetrics } from "../../lear
 import { isoWeekRangeShanghai } from "../../learn-x-input/scripts/collect-weread-weekly.mjs";
 import { countInputChars, inputSize, MAX_VOICE_WEEKLY_INPUT_CHARS, VOICE_TARGET_RETAINED_RATIO, VOICE_TARGET_RETAINED_RATIO_RANGE } from "../../learn-x-input/scripts/lib/input-limits.mjs";
 import { WEEKLY_SOURCE_CONFIG, compareWeeklySources, weeklySourceForFile, weeklySourceForId } from "../../learn-x-input/scripts/lib/weekly-source-config.mjs";
+import { MAX_ACCEPTED_MISSING_RECORDS } from "../../learn-x-input/scripts/lib/flomo-full-snapshot.mjs";
 import { defaultWeeklyReviewWeek, isoWeekRange, collectWeeklyInput } from "./collect-weekly-input.mjs";
 import { validateAiReview } from "./monthly-process-input.mjs";
 import { loadWeeklyPreparation, prepareWeeklyProcessInputs } from "./weekly-preprocessing.mjs";
@@ -31,15 +32,18 @@ export async function generateWeeklyProcessPack(options = {}) {
   const outputRoot = path.join(root, "04_output/_dist/weekly", distWeekId(payload.week));
 
   if (options.prepare) {
-    const preparation = await prepareWeeklyProcessInputs({ week: payload.week, repoRoot: root, payload });
+    const preparation = await prepareWeeklyProcessInputs({ week: payload.week, repoRoot: root, payload, allowPartial: true });
     return { payload, preparation, outputRoot, prepared: true };
   }
 
-  const gate = await validateWeeklyProcessInputs({ week: payload.week, repoRoot: root, payload });
+  const gate = await validateWeeklyProcessInputs({ week: payload.week, repoRoot: root, payload, allowPartial: true });
   if (gate.length) throw new Error(`weekly-process-blocked:\n${gate.map((item) => `- ${item}`).join("\n")}`);
 
-  const { manifest, manifestPath } = await loadWeeklyPreparation({ week: payload.week, repoRoot: root, payload });
+  const { manifest, manifestPath } = await loadWeeklyPreparation({ week: payload.week, repoRoot: root, payload, allowPartial: true });
   const { processPayload, items, compression } = applyWeeklyPreparation(payload, manifest);
+  processPayload.deliveryStatus = getWeeklyPackDeliveryStatus(processPayload);
+  payload.deliveryStatus = processPayload.deliveryStatus;
+  payload.preprocessing = processPayload.preprocessing;
   const sourceSummaries = buildSourceSummaries(processPayload);
   const fileSummaries = buildFileSummaries(processPayload, items);
   const previousOutput = await readPreviousWeeklyOutput(payload.week, root);
@@ -59,6 +63,7 @@ export async function generateWeeklyProcessPack(options = {}) {
     sourceSummaries,
     fileSummaries,
     compression,
+    deliveryStatus: processPayload.deliveryStatus,
     previousOutput,
     metrics,
     outputPath,
@@ -66,10 +71,19 @@ export async function generateWeeklyProcessPack(options = {}) {
   };
 }
 
-export async function validateWeeklyProcessInputs({ week, repoRoot: root = repoRoot, payload }) {
+export function getWeeklyPackDeliveryStatus(payload) {
+  const hasUnverifiedSource = Object.values(payload.sourceStatuses || {}).some((entry) =>
+    ["failed", "unavailable", "needs_review"].includes(entry.status) || entry.preservedStaleFile)
+    || Object.keys(payload.excludedSources || {}).length > 0
+    || (payload.preprocessing?.exclusions || []).length > 0;
+  return hasUnverifiedSource ? "有缺口已生成" : "完整生成";
+}
+
+export async function validateWeeklyProcessInputs({ week, repoRoot: root = repoRoot, payload, allowPartial = false }) {
   const byFile = new Map(payload.files.map((file) => [path.basename(file.path), file]));
   const status = payload.sourceStatuses || {};
   const issues = [];
+  const optionalIssues = {};
   const targetWeek = distWeekId(week);
 
   const daily = status.daily;
@@ -78,43 +92,63 @@ export async function validateWeeklyProcessInputs({ week, repoRoot: root = repoR
   }
 
   const flomo = status.flomo;
+  const flomoIssues = [];
   if (flomo?.status === "ready") {
     const file = byFile.get("flomo.md");
-    if ((flomo.count ?? 0) < 1 || !file) issues.push("Flomo 标记 ready，但没有有效记录或 flomo.md");
-    else await validateFlomoReady({ root, file, status: flomo, week: targetWeek, issues });
-  } else if (!(flomo?.status === "empty" && flomo.count === 0 && hasTrustedEmptyScan(flomo.summary, targetWeek, "flomo"))) {
-    issues.push(`Flomo flomo.md 必须完整采集成功（允许有完整扫描证据的零条结果；当前 ${flomo?.status || "未登记"}）`);
+    if ((flomo.count ?? 0) < 1 || !file) flomoIssues.push("Flomo 标记 ready，但没有有效记录或 flomo.md");
+    else await validateFlomoReady({ root, file, status: flomo, week: targetWeek, issues: flomoIssues });
+  } else if (!(flomo?.status === "empty" && flomo.count === 0 &&
+    (hasTrustedEmptyScan(flomo.summary, targetWeek, "flomo") || hasAcceptedGapEmptyFlomoScan(flomo.summary, targetWeek)))) {
+    flomoIssues.push(`Flomo flomo.md 必须采集成功（允许容差内缺口或有完整扫描证据的零条结果；当前 ${flomo?.status || "未登记"}）`);
+  }
+  if (flomoIssues.length) {
+    if (allowPartial) optionalIssues.flomo = flomoIssues;
+    else issues.push(...flomoIssues);
   }
 
   const voice = status.voice;
+  const voiceIssues = [];
   if (voice?.status === "ready") {
     if ((voice.count ?? 0) < 1 || !byFile.has("voice.md")) {
-      issues.push("Voice 标记 ready，但没有有效记录或 voice.md");
+      voiceIssues.push("Voice 标记 ready，但没有有效记录或 voice.md");
     } else {
       const text = await readFile(path.join(root, byFile.get("voice.md").path), "utf8");
-      await validateVoiceReady({ text, status: voice, week: targetWeek, issues });
+      await validateVoiceReady({ text, status: voice, week: targetWeek, issues: voiceIssues });
     }
   } else if (!(voice?.status === "empty" && voice.count === 0 && hasTrustedEmptyScan(voice.summary, targetWeek, "voice"))) {
-    issues.push(`Voice voice.md 必须完整采集成功（允许有完整扫描证据的零条结果；当前 ${voice?.status || "未登记"}）`);
+    voiceIssues.push(`Voice voice.md 必须完整采集成功（允许有完整扫描证据的零条结果；当前 ${voice?.status || "未登记"}）`);
+  }
+  if (voiceIssues.length) {
+    if (allowPartial) optionalIssues.voice = voiceIssues;
+    else issues.push(...voiceIssues);
   }
 
   const aiFile = byFile.get("ai.md");
+  const aiIssues = [];
   if (!aiFile) {
-    issues.push("AI 周回顾 ai.md 缺失，Process Pack 需要有效 AI 回顾");
+    aiIssues.push("AI 周回顾 ai.md 缺失，Process Pack 需要有效 AI 回顾");
   } else {
     const text = await readFile(path.join(root, aiFile.path), "utf8");
     const validation = validateAiReview(text);
-    if (!validation.valid) issues.push(`AI 周回顾结构无效（${validation.reasons.join(", ")}）`);
+    if (!validation.valid) aiIssues.push(`AI 周回顾结构无效（${validation.reasons.join(", ")}）`);
     const aiSidecarPath = path.join(root, "03_input/weekly", targetWeek, "_ai-generated.json");
     let aiSidecar;
     try { aiSidecar = JSON.parse(await readFile(aiSidecarPath, "utf8")); }
-    catch (error) { if (error.code !== "ENOENT") issues.push("AI 周回顾运行状态侧车无法验证"); }
+    catch (error) { if (error.code !== "ENOENT") aiIssues.push("AI 周回顾运行状态侧车无法验证"); }
     if (aiSidecar) {
-      if (aiSidecar.status !== "confirmed" || aiSidecar.targetWeek !== targetWeek) issues.push(`AI 周回顾未确认为目标周 ${targetWeek}`);
+      if (aiSidecar.status !== "confirmed" || aiSidecar.targetWeek !== targetWeek) aiIssues.push(`AI 周回顾未确认为目标周 ${targetWeek}`);
+      if (aiSidecar.completionSource === "user-manual" && validation.valid) {
+        const actualHash = createHash("sha256").update(text, "utf8").digest("hex");
+        if (aiSidecar.manualConfirmation?.sha256 !== actualHash) aiIssues.push("人工确认后的 ai.md 内容已变化或哈希不匹配");
+      }
     } else {
       const declaredWeek = text.match(/^# .*?(\d{4}-W\d{2})\s*$/m)?.[1];
-      if (declaredWeek !== targetWeek) issues.push(`AI 周回顾目标周标记缺失或不匹配（应为 ${targetWeek}）`);
+      if (declaredWeek !== targetWeek) aiIssues.push(`AI 周回顾目标周标记缺失或不匹配（应为 ${targetWeek}）`);
     }
+  }
+  if (aiIssues.length) {
+    if (allowPartial) optionalIssues.ai = aiIssues;
+    else issues.push(...aiIssues);
   }
 
   const weeklyFile = byFile.get("weekly.md");
@@ -128,7 +162,26 @@ export async function validateWeeklyProcessInputs({ week, repoRoot: root = repoR
     if (!hasSubstantiveWeeklyJournal(text)) issues.push("weekly.md 只有模板、占位或空内容，不能作为已确认周记");
   }
 
+  if (allowPartial) {
+    for (const [source, reasons] of Object.entries(optionalIssues)) {
+      const file = source === "ai" ? "ai.md" : WEEKLY_SOURCE_CONFIG.find((entry) => entry.id === source)?.file;
+      excludeUnverifiedSource(payload, source, file, reasons);
+    }
+  }
   return issues;
+}
+
+function excludeUnverifiedSource(payload, source, file, reasons) {
+  if (!file) return;
+  const pathSuffix = `/${file}`;
+  const removedPaths = new Set(payload.files.filter((entry) => entry.path.endsWith(pathSuffix)).map((entry) => entry.path));
+  payload.files = payload.files.filter((entry) => !removedPaths.has(entry.path));
+  payload.items = payload.items.filter((entry) => !removedPaths.has(entry.path));
+  payload.excludedSources ||= {};
+  payload.excludedSources[source] = {
+    status: "needs_review",
+    reason: reasons.map((reason) => String(reason).replace(/[\r\n|]/g, " ")).join("；").slice(0, 400)
+  };
 }
 
 async function validateFlomoReady({ root, file, status, week, issues }) {
@@ -136,7 +189,8 @@ async function validateFlomoReady({ root, file, status, week, issues }) {
   const range = expectedSourceRange(week, "flomo");
   if (!text.includes(`# Flomo 周输入｜${week}`)) issues.push(`Flomo 目标周标记缺失或不匹配（应为 ${week}）`);
   if (!text.includes(`- 采集范围：${range.start} 至 ${range.endExclusive}（不含结束时刻）`)
-    || !hasCompleteScanSummary(status.summary, range, status.count)) issues.push("Flomo 扫描范围、完整扫描状态或下界证据与目标周不匹配");
+    || !hasCompleteScanSummary(status.summary, range, status.count)
+    || !hasAcceptedFlomoCoverage(text, status.summary)) issues.push("Flomo 扫描范围、完整扫描状态、计数缺口或下界证据与目标周不匹配");
   if (!text.includes("- 完整扫描：是") || !text.includes("- 下界已覆盖：是")) issues.push("Flomo 文件缺少完整扫描或下界覆盖证据");
   const fileCount = Number(text.match(/^- 目标周记录：\s*(\d+)\s*$/m)?.[1]);
   const sidecarCount = Number(status.count);
@@ -170,6 +224,33 @@ function hasTrustedEmptyScan(summary, week, source) {
     && /(?:下界已覆盖|范围已覆盖)[：:]\s*是/.test(text)
     && /(?:0\s*条|零条|无匹配)/.test(text)
     && Number(text.match(/分页\s*(\d+)\s*页/)?.[1]) >= 1;
+}
+
+function hasAcceptedGapEmptyFlomoScan(summary, week) {
+  const text = String(summary || "");
+  const range = expectedSourceRange(week, "flomo");
+  const expectedRange = `完整扫描 ${range.start} 至 ${range.endExclusive} 完成`;
+  const coverage = text.match(/全库计数\s+(\d+)\s*\/\s*(\d+)，未枚举\s+(\d+) 条（容差内，最多 (\d+) 条）/);
+  if (!coverage) return false;
+  const [, observed, expected, omitted, maximum] = coverage.map(Number);
+  return text.includes(expectedRange)
+    && /下界已覆盖[：:]\s*是/.test(text)
+    && /0 条（可见结果为 0，缺口可能影响本周覆盖）/.test(text)
+    && Number(text.match(/分页\s*(\d+)\s*页/)?.[1]) >= 1
+    && expected - observed === omitted && omitted > 0
+    && omitted <= MAX_ACCEPTED_MISSING_RECORDS && maximum === MAX_ACCEPTED_MISSING_RECORDS;
+}
+
+function hasAcceptedFlomoCoverage(markdown, summary) {
+  const header = String(markdown || "").match(/^- 全库计数：观察到 (\d+) \/ (?:预期 )?(\d+)；未枚举 (\d+) 条(?:（容差内，最多 (\d+) 条）)?$/m);
+  const reported = String(summary || "").match(/全库计数\s+(\d+)\s*\/\s*(\d+)，未枚举\s+(\d+) 条(?:（容差内，最多 (\d+) 条）)?/);
+  if (!header || !reported) return false;
+  const [observed, expected, omitted, maximum] = header.slice(1).map((value) => value === undefined ? null : Number(value));
+  const [summaryObserved, summaryExpected, summaryOmitted, summaryMaximum] = reported.slice(1).map((value) => value === undefined ? null : Number(value));
+  return observed === summaryObserved && expected === summaryExpected && omitted === summaryOmitted
+    && maximum === summaryMaximum && expected - observed === omitted
+    && omitted >= 0 && omitted <= MAX_ACCEPTED_MISSING_RECORDS
+    && (omitted === 0 ? maximum === null : maximum === MAX_ACCEPTED_MISSING_RECORDS);
 }
 
 function hasCompleteScanSummary(summary, range, count) {
@@ -298,6 +379,7 @@ export function renderProcessPack(payload, sourceSummaries, fileSummaries, items
   const pack = [
     `# Learn-X Process Pack｜${payload.week}`,
     "",
+    `> 交付状态：${payload.deliveryStatus || getWeeklyPackDeliveryStatus(payload)}。缺失或未验证来源会在输入表中醒目标出并排除；日记和已确认周记仍是硬门槛。`,
     "> 这是给 AI Chat 生成最终 Weekly Output 的上下文材料包；行动与反馈直接来自第 7 节各来源材料正文。",
     "> 本文件只保留必要来源索引和清洗正文；不要在这里做道 / 法 / 术 / Prompt / Skill 判断。",
     "",
@@ -468,18 +550,21 @@ export function buildInputAuditRows(payload, fileSummaries, compression) {
 
 function buildInputAuditRow({ payload, definition, fileSummary, statusInfo }) {
   const entry = statusInfo?.entry;
+  const excluded = payload.excludedSources?.[definition.statusSource];
   const isManual = definition.mode === "manual";
   const hasMaterial = Boolean(fileSummary);
   const isReady = entry?.status === "ready" || (!entry && hasMaterial);
-  const status = entry?.status || (hasMaterial ? (isManual ? "ready（人工）" : "ready（兼容）") : "未发现");
+  const status = excluded?.status || entry?.status || (hasMaterial ? (isManual ? "ready（人工）" : "ready（兼容）") : "未发现");
   const stale = entry?.preservedStaleFile ? "；旧文件保留但过期、不计入" : "";
-  const present = hasMaterial || Boolean(payload.excludedFiles?.some((file) => file.file === definition.file && file.present));
+  const present = hasMaterial || Boolean(excluded) || Boolean(payload.excludedFiles?.some((file) => file.file === definition.file && file.present));
   const filePath = fileSummary?.path || `03_input/weekly/${distWeekId(payload.week)}/${definition.file}`;
   const link = present ? localFileLink(filePath, definition.file) : "—";
 
   let result;
   const preparedExclusion = payload.preprocessing?.exclusions?.find((item) => item.sourcePath === fileSummary?.path);
-  if (entry && entry.status !== "ready") {
+  if (excluded) {
+    result = `排除：来源核验失败（${excluded.reason}）`;
+  } else if (entry && entry.status !== "ready") {
     result = `排除：${entry.summary || entry.status}${stale}`;
   } else if (preparedExclusion) {
     result = `排除：预处理未就绪（${preparedExclusion.reason}）`;
@@ -526,18 +611,20 @@ export function renderInputAuditTable(payload, fileSummaries, compression) {
     return row.rawChars === "—" ? "—" : `${row.rawChars} → ${row.effectiveChars} → ${row.processChars}${compressionNote}`;
   };
   const fileCell = (row) => row.link === "—" ? row.file : row.link;
+  const statusCell = (row) => renderStatusLabel(row.status);
   const sourceTable = (title, groupRows) => [
     `### ${title}`,
     "",
-    "| 优先级 | 类型 / 产物 | 来源 | 文件 | 状态 | 记录/材料 | 字符链路（文件原始 → 清洗有效〔去重前〕→ 最终纳入） | 结果 |",
+    "| 优先级 | 状态 | 类型 / 产物 | 来源 | 文件 | 记录/材料 | 字符链路（文件原始 → 清洗有效〔去重前〕→ 最终纳入） | 结果 |",
     "| --- | --- | --- | --- | --- | ---: | ---: | --- |",
-    ...groupRows.map((row) => `| ${row.priority == null ? "—" : `P${row.priority}`} | ${row.type} | ${row.source} | ${fileCell(row)} | ${row.status} | ${row.count} | ${characterChain(row)} | ${escapeTableCell(row.result)} |`)
+    ...groupRows.map((row) => `| ${row.priority == null ? "—" : `P${row.priority}`} | ${statusCell(row)} | ${row.type} | ${row.source} | ${fileCell(row)} | ${row.count} | ${characterChain(row)} | ${escapeTableCell(row.result)} |`)
   ].join("\n");
   return [
     "> 周记是阶段前提，自动来源按统一配置排序。输入行展示文件原始 → 解析清洗有效（去重前）→ Process Pack 最终纳入；只有发生实际压缩时才显示比例。",
-    `> 本轮需关注：${renderInputAttention(rows)}`,
+    `**本轮状态：** ${renderOverallStatus(rows)}`,
+    `**本轮需关注：** ${renderInputAttention(rows)}`,
     "",
-    stage ? `**阶段前提：** ${stage.source}｜${fileCell(stage)}｜${stage.status}｜${stage.count} 条材料｜字符链路 ${characterChain(stage)}｜${stage.result}` : "",
+    stage ? `**阶段前提：** ${stage.source}｜${fileCell(stage)}｜${statusCell(stage)}｜${stage.count} 条材料｜字符链路 ${characterChain(stage)}｜${stage.result}` : "",
     "",
     sourceTable("重要来源", rows.filter((row) => row.group === "important")),
     "",
@@ -545,11 +632,40 @@ export function renderInputAuditTable(payload, fileSummaries, compression) {
   ].join("\n");
 }
 
+function renderStatusLabel(status) {
+  const raw = String(status || "未登记");
+  const match = raw.match(/^([a-z_-]+)(.*)$/i);
+  if (!match) return raw;
+  const labels = {
+    ready: "✅ 成功",
+    empty: "⚪ 成功（0 条）",
+    failed: "🔴 **失败**",
+    unavailable: "🟠 不可用",
+    needs_review: "🔴 **未验收**",
+    running: "⏳ 执行中",
+    pending: "⏳ 待执行",
+    "recheck-only": "🔎 仅复核",
+    "manual-input": "✋ 待手动输入"
+  };
+  const label = labels[match[1]] || match[1];
+  return `${label}${match[2] ? `（${match[2].replace(/^\s*[（(]|[）)]\s*$/g, "")}）` : ""}`;
+}
+
+function renderOverallStatus(rows) {
+  const failed = rows.filter((row) => /^(failed|needs_review)/.test(row.status));
+  const unavailable = rows.filter((row) => /^unavailable/.test(row.status));
+  const gaps = rows.filter((row) => row.blocksPack && /^(empty|未发现|未登记)/.test(row.status) && !row.trustedEmpty);
+  if (failed.length) return `🔴 存在失败：${failed.map((row) => row.source).join("、")}`;
+  if (unavailable.length) return `🟠 存在不可用来源：${unavailable.map((row) => row.source).join("、")}`;
+  if (gaps.length) return `🟡 重要来源有缺口：${gaps.map((row) => row.source).join("、")}`;
+  return "🟢 输入状态正常";
+}
+
 function renderInputAttention(rows) {
   const attention = rows
     .filter((row) => !row.trustedEmpty && (row.blocksPack || row.priority === 0)
       && (/^(empty|failed|unavailable|未发现|未登记|needs_review|待人工审核)/.test(row.status) || row.result.startsWith("异常")))
-    .map((row) => `${row.blocksPack ? "阻断" : "P0缺口"}：${row.source}（${row.file}：${row.status}）`);
+    .map((row) => `${row.blocksPack ? "阻断" : "P0缺口"}：${row.source}（${row.file}：${renderStatusLabel(row.status)}）`);
   return attention.length ? attention.join("；") : "无";
 }
 

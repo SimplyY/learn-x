@@ -65,8 +65,10 @@ async function downloaded(attachmentPath, root = message(), { resource = {}, byt
   return { ...root, resources: [{ key, local_path: filePath, message_id: root.message_id, size_bytes: Buffer.byteLength(content), type: 'file', ...resource }] };
 }
 
-const reviewCard = (content = markdown) => ({ schema: '2.0', body: { elements: [{ tag: 'markdown', content }] } });
+const reviewCard = (content = markdown) => ({ schema: '2.0', header: { title: { tag: 'plain_text', content: 'Flomo 回顾｜2026-10-06' }, subtitle: { tag: 'plain_text', content: '采集时间：2026-10-05；覆盖率：950/951' } }, body: { elements: [{ tag: 'markdown', content }] } });
 const cardMessage = (card, extra = {}) => message({ msg_type: 'interactive', content: JSON.stringify(card), resources: [], ...extra });
+const cardMarkup = (card) => `<card title="${card.header.title.content}" subtitle="${card.header.subtitle.content}">\n${card.body.elements.map(element => element.tag === 'hr' ? '---' : element.content).join('\n')}\n</card>`;
+const cardMarkupMessage = (card, extra = {}) => message({ msg_type: 'interactive', content: cardMarkup(card), resources: [], ...extra });
 
 test('one post attaches complete Markdown and persists upload before send, then verifies changed attachment key bytes', async (t) => {
   const attachmentPath = await attachment(t), calls = [];
@@ -216,6 +218,39 @@ test('card-only input sends interactive content and verifies exact readback',asy
   assert.equal(result.messageId,'om_root');
   assert.equal(result.cardContentSha256,cardContentSha256(card));
   assert.equal(result.readback,true);
+});
+
+test('card-only readback rejects a non-interactive message even when its card content matches',async()=>{
+  const card=reviewCard(`回顾日期：2026-10-06`);
+  await assert.rejects(sendRecommendation({chatId,card,idempotencyKey,botSenderId:appId,runCli:async args=>{
+    if(args[1]==='+messages-send') return envelope({message_id:'om_root',chat_id:chatId});
+    if(args[1]==='+messages-mget') return envelope({messages:[cardMessage(card,{msg_type:'post'})]});
+    throw Error('unexpected-call');
+  }}),{code:'card-message-type-mismatch',uncertain:true});
+});
+
+test('card-only send verifies lark-cli Card 2.0 markup readback and raw plus canonical hashes', async () => {
+  const card = reviewCard('回顾日期：2026-10-06');
+  const result = await sendRecommendation({ chatId, card, idempotencyKey, botSenderId: appId, runCli: async args => {
+    if (args[1] === '+messages-send') return envelope({ message_id: 'om_root', chat_id: chatId });
+    if (args[1] === '+messages-mget') return envelope({ messages: [cardMarkupMessage(card)] });
+    throw Error('unexpected-call');
+  } });
+  assert.equal(result.status, undefined);
+  assert.equal(result.cardContentSha256, cardContentSha256(card));
+  assert.equal(result.cardReadbackSha256, createHash('sha256').update(cardMarkup(card)).digest('hex'));
+  assert.equal(result.readback, true);
+});
+
+test('card-only send rejects changed lark-cli markup content and never resends', async () => {
+  const card = reviewCard('回顾日期：2026-10-06');
+  let sends = 0;
+  await assert.rejects(sendRecommendation({ chatId, card, idempotencyKey, botSenderId: appId, runCli: async args => {
+    if (args[1] === '+messages-send') { sends++; return envelope({ message_id: 'om_root', chat_id: chatId }); }
+    if (args[1] === '+messages-mget') return envelope({ messages: [cardMarkupMessage(card, { content: cardMarkup(card).replace('回顾日期：', '回顾日期X：') })] });
+    throw Error('unexpected-call');
+  } }), { code: 'card-content-hash-mismatch', uncertain: true, messageId: 'om_root' });
+  assert.equal(sends, 1);
 });
 
 test('markdown-only input never sends',async()=>{
@@ -452,4 +487,26 @@ test('card-only recovery and feedback remain independent of historical post rece
   const recovered=await recoverRecommendation({...batch,expectedCard:card,dateMarker:'回顾日期：2026-10-06',runCli});
   assert.equal(recovered.cardContentSha256,batch.cardContentSha256);
   const feedback=await collectFeedback({batches:[batch],ownerId,runCli});assert.equal(feedback.complete,true);
+});
+
+test('card recovery and feedback verify lark-cli markup without resending', async () => {
+  const card = reviewCard('回顾日期：2026-10-06');
+  const batch = { date: '2026-10-06', status: 'needs_review', chatId, messageId: 'om_root', botSenderId: appId, idempotencyKey, card, cardContentSha256: cardContentSha256(card), items: [] };
+  const root = cardMarkupMessage(card, { thread_id: null });
+  let sends = 0, reads = 0;
+  const runCli = async args => {
+    reads++;
+    assert.equal(args[1], '+messages-mget');
+    assert.ok(!args.includes('--idempotency-key'));
+    return envelope({ messages: [root] });
+  };
+  const recovered = await recoverRecommendation({ ...batch, expectedCard: card, dateMarker: '回顾日期：2026-10-06', runCli });
+  assert.equal(recovered.status, 'delivered');
+  assert.equal(recovered.cardContentSha256, batch.cardContentSha256);
+  assert.equal(recovered.cardReadbackSha256, createHash('sha256').update(cardMarkup(card)).digest('hex'));
+  const feedback = await collectFeedback({ batches: [{ ...batch, status: 'delivered' }], ownerId, runCli });
+  assert.equal(feedback.complete, true);
+  assert.equal(feedback.events.length, 0);
+  assert.equal(reads, 2);
+  assert.equal(sends, 0);
 });

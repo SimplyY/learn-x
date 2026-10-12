@@ -14,11 +14,11 @@ Feishu Docs 每周输入采集已暂时停用。历史 `feishu-docs.md` 报告�
 | --- | --- | --- |
 | 飞书日记 | `daily.md` | `npm run input:daily-coach -- --week YYYY-Www` |
 | 飞书周记 / 周复盘 | `weekly.md` | 自动生成草稿、用户确认后由阶段 2 采集定稿 |
-| Flomo | `flomo.md` | 每周输入自动采集 |
+| Flomo | `flomo.md` | `npm run input:flomo`；从线上完整扫描快照提取目标周，稳定到底且身份、时间、正文校验通过、全库漏项不超过10条时可发布，并标明预期数、观察数、遗漏数与覆盖率 |
 | 微信读书 | `weread.md` | `npm run input:weread -- --week YYYY-Www` |
 | Voice-X 核心重点 | `voice.md` | `npm run input:voice -- --week YYYY-Www` |
 | Time-X 随时记日历 | `calendar.md` | `npm run input:calendar -- --week YYYY-Www` |
-| Health-X 健康周报 | `health.md` | Health-X 完成飞书周报同步后自动生成 |
+| Health-X 健康周报 | `health.md` | Learn-X `weekly:retry` 调用 `input:health` 从 Health-X 已上传输入执行 report-only 生成 |
 | AI Coach | `coach.md`（有记录时） | 保留新增记录；0 条时不生成文件并写入状态侧车 |
 | 智慧之门新增记录 | `wisdom.md`（有记录时） | `npm run input:wisdom -- --week YYYY-Www`；普通记录按 Base 创建时间、Flomo 导入记录按原始 Flomo 创建时间归周，0 条时不生成文件并写入状态侧车 |
 | AI 对话摘要 | `ai.generated.md` → `ai.md` | 阶段 1 自动生成并经结构校验后转正，用户复核；失败时使用 fallback prompt 手动生成 |
@@ -28,6 +28,12 @@ Feishu Docs 每周输入采集已暂时停用。历史 `feishu-docs.md` 报告�
 | 调研等其他重要输入 | `research.md` 或语义清楚的 `<source>.md` | 按需补充 |
 
 `learn-x-process` 不联网采集，也不判断材料价值；它只读取指定周目录，生成 `04_output/_dist/weekly/YYYY-Www/input.json` 和 `process-pack.md`。
+
+### Flomo 线上快照
+
+`npm run input:flomo` 通过周流程执行器完成线上全量扫描，并从同一次已验证结果生成目标周 `flomo.md`。每日 Flomo 回顾读取最近一次成功的本地快照，不访问浏览器；预览与消息会显示该快照的采集时间和覆盖率。旧历史 Markdown 只作迁移审计，不用于补建每日候选库。
+
+全量扫描必须稳定到底，且每张已观察卡片都有有效 memo ID、创建时间和完整正文。同 ID 正文冲突、缺 ID/时间/正文、分页不稳定或全库遗漏超过10条时，本次失败并保留最近成功快照与旧周文件。完整性校验通过且遗漏不超过10条时，目标周文件可以标记 `ready`；文件头和 `_source-status.json` 必须同时说明预期数、观察数、遗漏数和覆盖率。若本周扫描失败，每日流程仍可显示并使用旧成功快照，但本周来源侧车必须如实失败，不能据此生成 `ready` 周输入。此同步不是实时更新；编辑和删除会在下次成功全量同步后反映。
 
 ## 每周流程
 

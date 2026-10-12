@@ -60,22 +60,61 @@ test("full-week sync activates one validated snapshot and renders weekly input f
   assert.equal(status.sources.flomo.count, 1);
 });
 
-test("accepted daily snapshot gaps cannot publish an incomplete weekly source or overwrite its old file", async (t) => {
+test("publishes weekly notes when the stable full scan has one user-accepted gap", async (t) => {
   const { root, weekRoot, attemptToken } = await fixture(t);
-  const old = "# Flomo 周输入｜2026-W40\n\n旧周输入保留但 failed 状态不允许消费。\n";
-  const file = path.join(weekRoot, "flomo.md");
-  await writeFile(file, old);
   const result = await syncFlomoFullWeek({ week, attemptToken, repoRoot: root,
     collect: stagedCollector(root, fullScan([record("memo-visible", "本次可见笔记。")], 2)) });
-  assert.equal(result.status, "failed");
-  assert.equal(result.error, "flomo-weekly-snapshot-gap");
+  assert.equal(result.status, "ready");
+  assert.equal(result.count, 1);
   assert.equal(result.coverage.omittedCount, 1);
+  const markdown = await readFile(path.join(weekRoot, "flomo.md"), "utf8");
+  assert.match(markdown, /本次可见笔记/);
+  assert.match(markdown, /全库计数：观察到 1 \/ 预期 2；未枚举 1 条（容差内，最多 10 条）/);
+  const status = await readWeeklySourceStatus(weekRoot, week);
+  assert.equal(status.sources.flomo.status, "ready");
+  assert.match(status.sources.flomo.summary, /未枚举 1 条（容差内，最多 10 条）/);
+  assert.equal(paths(root).onlineStorageActive, true);
+  assert.equal((await readJson(paths(root).catalog)).coverage.omittedCount, 1);
+});
+
+test("holds a full scan with more than five non-generated notes in one Shanghai hour before activation", async (t) => {
+  const { root, weekRoot, attemptToken } = await fixture(t);
+  const file = path.join(weekRoot, "flomo.md");
+  const old = "# Flomo 周输入｜2026-W40\n旧版保留。\n";
+  await writeFile(file, old);
+  const records = Array.from({ length: 6 }, (_, index) => record(`memo-burst-${index}`, `独立笔记 ${index}`));
+  await assert.rejects(syncFlomoFullWeek({ week, attemptToken, repoRoot: root,
+    collect: stagedCollector(root, fullScan(records)) }), /flomo-timestamp-density-review-required/);
   assert.equal(await readFile(file, "utf8"), old);
+  assert.equal(paths(root).onlineStorageActive, false);
   const status = await readWeeklySourceStatus(weekRoot, week);
   assert.equal(status.sources.flomo.status, "failed");
-  assert.equal(status.sources.flomo.preservedStaleFile, true);
-  assert.equal(paths(root).onlineStorageActive, true, "the accepted snapshot still serves daily review with visible coverage");
-  assert.equal((await readJson(paths(root).catalog)).coverage.omittedCount, 1);
+  assert.match(status.sources.flomo.summary, /超过 5 条笔记，时间需核验/);
+});
+
+test("filters generated Learn-X records before hourly density validation", async (t) => {
+  const { root, weekRoot, attemptToken } = await fixture(t);
+  const records = Array.from({ length: 6 }, (_, index) => record(`memo-generated-${index}`, "Learn-X 周记\n自动生成的内容"));
+  const result = await syncFlomoFullWeek({ week, attemptToken, repoRoot: root,
+    collect: stagedCollector(root, fullScan(records)) });
+  assert.equal(result.status, "empty");
+  assert.equal(result.count, 0);
+  assert.equal(paths(root).onlineStorageActive, true);
+  const status = await readWeeklySourceStatus(weekRoot, week);
+  assert.equal(status.sources.flomo.status, "empty");
+});
+
+test("rejects more than ten missing records without replacing an old week file or activating the snapshot", async (t) => {
+  const { root, weekRoot, attemptToken } = await fixture(t);
+  const old = "# Flomo 周输入｜2026-W40\n\n旧周输入保留。\n";
+  const file = path.join(weekRoot, "flomo.md");
+  await writeFile(file, old);
+  await assert.rejects(syncFlomoFullWeek({ week, attemptToken, repoRoot: root,
+    collect: stagedCollector(root, fullScan([record("memo-visible", "本次可见笔记。")], 12)) }), /flomo-full-scan-termination-unproven/);
+  assert.equal(await readFile(file, "utf8"), old);
+  assert.equal(paths(root).onlineStorageActive, false);
+  const status = await readWeeklySourceStatus(weekRoot, week);
+  assert.equal(status.sources.flomo.status, "failed");
 });
 
 test("late attempt token is rejected before the active snapshot pointer changes", async (t) => {

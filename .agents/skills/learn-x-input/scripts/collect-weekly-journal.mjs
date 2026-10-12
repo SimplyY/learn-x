@@ -92,7 +92,11 @@ export async function collectConfirmedWeeklyJournal({ week, repoRoot: root = rep
   }
   if (document.document_id !== anchor.documentId) throw new Error("weekly-journal-target-mismatch: the section belongs to a different document");
   const section = unwrapFragment(document.content).trim();
-  if (!section.includes(anchor.targetTitle)) throw new Error("weekly-journal-target-mismatch: fetched section does not contain the anchored heading");
+  const liveTitle = section.match(/^#{1,6}\s+(.+?)\s*$/m)?.[1]?.trim();
+  const expected = expectedJournalDates(normalizedWeek);
+  if (!liveTitle || !hasExpectedJournalDate(liveTitle, expected.shortTitle)) {
+    throw new Error(`weekly-journal-target-mismatch: target heading does not match expected write date ${expected.shortTitle}`);
+  }
   if (section.includes("【待优化】AI 基础草稿")) throw new Error("weekly-journal-unconfirmed: target section still contains the draft marker");
   if (!hasSubstantiveText(section)) throw new Error("weekly-journal-empty: target section has no substantive journal text");
 
@@ -100,7 +104,7 @@ export async function collectConfirmedWeeklyJournal({ week, repoRoot: root = rep
   const outputPath = path.join(weekDir, "weekly.md");
   const sourceMarker = [
     `- 来源 URL：${WEEKLY_JOURNAL_DOCUMENT_URL}`,
-    `- 周记写作日标题：${anchor.targetTitle}`,
+    `- 周记写作日标题：${liveTitle}`,
     `- 目标周：${normalizedWeek}`,
     `- 目标覆盖范围：${anchor.coverage.start} 至 ${anchor.coverage.end}`,
     `- 定位依据：已确认标题 block ${anchor.targetBlockId}`

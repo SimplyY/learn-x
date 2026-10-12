@@ -7,24 +7,6 @@ import { defaultWeeklyReviewWeek } from "./collect-weekly-input.mjs";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
 const MEMORY_APPROVAL_BACKUP_ROOTS = ["01_core", "03_input", "04_output", "05_library"];
-const NON_ANSWER_MARKERS = new Set([
-  "跳过", "主动跳过", "选择跳过", "先跳过", "本周跳过", "本周主动跳过", "本周选择跳过", "本周先跳过",
-  "这周跳过", "这周主动跳过", "本次跳过", "本次主动跳过", "这次跳过", "这次主动跳过", "略过",
-  "跳过本题", "跳过此题", "跳过这个问题", "略过本题", "未回答", "本周未回答", "本次未回答",
-  "尚未回答", "还未回答", "暂未回答", "暂不回答", "暂时不回答", "先不回答", "不回答", "没有回答",
-  "未作答", "尚未作答", "还未作答", "暂未作答", "暂不作答", "暂时不作答", "先不作答", "不作答",
-  "待回答", "待作答", "无答案", "暂无答案", "没有答案", "未填写", "暂不填写"
-]);
-const QUESTION_REFERENCE = "(?:本题|这题|此题|这个问题|该问题)";
-const NON_ANSWER_ACTION = `(?:(?:暂时还未|暂时没有|暂时没|暂缓|暂时不|暂不|先不|还没有|还未|还没|尚未|尚无|未曾|并未|没能|不能|无法|不会|不想|不愿|不予|不打算|不|没有|没|未|暂时|暂|待)(?:回答|作答|填写)(?:${QUESTION_REFERENCE})?|(?:暂时还没有|暂时没有|暂时还没|还没有|还没|暂无|尚无|没有|没|无)答案|(?:答案|结论|判断)(?:尚未|还未|未|暂未|暂无|没有|还没有|没)(?:形成|得出|确定|给出|作出)|(?:暂时|暂|暂缓|先|目前|本周|这周)?(?:搁置|搁一搁|放一放|暂缓)(?:${QUESTION_REFERENCE})?)`;
-const EXPLICIT_NON_ANSWER_PREFIX = new RegExp(`^(?:(?:本周|这周|本次|这次)?${QUESTION_REFERENCE}?(?:主动|选择|先)?(?:跳过|略过)(?:${QUESTION_REFERENCE})?|${QUESTION_REFERENCE}?${NON_ANSWER_ACTION})(?=$|[,，。.!！;；:：（(])`);
-const NON_ANSWER_CONTEXT = `(?:(?:我|我们|本人)(?:${QUESTION_REFERENCE})?|${QUESTION_REFERENCE}(?:(?:我|我们|本人))?|对(?:于)?${QUESTION_REFERENCE}|本周|这周|本次|这次)`;
-const NON_ANSWER_CONTEXT_BRIDGE = "(?:(?:我|我们|本人|本周|这周|本次|这次|明确|主动|选择|选择了|选了|决定|先|暂时|暂|目前|现在|正在|不再|暂时不|暂不|先不|暂时还未|暂时没有|暂时没|还没有|还未|还没|尚未|未能|未|没有|没能|无法|不会|不想|不愿|不予|不打算|不|(?:还没|尚未|暂时没|没)想(?:好|清楚)[,，]?))*";
-const NON_ANSWER_CONTEXTUAL_STATUS = new RegExp(
-  `${NON_ANSWER_CONTEXT}${NON_ANSWER_CONTEXT_BRIDGE}(?<state>(?:跳过|略过)(?:${QUESTION_REFERENCE})?|${NON_ANSWER_ACTION})(?:${QUESTION_REFERENCE})?`,
-  "g"
-);
-const CONTRASTED_NON_ANSWER = /(?:而是|但是|不过|但|却)(?:(?:本题|这题|此题|这个问题|该问题|我|我们|本人|本周|这周|本次|这次))?(?:还没有|还没|尚未|未曾|并未|暂时还未|暂时没有|暂时没|暂缓|暂不|先不|不予|不想|不会|不)(?:回答|作答|填写)|(?:而是|但是|不过|但|却)(?:还没有|还没|尚未|未曾|并未)(?:形成|得出|确定|给出|作出)?答案/;
 
 export async function prepareWeeklyMemory(options = {}) {
   const week = normalizeWeekId(options.week || defaultWeeklyReviewWeek());
@@ -47,7 +29,6 @@ export async function prepareWeeklyMemory(options = {}) {
     counts: {
       coreSummary: candidates.coreSummary.length,
       mungerInsights: candidates.mungerInsights.length,
-      questionsAnswers: candidates.questionsAnswers.length,
       checked: candidates.checked.length,
       observations: candidates.observations.length,
       explicit: candidates.explicit.length,
@@ -172,7 +153,6 @@ export function extractMemoryCandidates(content) {
   return {
     coreSummary: required.coreSummary,
     mungerInsights: required.mungerInsights,
-    questionsAnswers: required.questionsAnswers,
     checked: uniqueCandidates(checked),
     observations: uniqueCandidates(observations),
     unchecked: uniqueCandidates(unchecked),
@@ -195,7 +175,7 @@ function renderCandidatePack(week, quarter, weeklyPath, candidates, root = repoR
     `# Learn-X Memory Candidates｜${memoryWeekSectionId(week)}`,
     "",
     "> 这是给 Codex 生成 Weekly Memory 的候选材料，不是最终 Memory。",
-  "> 标题 11/12/13 是系统确认内容；脚本只抽取候选区内已勾选内容。最终由 Codex 按 `memory-rules.md` 整理并写入。",
+    "> 标题 11/12 是系统确认内容；问题、背景和回答保留在 Weekly Output，不进入 Memory 候选。脚本只抽取候选区内已勾选内容。",
     "",
     "## 处理信息",
     "",
@@ -211,9 +191,9 @@ function renderCandidatePack(week, quarter, weeklyPath, candidates, root = repoR
     "",
     renderBlocks(candidates.mungerInsights),
     "",
-    "## 系统确认：本周最值得思考的问题与回答",
+    "## 默认排除",
     "",
-    renderBlocks(candidates.questionsAnswers),
+    "- Weekly Output 的问题、背景和回答不迁移到 Memory；仅在用户本次明确指定具体内容时例外。",
     "",
     "## 已勾选内容",
     "",
@@ -235,8 +215,8 @@ function renderCandidatePack(week, quarter, weeklyPath, candidates, root = repoR
     "",
     "- 非空的「全文核心重点纪要」必须写入当周 `Memory`。",
     "- 非空的「芒格之魂的洞察」必须写入季度 Memory 顶部的芒格洞察候选池。",
-    "- 非空的「本周最值得思考的问题与回答」必须写入当周 `Memory`，问题和对应回答成对保留。",
-    "- 三个系统确认章节无需 checkbox；只过滤空白、`todo` 和占位文本。",
+    "- 两个系统确认章节无需 checkbox；只过滤空白、`todo` 和占位文本。",
+    "- 问题、背景和回答默认整体排除，不因回答完整或已确认而自动迁移。",
     "- 可以轻度去重和压缩重复表述，但不得删除独立判断、限定、反转、隐喻或行动边界。",
     "- 新 Weekly Output 只把「值得长期保留」章节中已勾选的条目作为长期候选；0 条合法，不得补造、催促补勾或强行写入。",
     "- 历史旧候选标题仍可解析；历史道 / 法 / 术 / 器观察只供查阅，不作为本期写入候选。",
@@ -257,7 +237,7 @@ export function extractRequiredSections(content) {
     headings.push({ index, level: match[1].length, title: normalizeHeading(match[2]) });
   }
 
-  const result = { coreSummary: [], mungerInsights: [], questionsAnswers: [] };
+  const result = { coreSummary: [], mungerInsights: [] };
   for (let index = 0; index < headings.length; index += 1) {
     const heading = headings[index];
     const key = requiredSectionKey(heading.title);
@@ -269,14 +249,13 @@ export function extractRequiredSections(content) {
       .join("\n")
       .replace(/(?:\n\s*---\s*)+$/g, "")
       .trim();
-    const acceptedBody = key === "questionsAnswers" ? filterAnsweredQuestionAnswers(body) : filterPlaceholderOnlyLines(body);
+    const acceptedBody = filterPlaceholderOnlyLines(body);
     if (!isSubstantiveSection(acceptedBody)) continue;
     result[key].push({ section: heading.title, text: acceptedBody });
   }
 
   result.coreSummary = uniqueCandidates(result.coreSummary);
   result.mungerInsights = uniqueCandidates(result.mungerInsights);
-  result.questionsAnswers = uniqueCandidates(result.questionsAnswers);
   return result;
 }
 
@@ -309,7 +288,6 @@ function requiredSectionKey(title) {
   const compact = String(title).replace(/\s+/g, "");
   if (/^全文核心重点纪要(?:$|[（(:：—–-])/.test(compact)) return "coreSummary";
   if (/^芒格之魂的洞察(?:$|[（(:：—–-])/.test(compact)) return "mungerInsights";
-  if ((compact.includes("最值得思考") && compact.includes("问题")) || /问题(?:与|和|及)(?:回答|答案)/.test(compact)) return "questionsAnswers";
   return "";
 }
 
@@ -320,106 +298,6 @@ function isSubstantiveSection(body) {
     .replace(/[\s*_`>#。.!！-]/g, "")
     .toLowerCase();
   return Boolean(plain) && !["todo", "待补充", "暂无", "无", "占位"].includes(plain) && !isPlaceholderList(body);
-}
-
-function filterAnsweredQuestionAnswers(body) {
-  const lines = String(body).split(/\r?\n/);
-  const numberedStarts = lines
-    .map((line, index) => /^\d+[.)、．]\s+/.test(line) ? index : -1)
-    .filter((index) => index >= 0);
-  const questionStarts = lines
-    .map((line, index) => /^(?:[-*]\s*)?问题(?:\s*[一二三四五六七八九十\d]+)?\s*[：:]\s*\S/.test(line) ? index : -1)
-    .filter((index) => index >= 0);
-  const starts = numberedStarts.length ? numberedStarts : questionStarts;
-
-  if (starts.length) {
-    const answered = starts.flatMap((start, index) => {
-      const end = starts[index + 1] ?? lines.length;
-      const block = lines.slice(start, end);
-      return isAnsweredQuestionEntry(block) ? [block.join("\n").trimEnd()] : [];
-    });
-    return answered.join("\n\n").trim();
-  }
-
-  return isAnsweredQuestionEntry(lines) ? String(body).trim() : "";
-}
-
-function isAnsweredQuestionEntry(lines) {
-  const textLines = lines
-    .map((line) => line.replace(/\*\*([^*]+)\*\*/g, "$1").replace(/__([^_]+)__/g, "$1").replace(/\*([^*]+)\*/g, "$1").trim())
-    .filter(Boolean);
-  if (!textLines.length) return false;
-
-  const first = textLines[0].replace(/^\d+[.)、．]\s+/, "").replace(/^[-*]\s+/, "").trim();
-  const hasQuestion = /[？?]/.test(first) || /^问题(?:\s*[一二三四五六七八九十\d]+)?\s*[：:]/.test(first);
-  if (!hasQuestion) return false;
-  const questionMark = Math.max(first.indexOf("？"), first.indexOf("?"));
-  const questionText = (questionMark >= 0 ? first.slice(0, questionMark) : first)
-    .replace(/^问题(?:\s*[一二三四五六七八九十\d]+)?\s*[：:]\s*/, "");
-  if (!isSubstantiveText(questionText)) return false;
-
-  const inlineAnswer = questionMark >= 0
-    ? first.slice(questionMark + 1).replace(/^\s*(?:回答|答案|A)\s*[：:]\s*/i, "").trim()
-    : "";
-  if (isSubstantiveAnswer(inlineAnswer)) return true;
-
-  const answerIndex = textLines.slice(1).findIndex((line) => /^(?:[-*+]\s*)?(?:回答|答案|A)\s*[：:]/i.test(line));
-  if (answerIndex < 0) return false;
-  const absoluteAnswerIndex = answerIndex + 1;
-  const answerLine = textLines[absoluteAnswerIndex].replace(/^[-*+]\s*/, "");
-  const answer = answerLine.replace(/^(?:回答|答案|A)\s*[：:]\s*/i, "").trim();
-  if (isSubstantiveAnswer(answer)) return true;
-  if (answer) return false;
-
-  // Empty explicit answers must not absorb a following tracking/background field.
-  // A plain continuation or bullet list directly below `回答：` is a valid multiline answer.
-  const continuation = [];
-  for (const line of textLines.slice(absoluteAnswerIndex + 1)) {
-    const normalized = line.replace(/^[-*+]\s*/, "").trim();
-    if (/^(?:背景(?:补充)?|上下文|下周跟踪|跟踪|下一步|备注|补充|状态|原因|证据)\s*[：:]/.test(normalized)) break;
-    continuation.push(normalized);
-  }
-  return isSubstantiveAnswer(continuation.join("\n"));
-}
-
-function isSubstantiveAnswer(value) {
-  const raw = String(value)
-    .replace(/^[-*+>]\s*/, "")
-    .replace(/^(?:回答|答案|A)\s*[：:]\s*/i, "")
-    .replace(/[ *_`>#]/g, "")
-    .trim()
-    .toLowerCase();
-  const compact = raw.replace(/\s/g, "");
-  const comparable = compact.replace(/[。.!！,，:：;；?？…-]/g, "");
-  return isSubstantiveText(value)
-    && !NON_ANSWER_MARKERS.has(comparable)
-    && !isExplicitNonAnswerStatus(compact);
-}
-
-function isSubstantiveText(value) {
-  const normalized = String(value)
-    .replace(/^[-*+>]\s*/, "")
-    .replace(/[\s*_`>#。.!！,，:：;；?？…-]/g, "")
-    .toLowerCase();
-  return Boolean(normalized)
-    && !["todo", "待补充", "暂无", "无", "占位", "xx"].includes(normalized);
-}
-
-function isExplicitNonAnswerStatus(compact) {
-  if (EXPLICIT_NON_ANSWER_PREFIX.test(compact)) return true;
-
-  for (const match of compact.matchAll(NON_ANSWER_CONTEXTUAL_STATUS)) {
-    const stateStart = match.index + match[0].lastIndexOf(match.groups.state);
-    const statement = compact.slice(0, stateStart + match.groups.state.length);
-    const preceding = compact.slice(0, stateStart);
-    const skipState = /^(?:跳过|略过)/.test(match.groups.state);
-    const negated = skipState
-      ? /(?:不是|并非|不要|别|不应(?:该)?|不该|不必|不需要|无需|不用|不能|不可以|不可|不建议|不值得|不想|不打算|不会|没有|没|还没|还未|尚未|未|未曾|并未|暂不|先不|不|没必要|禁止)(?:(?:把|将|去|再|就|直接|主动|选择|我|我们|本人|本周|这周|本次|这次|不想|不打算|暂不|先不|不)|(?:本题|这题|此题|这个问题|该问题))*$/.test(preceding)
-      : /(?:没有|没|并未|未曾|并非|不是)(?:(?:选择|决定|打算|计划|准备|想|愿意|需要|主动))+(?:暂时|暂缓|暂|先)?(?:不想|不愿|不予|暂不|先不|不|未|没有|没)?(?:回答|作答|填写)/.test(statement);
-    if (!negated) return true;
-  }
-
-  return CONTRASTED_NON_ANSWER.test(compact);
 }
 
 function isPlaceholderList(body) {
@@ -527,7 +405,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.log(`Quarterly memory target: 01_core/memory/${result.quarter}.memory.md`);
     console.log(`Core summary sections: ${result.counts.coreSummary}`);
     console.log(`Munger insight sections: ${result.counts.mungerInsights}`);
-    console.log(`Question and answer sections: ${result.counts.questionsAnswers}`);
     console.log(`Checked items: ${result.counts.checked}`);
     console.log(`Explicit markers: ${result.counts.explicit}`);
     console.log(`Core clues: ${result.counts.core}`);

@@ -7,9 +7,61 @@ import { collectConfirmedWeeklyJournal, recordWeeklyJournalAnchor } from "../../
 import { updateWeeklySourceStatus } from "../../learn-x-input/scripts/lib/source-status.mjs";
 import { generateWeeklyProcessPack } from "../../learn-x-process/scripts/generate-weekly-process-pack.mjs";
 import { bindWeeklyMemoryApproval, prepareWeeklyMemory, verifyWeeklyMemoryApproval } from "../../learn-x-process/scripts/prepare-weekly-memory.mjs";
-import { runWeeklyRetrySupervisor } from "./weekly-retry-supervisor.mjs";
+import { readCurrentSourceOutcome, runWeeklyRetrySupervisor } from "./weekly-retry-supervisor.mjs";
+import { WEEKLY_SOURCE_CONFIG } from "../../learn-x-input/scripts/lib/weekly-source-config.mjs";
 
 const week = "2026-W40";
+
+test("a valid daily journal is observable while an unrelated browser source is still running", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-early-daily-ready-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(path.join(root, "package.json"), JSON.stringify({ type: "module", scripts: {} }));
+
+  let markFlomoStarted;
+  let releaseFlomo;
+  let completed = false;
+  const flomoStarted = new Promise((resolve) => { markFlomoStarted = resolve; });
+  const flomoGate = new Promise((resolve) => { releaseFlomo = resolve; });
+  const execution = runWeeklyRetrySupervisor({
+    week, repoRoot: root, maxDurationMs: 30_000,
+    runSource: async (source) => {
+      if (source.id === "daily") {
+        await writeReadyDaily(root);
+        return { status: "ready", count: 1 };
+      }
+      if (source.id === "flomo") {
+        markFlomoStarted();
+        await flomoGate;
+        return { status: "unavailable", error: "synthetic-browser-source-pending" };
+      }
+      return { status: "ready", count: 1 };
+    },
+    readOutcome: async () => null
+  }).then((result) => { completed = true; return result; });
+
+  try {
+    await flomoStarted;
+    const statePath = path.join(root, "03_input/weekly", week, "_weekly-retry-state.json");
+    let dailyStatus = "";
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline && dailyStatus !== "succeeded") {
+      const state = JSON.parse(await readFile(statePath, "utf8"));
+      dailyStatus = state.sources.daily.status;
+      if (dailyStatus !== "succeeded") await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(dailyStatus, "succeeded");
+    const daily = await readCurrentSourceOutcome(WEEKLY_SOURCE_CONFIG.find((source) => source.id === "daily"), week, root);
+    assert.equal(daily.status, "ready");
+    assert.equal(daily.count, 1);
+    assert.equal(completed, false, "the initial batch must still be waiting on Flomo");
+  } finally {
+    releaseFlomo();
+    await execution.catch(() => {});
+  }
+  const result = await execution;
+  assert.equal(result.sources.daily.status, "succeeded");
+  assert.equal(result.sources.flomo.status, "unavailable");
+});
 
 test("simulates the weekly workflow in a temporary repo, from cooldown rescue through Pack and Memory candidates", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-weekly-workflow-sim-"));
@@ -109,10 +161,11 @@ test("simulates the weekly workflow in a temporary repo, from cooldown rescue th
   const candidateText = await readFile(candidates.outputPath, "utf8");
   assert.equal(candidates.counts.coreSummary, 1);
   assert.equal(candidates.counts.mungerInsights, 1);
-  assert.equal(candidates.counts.questionsAnswers, 1);
+  assert.equal(Object.hasOwn(candidates.counts, "questionsAnswers"), false);
   assert.match(candidateText, /本周用小实验替代不可检验的大改造/);
   assert.match(candidateText, /反向思考先识别失败路径/);
-  assert.match(candidateText, /继续小规模实测/);
+  assert.match(candidateText, /问题、背景和回答保留在 Weekly Output/);
+  assert.doesNotMatch(candidateText, /当前哪项行动值得继续|继续小规模实测|哪项探索先暂停/);
   assert.match(candidateText, /用小实验替代不可检验的大改造/);
   assert.doesNotMatch(candidateText, /暂时不迁移的候选/);
   await assert.rejects(readFile(path.join(root, "01_core/memory/2026-Q3.memory.md")), { code: "ENOENT" });
@@ -122,6 +175,8 @@ test("simulates the weekly workflow in a temporary repo, from cooldown rescue th
   assert.equal((await verifyWeeklyMemoryApproval({ week, fingerprint: approval.fingerprint, repoRoot: root })).verified, true);
 
   const weeklyAutomationSkill = await readFile(new URL("../SKILL.md", import.meta.url), "utf8");
+  assert.match(weeklyAutomationSkill, /日记状态 `ready`、至少一条有效记录且目标周匹配时，立即调用 `learn-x-weekly-journal`/);
+  assert.match(weeklyAutomationSkill, /07:00 补查只为仍缺失的产物恢复或补生成，不重复已有草稿/);
   assert.match(weeklyAutomationSkill, /Process Pack 成功生成后，在同一条阶段 2 消息中同时交付 Pack 与“执行授权范围预览”/);
   assert.match(weeklyAutomationSkill, /不展示尚未生成的记忆内容，也不构成授权/);
   assert.match(weeklyAutomationSkill, /展示真实拟迁移内容并与第二步已预览的执行范围合并为一张最终确认卡/);
@@ -135,7 +190,8 @@ test("simulates the weekly workflow in a temporary repo, from cooldown rescue th
   assert.match(weeklyAutomationSkill, /图片生成和其他写入都必须等阶段 3 这一次确认/);
   assert.match(weeklyAutomationSkill, /memory:weekly -- --week YYYY-Www --bind-approval/);
   assert.match(weeklyAutomationSkill, /memory:weekly -- --week YYYY-Www --verify-approval/);
-  assert.match(weeklyAutomationSkill, /未答、空白、占位或明确跳过的问题及其背景都自动排除/);
+  assert.match(weeklyAutomationSkill, /确认词只需指向这张最终确认卡及其指纹/);
+  assert.match(weeklyAutomationSkill, /问题、背景和回答只保留在 Weekly Output，不自动迁移/);
 });
 
 async function writeReadyDaily(root) {

@@ -165,17 +165,19 @@ test("异步 Prompt 装载后刷新自动装配，切换与失败重试不丢失
   let firstPromptFailed = false;
   let deferLatestPrompt = false;
   let latestPromptFetches = 0;
+  let cachePromptFetches = 0;
   let deferContextRead = false;
   let contextReadWasStarted = false;
   let usageWrites = 0;
   const copiedChatPacks = [];
+  const cachedPromptAssets = new Map();
   const promptFetchStartedPromise = new Promise((resolve) => {
     promptFetchStarted = resolve;
   });
   const promptPayloadPromise = new Promise((resolve) => {
     releasePromptPayload = resolve;
   });
-  const latestPromptPayloadPromise = new Promise((resolve) => {
+  let latestPromptPayloadPromise = new Promise((resolve) => {
     releaseLatestPrompt = resolve;
   });
   const latestPromptFetchStartedPromise = new Promise((resolve) => {
@@ -203,19 +205,31 @@ test("异步 Prompt 装载后刷新自动装配，切换与失败重试不丢失
       requestAnimationFrame: (callback) => dom.window.setTimeout(callback, 0),
       fetch: async (url, options = {}) => {
         if (String(url).includes("api/chatpack/prompts/latest")) {
+          const request = JSON.parse(options.body || "{}");
+          const promptIds = request.prompt_ids || [];
+          if (request.cache_only) {
+            cachePromptFetches += 1;
+            const cacheHit = promptIds.every((id) => cachedPromptAssets.has(id));
+            return { ok: true, json: async () => ({
+              cache_hit: cacheHit,
+              assets: cacheHit ? Object.fromEntries(promptIds.map((id) => [id, cachedPromptAssets.get(id)])) : {}
+            }) };
+          }
           latestPromptFetches += 1;
           if (deferLatestPrompt) {
             deferLatestPrompt = false;
             latestPromptFetchStarted();
-            return latestPromptPayloadPromise;
+            const response = await latestPromptPayloadPromise;
+            const payload = await response.json();
+            for (const [id, asset] of Object.entries(payload.assets || {})) cachedPromptAssets.set(id, asset);
+            return { ok: response.ok, status: response.status, json: async () => payload };
           }
-          const promptIds = JSON.parse(options.body || "{}").prompt_ids || [];
-          return { ok: true, json: async () => ({
-            assets: Object.fromEntries(promptIds.map((id) => {
-              const existing = promptPayload.assets[id];
-              return [id, existing?.content ? existing : managedAsset(id, `LIVE_${id}`)];
-            }))
-          }) };
+          const assets = Object.fromEntries(promptIds.map((id) => {
+            const existing = promptPayload.assets[id];
+            return [id, existing?.content ? existing : managedAsset(id, `LIVE_${id}`)];
+          }));
+          for (const [id, asset] of Object.entries(assets)) cachedPromptAssets.set(id, asset);
+          return { ok: true, json: async () => ({ assets }) };
         }
         if (String(url).includes("api/file?path=") && deferContextRead) {
           deferContextRead = false;
@@ -288,6 +302,7 @@ test("异步 Prompt 装载后刷新自动装配，切换与失败重试不丢失
     deferLatestPrompt = true;
     document.querySelector("#generateChatPackBtn").click();
     await latestPromptFetchStartedPromise;
+    assert.match(document.querySelector("#learningStatus").textContent, /正在读取飞书最新 Prompt/);
     const currentHiddenSelect = document.querySelector('#dialogueSubtypeList select[aria-label="其他提示词"]');
     currentHiddenSelect.value = "test-type.second";
     currentHiddenSelect.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
@@ -359,6 +374,35 @@ test("异步 Prompt 装载后刷新自动装配，切换与失败重试不丢失
     assert.match(monthlyChatPack, /High Priority Context[\s\S]*CURRENT_MONTH_PROCESS_PACK_SENTINEL/);
     assert.match(monthlyChatPack, /PREVIOUS_MONTH_OUTPUT_COMPLETE_SENTINEL/);
     assert.doesNotMatch(monthlyChatPack, /OLDER_MONTH_PACK_SENTINEL/);
+
+    state.runtime.contextEnabled = false;
+    const cachedCopyCount = copiedChatPacks.length;
+    const cachedRefreshCount = latestPromptFetches;
+    deferLatestPrompt = true;
+    latestPromptPayloadPromise = new Promise((resolve) => {
+      releaseLatestPrompt = resolve;
+    });
+    document.querySelector("#generateChatPackBtn").click();
+    for (let attempt = 0; attempt < 100 && copiedChatPacks.length === cachedCopyCount; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const cachedChatPack = copiedChatPacks.at(-1);
+    assert.ok(cachedChatPack, "a warm Prompt cache is copied before the delayed latest read resolves");
+    assert.match(cachedChatPack, /LIVE_chatpack\.monthly-output/);
+    assert.equal(latestPromptFetches, cachedRefreshCount + 1, "one background refresh starts after the cache hit");
+    assert.match(document.querySelector("#learningStatus").textContent, /缓存状态/);
+
+    const refreshedMonthlyAsset = {
+      ...managedAsset("chatpack.monthly-output", "REFRESHED_MONTHLY_PROMPT"),
+      prompt_revision: 2
+    };
+    releaseLatestPrompt({ ok: true, json: async () => ({ assets: { "chatpack.monthly-output": refreshedMonthlyAsset } }) });
+    for (let attempt = 0; attempt < 100 && !document.querySelector("#learningStatus").textContent.includes("更新缓存"); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.match(document.querySelector("#learningStatus").textContent, /最新 Prompt 已拉取并更新缓存/);
+    assert.equal(copiedChatPacks.at(-1), cachedChatPack, "background refresh does not silently replace clipboard contents");
+    assert.ok(cachePromptFetches > 0);
   } finally {
     dom.window.close();
     for (const [key, value] of Object.entries(previous)) {

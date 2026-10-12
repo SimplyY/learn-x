@@ -1,12 +1,13 @@
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { isoWeeksInYear } from "./lib/iso-week.mjs";
 import { fileExists, updateWeeklySourceStatus } from "./lib/source-status.mjs";
 
 const API_URL = "https://i.weread.qq.com/api/agent/gateway";
-const SKILL_VERSION = "1.0.4";
 const KEYCHAIN_SERVICE = "learn-x-weread-api-key";
 const SHANGHAI_OFFSET_SECONDS = 8 * 60 * 60;
 const execFileAsync = promisify(execFile);
@@ -20,8 +21,9 @@ export async function collectWereadWeekly(options = {}) {
   }
 
   const week = normalizeWeek(options.week || defaultWeeklyReviewWeek());
+  const skillVersion = options.skillVersion || await readInstalledWereadSkillVersion(options.skillPath);
   const range = isoWeekRangeShanghai(week);
-  const callApi = options.callApi || ((payload) => callWereadApi(payload, apiKey));
+  const callApi = options.callApi || ((payload) => callWereadApi(payload, apiKey, skillVersion));
   const [notebooks, readingDetail, shelf] = await Promise.all([
     collectCandidateBooks(callApi, range.startEpoch),
     callApi({ api_name: "/readdata/detail", mode: "weekly", baseTime: range.startEpoch }),
@@ -63,7 +65,7 @@ export async function collectWereadWeekly(options = {}) {
       endExclusive: formatShanghaiDateTime(range.endEpoch)
     },
     generatedAt,
-    skillVersion: SKILL_VERSION,
+    skillVersion,
     reading,
     stats: {
       candidateBookCount: notebooks.length,
@@ -74,6 +76,15 @@ export async function collectWereadWeekly(options = {}) {
     },
     books
   };
+}
+
+export async function readInstalledWereadSkillVersion(skillPath = path.join(os.homedir(), ".agents/skills/weread-skills/SKILL.md")) {
+  const skill = await readFile(skillPath, "utf8");
+  const version = skill.match(/^version:\s*["']?([^\s"'#]+)["']?\s*$/m)?.[1];
+  if (!version || !/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(version)) {
+    throw new Error(`weread-skill-version-unverifiable: installed Skill version missing or invalid at ${skillPath}`);
+  }
+  return version;
 }
 
 function assertWeeklyReadingDetail(readingDetail, range) {
@@ -163,7 +174,9 @@ export async function writeWereadWeekly(options = {}) {
       await rename(notesTempPath, notesPath);
     }
     const count = payload.stats.highlightCount + payload.stats.thoughtCount + payload.stats.readBookCount;
-    await updateWeeklySourceStatus({ weekRoot: outputRoot, week, source: "weread", status: written ? "ready" : "empty", file: "weread.md", count, summary: written ? "本周有阅读活动" : "本周 0 条记录，文件未生成", preservedStaleFile: !written && await fileExists(notesPath) });
+    await updateWeeklySourceStatus({ weekRoot: outputRoot, week, source: "weread", status: written ? "ready" : "empty", file: "weread.md", count,
+      summary: `${written ? "本周有阅读活动" : "本周 0 条记录，文件未生成"}；Skill版本：${payload.skillVersion}`,
+      preservedStaleFile: !written && await fileExists(notesPath) });
     return { payload, notesPath: written ? notesPath : null };
   } catch (error) {
     await updateWeeklySourceStatus({ weekRoot: outputRoot, week, source: "weread", status: "failed", file: "weread.md", count: 0, summary: `采集失败：${error.message}`, preservedStaleFile: await fileExists(notesPath) });
@@ -213,21 +226,21 @@ async function collectBookReviews(callApi, bookId) {
   return reviews;
 }
 
-async function callWereadApi(payload, apiKey) {
+async function callWereadApi(payload, apiKey, skillVersion) {
   const response = await fetch(API_URL, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({ ...payload, skill_version: SKILL_VERSION })
+    body: JSON.stringify({ ...payload, skill_version: skillVersion })
   });
   if (!response.ok) throw new Error(`WeRead API HTTP ${response.status}.`);
 
   const data = await response.json();
   if (data.upgrade_info) {
     const suffix = data.upgrade_info.upgrade_url ? ` Upgrade URL: ${data.upgrade_info.upgrade_url}` : "";
-    throw new Error(`${data.upgrade_info.message || "The WeRead Skill must be upgraded before retrying."}${suffix}`);
+    throw new Error(`weread-skill-upgrade-required: ${data.upgrade_info.message || "The WeRead Skill must be upgraded before retrying."}${suffix}`);
   }
   if (data.errcode && data.errcode !== 0) {
     throw new Error(`WeRead API error ${data.errcode}: ${data.errmsg || "unknown error"}`);
@@ -383,8 +396,9 @@ function formatDuration(seconds) {
 export function normalizeWeek(week) {
   const match = String(week).match(/^(\d{4})-W?(\d{1,2})$/);
   if (!match) throw new Error(`Invalid week format: ${week}. Use YYYY-Www, for example 2026-W24.`);
+  const year = Number(match[1]);
   const weekNumber = Number(match[2]);
-  if (weekNumber < 1 || weekNumber > 53) throw new Error(`Invalid ISO week number: ${weekNumber}.`);
+  if (weekNumber < 1 || weekNumber > isoWeeksInYear(year)) throw new Error(`Invalid ISO week number: ${weekNumber}.`);
   return `${match[1]}-W${String(weekNumber).padStart(2, "0")}`;
 }
 

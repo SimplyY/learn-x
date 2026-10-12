@@ -7,6 +7,14 @@ description: 采集外部每周证据（微信读书阅读、划线和想法等�
 
 Collect external evidence into the requested `03_input/weekly/YYYY-Www/` directory. Keep collection deterministic and source-preserving; do not summarize long-term conclusions or write to `01_core/`.
 
+## Flomo Weekly Input
+
+Weekly timestamps come from the time shown on each Flomo list entry and are converted to Asia/Shanghai; the ID backfill may attach an ID only by exact timestamp plus normalized body hash and must never rewrite `flomo.md` or its timestamp. Filter Learn-X-generated entries before checking density. More than 5 distinct notes in one Shanghai hour makes the source `failed`; preserve the existing `flomo.md` and, for full-snapshot sync, reject before activating the staged snapshot so the timestamp can be reviewed.
+
+## Health-X Weekly Report
+
+`npm run input:health -- --week YYYY-Www` is invoked by `weekly:retry`. It locates `health-x/input/<target-week-Sunday>.json`, runs the existing Health-X `src/cli.ts report` command with a temporary working directory, validates the date range and report structure, then writes `health.md` and the `health` status entry. This report-only path reads the daily aggregates required by Health-X but does not call `sync` or write the Health-X Base. Missing input is `unavailable`; command or integrity failures are `failed`. Never overwrite existing `health.md`; keep it and report a conflict when its range or structure does not match.
+
 ## WeRead Weekly Input
 
 1. Confirm the API Key is available through `WEREAD_API_KEY` or macOS Keychain service `learn-x-weread-api-key`.
@@ -24,7 +32,9 @@ Collect external evidence into the requested `03_input/weekly/YYYY-Www/` directo
    ```
 
 3. If present, verify `03_input/weekly/YYYY-Www/_source-status.json`. For newly collected weeks, only `status=ready` produces `weread.md`; a successful zero result records `empty` and reports `0 条记录，文件未生成`. A failed query preserves any old file but records `failed/unavailable`, so downstream processing must ignore it. Historical weeks without the sidecar keep legacy compatibility.
-4. Run `npm run process:weekly -- --week YYYY-Www` only when the user also wants the Weekly Process Pack refreshed.
+4. The collector reads `version` from the installed `weread-skills/SKILL.md` package metadata and sends that exact version; do not maintain a second version constant in Learn-X.
+5. If the API returns `upgrade_info`, stop that WeRead attempt and handle it as a version mismatch, not a transient network retry. Verify the upgrade instructions and package origin against the official WeRead Skill, install only a newer verified package using its documented method, read back the installed version, then retry the target-week collection once. If the upgrade target, origin, or installed version cannot be verified, leave WeRead failed and continue unrelated sources.
+6. Run `npm run process:weekly -- --week YYYY-Www` only when the user also wants the Weekly Process Pack refreshed.
 
 The collector exports weekly reading time, books whose latest reading time falls in the requested ISO week, each book's latest progress and current chapter, plus personal highlights and thoughts created during that week. The current chapter is a progress snapshot, not a complete chapter-by-chapter reading history. It may use notebook recency to limit candidate books, but must filter every exported note by its own creation time.
 
@@ -39,7 +49,7 @@ Render all seven days from the weekly `readTimes` buckets, including zero-minute
 - Do not collect public reviews, popular highlights, or bookmark positions without content.
 - Do not overwrite existing output unless all API requests and rendering complete successfully.
 - Reject `/readdata/detail` when any returned daily bucket falls outside the requested ISO week. Do not turn a previous-week response into a file labelled as the target week.
-- Stop when the WeRead API returns `upgrade_info`; update the installed WeRead Skill before retrying.
+- On `upgrade_info`, upgrade and verify the installed WeRead Skill before retrying; never repeat collection with the stale version or downgrade from an older upstream package.
 
 ## Time-X Calendar Input
 

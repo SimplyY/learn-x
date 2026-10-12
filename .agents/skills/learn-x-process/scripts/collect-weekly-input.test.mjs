@@ -3,7 +3,8 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import test from "node:test";
 import os from "node:os";
 import path from "node:path";
-import { collectWeeklyInput, defaultWeeklyReviewWeek, filterFilesBySourceStatus, findOversizedWeeklyInputs, inputKindFromRelativePath, isIgnoredWeeklyInputFile, writeWeeklyInput } from "./collect-weekly-input.mjs";
+import { collectWeeklyInput, defaultWeeklyReviewWeek, filterFilesBySourceStatus, findOversizedWeeklyInputs, inputKindFromRelativePath, isIgnoredWeeklyInputFile, readBuildCoverageHeader, writeWeeklyInput } from "./collect-weekly-input.mjs";
+import { updateWeeklySourceStatus } from "../../learn-x-input/scripts/lib/source-status.mjs";
 
 test("defaults weekly review to previous week on weekdays and current week on weekends", () => {
   assert.equal(defaultWeeklyReviewWeek(new Date("2026-07-03T04:00:00Z")), "2026-W26");
@@ -71,6 +72,27 @@ test("keeps the unconfirmed AI draft out of weekly process input", () => {
   assert.equal(isIgnoredWeeklyInputFile("ai.generated.md"), true);
   assert.equal(isIgnoredWeeklyInputFile("_ai-generated.json"), true);
   assert.equal(isIgnoredWeeklyInputFile("ai.md"), false);
+});
+
+test("accepts only external Build artifacts whose heading proves the target ISO week", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-build-coverage-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W41";
+  const weekDir = path.join(root, "03_input/weekly", week);
+  await mkdir(weekDir, { recursive: true });
+  const report = path.join(weekDir, "build-bot.md");
+  await writeFile(report, "# 飞书机器人 Build 复盘｜2026-W40\n\n旧周报告正文", "utf8");
+  await updateWeeklySourceStatus({ weekRoot: weekDir, week, source: "build-bot", status: "ready", file: "build-bot.md", count: 1, summary: "报告已生成", preservedStaleFile: false });
+
+  const oldWeek = await collectWeeklyInput({ repoRoot: root, week });
+  assert.equal(oldWeek.files.some((file) => file.path.endsWith("/build-bot.md")), false);
+  assert.equal(oldWeek.excludedSources["build-bot"].status, "needs_review");
+  assert.equal((await readBuildCoverageHeader(report, week)).coverageWeek, "2026-W40");
+
+  await writeFile(report, "# 飞书机器人 Build 复盘｜W41\n\n目标周：2026-W41\n", "utf8");
+  const currentWeek = await collectWeeklyInput({ repoRoot: root, week });
+  assert.equal(currentWeek.files.some((file) => file.path.endsWith("/build-bot.md")), true);
+  assert.equal(currentWeek.excludedSources["build-bot"], undefined);
 });
 
 test("records raw and effective character counts for each Process file", async () => {

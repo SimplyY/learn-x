@@ -1,11 +1,17 @@
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { WEEKLY_SOURCE_CONFIG } from "../../learn-x-input/scripts/lib/weekly-source-config.mjs";
+import { isoWeeksInYear } from "../../learn-x-input/scripts/lib/iso-week.mjs";
+import { ensureWeeklyDirectory } from "../../learn-x-input/scripts/lib/weekly-path.mjs";
 import { readWeeklySourceStatus } from "../../learn-x-input/scripts/lib/source-status.mjs";
+import { canResubmitUncertainAi } from "./generate-ai-review.mjs";
+import { hasVerifiedSmallPatch, prepareRecoveryIncident, queryRecoveryPlaybook, recordRecoveryIncident, recoveryLayerForAttempt } from "./recovery-memory.mjs";
+import { withLock } from "../../learn-x-flomo-review/scripts/review.mjs";
+import { readBuildCoverageHeader } from "../../learn-x-process/scripts/collect-weekly-input.mjs";
 
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -16,6 +22,12 @@ const STATE_FILE = "_weekly-retry-state.json";
 const LOCK_FILE = "_weekly-retry-state.lock";
 const BROWSER_QUEUE_LOCK_FILE = ".browser-queue.lock";
 const LOG_LIMIT = 500;
+const RECOVERY_ACTIONS = Object.freeze({
+  "verify-only": { layer: 2, note: "执行只读核验后重查", preconditions: ["status-readback-valid"] },
+  "manual-repair": { layer: 2, note: "完成经核验的来源修复后重采", preconditions: ["user-confirmed-scope"] },
+  "upgrade-official-skill": { layer: 2, note: "官方 Skill 升级后重采", preconditions: ["official-source-verified", "current-version-matched"], sourceId: "weread" },
+  "small-patch": { layer: 3, note: "受控补丁通过原失败与反例验证后重采", preconditions: ["same-target-week", "status-readback-valid", "user-confirmed-scope", "remaining-budget-sufficient"] }
+});
 
 export function createWeeklyRetryState(week) {
   return {
@@ -25,23 +37,33 @@ export function createWeeklyRetryState(week) {
     updatedAt: new Date().toISOString(),
     sources: Object.fromEntries(WEEKLY_SOURCE_CONFIG.map((source) => [source.id, {
       status: "pending", attempts: 0, retries: source.retries, rescueUsed: false,
+      recoveryActions: [], problemRunId: null,
       nextRetryAt: null, lastAttemptAt: null, lastSuccessAt: null,
-      lastErrorClass: null, sameErrorCount: 0
+      lastErrorClass: null, lastErrorSignal: null, sameErrorCount: 0
     }])),
+    flomoReviewImport: null,
+    pendingRecoveryEvents: [],
     diagnostics: []
   };
 }
 
 export function classifyWeeklyFailure(message, { sourceId = "", code = "" } = {}) {
   const value = `${code} ${message}`.toLowerCase();
+  if (/weread-skill-upgrade-required|weread-skill-version-unverifiable|skill.{0,20}(upgrade|version)|upgrade_info/.test(value)) {
+    return { errorClass: "source-version-mismatch", retryable: false, retryAfterMs: 0 };
+  }
   if (/permission|forbidden|unauthori[sz]ed|login|captcha|user.control|bootstrap.permission|scope|identity/.test(value)) {
     return { errorClass: "permission-or-human-control", retryable: false, retryAfterMs: 0 };
   }
   if (/schema|field.contract|invalid.field|contract.mismatch|unsupported.field|target.mismatch|snapshot-gap|completeness-contract/.test(value)) {
     return { errorClass: "source-contract-mismatch", retryable: false, retryAfterMs: 0 };
   }
-  if (/manual|human.review|needs_review/.test(value)) {
+  if (/manual|human.review|needs_review|timestamp[-_ ]density[-_ ]review[-_ ]required/.test(value)) {
     return { errorClass: "manual-review-required", retryable: false, retryAfterMs: 0 };
+  }
+  if (/review[-_ ]locked[-_ ]inspect[-_ ]owner[-_ ]before[-_ ]recovery|review[-_ ]store[-_ ]lock[-_ ]busy/.test(value)) {
+    const cooldown = sourceId === "flomo" ? FLOMO_RETRY_GAP_MS : DEFAULT_RETRY_GAP_MS;
+    return { errorClass: "review-store-lock-busy", retryable: true, retryAfterMs: cooldown };
   }
   const retryAfter = Number(value.match(/retry-after\s*[:= ]\s*(\d+)/)?.[1] || 0) * 1000;
   if (/econnreset|econnrefused|eai_again|enotfound|network|dns|temporar|http.?5\d\d|rate.?limit|throttl|timeout|timed out|process-interrupted/.test(value)) {
@@ -65,6 +87,9 @@ export function canRetrySource(source, entry, mode, now = Date.now()) {
 }
 
 export function classifyOutcome(sourceId, outcome) {
+  if (outcome?.status === "unavailable") {
+    return { status: "unavailable", errorClass: "source-unavailable", retryable: false, retryAfterMs: 0 };
+  }
   if (["ready", "empty", "success", "generated", "confirmed"].includes(outcome?.status)) {
     return { status: "succeeded", errorClass: null, retryable: false, retryAfterMs: 0 };
   }
@@ -88,6 +113,13 @@ export async function runWeeklyRetrySupervisor({
   week,
   mode = "initial",
   sourceId = null,
+  resubmitUncertainAi = false,
+  recoveryActionCode = "",
+  problemId = "",
+  expectedSourceVersion = "",
+  confirmedRecovery = false,
+  enableFlomoReviewImport = false,
+  importFlomoReviews = runFlomoReviewImport,
   repoRoot = defaultRepoRoot,
   now = () => Date.now(),
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -98,15 +130,33 @@ export async function runWeeklyRetrySupervisor({
   maxDurationMs = 100 * 60_000
 } = {}) {
   const normalizedWeek = normalizeWeek(week);
-  if (!["initial", "rescue", "manual"].includes(mode)) throw new Error("mode must be initial, rescue, or manual");
-  if (sourceId != null && (!WEEKLY_SOURCE_CONFIG.some((source) => source.id === sourceId && source.collector) || mode !== "manual" || sourceId !== "flomo")) {
-    throw new Error("source-filter-only-supports-manual-flomo-refresh");
+  if (!["initial", "rescue", "manual", "recovery"].includes(mode)) throw new Error("mode must be initial, rescue, manual, or recovery");
+  if (mode === "recovery" && !sourceId) throw new Error("recovery-mode-requires-source");
+  const supportedManualSource = sourceId === "flomo" || (sourceId === "ai" && resubmitUncertainAi);
+  const recoverySource = sourceId && WEEKLY_SOURCE_CONFIG.find((source) => source.id === sourceId);
+  if (sourceId != null && mode === "recovery") {
+    if (!recoverySource?.collector || sourceId === "ai") throw new Error("recovery-mode-source-not-supported");
+    const contract = RECOVERY_ACTIONS[recoveryActionCode];
+    if (!contract || (contract.sourceId && contract.sourceId !== sourceId)) throw new Error("recovery-action-not-supported-for-source");
+    if (!confirmedRecovery) throw new Error("recovery-action-requires-confirm");
+    if (recoveryActionCode === "upgrade-official-skill" && !/^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/.test(expectedSourceVersion)) {
+      throw new Error("recovery-expected-version-required");
+    }
+  } else if (recoveryActionCode || expectedSourceVersion || confirmedRecovery) {
+    throw new Error("recovery-action-requires-recovery-mode");
   }
-  if (mode === "manual" && sourceId !== "flomo") throw new Error("manual-mode-requires-source-flomo");
+  if (sourceId != null && mode !== "recovery" && (!WEEKLY_SOURCE_CONFIG.some((source) => source.id === sourceId && source.collector) || mode !== "manual" || !supportedManualSource)) {
+    throw new Error("source-filter-only-supports-manual-flomo-or-confirmed-ai-resubmission-or-recovery");
+  }
+  if (resubmitUncertainAi && (mode !== "manual" || sourceId !== "ai")) throw new Error("uncertain-ai-resubmission-requires-manual-source-ai");
+  if (mode === "manual" && sourceId !== "flomo" && !(sourceId === "ai" && resubmitUncertainAi)) throw new Error("manual-mode-requires-source-flomo-or-confirmed-ai-resubmission");
   const selectedSources = sourceId ? WEEKLY_SOURCE_CONFIG.filter((source) => source.id === sourceId) : WEEKLY_SOURCE_CONFIG;
-  const weekRoot = path.join(repoRoot, "03_input/weekly", normalizedWeek);
+  const safePaths = await ensureWeeklyDirectory(repoRoot, normalizedWeek);
+  repoRoot = safePaths.repoRoot;
+  const weekRoot = safePaths.weekRoot;
   const statePath = path.join(weekRoot, STATE_FILE);
   const startedAt = now();
+  const executionId = randomUUID();
   const lockPath = path.join(weekRoot, LOCK_FILE);
   let lock = await tryAcquireRunLock(lockPath);
   let lockWaitMs = 0;
@@ -121,21 +171,89 @@ export async function runWeeklyRetrySupervisor({
   let state;
   let saveQueue = Promise.resolve();
   let preparationQueue = Promise.resolve();
+  let recoveryQueue = Promise.resolve();
+  let aiRecoveryStarted = false;
+  const recoveryWriteErrors = [];
   const save = () => {
     state.updatedAt = new Date(now()).toISOString();
     saveQueue = saveQueue.then(() => atomicWrite(statePath, `${JSON.stringify(state, null, 2)}\n`));
     return saveQueue;
   };
+  const recoveryStateRoot = path.join(repoRoot, ".agents/skills/learn-x-weekly-automation/state");
+  const queueRecoveryWrite = (input) => {
+    let incident;
+    try { incident = prepareRecoveryIncident(input, input?.at || new Date(now())); }
+    catch { recoveryWriteErrors.push("invalid-event"); return; }
+    state.pendingRecoveryEvents = Array.isArray(state.pendingRecoveryEvents) ? state.pendingRecoveryEvents : [];
+    const wasPending = state.pendingRecoveryEvents.some((item) => item.eventId === incident.eventId);
+    if (!wasPending) state.pendingRecoveryEvents.push(incident);
+    recoveryQueue = recoveryQueue.then(async () => {
+      try { await save(); }
+      catch { recoveryWriteErrors.push("pending-marker-save-failed"); }
+      let recorded;
+      try {
+        recorded = await recordRecoveryIncident(incident, { stateRoot: recoveryStateRoot });
+      } catch {
+        recoveryWriteErrors.push("write-failed");
+        state.diagnostics.push({ at: new Date(now()).toISOString(), step: "recovery-memory", eventId: incident.eventId, outcome: "pending-write" });
+        try { await save(); }
+        catch { recoveryWriteErrors.push("pending-state-save-failed"); }
+        return;
+      }
+      state.pendingRecoveryEvents = state.pendingRecoveryEvents.filter((item) => item.eventId !== incident.eventId);
+      state.diagnostics.push({ at: new Date(now()).toISOString(), step: "recovery-memory", eventId: incident.eventId,
+        outcome: wasPending ? "pending-backfilled" : recorded.duplicate ? "already-recorded" : "written",
+        ...(wasPending ? { evidence: "_weekly-retry-state.json" } : {}) });
+      try { await save(); }
+      catch { recoveryWriteErrors.push("pending-clear-save-failed"); }
+    });
+  };
   const event = (entry) => {
-    state.diagnostics.push({ at: new Date(now()).toISOString(), ...entry });
+    const logged = entry.step === "source-collection" && entry.attemptKind
+      ? { ...entry, executionId, problemRunId: state.sources[entry.sourceId]?.problemRunId || executionId,
+        recoveryLayer: recoveryLayerForAttempt(entry.attemptKind) || 1 }
+      : entry;
+    state.diagnostics.push({ at: new Date(now()).toISOString(), ...logged });
     if (state.diagnostics.length > LOG_LIMIT) state.diagnostics.splice(0, state.diagnostics.length - LOG_LIMIT);
-    onEvent(entry);
+    onEvent(logged);
+    if (logged.step === "source-collection" && ["failed", "needs_review", "unavailable", "succeeded"].includes(logged.outcome)) {
+      const signal = logged.outcome === "succeeded" ? logged.recoveredErrorSignal : logged.errorSignal;
+      const errorClass = logged.outcome === "succeeded" ? logged.recoveredErrorClass : logged.errorClass;
+      if (errorClass && signal) {
+        const evidenceMetadata = normalizeRecoveryEvidence(normalizedWeek, logged.evidenceMetadata);
+        const layer = recoveryLayerForAttempt(logged.attemptKind);
+        const eventType = logged.outcome === "succeeded" || logged.actionCode ? "recovery" : "failure";
+        const outcome = logged.outcome === "succeeded" ? "succeeded" : logged.outcome === "failed" ? "failed" : "inconclusive";
+        queueRecoveryWrite({
+          eventId: `${logged.executionId}-${logged.sourceId}-${logged.attempt}-${logged.outcome}`,
+          week: normalizedWeek,
+          sourceId: logged.sourceId,
+          errorClass,
+          errorSignal: signal,
+          layer: layer || 1,
+          runId: logged.problemRunId,
+          eventType,
+          attemptKind: logged.attemptKind,
+          actionCode: logged.actionCode || (logged.outcome === "succeeded" ? "retry-transient" : logged.attemptKind === "first" ? "retry-transient" : "verify-only"),
+          actionNote: logged.actionNote || "",
+          actionPreconditions: logged.actionPreconditions || [],
+          outcome,
+          evidence: evidenceMetadata,
+          hypothesisNote: logged.hypothesis,
+          evidenceRef: `03_input/weekly/${normalizedWeek}/${logged.sourceId === "ai" ? "_ai-generated.json" : "_source-status.json"}`,
+          rootCauseStatus: logged.rootCauseStatus || "unconfirmed",
+          verification: "pending"
+        });
+      }
+    }
   };
   const prepareAfterSuccess = prepareInputs ? (source) => {
     preparationQueue = preparationQueue.then(async () => {
       const began = now();
       try {
-        await prepareInputs(source, { week: normalizedWeek, repoRoot });
+        const remainingMs = Math.max(0, maxDurationMs - (now() - startedAt));
+        if (remainingMs <= 0) throw new Error("weekly-preparation-deadline-exceeded");
+        await prepareInputs(source, { week: normalizedWeek, repoRoot, remainingMs });
         event({ step: "weekly-preprocess", sourceId: source.id, durationMs: Math.max(0, now() - began), outcome: "succeeded", evidence: "04_output/_dist/weekly/<week>/.preprocessing/manifest.json" });
       } catch (error) {
         const errorClass = classifyWeeklyFailure(sanitizeErrorForClassification(error)).errorClass;
@@ -146,7 +264,11 @@ export async function runWeeklyRetrySupervisor({
     return preparationQueue;
   } : undefined;
   const sourceContext = () => ({ state, now, sleep, runSource, readOutcome, save, event, mode, week: normalizedWeek, repoRoot,
-    maxDurationMs, prepareAfterSuccess, drainPreparation: () => preparationQueue });
+    enableFlomoReviewImport, importFlomoReviews, executionId,
+    recoveryActionCode, expectedSourceVersion,
+    maxDurationMs, prepareAfterSuccess, drainPreparation: () => preparationQueue, resubmitUncertainAi,
+    remainingDurationMs: () => Math.max(0, maxDurationMs - (now() - startedAt)),
+    beginAiRecovery: () => { if (aiRecoveryStarted) return false; aiRecoveryStarted = true; return true; } });
 
   try {
     state = await loadState(statePath, normalizedWeek);
@@ -157,15 +279,106 @@ export async function runWeeklyRetrySupervisor({
       return { week: normalizedWeek, mode, stopped: "retry-state-missing", statePath };
     }
     state ||= createWeeklyRetryState(normalizedWeek);
-    await reconcileInterruptedRuns(state, { now: now(), mode, event, readOutcome, weekRoot });
-    await absorbCurrentSuccesses(state, { readOutcome, now: now(), event });
+    state.pendingRecoveryEvents = Array.isArray(state.pendingRecoveryEvents) ? state.pendingRecoveryEvents : [];
+    for (const pending of [...state.pendingRecoveryEvents]) queueRecoveryWrite(pending);
+    await reconcileInterruptedRuns(state, { now: now(), mode, event, readOutcome, weekRoot, repoRoot });
+    if (mode !== "recovery") await absorbCurrentSuccesses(state, { readOutcome, now: now(), event });
     if (lockWaitMs) event({ step: "retry-rescue-wait", outcome: "waited-for-active-run", durationMs: lockWaitMs, evidence: STATE_FILE });
     await save();
 
+    if (!sourceId && ["initial", "rescue"].includes(mode)) await runEligibleAiResubmission(sourceContext());
+
     if (mode === "initial") {
-      const dueFirst = selectedSources.filter((source) => source.collector && source.id !== "wisdom" && state.sources[source.id]?.attempts === 0 && state.sources[source.id]?.status === "pending");
+      const dueFirst = selectedSources.filter((source) => source.collector && state.sources[source.id]?.attempts === 0 && state.sources[source.id]?.status === "pending");
       await runBatch(dueFirst, "first", sourceContext());
-      if (!sourceId) await runDependentWisdomFirst(sourceContext());
+      if (!sourceId) await runEligibleAiResubmission(sourceContext());
+    }
+
+    if (mode === "recovery") {
+      const source = selectedSources[0];
+      const entry = state.sources[source.id];
+      const contract = RECOVERY_ACTIONS[recoveryActionCode];
+      entry.recoveryActions = Array.isArray(entry.recoveryActions) ? entry.recoveryActions : [];
+      const previous = await readOutcome(source).catch(() => null);
+      if (classifyOutcome(source.id, previous).status === "succeeded") {
+        const previousAt = Date.parse(previous.updatedAt || previous.confirmedAt || previous.completedAt || "");
+        const lastAttemptAt = Date.parse(entry.lastAttemptAt || "");
+        const staleForFailedState = ["failed", "needs_review", "unavailable"].includes(entry.status) && Number.isFinite(lastAttemptAt)
+          && (!Number.isFinite(previousAt) || previousAt < lastAttemptAt - 1_000);
+        if (!staleForFailedState) {
+          if (entry.status === "succeeded") {
+            await save();
+            return { week: normalizedWeek, mode, sourceId, result: "already-succeeded", statePath,
+              sources: { [sourceId]: { status: entry.status, attempts: entry.attempts, recoveryActions: entry.recoveryActions } } };
+          }
+          if (!["failed", "needs_review", "unavailable"].includes(entry.status) || !entry.lastErrorClass) {
+            throw new Error("recovery-source-not-failed");
+          }
+          const priorErrorClass = entry.lastErrorClass;
+          const priorErrorSignal = entry.lastErrorSignal;
+          entry.status = "succeeded";
+          entry.lastSuccessAt = new Date(now()).toISOString();
+          entry.lastErrorClass = null;
+          entry.lastErrorSignal = null;
+          entry.problemRunId = null;
+          entry.nextRetryAt = null;
+          event({ step: "source-collection", sourceId: source.id, attempt: entry.attempts, attemptKind: "recovery",
+            actionCode: "reconcile-output", outcome: "succeeded", recoveredErrorClass: priorErrorClass,
+            recoveredErrorSignal: priorErrorSignal, evidence: sourceStatusEvidence(source, previous),
+            evidenceMetadata: normalizeRecoveryEvidence(normalizedWeek, { sourceStatus: previous.status,
+              sourceVersion: previous.sourceVersion || previous.skillVersion || "", count: previous.count,
+              artifactSha256: previous.artifactSha256 }) });
+          await save();
+          return { week: normalizedWeek, mode, sourceId, result: "recovered-existing-result", statePath,
+            sources: { [sourceId]: { status: entry.status, attempts: entry.attempts, recoveryActions: entry.recoveryActions } } };
+        }
+      }
+      if (!["failed", "needs_review", "unavailable"].includes(entry.status) || !entry.lastErrorClass) throw new Error("recovery-source-not-failed");
+      for (const interrupted of entry.recoveryActions.filter((action) => action.status === "running")) {
+        interrupted.status = "inconclusive";
+        interrupted.finishedAt = new Date(now()).toISOString();
+        interrupted.resultErrorClass = "process-interrupted";
+        event({ step: "recovery-action", sourceId: source.id, recoveryLayer: interrupted.layer || 2,
+          actionCode: interrupted.actionCode, outcome: "inconclusive", evidence: interrupted.evidenceRef || STATE_FILE });
+        queueRecoveryWrite({
+          eventId: "recovery-interrupted-" + normalizedWeek + "-" + source.id + "-" + String(interrupted.runId || "unknown") + "-" + interrupted.actionCode,
+          week: normalizedWeek, sourceId: source.id, errorClass: entry.lastErrorClass, errorSignal: entry.lastErrorSignal || entry.lastErrorClass,
+          layer: interrupted.layer || 2, runId: interrupted.runId || "", eventType: "recovery", attemptKind: "recovery",
+          actionCode: interrupted.actionCode, actionNote: RECOVERY_ACTIONS[interrupted.actionCode]?.note || "",
+          actionPreconditions: RECOVERY_ACTIONS[interrupted.actionCode]?.preconditions || [], outcome: "inconclusive",
+          evidence: normalizeRecoveryEvidence(normalizedWeek, entry.lastEvidence || {}),
+          evidenceRef: interrupted.evidenceRef || "03_input/weekly/" + normalizedWeek + "/_source-status.json",
+          rootCauseStatus: "unconfirmed", verification: "pending"
+        });
+      }
+      if (entry.recoveryActions.some((action) => action.status === "inconclusive" && action.resultErrorClass === "process-interrupted")) await save();
+      if (entry.recoveryActions.some((action) => action.actionCode === recoveryActionCode)) throw new Error("recovery-action-already-used");
+      const layerTwoActions = entry.recoveryActions.filter((action) => action.layer === 2);
+      if (contract.layer === 2 && layerTwoActions.length >= 2) throw new Error("recovery-layer-two-budget-exhausted");
+      if (contract.layer === 3) {
+        if (layerTwoActions.length < 2) throw new Error("recovery-layer-two-not-exhausted");
+        if (layerTwoActions.some((action) => !["failed", "inconclusive", "needs_review", "unavailable"].includes(action.status))) {
+          throw new Error("recovery-layer-two-not-exhausted");
+        }
+      }
+      if (recoveryActionCode === "small-patch") {
+        const verified = await hasVerifiedSmallPatch({ week: normalizedWeek, sourceId: source.id, problemId,
+          errorSignal: entry.lastErrorSignal || "" }, { stateRoot: path.join(repoRoot, ".agents/skills/learn-x-weekly-automation/state") });
+        if (!verified) throw new Error("recovery-small-patch-not-verified");
+      }
+      const action = { actionCode: recoveryActionCode, layer: contract.layer, runId: executionId, status: "running", at: new Date(now()).toISOString(),
+        sourceVersion: String(entry.lastEvidence?.sourceVersion || ""), evidenceRef: `03_input/weekly/${normalizedWeek}/_source-status.json` };
+      entry.recoveryActions.push(action);
+      event({ step: "recovery-action", sourceId: source.id, recoveryLayer: contract.layer, actionCode: recoveryActionCode,
+        outcome: "started", evidence: action.evidenceRef });
+      await save();
+      await runBatch([source], contract.layer === 3 ? "patch" : "recovery", sourceContext());
+      action.status = state.sources[source.id].status;
+      action.finishedAt = new Date(now()).toISOString();
+      action.resultErrorClass = state.sources[source.id].lastErrorClass || null;
+      event({ step: "recovery-action", sourceId: source.id, recoveryLayer: contract.layer, actionCode: recoveryActionCode,
+        outcome: action.status, evidence: action.evidenceRef });
+      await save();
     }
 
     if (mode === "manual") {
@@ -186,7 +399,7 @@ export async function runWeeklyRetrySupervisor({
       if (!blockedByCooldown && now() - startedAt < maxDurationMs) {
         let retryCount = 0;
         await runBatch([source], "manual", sourceContext());
-        while (now() - startedAt < maxDurationMs) {
+        while (sourceId !== "ai" && now() - startedAt < maxDurationMs) {
           const current = state.sources[source.id];
           if (current.status !== "failed" || !isRetryableClass(current.lastErrorClass) || retryCount >= source.retries) break;
           const retryAt = Date.parse(current.nextRetryAt || "");
@@ -211,7 +424,7 @@ export async function runWeeklyRetrySupervisor({
     }
 
     while (mode === "initial" && now() - startedAt < maxDurationMs) {
-      const due = selectedSources.filter((source) => canRetrySource(source, state.sources[source.id], mode, now()) && (source.id !== "wisdom" || state.sources.flomo?.status === "succeeded"));
+      const due = selectedSources.filter((source) => canRetrySource(source, state.sources[source.id], mode, now()));
       if (!due.length) {
         const pending = selectedSources
           .filter((source) => source.collector && state.sources[source.id]?.status === "failed" && isRetryableClass(state.sources[source.id]?.lastErrorClass) && state.sources[source.id].attempts <= source.retries)
@@ -227,22 +440,20 @@ export async function runWeeklyRetrySupervisor({
         continue;
       }
       await runBatch(due, "retry", sourceContext());
-      if (!sourceId) await runDependentWisdomFirst(sourceContext());
     }
 
     if (mode === "rescue") {
       while (now() - startedAt < maxDurationMs) {
-        const dueRescue = selectedSources.filter((source) => canRetrySource(source, state.sources[source.id], mode, now()) && (source.id !== "wisdom" || state.sources.flomo?.status === "succeeded"));
+        const dueRescue = selectedSources.filter((source) => canRetrySource(source, state.sources[source.id], mode, now()));
         if (dueRescue.length) {
           for (const source of dueRescue) state.sources[source.id].rescueUsed = true;
           await save();
           await runBatch(dueRescue, "rescue", sourceContext());
-          if (!sourceId) await runDependentWisdomFirst(sourceContext());
+          if (!sourceId) await runEligibleAiResubmission(sourceContext());
           continue;
         }
         const pendingTimes = selectedSources
-          .filter((source) => source.collector && source.queue !== "external" && source.queue !== "manual"
-            && (source.id !== "wisdom" || state.sources.flomo?.status === "succeeded"))
+          .filter((source) => source.collector && source.queue !== "external" && source.queue !== "manual")
           .map((source) => state.sources[source.id])
           .filter((entry) => entry.status === "failed" && !entry.rescueUsed && isRetryableClass(entry.lastErrorClass) && Number.isFinite(Date.parse(entry.nextRetryAt)))
           .map((entry) => Date.parse(entry.nextRetryAt));
@@ -263,15 +474,32 @@ export async function runWeeklyRetrySupervisor({
     }
 
     await save();
+    await recoveryQueue;
+    await save();
+    const recoveryAdvice = {};
+    const adviceLayer = recoveryActionCode === "small-patch" ? 3 : ["rescue", "recovery", "manual"].includes(mode) ? 2 : 1;
+    for (const [id, entry] of Object.entries(state.sources)) {
+      if (entry.status !== "failed" && entry.status !== "needs_review") continue;
+      const advice = await queryRecoveryPlaybook({ sourceId: id, errorClass: entry.lastErrorClass || "", errorSignal: entry.lastErrorSignal || "",
+        sourceVersion: entry.lastEvidence?.sourceVersion || "", layer: adviceLayer,
+        satisfiedPreconditions: ["same-target-week"] }, { stateRoot: path.join(repoRoot, ".agents/skills/learn-x-weekly-automation/state") });
+      if (advice.recommendations?.length) recoveryAdvice[id] = advice.recommendations;
+    }
     return {
       week: normalizedWeek,
       mode,
       statePath,
-      sources: Object.fromEntries(Object.entries(state.sources).map(([id, item]) => [id, { status: item.status, attempts: item.attempts, retries: item.retries, rescueUsed: item.rescueUsed, lastErrorClass: item.lastErrorClass, nextRetryAt: item.nextRetryAt }])),
-      alerts: await repeatedFailureAlerts(state, repoRoot)
+      sources: Object.fromEntries(Object.entries(state.sources).map(([id, item]) => [id, { status: item.status, attempts: item.attempts, retries: item.retries, rescueUsed: item.rescueUsed,
+        recoveryActions: item.recoveryActions || [], problemRunId: item.problemRunId || null,
+        lastErrorClass: item.lastErrorClass, nextRetryAt: item.nextRetryAt }])),
+      alerts: await repeatedFailureAlerts(state, repoRoot),
+      recoveryAdvice,
+      recoveryMemory: { status: recoveryWriteErrors.length ? "partial" : "ready", writeFailures: recoveryWriteErrors.length,
+        pendingEvents: state.pendingRecoveryEvents.length }
     };
   } finally {
     await saveQueue.catch(() => {});
+    await recoveryQueue.catch(() => {});
     await lock.release();
   }
 }
@@ -296,27 +524,99 @@ async function runBatch(sources, kind, context) {
     await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
   }));
   await context.drainPreparation?.();
+  if (context.enableFlomoReviewImport) await runEligibleFlomoReviewImport(context);
 }
 
-async function runDependentWisdomFirst(context) {
-  const entry = context.state.sources.wisdom;
-  if (context.state.sources.flomo?.status !== "succeeded" || entry?.status !== "pending" || entry.attempts !== 0) return;
-  const source = WEEKLY_SOURCE_CONFIG.find((item) => item.id === "wisdom");
-  await runBatch([source], context.mode === "rescue" ? "rescue" : "first", context);
+async function runEligibleFlomoReviewImport(context) {
+  if (context.state.sources.flomo?.status !== "succeeded" || context.state.sources.wisdom?.status !== "succeeded") return;
+  const prior = context.state.flomoReviewImport;
+  if (prior?.status === "succeeded" || prior?.executionId === context.executionId) return;
+  if ((context.remainingDurationMs?.() ?? 0) <= 0) {
+    context.state.flomoReviewImport = { status: "pending", executionId: context.executionId, reason: "shared-deadline-exceeded", at: new Date(context.now()).toISOString() };
+    context.event({ step: "flomo-review-import", sourceId: "wisdom", outcome: "skipped-deadline", evidence: "共享执行截止时间" });
+    await context.save();
+    return;
+  }
+  context.state.flomoReviewImport = { status: "running", executionId: context.executionId, at: new Date(context.now()).toISOString() };
+  context.event({ step: "flomo-review-import", sourceId: "wisdom", outcome: "started", evidence: "Flomo 与 Wisdom Base 来源状态均成功" });
+  await context.save();
+  let browserQueueLock;
+  try {
+    browserQueueLock = await acquireBrowserQueue(context);
+    const result = await context.importFlomoReviews(context.week, context.repoRoot);
+    context.state.flomoReviewImport = { status: "succeeded", executionId: context.executionId, at: new Date(context.now()).toISOString(),
+      scanned: Number(result?.scanned) || 0, candidates: Number(result?.candidates) || 0,
+      alreadyImported: Number(result?.alreadyImported) || 0, created: Number(result?.created) || 0,
+      skipped: Number(result?.skipped) || 0 };
+    context.event({ step: "flomo-review-import", sourceId: "wisdom", outcome: "succeeded", ...context.state.flomoReviewImport,
+      evidence: "智慧之门来源键读回" });
+  } catch (error) {
+    const errorClass = classifyWeeklyFailure(sanitizeErrorForClassification(error), { sourceId: "wisdom" }).errorClass;
+    const errorSignal = safeFailureSignal(error, errorClass);
+    context.state.flomoReviewImport = { status: "failed", executionId: context.executionId, at: new Date(context.now()).toISOString(), errorClass, errorSignal };
+    context.event({ step: "flomo-review-import", sourceId: "wisdom", outcome: "failed", errorClass, errorSignal,
+      rootCauseStatus: "unconfirmed", evidence: "依赖状态诊断" });
+  } finally {
+    await browserQueueLock?.release();
+    await context.save();
+  }
+}
+
+async function runEligibleAiResubmission(context) {
+  const source = WEEKLY_SOURCE_CONFIG.find((item) => item.id === "ai");
+  const entry = context.state.sources.ai;
+  if (entry?.status !== "needs_review") return false;
+  try {
+    const priorAi = JSON.parse(await readFile(path.join(context.repoRoot, "03_input/weekly", context.week, "_ai-generated.json"), "utf8"));
+    if (priorAi?.status !== "needs_review" || priorAi.targetWeek !== context.week
+      || typeof priorAi.runId !== "string" || typeof priorAi.conversationUrl !== "string") return false;
+  } catch { return false; }
+  if (context.beginAiRecovery && !context.beginAiRecovery()) return false;
+  context.event({ step: "ai-uncertain-observation", sourceId: "ai", outcome: "started", evidence: "_ai-generated.json 原 runId 与会话地址" });
+  await context.save();
+  const remainingMs = context.remainingDurationMs?.() ?? 810_000;
+  if (remainingMs <= 90_000) return false;
+  const observeSeconds = Math.max(1, Math.min(720, Math.floor(remainingMs / 1000) - 90));
+  await runBatch([source], "observe-existing", { ...context, observeUncertainAi: true, observeWaitSeconds: observeSeconds });
+  if (context.state.sources.ai?.status === "succeeded") return true;
+  let priorAi;
+  try { priorAi = JSON.parse(await readFile(path.join(context.repoRoot, "03_input/weekly", context.week, "_ai-generated.json"), "utf8")); }
+  catch { return true; }
+  if (priorAi.observation?.reason !== "snapshot-mismatch") return true;
+  let eligible = false;
+  try { eligible = await canResubmitUncertainAi({ repoRoot: context.repoRoot, week: context.week }); }
+  catch { return false; }
+  if (!eligible) return false;
+  if ((context.remainingDurationMs?.() ?? 0) < 5 * 60_000) {
+    context.event({ step: "ai-uncertain-resubmission", sourceId: "ai", outcome: "skipped-deadline", evidence: "剩余执行预算不足 5 分钟" });
+    return true;
+  }
+  context.event({ step: "ai-uncertain-resubmission", sourceId: "ai", outcome: "one-shot-resubmission-eligible", evidence: "观察原 run 后的 snapshot-mismatch 证据与当前 prompt 指纹" });
+  await context.save();
+  await runBatch([source], "uncertain-resubmission", { ...context, resubmitUncertainAi: true });
+  return true;
 }
 
 async function runOneSource(source, kind, context) {
   const entry = context.state.sources[source.id];
+  const priorStatus = entry.status;
+  const priorErrorSignal = entry.lastErrorSignal || "";
+  const priorProblemRunId = entry.problemRunId || "";
+  if ((context.remainingDurationMs?.() ?? context.maxDurationMs) <= 0) {
+    context.event({ step: "source-collection", sourceId: source.id, attemptKind: kind, outcome: "skipped-deadline", evidence: STATE_FILE });
+    await context.save();
+    return;
+  }
   const attempt = entry.attempts + 1;
   const began = context.now();
   const attemptToken = source.id === "flomo" ? randomUUID() : null;
+  const previousActiveAttemptToken = entry.activeAttemptToken ?? null;
   entry.status = "running";
   entry.attempts = attempt;
   entry.lastAttemptAt = new Date(began).toISOString();
   entry.nextRetryAt = null;
   if (attemptToken) {
     entry.activeAttemptToken = attemptToken;
-    await writeFlomoAttemptGuard(context.repoRoot, context.week, { token: attemptToken, active: true, startedAt: entry.lastAttemptAt });
   }
   if (kind === "rescue") entry.rescueUsed = true;
   context.event({ step: "source-collection", sourceId: source.id, attempt, attemptKind: kind, outcome: "started", evidence: STATE_FILE });
@@ -324,13 +624,37 @@ async function runOneSource(source, kind, context) {
 
   let outcome;
   let browserQueueLock = null;
+  let attemptGuardWritten = false;
   try {
     if (source.queue === "browser") browserQueueLock = await acquireBrowserQueue(context);
+    if (attemptToken) {
+      await writeFlomoAttemptGuard(context.repoRoot, context.week, { token: attemptToken, active: true, startedAt: entry.lastAttemptAt });
+      attemptGuardWritten = true;
+    }
     const result = await context.runSource(source, {
       week: context.week, repoRoot: context.repoRoot, attempt, attemptKind: kind,
+      recoveryActionCode: context.recoveryActionCode,
+      expectedSourceVersion: context.expectedSourceVersion,
       attemptToken,
+      resubmitUncertainAi: context.resubmitUncertainAi && source.id === "ai",
+      observeUncertainAi: context.observeUncertainAi && source.id === "ai",
+      observeWaitSeconds: context.observeWaitSeconds,
+      timeoutMs: context.remainingDurationMs?.(),
+      allowFlomoReviewImport: context.enableFlomoReviewImport && source.id === "wisdom",
+      importFlomoReviews: async (week, repoRoot) => {
+        const dependencyLock = await acquireBrowserQueue(context);
+        try { return await context.importFlomoReviews(week, repoRoot); }
+        finally { await dependencyLock.release(); }
+      },
       onDependencyResult: async (result) => {
-        context.event({ step: "flomo-review-import", sourceId: source.id, outcome: "succeeded", ...result, evidence: "智慧之门来源键读回" });
+        if (result.outcome === "succeeded" || result.outcome === "failed") state.flomoReviewImport = {
+          status: result.outcome, executionId: context.executionId, at: new Date(context.now()).toISOString(),
+          ...(result.outcome === "succeeded" ? { scanned: Number(result.scanned) || 0, candidates: Number(result.candidates) || 0,
+            alreadyImported: Number(result.alreadyImported) || 0, created: Number(result.created) || 0, skipped: Number(result.skipped) || 0 } :
+            { errorClass: result.errorClass || "unknown-failure", errorSignal: result.errorSignal || "UNKNOWN-FAILURE" })
+        };
+        context.event({ step: "flomo-review-import", sourceId: source.id, ...result,
+          evidence: result.outcome === "succeeded" ? "智慧之门来源键读回" : "依赖状态诊断" });
         await context.save();
       }
     });
@@ -338,33 +662,55 @@ async function runOneSource(source, kind, context) {
       outcome = result;
     } else {
       const current = await context.readOutcome(source);
-      outcome = freshOutcome(current, began) && ["ready", "empty", "generated", "confirmed", "needs_review"].includes(current.status)
+      outcome = freshOutcome(current, began) && ["ready", "empty", "generated", "confirmed", "needs_review", "unavailable"].includes(current.status)
         ? current
         : { status: "failed", error: "collector-result-missing" };
     }
   } catch (error) {
     const current = await context.readOutcome(source).catch(() => null);
-    // ChatGPT may finish after its observer is interrupted. Recover only a
-    // confirmed AI result; other collector exceptions remain authoritative.
-    outcome = source.id === "ai" && freshOutcome(current, began) && ["generated", "confirmed"].includes(current.status)
+    // The AI CLI exits with code 2 for a recorded needs_review result. A fresh
+    // sidecar is authoritative for that exit; keep its uncertainty state.
+    outcome = source.id === "ai" && freshOutcome(current, began) && ["generated", "confirmed", "needs_review"].includes(current.status)
       ? current
       : { status: "failed", error: sanitizeErrorForClassification(error), code: error?.code, timedOut: Boolean(error?.killed || error?.signal === "SIGTERM") };
+  }
+  if (context.recoveryActionCode === "upgrade-official-skill" && ["ready", "empty", "succeeded"].includes(outcome?.status)
+    && outcome.sourceVersion !== context.expectedSourceVersion) {
+    outcome = { status: "failed", error: "weread-skill-version-unverifiable" };
+  }
+  try {
+    if (attemptToken) {
+      let attemptGuardRetired = false;
+      if (attemptGuardWritten) {
+        try {
+          await retireFlomoAttemptGuard(context.repoRoot, context.week, attemptToken);
+          attemptGuardRetired = true;
+        } catch (error) {
+          const failure = classifyWeeklyFailure(sanitizeErrorForClassification(error), { sourceId: "flomo", code: error?.code });
+          if (failure.errorClass !== "review-store-lock-busy") throw error;
+          outcome = { status: "failed", error: failure.errorClass };
+        }
+      }
+      if (attemptGuardRetired) {
+        entry.activeAttemptToken = null;
+        const snapshot = outcome?.snapshotId ? {
+          snapshotId: outcome.snapshotId, capturedAt: outcome.capturedAt,
+          coverage: outcome.coverage ? { ...outcome.coverage } : null,
+          termination: outcome.termination ? { ...outcome.termination } : null,
+        } : null;
+        if (snapshot) entry.lastSnapshot = snapshot;
+      } else if (!attemptGuardWritten) {
+        entry.activeAttemptToken = previousActiveAttemptToken;
+      }
+    }
   } finally {
     await browserQueueLock?.release();
-  }
-  if (attemptToken) {
-    await retireFlomoAttemptGuard(context.repoRoot, context.week, attemptToken);
-    entry.activeAttemptToken = null;
-    const snapshot = outcome?.snapshotId ? {
-      snapshotId: outcome.snapshotId, capturedAt: outcome.capturedAt,
-      coverage: outcome.coverage ? { ...outcome.coverage } : null,
-      termination: outcome.termination ? { ...outcome.termination } : null,
-    } : null;
-    if (snapshot) entry.lastSnapshot = snapshot;
   }
   const classified = classifyOutcome(source.id, outcome);
   const durationMs = Math.max(0, context.now() - began);
   const previousErrorClass = entry.lastErrorClass;
+  const errorSignal = ["failed", "needs_review", "unavailable"].includes(classified.status)
+    ? safeFailureSignal(outcome, classified.errorClass) : null;
   entry.status = classified.status;
   entry.lastDurationMs = durationMs;
   entry.lastErrorClass = classified.errorClass;
@@ -372,6 +718,7 @@ async function runOneSource(source, kind, context) {
     entry.lastSuccessAt = new Date(context.now()).toISOString();
     entry.nextRetryAt = null;
     entry.sameErrorCount = 0;
+    entry.problemRunId = null;
   } else if (classified.retryable) {
     entry.lastFailureAt = new Date(context.now()).toISOString();
     const retryGap = source.id === "flomo" ? FLOMO_RETRY_GAP_MS : DEFAULT_RETRY_GAP_MS;
@@ -380,28 +727,61 @@ async function runOneSource(source, kind, context) {
     entry.lastFailureAt = new Date(context.now()).toISOString();
     entry.nextRetryAt = null;
   }
+  if (classified.status === "failed" || classified.status === "needs_review" || classified.status === "unavailable") {
+    entry.lastErrorSignal = errorSignal;
+    const continuesProblem = priorProblemRunId && priorErrorSignal === errorSignal && priorStatus !== "succeeded";
+    entry.problemRunId = continuesProblem ? priorProblemRunId : `issue-${randomUUID()}`;
+  }
   if (classified.status !== "succeeded" && classified.status !== "needs_review") {
     entry.sameErrorCount = previousErrorClass === classified.errorClass ? entry.sameErrorCount + 1 : 1;
   }
   context.event({
     step: "source-collection", sourceId: source.id, attempt, attemptKind: kind,
+    ...(context.recoveryActionCode ? { actionCode: context.recoveryActionCode, actionNote: RECOVERY_ACTIONS[context.recoveryActionCode]?.note || "",
+      actionPreconditions: RECOVERY_ACTIONS[context.recoveryActionCode]?.preconditions || [] } : {}),
     durationMs, outcome: classified.status, errorClass: classified.errorClass,
-    errorSignal: safeFailureSignal(outcome, classified.errorClass),
+    errorSignal,
     retryable: classified.retryable, nextRetryAt: entry.nextRetryAt,
     rootCauseStatus: classified.status === "failed" ? "unconfirmed" : "not-applicable",
+    recoveredErrorClass: classified.status === "succeeded" ? previousErrorClass : null,
+    recoveredErrorSignal: classified.status === "succeeded" ? entry.lastErrorSignal || null : null,
     hypothesis: classified.errorClass,
-    evidence: sourceStatusEvidence(source, outcome)
+    evidence: sourceStatusEvidence(source, outcome),
+    evidenceMetadata: normalizeRecoveryEvidence(context.week, {
+      sourceStatus: outcome?.status || classified.status,
+      sourceVersion: outcome?.sourceVersion || outcome?.skillVersion || "",
+      count: outcome?.count,
+      expectedCount: outcome?.coverage?.expectedCount ?? outcome?.expectedCount,
+      observedCount: outcome?.coverage?.observedCount ?? outcome?.observedCount,
+      omittedCount: outcome?.coverage?.omittedCount ?? outcome?.omittedCount,
+      artifactSha256: outcome?.artifactSha256,
+      snapshotSha256: outcome?.snapshotId ? createHash("sha256").update(String(outcome.snapshotId)).digest("hex") : "",
+      phase: outcome?.diagnostics?.phase
+    })
+  });
+  entry.lastEvidence = normalizeRecoveryEvidence(context.week, {
+    sourceStatus: outcome?.status || classified.status,
+    sourceVersion: outcome?.sourceVersion || outcome?.skillVersion || "",
+    count: outcome?.count,
+    expectedCount: outcome?.coverage?.expectedCount ?? outcome?.expectedCount,
+    observedCount: outcome?.coverage?.observedCount ?? outcome?.observedCount,
+    omittedCount: outcome?.coverage?.omittedCount ?? outcome?.omittedCount,
+    artifactSha256: outcome?.artifactSha256,
+    snapshotSha256: outcome?.snapshotId ? createHash("sha256").update(String(outcome.snapshotId)).digest("hex") : "",
+    phase: outcome?.diagnostics?.phase
   });
   await context.save();
   if (classified.status === "succeeded") context.prepareAfterSuccess?.(source);
 }
 
-export async function runConfiguredSource(source, { week, repoRoot, onDependencyResult, attemptToken }) {
+export async function runConfiguredSource(source, { week, repoRoot, onDependencyResult, attemptToken,
+  resubmitUncertainAi = false,
+  observeUncertainAi = false,
+  observeWaitSeconds = 720,
+  timeoutMs,
+  allowFlomoReviewImport = false, importFlomoReviews = runFlomoReviewImport,
+  executeCommand = execFileAsync, readOutcome = readCurrentSourceOutcome } = {}) {
   const startedAt = Date.now();
-  if (source.id === "wisdom") {
-    const importResult = await runFlomoReviewImport(week, repoRoot);
-    await onDependencyResult?.(importResult);
-  }
   let script, args;
   if (source.id === "flomo") {
     if (!attemptToken) return { status: "failed", error: "flomo-attempt-token-required" };
@@ -414,22 +794,43 @@ export async function runConfiguredSource(source, { week, repoRoot, onDependency
     const tokens = command.trim().split(/\s+/);
     if (tokens[0] !== "node" || !tokens[1]?.endsWith(".mjs")) return { status: "failed", error: "source-collector-command-contract-mismatch" };
     script = path.resolve(repoRoot, tokens[1]);
-    args = [...tokens.slice(2), "--week", week];
+    args = [...tokens.slice(2), "--week", week,
+      ...(source.id === "ai" && observeUncertainAi ? ["--observe-uncertain", "--observe-seconds", String(observeWaitSeconds)] : []),
+      ...(source.id === "ai" && resubmitUncertainAi ? ["--resubmit-uncertain", "--confirm"] : [])];
   }
   try {
-    const result = await execFileAsync(process.execPath, [script, ...args], {
+    const sourceTimeoutMs = source.id === "ai" && observeUncertainAi ? (observeWaitSeconds + 90) * 1000 : source.id === "ai" ? 5 * 60_000 : source.id === "flomo" ? 32 * 60_000 : 12 * 60_000;
+    const result = await executeCommand(process.execPath, [script, ...args], {
       cwd: repoRoot,
-      timeout: source.id === "ai" ? 5 * 60_000 : source.id === "flomo" ? 32 * 60_000 : 12 * 60_000,
+      timeout: Math.max(1, Math.min(sourceTimeoutMs, Number.isFinite(timeoutMs) ? timeoutMs : sourceTimeoutMs)),
       maxBuffer: 2 * 1024 * 1024,
       windowsHide: true
     });
-    const current = await readCurrentSourceOutcome(source, week, repoRoot);
+    const current = await readOutcome(source, week, repoRoot);
     const updatedAt = Date.parse(current?.updatedAt || current?.confirmedAt || current?.completedAt || "");
-    const acceptedStatuses = ["ready", "empty", "generated", "confirmed", "needs_review", ...(source.id === "flomo" ? ["failed", "unavailable"] : [])];
+    const acceptedStatuses = ["ready", "empty", "generated", "confirmed", "needs_review", "unavailable", ...(source.id === "flomo" ? ["failed"] : [])];
     if (!current || !Number.isFinite(updatedAt) || updatedAt < startedAt - 1_000 || !acceptedStatuses.includes(current.status)) {
       return { status: "failed", error: "collector-exit-without-fresh-valid-status" };
     }
-    if (source.id !== "flomo") return current;
+    if (source.id !== "flomo") {
+      if (source.id === "wisdom") {
+        const flomoSource = WEEKLY_SOURCE_CONFIG.find((item) => item.id === "flomo");
+        const flomoOutcome = allowFlomoReviewImport ? await readOutcome(flomoSource, week, repoRoot).catch(() => null) : null;
+        if (allowFlomoReviewImport && ["ready", "empty", "succeeded"].includes(flomoOutcome?.status)) {
+          try {
+            const importResult = await importFlomoReviews(week, repoRoot);
+            await onDependencyResult?.({ outcome: "succeeded", ...importResult });
+          } catch (error) {
+            const errorClass = classifyWeeklyFailure(sanitizeErrorForClassification(error), { sourceId: "wisdom" }).errorClass;
+            await onDependencyResult?.({ outcome: "failed", errorClass,
+              errorSignal: safeFailureSignal(error, errorClass), rootCauseStatus: "unconfirmed" });
+          }
+        } else {
+          await onDependencyResult?.({ outcome: "skipped", reason: "flomo-not-successful" });
+        }
+      }
+      return current;
+    }
     let runResult = null;
     try { runResult = JSON.parse(result.stdout.trim().split("\n").at(-1)); } catch {}
     return { ...current, ...(runResult?.error ? { error: runResult.error } : {}), ...(runResult?.snapshotId ? {
@@ -437,9 +838,12 @@ export async function runConfiguredSource(source, { week, repoRoot, onDependency
       coverage: runResult.coverage, termination: runResult.termination,
     } : {}) };
   } catch (error) {
+    const current = await readOutcome(source, week, repoRoot).catch(() => null);
+    if (source.id === "ai" && freshOutcome(current, startedAt) && ["generated", "confirmed", "needs_review"].includes(current.status)) return current;
     return {
       status: "failed",
       error: error?.killed ? "collector-timeout" : String(error?.stderr || error?.message || "collector-failed").slice(-1200),
+      ...(current?.sourceVersion ? { sourceVersion: current.sourceVersion } : {}),
       code: error?.code,
       timedOut: Boolean(error?.killed || error?.signal === "SIGTERM")
     };
@@ -485,7 +889,20 @@ export async function readCurrentSourceOutcome(source, week, repoRoot = defaultR
   try {
     const status = await readWeeklySourceStatus(weekRoot, normalizeWeek(week));
     const entry = status.sources[source.id];
-    return entry ? { status: entry.status, count: entry.count, summary: entry.summary, updatedAt: entry.updatedAt } : null;
+    if (!entry) return null;
+    if (["build", "build-bot"].includes(source.id) && entry.status === "ready") {
+      try {
+        const coverage = await readBuildCoverageHeader(path.join(weekRoot, entry.file), normalizeWeek(week));
+        if (coverage.status !== "matched") return {
+          status: "needs_review", count: entry.count, updatedAt: entry.updatedAt,
+          error: coverage.status === "mismatch" ? "build-report-target-week-mismatch" : "build-report-target-week-unverified"
+        };
+      } catch (error) {
+        return { status: "needs_review", count: entry.count, updatedAt: entry.updatedAt, error: error.code === "ENOENT" ? "build-report-missing" : "build-report-target-week-unverified" };
+      }
+    }
+    const sourceVersion = source.id === "weread" ? String(entry.summary || "").match(/Skill版本[:：]\s*([A-Za-z0-9][A-Za-z0-9._+-]{0,63})/)?.[1] : "";
+    return { status: entry.status, count: entry.count, summary: entry.summary, updatedAt: entry.updatedAt, ...(sourceVersion ? { sourceVersion } : {}) };
   } catch {
     return { status: "failed", error: "source-status-sidecar-invalid" };
   }
@@ -494,7 +911,7 @@ export async function readCurrentSourceOutcome(source, week, repoRoot = defaultR
 async function absorbCurrentSuccesses(state, { readOutcome, now, event }) {
   for (const source of WEEKLY_SOURCE_CONFIG) {
     const entry = state.sources[source.id];
-    if (["running", "succeeded", "needs_review", "recheck-only", "manual-input"].includes(entry.status)) continue;
+    if (["running", "succeeded"].includes(entry.status)) continue;
     if (!source.collector) {
       const current = await readOutcome(source).catch(() => null);
       entry.status = source.queue === "external" ? (current?.status || "recheck-only") : "manual-input";
@@ -507,11 +924,20 @@ async function absorbCurrentSuccesses(state, { readOutcome, now, event }) {
     const lastAttemptAt = Date.parse(entry.lastAttemptAt || "");
     if (entry.status === "failed" && Number.isFinite(lastAttemptAt) && (!Number.isFinite(currentAt) || currentAt < lastAttemptAt - 1_000)) continue;
     const classified = classifyOutcome(source.id, current);
+    if (classified.status === "unavailable") {
+      entry.status = "unavailable";
+      entry.lastErrorClass = classified.errorClass;
+      entry.nextRetryAt = null;
+      event({ step: "source-check", sourceId: source.id, outcome: "unavailable", errorClass: classified.errorClass, evidence: sourceStatusEvidence(source, current) });
+      continue;
+    }
     if (classified.status === "succeeded") {
       entry.status = "succeeded";
       entry.lastSuccessAt = new Date(now).toISOString();
       entry.nextRetryAt = null;
       entry.lastErrorClass = null;
+      entry.lastErrorSignal = null;
+      entry.problemRunId = null;
       event({ step: "source-check", sourceId: source.id, outcome: "already-succeeded", evidence: sourceStatusEvidence(source, current) });
     } else if (classified.status === "needs_review") {
       entry.status = "needs_review";
@@ -521,7 +947,7 @@ async function absorbCurrentSuccesses(state, { readOutcome, now, event }) {
   }
 }
 
-async function reconcileInterruptedRuns(state, { now, event, readOutcome, weekRoot }) {
+async function reconcileInterruptedRuns(state, { now, event, readOutcome, weekRoot, repoRoot }) {
   for (const source of WEEKLY_SOURCE_CONFIG) {
     const entry = state.sources[source.id];
     if (entry.status !== "running") continue;
@@ -531,6 +957,8 @@ async function reconcileInterruptedRuns(state, { now, event, readOutcome, weekRo
         entry.status = "succeeded";
         entry.lastSuccessAt = new Date(now).toISOString();
         entry.lastErrorClass = null;
+        entry.lastErrorSignal = null;
+        entry.problemRunId = null;
         entry.nextRetryAt = null;
         event({ step: "recovery", sourceId: source.id, outcome: "recovered-existing-result", evidence: sourceStatusEvidence(source, current) });
       } else {
@@ -542,8 +970,21 @@ async function reconcileInterruptedRuns(state, { now, event, readOutcome, weekRo
       continue;
     }
     if (source.id === "flomo") {
-      await invalidateFlomoAttemptGuard(weekRoot);
-      entry.activeAttemptToken = null;
+      try {
+        await invalidateFlomoAttemptGuard(weekRoot, repoRoot);
+        entry.activeAttemptToken = null;
+      } catch (error) {
+        const failure = classifyWeeklyFailure(sanitizeErrorForClassification(error), { sourceId: "flomo", code: error?.code });
+        if (failure.errorClass !== "review-store-lock-busy") throw error;
+        const previousErrorClass = entry.lastErrorClass;
+        entry.status = "failed";
+        entry.lastErrorClass = failure.errorClass;
+        entry.lastFailureAt = new Date(now).toISOString();
+        entry.nextRetryAt = new Date(now + failure.retryAfterMs).toISOString();
+        entry.sameErrorCount = previousErrorClass === failure.errorClass ? entry.sameErrorCount + 1 : 1;
+        event({ step: "recovery", sourceId: source.id, outcome: "retry-scheduled", errorClass: failure.errorClass, nextRetryAt: entry.nextRetryAt, evidence: STATE_FILE });
+        continue;
+      }
     }
     const failure = classifyWeeklyFailure("process-interrupted", { sourceId: source.id });
     entry.status = "failed";
@@ -578,26 +1019,48 @@ function sourceStatusEvidence(source, outcome) {
   };
 }
 
+function normalizeRecoveryEvidence(week, value = {}) {
+  const evidence = { targetWeek: week };
+  const statuses = new Set(["pending", "running", "ready", "empty", "succeeded", "failed", "unavailable", "needs_review"]);
+  if (statuses.has(value.sourceStatus)) evidence.sourceStatus = value.sourceStatus;
+  if (/^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/.test(String(value.sourceVersion || ""))) evidence.sourceVersion = String(value.sourceVersion);
+  if (["preflight", "collection", "observation", "readback", "preprocess", "validation", "repair", "delivery"].includes(value.phase)) evidence.phase = value.phase;
+  for (const key of ["count", "expectedCount", "observedCount", "omittedCount"]) {
+    if (Number.isSafeInteger(value[key]) && value[key] >= 0 && value[key] <= 1_000_000_000) evidence[key] = value[key];
+  }
+  for (const key of ["artifactSha256", "snapshotSha256"]) {
+    const hash = String(value[key] || "").toLowerCase();
+    if (/^[a-f0-9]{64}$/.test(hash)) evidence[key] = hash;
+  }
+  return evidence;
+}
+
 async function writeFlomoAttemptGuard(repoRoot, week, guard) {
   const weekRoot = path.join(repoRoot, "03_input/weekly", week);
-  await mkdir(weekRoot, { recursive: true });
-  await atomicWrite(path.join(weekRoot, "_flomo-attempt.json"), `${JSON.stringify(guard)}\n`);
+  await withLock(repoRoot, async () => {
+    await mkdir(weekRoot, { recursive: true });
+    await atomicWrite(path.join(weekRoot, "_flomo-attempt.json"), `${JSON.stringify(guard)}\n`);
+  });
 }
 
 async function retireFlomoAttemptGuard(repoRoot, week, token) {
   const guardPath = path.join(repoRoot, "03_input/weekly", week, "_flomo-attempt.json");
-  try {
-    const current = JSON.parse(await readFile(guardPath, "utf8"));
-    if (current.token === token) await atomicWrite(guardPath, `${JSON.stringify({ ...current, active: false, finishedAt: new Date().toISOString() })}\n`);
-  } catch (error) { if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error; }
+  await withLock(repoRoot, async () => {
+    try {
+      const current = JSON.parse(await readFile(guardPath, "utf8"));
+      if (current.token === token) await atomicWrite(guardPath, `${JSON.stringify({ ...current, active: false, finishedAt: new Date().toISOString() })}\n`);
+    } catch (error) { if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error; }
+  });
 }
 
-async function invalidateFlomoAttemptGuard(weekRoot) {
+async function invalidateFlomoAttemptGuard(weekRoot, repoRoot) {
   const guardPath = path.join(weekRoot, "_flomo-attempt.json");
-  try {
-    const current = JSON.parse(await readFile(guardPath, "utf8"));
-    if (current.active === true) await atomicWrite(guardPath, `${JSON.stringify({ ...current, active: false, invalidatedAt: new Date().toISOString() })}\n`);
-  } catch (error) { if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error; }
+  await withLock(repoRoot, async () => {
+    try {
+      const current = JSON.parse(await readFile(guardPath, "utf8"));
+      if (current.active === true) await atomicWrite(guardPath, `${JSON.stringify({ ...current, active: false, invalidatedAt: new Date().toISOString() })}\n`);
+    } catch (error) { if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error; }
+  });
 }
 
 function freshOutcome(outcome, attemptStartedAt) {
@@ -615,13 +1078,20 @@ function sanitizeErrorForClassification(error) {
 function safeFailureSignal(outcome, errorClass) {
   const code = String(outcome?.code || "").match(/^[A-Z][A-Z0-9_]{0,39}$/)?.[0];
   if (code) return code;
-  const message = String(outcome?.error || "");
+  const message = String(outcome?.error || outcome?.stderr || "");
   const knownSignal = message.match(/\b(?:ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENOTFOUND|ETIMEDOUT|EHOSTUNREACH|EPIPE|HTTP\s?5\d\d|collector-timeout|collector-exit-without-fresh-valid-status|source-status-sidecar-invalid|source-collector-command-missing|source-collector-command-contract-mismatch)\b/i)?.[0];
-  return knownSignal ? knownSignal.toUpperCase().replace(/\s+/g, "") : errorClass;
+  if (knownSignal) return knownSignal.toUpperCase().replace(/\s+/g, "");
+  if (errorClass === "unknown-failure") {
+    const sanitized = sanitizeErrorForClassification({ message }).replace(/\s+/g, " ").trim().toLowerCase();
+    return sanitized && sanitized !== "unknown"
+      ? `UNKNOWN-${createHash("sha256").update(sanitized).digest("hex").slice(0, 16).toUpperCase()}`
+      : `UNKNOWN-UNATTRIBUTED-${randomUUID().replaceAll("-", "").slice(0, 16).toUpperCase()}`;
+  }
+  return errorClass;
 }
 
 function isRetryableClass(errorClass) {
-  return ["service-rate-limit", "network-timeout", "network-transient", "process-interrupted"].includes(errorClass);
+  return ["service-rate-limit", "network-timeout", "network-transient", "process-interrupted", "review-store-lock-busy"].includes(errorClass);
 }
 
 async function loadState(filePath, week) {
@@ -633,6 +1103,13 @@ async function loadState(filePath, week) {
       parsed.sources[source.id] ||= expected.sources[source.id];
       parsed.sources[source.id].retries = source.retries;
       parsed.sources[source.id].rescueUsed = Boolean(parsed.sources[source.id].rescueUsed);
+      parsed.sources[source.id].recoveryActions = Array.isArray(parsed.sources[source.id].recoveryActions) ? parsed.sources[source.id].recoveryActions : [];
+      if (source.id === "health" && parsed.sources[source.id].status === "recheck-only"
+        && parsed.sources[source.id].attempts === 0 && parsed.sources[source.id].lastAttemptAt == null) {
+        parsed.sources[source.id].status = "pending";
+        parsed.diagnostics ||= [];
+        parsed.diagnostics.push({ at: new Date().toISOString(), step: "source-management-migration", sourceId: "health", from: "recheck-only", to: "pending", evidence: "Health-X report-only collector" });
+      }
     }
     parsed.diagnostics = Array.isArray(parsed.diagnostics) ? parsed.diagnostics : [];
     return parsed;
@@ -666,13 +1143,13 @@ async function tryAcquireRunLock(lockPath) {
 
 async function acquireBrowserQueue(context) {
   const lockPath = path.join(context.repoRoot, "03_input", "weekly", BROWSER_QUEUE_LOCK_FILE);
-  const startedAt = Date.now();
+  const startedAt = context.now();
   while (true) {
     const lock = await tryAcquireRunLock(lockPath);
     if (lock) return lock;
-    const elapsed = Date.now() - startedAt;
-    if (elapsed >= context.maxDurationMs) throw new Error("browser-queue-wait-timeout");
-    await context.sleep(Math.min(250, Math.max(1, context.maxDurationMs - elapsed)));
+    const remaining = context.remainingDurationMs?.() ?? context.maxDurationMs - (context.now() - startedAt);
+    if (remaining <= 0) throw new Error("browser-queue-wait-timeout");
+    await context.sleep(Math.min(250, remaining));
   }
 }
 
@@ -728,7 +1205,7 @@ function normalizeWeek(value) {
   const match = String(value || "").match(/^(\d{4})-W?(\d{1,2})$/);
   if (!match) throw new Error(`invalid-week: ${value}`);
   const normalized = `${match[1]}-W${String(match[2]).padStart(2, "0")}`;
-  if (Number(match[2]) < 1 || Number(match[2]) > 53) throw new Error(`invalid-week: ${value}`);
+  if (Number(match[2]) < 1 || Number(match[2]) > isoWeeksInYear(Number(match[1]))) throw new Error(`invalid-week: ${value}`);
   return normalized;
 }
 
@@ -767,13 +1244,20 @@ export async function recordWeeklyStage({ week, stage, durationMs, outcome = "su
 function parseArgs(argv) {
   const value = (flag, fallback = undefined) => { const index = argv.indexOf(flag); return index < 0 ? fallback : argv[index + 1]; };
   if (argv.includes("--record-stage")) return { recordStage: value("--record-stage"), durationMs: Number(value("--duration-ms", "0")), outcome: value("--outcome", "success"), week: value("--week") };
-  return { week: value("--week"), mode: value("--mode", "initial"), sourceId: value("--source") || null };
+  return {
+    week: value("--week"), mode: value("--mode", "initial"), sourceId: value("--source") || null,
+    resubmitUncertainAi: argv.includes("--resubmit-uncertain") && argv.includes("--confirm"),
+    recoveryActionCode: value("--action-code", ""),
+    problemId: value("--problem-id", ""),
+    expectedSourceVersion: value("--expected-source-version", ""),
+    confirmedRecovery: argv.includes("--confirm")
+  };
 }
 
-async function prepareWeeklyInputs(_source, { week, repoRoot }) {
+async function prepareWeeklyInputs(_source, { week, repoRoot, remainingMs = 2 * 60_000 }) {
   const script = path.join(repoRoot, ".agents/skills/learn-x-process/scripts/generate-weekly-process-pack.mjs");
   await execFileAsync(process.execPath, [script, "--week", week, "--prepare"], {
-    cwd: repoRoot, timeout: 2 * 60_000, maxBuffer: 2 * 1024 * 1024, windowsHide: true
+    cwd: repoRoot, timeout: Math.max(1, Math.min(2 * 60_000, Number(remainingMs) || 2 * 60_000)), maxBuffer: 2 * 1024 * 1024, windowsHide: true
   });
 }
 
@@ -781,7 +1265,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const options = parseArgs(process.argv.slice(2));
   const operation = options.recordStage
     ? recordWeeklyStage(options)
-    : runWeeklyRetrySupervisor({ ...options, prepareInputs: prepareWeeklyInputs });
+    : runWeeklyRetrySupervisor({ ...options, prepareInputs: prepareWeeklyInputs, enableFlomoReviewImport: true });
   operation
     .then((result) => console.log(JSON.stringify(result)))
     .catch((error) => { console.error(error.message); process.exitCode = 1; });

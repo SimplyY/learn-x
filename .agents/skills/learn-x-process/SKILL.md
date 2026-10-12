@@ -45,7 +45,7 @@ Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 刷新 YW Next �
 - 可以在 `04_output/weekly/YYYY-WW.md` 不存在或为空时创建最小壳；如果已有内容，不覆盖、不改写。
 - 可以生成中间材料 `04_output/_dist/weekly/YYYY-Www/input.json` 和 `04_output/_dist/weekly/YYYY-Www/process-pack.md`。
 - 可以生成 metadata-only 的 `04_output/_dist/monthly/YYYY-MM/input.json`、压缩请求和自包含的 `process-pack.md`。
-- 可以读取 `04_output/weekly/YYYY-WW.md`，抽取“值得长期保留”中已勾选项（0–3 项，0 项合法）及系统确认章节，生成 `04_output/_dist/weekly/YYYY-Www/memory-candidates.md`；问题与回答逐题筛选，只抽取有实质回答的问题，不迁移空回答或占位内容。
+- 可以读取 `04_output/weekly/YYYY-WW.md`，抽取“值得长期保留”中已勾选项（0–3 项，0 项合法）及系统确认章节，生成 `04_output/_dist/weekly/YYYY-Www/memory-candidates.md`；问题、背景与回答只留在 Weekly Output，默认整体排除，不进入 Memory 候选。
 - 可以读取 `04_output/monthly/YYYY-MM.md` 或 `04_output/yearly/YYYY.md`，抽取 Memory 候选包，供 Codex 无损整理写入季度或年度 Memory。
 - 可以运行 `npm run memory:compress -- --as-of YYYY-MM-DD` 生成只读压缩规划；Codex 将不含技术注释的语义压缩候选写入 `04_output/_dist/memory-compression/`，技术元数据、`changeSummary`、`coreDifferences` 和 `otherChanges` 放在同目录隐藏 sidecar，脚本再负责比较、哈希、保护范围和预算校验。`changeSummary` 必须由 Codex 通读原文与候选后按 `resources/memory-compression-rules.md` 生成，脚本不得用固定句式代写。
 - comparison 报告必须把“核心变化”放在最前面，先说明整份文件实际减少量，再按上一版的简洁表格列出 5—10 条代表性核心变化：字数变化（风险写在括号内）、之前是什么、现在是什么，并按风险从高到低、同风险按净减少字数排序；实际改动量按字符级删除加新增计算，净减少不超过 10 字但替换超过 10 字的改写仍需展示。不把所有碎片逐条铺开。实际改动量不超过 10 字的变化按类型归类，超过 10 字但未入选核心的变化只做汇总。报告另设“非删除类变化”表，说明改动（风险写在括号内），并把原文和压缩后拆成两列；未逐字保留的来源单元再按候选池小节、Memory、洞察和继续追踪等类型细分，删除候选不得与普通合并混为一类。保护范围和量化校验后置；报告说明核心摘要与整份文件实际总压缩量的口径区别；缺少 5—10 条核心摘要时标记 `needs_review`，不允许晋级。
@@ -79,7 +79,7 @@ Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 刷新 YW Next �
    node .agents/skills/learn-x-process/scripts/generate-weekly-process-pack.mjs --week 2026-22
    ```
 
-   Weekly Process 对普通文件保留 15,000 Unicode 字符提示；Voice-X 的 `voice.md` 完整落盘，30,000 字符只是强提示，不阻断输入生成。阶段 1 的准备模式先压缩 Voice-X 并生成微信读书及超长来源的候选请求。正式 Pack 按统一来源配置顺序输出「重要来源」和「可选来源」两张表，已确认周记作为阶段前提单列；逐来源报告状态、记录/材料数及文件原始 → 清洗有效 → Pack 最终纳入字符链路。Voice-X 目标保留 10%–15%（预算中心 12.5%）；微信读书是必需语义压缩来源。`input:compress` 不处理 Voice-X，也不属于周流程快路径。
+   Weekly Process 对普通文件保留 15,000 Unicode 字符提示；Voice-X 的 `voice.md` 完整落盘，30,000 字符只是强提示，不阻断输入生成。阶段 1 的准备模式先压缩 Voice-X 并生成微信读书及超长来源的候选请求。正式 Pack 按统一来源配置顺序输出「重要来源」和「可选来源」两张表，已确认周记作为阶段前提单列；逐来源报告状态、记录/材料数及文件原始 → 清洗有效 → Pack 最终纳入字符链路。状态列紧跟优先级并使用中文；失败显示为红色醒目标记 `🔴 **失败**`。交付状态明确为「完整生成 / 有缺口已生成 / 生成失败」。周记与有效日记是硬门槛；其他来源失败、不可用、目标周不符或语义候选未通过时，排除该来源并标注缺口，继续生成其余安全材料。微信读书若有划线或想法必须语义压缩；候选缺失时排除该来源，不阻断周包。`input:compress` 不处理 Voice-X，也不属于周流程快路径。
 
    阶段 1 的执行器在每个来源成功后立即运行准备模式；必要的语义候选由 Codex 完成后，再运行一次准备模式校验全量缓存：
 
@@ -91,7 +91,7 @@ Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 刷新 YW Next �
 
    微信读书有划线或想法时必须语义压缩，不受 15,000 字符门槛影响。保留阅读统计、书名、作者、进度和“当前章节”快照；按书和必要章节归纳高信号观点，合并重复划线，保留独立主张、推理链、条件、反例、风险和关键具象信息。用户想法与作者观点分开且完整保留；不推导行动或 Memory。压缩须实质缩短，不能靠删尾或机械截断；无法安全缩短时标记 `needs_review` 并停止交付。
 
-   确认周记后，正常快路径直接运行 `npm run input:weekly -- --week YYYY-Www` 和 `npm run process:weekly -- --week YYYY-Www`。最终脚本核验缓存哈希、来源状态、跨来源去重和两张来源汇报表，统一计算最终纳入字符数，再写正式 `input.json`、Process Pack 与 Output 最小壳。缓存失效时只重做变化来源的准备；不得在 Pack 生成后手工修统计或临时做语义压缩。所有计数使用 `countInputChars`（Unicode 码点数），分别报告来源正文、上周对照和完整 Pack 字符数；周记永不压缩。
+   确认周记后，正常快路径直接运行 `npm run input:weekly -- --week YYYY-Www` 和 `npm run process:weekly -- --week YYYY-Www`。最终脚本核验缓存哈希、来源状态、跨来源去重和两张来源汇报表，统一计算最终纳入字符数，再写正式 `input.json`、Process Pack 与 Output 最小壳。日记或确认周记未通过时不生成；其他来源或缓存未验证时排除并醒目提示，仍生成「有缺口已生成」Pack。缓存失效时只重做变化来源的准备；不得在 Pack 生成后手工修统计或临时做语义压缩。所有计数使用 `countInputChars`（Unicode 码点数），分别报告来源正文、上周对照和完整 Pack 字符数；周记永不压缩。
 
    `智慧之门` 的增值源是飞书 Base；采集入口读取结构化字段，并把 `长篇内容、原始内容` 做自适应高信号抽取：以每条约 300 Unicode 字符为中心，通常保留 200-500 字，预算根据独立核心判断、因果/模型结构、结论、边界、风险和与参考字段的关联度有限调整；短内容不硬扩，长内容不超过 500。只把压缩内容写入本地，原文不落盘。因此 `wisdom.md`、`input.json` 和 Process Pack 保持同一内容口径；需要核查长篇原文时回到 Base 链接。各来源仍记录原始字符数与纳入字符数，避免把材料体量和实际纳入上下文混为一谈。
 
@@ -124,7 +124,7 @@ Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 刷新 YW Next �
    然后读取 `resources/memory-rules.md` 和对应 `memory-candidates.md`，把已确认内容无损迁移到 Memory，并按来源周期排序；0 个长期候选合法，没有获准内容时不写入 Memory，也不要求用户为凑数补选。
 
    Weekly Memorize 完成后不再有 Action Feedback Base 同步步骤（已于 2026-10 退役，由 Core V1 接管周度行动复盘）。
-   Weekly 自动化仍按现有契约处理标题「全文核心重点纪要」「芒格之魂的洞察」及问题与回答；问题逐题过滤，只有有实质回答的题目可迁移，未回答问题和背景排除。新格式只从“值得长期保留”章节读取已勾选项，最多 3 条；不再从新 Output 提取道 / 法 / 术候选。旧格式候选可按历史兼容规则识别，但不得当作新格式候选。禁止扫描普通正文或把关键词当作确认；重复执行不得追加同一条目。
+   Weekly 自动化只迁移标题「全文核心重点纪要」「芒格之魂的洞察」和“值得长期保留”章节中已勾选项。问题、背景与回答保留在 Weekly Output，默认整体排除；只有用户本次明确指定具体问答内容时才可例外。新格式最多迁移 3 条长期候选；不再从新 Output 提取道 / 法 / 术候选。旧格式候选可按历史兼容规则识别，但不得当作新格式候选。禁止扫描普通正文或把关键词当作确认；重复执行不得追加同一条目。
 
 10. 如需维护历史 Memory，先读取 `resources/memory-compression-rules.md`，运行压缩规划并由 Codex 生成候选；对候选目录运行 `--validate`。只向用户报告 `ready`、`needs_review` 或 `stale`，不把校验结果描述为语义无损证明。只有用户另行明确确认晋级，才运行 `--promote --confirm`。
 

@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { collectFlomoFullSnapshot, classifyFlomoError, publishFlomoSnapshotWeek } from "./collect-flomo-weekly.mjs";
+import { collectFlomoFullSnapshot, classifyFlomoError, publishFlomoSnapshotWeek, validateFlomoSnapshotWeekTimestampDensity } from "./collect-flomo-weekly.mjs";
 import { fileExists, updateWeeklySourceStatus } from "./lib/source-status.mjs";
 import { defaultFlomoPrivateDataRoot, readVerifiedStagedOnlineFlomoSnapshot } from "./lib/flomo-full-snapshot.mjs";
 import { normalizeWeek } from "./collect-weread-weekly.mjs";
@@ -29,6 +29,7 @@ export async function syncFlomoFullWeek({ week, attemptToken, repoRoot = default
     const stagedResult = await collect({ repoRoot, storageRoot, timeout: 30 * 60_000 });
     const { snapshot } = await readVerifiedStagedOnlineFlomoSnapshot(stagedResult.snapshotPath);
     await checkAttempt();
+    validateFlomoSnapshotWeekTimestampDensity(snapshot, targetWeek);
     const activation = await activate(repoRoot, stagedResult.snapshotPath, { beforeCommit: checkAttempt });
     await checkAttempt();
     const weekly = await publish(snapshot, { week: targetWeek, repoRoot });
@@ -39,7 +40,9 @@ export async function syncFlomoFullWeek({ week, attemptToken, repoRoot = default
       const reason = classifyFlomoError(error);
       const status = reason === "ego-login-or-control-required" ? "unavailable" : "failed";
       await updateWeeklySourceStatus({ weekRoot, week: targetWeek, source: "flomo", status, file: "flomo.md", count: 0,
-        summary: `Flomo 全量快照同步失败：${reason}；保留最近成功快照和已有周输入`, preservedStaleFile: await fileExists(notesPath) });
+        summary: reason === "timestamp-density-review-required"
+          ? "失败：同一小时超过 5 条笔记，时间需核验；旧快照和旧 flomo.md 已保留"
+          : `Flomo 全量快照同步失败：${reason}；保留最近成功快照和已有周输入`, preservedStaleFile: await fileExists(notesPath) });
     }
     throw error;
   }

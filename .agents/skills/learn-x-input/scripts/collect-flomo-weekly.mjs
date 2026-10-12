@@ -25,6 +25,7 @@ export async function collectFlomoWeekly(options = {}) {
     const validated = validateCompleteScan(scan, week);
     const generatedExcluded = validated.memos.filter((memo) => isLearnXGenerated(memo.bodyText)).length;
     const filtered = validated.memos.filter((memo) => !isLearnXGenerated(memo.bodyText));
+    assertFlomoTimestampDensity(filtered);
     const included = dedupeWeeklyMemos(filtered);
     const content = renderFlomoWeekly({ week, scan: validated, memos: included });
     await mkdir(outputRoot, { recursive: true });
@@ -72,7 +73,9 @@ export async function collectFlomoWeekly(options = {}) {
       status: safeReason === "ego-login-or-control-required" ? "unavailable" : "failed",
       file: "flomo.md",
       count: 0,
-      summary: `完整周扫描失败：${safeReason}；未使用旧文件`,
+      summary: safeReason === "timestamp-density-review-required"
+        ? "失败：同一小时超过 5 条笔记，时间需核验；保留旧 flomo.md，本次未发布"
+        : `完整周扫描失败：${safeReason}；未使用旧文件`,
       preservedStaleFile: await fileExists(notesPath)
     });
     error.message = `flomo-weekly-${safeReason}`;
@@ -168,21 +171,25 @@ export function dedupeWeeklyMemos(memos) {
 }
 
 export function renderFlomoWeekly({ week, scan, memos }) {
+  const coverage = scan.coverage || { expectedCount: scan.scanned, observedCount: scan.scanned, omittedCount: 0 };
   const lines = [
     `# Flomo 周输入｜${week}`,
     "",
     `- 时区：${TIMEZONE}`,
     `- 采集范围：${scan.range.start} 至 ${scan.range.endExclusive}（不含结束时刻）`,
-    "- 完整扫描：是",
+    "- 完整扫描：是（稳定到达底部）",
     "- 下界已覆盖：是",
     `- 扫描记录：${scan.scanned}`,
+    `- 全库计数：观察到 ${coverage.observedCount} / 预期 ${coverage.expectedCount}；未枚举 ${coverage.omittedCount} 条${coverage.omittedCount ? `（容差内，最多 ${MAX_ACCEPTED_MISSING_RECORDS} 条）` : ""}`,
     `- 分页：已完成（${scan.pageCount} 页）`,
     `- 目标周记录：${memos.length}`,
     `- 扫描开始：${scan.scanStartedAt}`,
     `- 扫描完成：${scan.scanFinishedAt}`,
     ""
   ];
-  if (!memos.length) lines.push("本周完整查询，Flomo 笔记为 0 条。", "");
+  if (!memos.length) lines.push(coverage.omittedCount
+    ? `本周观察到 0 条 Flomo 笔记；全库另有 ${coverage.omittedCount} 条未枚举，因此不能证明遗漏不属于本周。本轮按用户接受的缺口上限记录。`
+    : "本周完整查询，Flomo 笔记为 0 条。", "");
   for (const [index, memo] of memos.entries()) {
     if (index) lines.push("---", "");
     lines.push(`## ${memo.timeText}`, "", `- 来源：${flomoMemoUrl(memo.memoId)}`, "", memo.bodyText || "（该笔记无可提取文字）", "");
@@ -212,32 +219,42 @@ export async function publishFlomoSnapshotWeek(snapshot, { week, repoRoot: root 
       !Number.isInteger(snapshot.totalCount) || snapshot.totalCount !== snapshot.records.length || !snapshot.coverage) {
     throw new Error("flomo-week-snapshot-invalid");
   }
+  const coverage = snapshot.coverage;
+  const omittedCount = coverage.omittedCount;
+  const expectedCount = coverage.expectedCount;
+  const termination = snapshot.termination;
+  const coverageValid = Number.isInteger(expectedCount) && expectedCount >= snapshot.totalCount &&
+    Number.isInteger(coverage.observedCount) && coverage.observedCount === snapshot.totalCount &&
+    Number.isInteger(omittedCount) && omittedCount >= 0 && omittedCount <= MAX_ACCEPTED_MISSING_RECORDS &&
+    expectedCount - snapshot.totalCount === omittedCount &&
+    coverage.status === (omittedCount === 0 ? "complete" : "accepted-with-gaps") &&
+    termination?.expectedCount === expectedCount && termination?.observedUniqueIds === snapshot.totalCount &&
+    termination?.missingCount === omittedCount && termination?.enumerationComplete === true &&
+    termination?.stableScrollPasses >= 2 && termination?.atBottom === true &&
+    termination?.hasMore === false && termination?.loading === false &&
+    termination?.reason === (omittedCount === 0 ? "library-count-and-stable-ids" : "stable-bottom-with-accepted-count-gap");
+  if (!coverageValid) throw new Error("flomo-week-snapshot-coverage-invalid");
   const range = isoWeekRangeShanghai(targetWeek);
   const startMs = range.startEpoch * 1000, endMs = range.endEpoch * 1000;
+  validateFlomoSnapshotWeekTimestampDensity(snapshot, targetWeek);
   const observed = snapshot.records
     .filter((record) => !record.isPinned && Date.parse(record.createdAt) >= startMs && Date.parse(record.createdAt) < endMs)
     .map((record) => ({ ...record, timeMs: Date.parse(record.createdAt), bodyText: normalizeMemoText(record.body) }));
   const generatedExcluded = observed.filter((memo) => isLearnXGenerated(memo.bodyText)).length;
   const filtered = observed.filter((memo) => !isLearnXGenerated(memo.bodyText));
+  assertFlomoTimestampDensity(filtered);
   const included = dedupeWeeklyMemos(filtered);
   const weekRoot = outputRoot || path.join(root, "03_input/weekly", targetWeek);
   const notesPath = path.join(weekRoot, "flomo.md");
-  const coverageComplete = snapshot.coverage.status === "complete" && snapshot.coverage.omittedCount === 0;
-  const summary = coverageComplete
-    ? `完整线上快照 ${snapshot.capturedAt}；扫描 ${snapshot.scanStartedAt} 至 ${snapshot.scanFinishedAt}；下界已覆盖：是；${included.length} 条${included.length ? "" : "，确认无匹配"}（分页 ${snapshot.pageCount} 页）`
-    : `全量快照扫描完成但存在 ${snapshot.coverage.omittedCount} 条未枚举缺口；无法证明 ${targetWeek} Flomo 周输入完整，未发布目标周文件`;
-
-  if (!coverageComplete) {
-    await updateWeeklySourceStatus({ weekRoot, week: targetWeek, source: "flomo", status: "failed", file: "flomo.md",
-      count: 0, summary, preservedStaleFile: await fileExists(notesPath) });
-    return { week: targetWeek, status: "failed", error: "flomo-weekly-snapshot-gap", count: 0, snapshotId: snapshot.snapshotId,
-      capturedAt: snapshot.capturedAt, coverage: snapshot.coverage, termination: snapshot.termination };
-  }
+  const gapSummary = omittedCount
+    ? `；全库计数 ${snapshot.totalCount}/${expectedCount}，未枚举 ${omittedCount} 条（容差内，最多 ${MAX_ACCEPTED_MISSING_RECORDS} 条）`
+    : `；全库计数 ${snapshot.totalCount}/${expectedCount}，未枚举 0 条`;
+  const summary = `完整扫描 ${formatShanghaiDateTime(range.startEpoch)} 至 ${formatShanghaiDateTime(range.endEpoch)} 完成；下界已覆盖：是；${included.length} 条${included.length ? "" : omittedCount ? "（可见结果为 0，缺口可能影响本周覆盖）" : "，确认无匹配"}${gapSummary}（分页 ${snapshot.pageCount} 页）`;
 
   await mkdir(weekRoot, { recursive: true });
   const scan = { range: { start: formatShanghaiDateTime(range.startEpoch), endExclusive: formatShanghaiDateTime(range.endEpoch) },
     scanned: snapshot.totalCount, pageCount: snapshot.pageCount,
-    scanStartedAt: snapshot.scanStartedAt, scanFinishedAt: snapshot.scanFinishedAt };
+    scanStartedAt: snapshot.scanStartedAt, scanFinishedAt: snapshot.scanFinishedAt, coverage };
   if (included.length) {
     await assertReplaceableGeneratedInput(notesPath, targetWeek);
     await atomicWrite(notesPath, renderFlomoWeekly({ week: targetWeek, scan, memos: included }));
@@ -258,6 +275,33 @@ export async function publishFlomoSnapshotWeek(snapshot, { week, repoRoot: root 
     scanned: snapshot.totalCount, excludedGenerated: generatedExcluded, duplicateCount: filtered.length - included.length,
     summary, mirror, snapshotId: snapshot.snapshotId, capturedAt: snapshot.capturedAt,
     coverage: snapshot.coverage, termination: snapshot.termination };
+}
+
+export function validateFlomoSnapshotWeekTimestampDensity(snapshot, week) {
+  const range = isoWeekRangeShanghai(normalizeWeek(week));
+  const startMs = range.startEpoch * 1000, endMs = range.endEpoch * 1000;
+  const records = (snapshot?.records || [])
+    .filter((record) => !record.isPinned && Date.parse(record.createdAt) >= startMs && Date.parse(record.createdAt) < endMs)
+    .map((record) => ({ timeMs: Date.parse(record.createdAt), bodyText: normalizeMemoText(record.bodyText ?? record.body) }))
+    .filter((record) => !isLearnXGenerated(record.bodyText));
+  assertFlomoTimestampDensity(records);
+  return true;
+}
+
+function assertFlomoTimestampDensity(records) {
+  const counts = new Map();
+  const seenIds = new Set();
+  for (const record of records) {
+    if (record.memoId && seenIds.has(record.memoId)) continue;
+    if (record.memoId) seenIds.add(record.memoId);
+    const timeMs = Number(record.timeMs ?? Date.parse(record.createdAt));
+    if (!Number.isFinite(timeMs)) continue;
+    const hour = formatShanghaiDateTime(Math.floor(timeMs / 1000)).slice(0, 13);
+    counts.set(hour, (counts.get(hour) || 0) + 1);
+  }
+  if ([...counts.values()].some((count) => count > 5)) {
+    throw new Error("flomo-timestamp-density-review-required");
+  }
 }
 
 function validatePinnedMemo(pinned) {
@@ -427,6 +471,7 @@ export function formatCliError(error) {
 
 export function classifyFlomoError(error) {
   const value = `${error?.message || ""} ${error?.code || ""} ${error?.stderr || ""}`.toLowerCase();
+  if (/flomo-timestamp-density-review-required/.test(value)) return "timestamp-density-review-required";
   if (/ego.*(?:bootstrap|login|permission|control)|user.control|unauthori[sz]ed|forbidden/.test(value)) return "ego-login-or-control-required";
   if (/task-exit-unconfirmed|taskspace-(?:binding-mismatch|resume-name-required)|cleanup-unconfirmed|detail-(?:body-mismatch|link-unresolved|editor-(?:unavailable|target-unavailable|cancel-unavailable)|verification-(?:missing|invalid))|library-count-(?:mismatch|gap-exceeds-tolerance|changed|unavailable)|memo-id-missing|body-incomplete|pagination-incomplete|pagination-control-missing|scan-record-conflict|scan-conflict/.test(value)) return "scan-integrity-check-failed";
   if (/capacity/.test(value)) return "scan-capacity-exceeded";

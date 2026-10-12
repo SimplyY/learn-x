@@ -411,6 +411,30 @@ test("online catalog preserves distinct IDs with identical bodies and reports ac
   assert.equal(hashBody(body), catalog.notes[0].bodyHash);
 });
 
+test("online catalog accepts a valid snapshot stamped with the prior stricter gap policy", () => {
+  const snapshot = onlineSnapshot([
+    { id: "memo-a", body: "一条用于验证旧版覆盖策略兼容的笔记。" },
+    { id: "memo-b", body: "另一条用于验证旧版覆盖策略兼容的笔记。" },
+  ], 3);
+  snapshot.coverage.policy = "up-to-three-unresolved-records-v1";
+
+  const catalog = scanOnlineSnapshot(snapshot);
+
+  assert.equal(catalog.notes.length, 2);
+  assert.equal(catalog.coverage.omittedCount, 1);
+  assert.equal(catalog.snapshot.coverage.policy, "up-to-three-unresolved-records-v1");
+});
+
+test("online catalog rejects unknown or internally inconsistent coverage policies", () => {
+  const unknown = onlineSnapshot([{ id: "memo-a", body: "覆盖策略必须可识别。" }], 2);
+  unknown.coverage.policy = "unrecognized-policy-v9";
+  assert.throws(() => scanOnlineSnapshot(unknown), /online-snapshot-coverage-invalid/);
+
+  const exceedsPriorPolicy = onlineSnapshot([{ id: "memo-a", body: "旧策略的缺口上限仍需遵守。" }], 5);
+  exceedsPriorPolicy.coverage.policy = "up-to-three-unresolved-records-v1";
+  assert.throws(() => scanOnlineSnapshot(exceedsPriorPolicy), /online-snapshot-coverage-invalid/);
+});
+
 test("online catalog never assigns one ID-less legacy note to multiple online identities", () => {
   const body = "历史本地归档中没有可验证 Flomo ID 的笔记。";
   const legacy = {

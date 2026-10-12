@@ -11,7 +11,7 @@ export function weeklyPreparationPath(repoRoot, week) {
   return path.join(repoRoot, "04_output/_dist/weekly", normalizeWeek(week), ".preprocessing", "manifest.json");
 }
 
-export async function prepareWeeklyProcessInputs({ week, repoRoot, payload }) {
+export async function prepareWeeklyProcessInputs({ week, repoRoot, payload, allowPartial = false }) {
   const manifestPath = weeklyPreparationPath(repoRoot, week);
   const prepDir = path.dirname(manifestPath);
   await mkdir(path.join(prepDir, "candidates"), { recursive: true });
@@ -58,7 +58,7 @@ export async function prepareWeeklyProcessInputs({ week, repoRoot, payload }) {
     if (!isWeread && !isOversized) continue;
 
     const candidateFile = path.join(prepDir, "candidates", `${safeId(snapshot.sourceId)}.json`);
-    const required = Boolean(source?.blocksPack);
+    const required = Boolean(source?.blocksPack) && !allowPartial;
     let candidate = null;
     try {
       const value = JSON.parse(await readFile(candidateFile, "utf8"));
@@ -124,7 +124,7 @@ export async function prepareWeeklyProcessInputs({ week, repoRoot, payload }) {
   return { manifest, manifestPath, requests, exclusions };
 }
 
-export async function loadWeeklyPreparation({ week, repoRoot, payload }) {
+export async function loadWeeklyPreparation({ week, repoRoot, payload, allowPartial = false }) {
   const manifestPath = weeklyPreparationPath(repoRoot, week);
   let manifest;
   try { manifest = JSON.parse(await readFile(manifestPath, "utf8")); }
@@ -155,21 +155,42 @@ export async function loadWeeklyPreparation({ week, repoRoot, payload }) {
     if (!old || old.sourceHash !== snapshot.sourceHash || old.collectorHash !== snapshot.collectorHash || old.generation !== snapshot.generation) changed.push(file);
   }
   if (changed.length) {
+    const dailyChanged = changed.filter((file) => path.basename(file) === "daily.md");
+    if (dailyChanged.length) throw new Error(`weekly-preprocessing-stale: daily source changed (${dailyChanged.join(", ")}); recollect and rerun --prepare`);
     const requiredChanged = changed.filter((file) => weeklySourceForFile(path.basename(file))?.blocksPack);
-    if (requiredChanged.length) throw new Error(`weekly-preprocessing-stale: required sources changed (${requiredChanged.join(", ")}); rerun --prepare`);
+    if (requiredChanged.length && !allowPartial) throw new Error(`weekly-preprocessing-stale: required sources changed (${requiredChanged.join(", ")}); rerun --prepare`);
     manifest.exclusions = [...(manifest.exclusions || []), ...changed.map((file) => ({ sourcePath: file, reason: "source-changed-after-prepare" }))];
     manifest.preparedItems = (manifest.preparedItems || []).filter((item) => !changed.includes(item.path));
+    if (allowPartial) {
+      for (const file of changed.filter((item) => path.basename(item) !== "weekly.md")) excludeSourceFromPayload(payload, file, "source-changed-after-prepare");
+    }
   }
-  if (!manifest.completeForPack) {
+  if (!manifest.completeForPack && !allowPartial) {
     const required = (manifest.requests || []).filter((request) => request.required).map((request) => request.sourcePath);
     if (required.length) throw new Error(`weekly-preprocessing-required: ${required.join(", ")}; prepare candidates and rerun --prepare`);
   }
   const preparedVoiceIds = new Set((manifest.preparedItems || []).filter((item) => item.kind === "voice").map((item) => item.itemId));
   const missingVoice = payload.items.filter((item) => item.path.endsWith("/voice.md") && !preparedVoiceIds.has(item.id));
-  if (missingVoice.length) {
+  if (missingVoice.length && !allowPartial) {
     throw new Error(`weekly-preprocessing-required: voice cache missing for ${missingVoice.map((item) => item.id).join(", ")}; rerun --prepare`);
   }
+  if (missingVoice.length) {
+    const files = [...new Set(missingVoice.map((item) => item.path))];
+    manifest.exclusions = [...(manifest.exclusions || []), ...files.map((file) => ({ sourcePath: file, reason: "voice-cache-not-ready" }))];
+    for (const file of files) excludeSourceFromPayload(payload, file, "voice-cache-not-ready");
+  }
   return { manifest, manifestPath };
+}
+
+function excludeSourceFromPayload(payload, sourcePath, reason) {
+  payload.files = payload.files.filter((file) => file.path !== sourcePath);
+  payload.items = payload.items.filter((item) => item.path !== sourcePath);
+  const sourceFile = path.basename(sourcePath);
+  const source = weeklySourceForFile(sourceFile);
+  const sourceId = sourceFile === "ai.md" ? "ai" : source?.id;
+  if (!sourceId) return;
+  payload.excludedSources ||= {};
+  payload.excludedSources[sourceId] = { status: "needs_review", reason };
 }
 
 function sha256(value) { return createHash("sha256").update(value).digest("hex"); }

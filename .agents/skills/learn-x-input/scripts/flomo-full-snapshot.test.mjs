@@ -87,12 +87,19 @@ test("validates full-scan termination, identities, body text, and detail evidenc
   });
   assert.deepEqual(validateFullFlomoScan(acceptedGap).coverage, {
     status: "accepted-with-gaps", expectedCount: 3, observedCount: 2, omittedCount: 1,
-    ratio: 2 / 3, policy: "up-to-three-unresolved-records-v1",
+    ratio: 2 / 3, policy: "up-to-ten-unresolved-records-v1",
   });
-  assert.throws(() => validateFullFlomoScan(fullScan([sourceRecord("memo-a", "正文")], {
-    libraryCount: 5,
+  const tenMissing = fullScan([sourceRecord("memo-a", "正文")], {
+    libraryCount: 11,
     termination: { reason: "stable-bottom-with-accepted-count-gap", enumerationComplete: true,
-      expectedCount: 5, observedUniqueIds: 1, missingCount: 4, stableScrollPasses: 2,
+      expectedCount: 11, observedUniqueIds: 1, missingCount: 10, stableScrollPasses: 2,
+      atBottom: true, hasMore: false, loading: false },
+  });
+  assert.equal(validateFullFlomoScan(tenMissing).coverage.omittedCount, 10);
+  assert.throws(() => validateFullFlomoScan(fullScan([sourceRecord("memo-a", "正文")], {
+    libraryCount: 12,
+    termination: { reason: "stable-bottom-with-accepted-count-gap", enumerationComplete: true,
+      expectedCount: 12, observedUniqueIds: 1, missingCount: 11, stableScrollPasses: 2,
       atBottom: true, hasMore: false, loading: false },
   })), /termination-unproven/);
 
@@ -152,12 +159,12 @@ test("creates a private staged snapshot and a Card 2.0 preview bound to the same
   assert.equal(snapshot.totalCount, 2);
   assert.deepEqual(snapshot.coverage, {
     status: "complete", expectedCount: 2, observedCount: 2, omittedCount: 0,
-    ratio: 1, policy: "up-to-three-unresolved-records-v1",
+    ratio: 1, policy: "up-to-ten-unresolved-records-v1",
   });
   assert.equal(card.schema, "2.0");
   assert.match(card.header.subtitle.content, /漏项 0 条/);
   assert.match(card.header.subtitle.content, /100\.00%/);
-  assert.match(card.header.subtitle.content, /策略 up-to-three-unresolved-records-v1/);
+  assert.match(card.header.subtitle.content, /策略 up-to-ten-unresolved-records-v1/);
   assert.match(card.header.subtitle.content, /^笔记快照：2026-10-05.*覆盖 2\/2/);
   assert.match(card.body.elements[1].content, /https:\/\/v\.flomoapp\.com\/mine\/\?memo_id=memo-long/);
   assert.doesNotMatch(card.body.elements[1].content, /memo-short/);
@@ -206,7 +213,7 @@ test("surfaces an accepted omission and coverage ratio in snapshot and preview",
   assert.equal(snapshot.coverage.omittedCount, 1);
   assert.match(card.header.subtitle.content, /漏项 1 条/);
   assert.match(card.header.subtitle.content, /66\.67%/);
-  assert.match(card.header.subtitle.content, /策略 up-to-three-unresolved-records-v1/);
+  assert.match(card.header.subtitle.content, /策略 up-to-ten-unresolved-records-v1/);
   assert.match(card.header.subtitle.content, /覆盖 2\/3/);
   assert.match(preview, /覆盖率 66\.67%，漏项约 1 条/);
   assert.match(preview, /稳定到底并在策略上限内接受 1 条未枚举缺口（2\/3）/);
@@ -807,11 +814,11 @@ test("full browser scan records a bounded ordinary duplicate-ID count gap", asyn
 
 test("full browser scan rejects a stable gap larger than the accepted limit", async (t) => {
   const first = sourceRecord("memo-a", "同一正文");
-  const duplicates = Array.from({ length: 5 }, () => ({ ...first }));
-  const { result, harness } = await runBrowserScan(t, { initialRecords: duplicates, libraryCount: 5 });
+  const duplicates = Array.from({ length: 12 }, () => ({ ...first }));
+  const { result, harness } = await runBrowserScan(t, { initialRecords: duplicates, libraryCount: 12 });
   assert.equal(result.ok, false);
   assert.equal(result.error, "library-count-gap-exceeds-tolerance");
-  assert.equal(result.expectedCount, 5);
+  assert.equal(result.expectedCount, 12);
   assert.equal(result.observedUniqueIds, 1);
   assert.equal(harness.finished, 0);
 });

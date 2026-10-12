@@ -174,6 +174,29 @@ test("writes only complete target-week Flomo records, deduplicates, filters gene
   assert.equal(status.sources.flomo.count, 2);
 });
 
+test("holds a legacy weekly scan above five notes per Shanghai hour and preserves the prior file", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-density-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const outputRoot = path.join(root, "03_input/weekly/2026-W40");
+  await mkdir(outputRoot, { recursive: true });
+  const file = path.join(outputRoot, "flomo.md");
+  const old = "# Flomo 周输入｜2026-W40\n人工保留。\n";
+  await writeFile(file, old);
+
+  await assert.rejects(collectFlomoWeekly({
+    week: "2026-W40",
+    outputRoot,
+    scan: async () => scanFixture({ memos: Array.from({ length: 6 }, (_, index) => ({
+      memoId: `memo-burst-${index}`, timeText: "2026-09-28 09:15", bodyText: `独立笔记 ${index}`, bodyComplete: true
+    })) })
+  }), /flomo-weekly-timestamp-density-review-required/);
+
+  assert.equal(await readFile(file, "utf8"), old);
+  const status = JSON.parse(await readFile(path.join(outputRoot, "_source-status.json"), "utf8"));
+  assert.equal(status.sources.flomo.status, "failed");
+  assert.match(status.sources.flomo.summary, /超过 5 条笔记，时间需核验/);
+});
+
 test("records a complete trusted empty scan without reading or replacing a stale Flomo file", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-empty-"));
   t.after(() => rm(root, { recursive: true, force: true }));

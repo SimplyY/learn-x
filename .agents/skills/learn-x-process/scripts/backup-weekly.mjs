@@ -183,7 +183,19 @@ export async function createArchive(rootDirectory, week, manifest, files) {
   await writeFile(path.join(stage, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
   const archiveName = `learn-x-backup-${week}-${manifest.manifestSha256.slice(0, 8)}.tar.gz`;
   const archivePath = path.join(tempRoot, archiveName);
-  await execFileAsync("tar", ["-czf", archivePath, "-C", stage, ...BACKUP_ROOTS, "manifest.json"], { cwd: repoRoot });
+  const zopfliAvailable = await execFileAsync("python3", ["-c", "import zopfli.gzip"], { cwd: repoRoot, maxBuffer: 1024 * 1024 }).then(() => true, () => false);
+  if (zopfliAvailable) {
+    const tarPath = path.join(tempRoot, `${archiveName}.raw`);
+    try {
+      await execFileAsync("tar", ["-cf", tarPath, "-C", stage, ...BACKUP_ROOTS, "manifest.json"], { cwd: repoRoot });
+      await execFileAsync("python3", ["-c", "import sys; from zopfli import gzip; data=open(sys.argv[1], 'rb').read(); open(sys.argv[2], 'wb').write(gzip.compress(data, numiterations=15))", tarPath, archivePath], { cwd: repoRoot, maxBuffer: 1024 * 1024 });
+      await execFileAsync("gzip", ["-t", archivePath], { cwd: repoRoot, maxBuffer: 1024 * 1024 });
+    } finally {
+      await rm(tarPath, { force: true });
+    }
+  } else {
+    await execFileAsync("tar", ["-czf", archivePath, "-C", stage, ...BACKUP_ROOTS, "manifest.json"], { cwd: repoRoot });
+  }
   return { tempRoot, archivePath, archiveName, archiveSha256: await hashFile(archivePath) };
 }
 

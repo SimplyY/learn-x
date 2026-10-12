@@ -4,7 +4,14 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 const MAX_RECORDS = 20_000;
-export const MAX_ACCEPTED_MISSING_RECORDS = 3;
+export const MAX_ACCEPTED_MISSING_RECORDS = 10;
+export const CURRENT_COVERAGE_POLICY = "up-to-ten-unresolved-records-v1";
+
+export function maxMissingRecordsForCoveragePolicy(policy) {
+  if (policy === "up-to-three-unresolved-records-v1") return 3;
+  if (policy === CURRENT_COVERAGE_POLICY) return MAX_ACCEPTED_MISSING_RECORDS;
+  return null;
+}
 
 export function defaultFlomoPrivateDataRoot() {
   return path.join(homedir(), "Library", "Application Support", "Learn-X", "flomo-review");
@@ -102,7 +109,7 @@ export function validateFullFlomoScan(scan) {
     observedCount: observedUniqueIds,
     omittedCount: missingCount,
     ratio: count === 0 ? 1 : observedUniqueIds / count,
-    policy: "up-to-three-unresolved-records-v1",
+    policy: CURRENT_COVERAGE_POLICY,
   };
   return { ...scan, records, coverage };
 }

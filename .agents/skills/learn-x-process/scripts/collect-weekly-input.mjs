@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile, readdir, stat, writeFile, mkdir } from "node:fs/promises";
+import { open, readFile, readdir, stat, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { MAX_WEEKLY_INPUT_CHARS, countInputChars, inputSize, maxInputCharsForPath } from "../../learn-x-input/scripts/lib/input-limits.mjs";
@@ -22,10 +22,26 @@ export async function collectWeeklyInput(options = {}) {
   const allFiles = await collectInputFiles(weekInputRoot, root);
   const sourceStatus = await readWeeklySourceStatus(weekInputRoot, week);
   const statusEntries = Object.entries(sourceStatus.sources);
-  const files = filterFilesBySourceStatus(allFiles, sourceStatus.sources);
+  let files = filterFilesBySourceStatus(allFiles, sourceStatus.sources);
   const excludedFiles = statusEntries
     .filter(([, entry]) => entry.status !== "ready")
     .map(([source, entry]) => ({ source, file: entry.file, status: entry.status, count: entry.count, summary: entry.summary, preservedStaleFile: entry.preservedStaleFile, present: allFiles.some((file) => path.basename(file.relativePath) === entry.file) }));
+  const excludedSources = {};
+  for (const sourceId of ["build", "build-bot"]) {
+    const status = sourceStatus.sources[sourceId];
+    if (status?.status !== "ready") continue;
+    const file = files.find((entry) => path.basename(entry.relativePath) === status.file);
+    if (!file) continue;
+    const coverage = await readBuildCoverageHeader(file.absolutePath, week);
+    if (coverage.status === "matched") continue;
+    const reason = coverage.status === "mismatch"
+      ? `报告标题覆盖 ${coverage.coverageWeek}，目标周为 ${week}；不把旧周报告认作本周产物`
+      : `报告标题未能核实目标周 ${week}；不把未验证产物计入本周`;
+    excludedSources[sourceId] = { status: "needs_review", reason };
+    sourceStatus.sources[sourceId] = { ...status, status: "needs_review", summary: reason };
+    excludedFiles.push({ source: sourceId, file: status.file, status: "needs_review", count: status.count, summary: reason, preservedStaleFile: false, present: true });
+    files = files.filter((entry) => entry.absolutePath !== file.absolutePath);
+  }
   const activeFiles = [];
   const rawItems = [];
   const oversized = [];
@@ -92,6 +108,7 @@ export async function collectWeeklyInput(options = {}) {
     })),
     items: uniqueItems,
     sourceStatuses: sourceStatus.sources,
+    excludedSources,
     excludedFiles,
     stats: {
       fileCount: activeFiles.length,
@@ -101,6 +118,22 @@ export async function collectWeeklyInput(options = {}) {
       excludedFileCount: excludedFiles.length
     }
   };
+}
+
+export async function readBuildCoverageHeader(filePath, targetWeek) {
+  const handle = await open(filePath, "r");
+  let prefix;
+  try {
+    const buffer = Buffer.alloc(8192);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    prefix = buffer.subarray(0, bytesRead).toString("utf8");
+  } finally { await handle.close(); }
+  const explicit = prefix.match(/(?:目标周|覆盖周|周报周期)\s*[：:]\s*(\d{4}-W\d{2})/i)?.[1];
+  const header = prefix.split(/\r?\n/).slice(0, 24).find((line) => /^#\s/.test(line)) || "";
+  const declared = explicit || header.match(/\b(\d{4}-W\d{2}|W\d{1,2})\b/i)?.[1];
+  if (!declared) return { status: "unverified", coverageWeek: null };
+  const coverageWeek = /^W/i.test(declared) ? `${targetWeek.slice(0, 4)}-${declared.toUpperCase().replace(/^W/, "W")}` : declared.toUpperCase();
+  return { status: coverageWeek === targetWeek ? "matched" : "mismatch", coverageWeek };
 }
 
 export function filterFilesBySourceStatus(files, sources) {

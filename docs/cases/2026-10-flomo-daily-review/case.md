@@ -5,15 +5,15 @@
 - 上下游链接：[Requirement](../../requirements/2026-10-flomo-daily-review.md) → [Plan](execution-plan.md)
 - Type: Major
 - Status: In Progress
-- Implementation: M0、M1完成；M2 已备份并激活线上快照，771条候选完成评分、495条达到推荐门槛；M3 全量同步、同快照周输入、重试与每日缓存已接线。2026-10-11/12 手动同步已更新快照，因1条可接受漏项，目标周输入如实失败并保留旧快照；本地回归和代码审查通过。两轮 yw-testing 与 ywuse、自然周运行仍待验收
+- Implementation: M0、M1完成；M2 已备份并激活线上快照，771条候选完成评分、495条达到推荐门槛；M3 全量同步、同快照周输入、重试与每日缓存已接线。W41 周一自然运行经10分钟重试后更新每日快照；按当时临时3条阈值首次发布失败。用户随后确认最多10条漏项，从同一已验证950/951快照生成W41 `flomo.md`，9条且sidecar为`ready`。yw-testing和独立ywtest通过本地回归；ywuse Usage Truth 页面、导航和README链接已写入并读回。整体Acceptance仍为PARTIAL。
 - Acceptance: PARTIAL（[当前验收报告](acceptance.md)；[2026-10-08旧方案验收留档](acceptance-2026-10-08.md)）
 
 ## 执行状态
 
 - 当前有效方案：Requirement 中 2026-10-09 用户确认的 Flomo 线上全量快照与每周同步方案，明确替代旧“历史归档＋周新增”日常来源；已授权实施。
-- 最后已验证里程碑：M0/M1通过；M2旧 catalog/ledger 备份、线上快照激活、质量重评与日发送占用保留均有本机读回证据；M3手动同步路径真实运行并按数据契约分别激活日快照、拒绝发布不完整周输入。数量契约已依用户裁决修正。
-- 当前阶段：active snapshot `ac3c095d-f8d4-4ee0-b18d-88f18ded7ca0` 含950条记录（预期951，缺1，覆盖率99.89485%）；catalog 771条候选均有真实ID与链接，771条评分有效、495条达到分数门槛；ledger保留5个 delivered 批次，代际一致。当前周侧车为失败状态，旧 `flomo.md` 保留。全仓测试520/520、Review测试147/147、核心同步与重试测试95/95通过。整体仍为 PARTIAL。
-- 下一步：执行首轮 yw-testing、其后的独立 ywtest 和 ywuse；核验周一05:00自然同步是否从同一扫描产生快照和目标周输入，并检查实际每日消息是否符合当前卡片契约。完成实际验收后才更新 Architecture Truth。
+- 最后已验证里程碑：M0/M1通过；M2旧 catalog/ledger 备份、线上快照激活、质量重评与日发送占用保留均有本机读回证据；M3手动及周一自然同步路径真实运行。自然运行经一次10分钟网络重试后激活每日缓存；当时临时3条阈值使W41首次发布失败。用户将容差明确提高至最多10条后，从已验证快照发布出9条W41 `flomo.md`，sidecar读回为`ready`。
+- 当前阶段：active snapshot `fdfb5303-6ea6-4916-ad3c-17533f7bcc7e` 含950条记录（预期951，缺1，覆盖率99.89485%）；当前接受阈值最多10条。catalog 771条候选均有真实ID与链接，771条评分有效、495条达到分数门槛；ledger保留5个 delivered 批次，代际一致。W41 sidecar `ready`、count 9，文件生成于阈值更新后，使用同一已验证快照。新鲜协调者验证：全仓535/535、Review148/148；独立Flomo相关套件243/243，Process Pack 17/17；相关脚本语法、Review Skill校验和`git diff --check`通过。Usage Truth正文revision 3，导航revision 16，README链接已读回。
+- 下一步：实现与文档目标已完成，验收仍为PARTIAL。真实消息发送、真实线上笔记编辑/删除后的同步、失败后使用旧缓存生成每日卡片，以及活跃私有store实际回滚仍未观察；Architecture Truth暂不更新。没有发送消息或修改线上Flomo笔记。
 - 历史停止点：2026-10-10 的两次扫描曾因951/950不一致失败；用户后续已允许有界漏项，当前数量门禁不再要求精确相等。历史证据保留在下方各次执行记录。
 
 ## 来源与落点核对
@@ -372,3 +372,26 @@
 - 同次运行的 `2026-W40` 周输入 sidecar 标记为失败，未将有缺口的扫描冒充完整周输入；旧周文件保留。该数据契约失败不触发自动重试，符合身份/完整性错误停止重试规则。上次成功每日快照仍可用。
 - 新鲜验证：`rtk npm run test:flomo:review` 147/147；全仓 `rtk npm test` 520/520；采集、快照、同源周提取、发布与重试核心套件95/95；9个相关运行脚本 `node --check` 退出0；`rtk git diff --check` 退出0。独立只读代码审查未发现阻断缺陷；指出平均7–8是提示软目标，不是账本强保证，与当前 Requirement 的“目标”表述一致。
 - 未触发真实发送，未修改线上 Flomo 笔记或自动化配置；未更新 Architecture Truth。首轮 yw-testing、独立 ywtest、ywuse 和周一05:00自然执行观测待完成。
+
+## 自然周运行与首轮 yw-testing｜2026-10-12 08:45 Asia/Shanghai
+
+- **自然周执行：**现有周一05:00自动化于本地05:02启动Flomo首次尝试（UTC `2026-10-11T21:02:53.269Z`）；`2026-10-11T21:03:04.948Z` 记录 `network-transient` 并安排10分钟后重试，预定时间 `21:13:04.947Z`，实际第二次开始于 `21:13:04.955Z`。第二次扫描于 `21:15:55.943Z` 结束并报告 `source-contract-mismatch`，该错误不再重试。重试状态记录尝试2/最多4次重试、无活动令牌、无待重试时间；两次扫描串行。
+- **实际快照：**新active snapshot为 `fdfb5303-6ea6-4916-ad3c-17533f7bcc7e`，捕获于 `2026-10-11T21:15:55.757Z`；预期951、观察950、遗漏1、覆盖率99.89485%，结束依据 `stable-bottom-with-accepted-count-gap`，稳定滚动2次、已到底、无更多页且无加载。当前catalog 771条，771条质量哈希有效、495条达到分数门槛；ledger保留5个已送达批次，catalog/ledger代际一致。
+- **周输入：**`2026-W41/_source-status.json` 将Flomo标记 `failed`、count 0，原因是缺1条时无法证明周输入完整；当周此前没有 `flomo.md`，所以 `preservedStaleFile=false`。这验证了周输入门禁与失败分类，但没有验证已有W41旧文件的真实保留。更早W40手动执行的旧文件保留证据仍见前文。
+- **首轮测试：**协调者执行 `rtk npm test`，520/520通过；`rtk npm run test:flomo:review`，147/147通过；9个相关运行模块 `node --check` 全部通过，`rtk git diff --check` 退出0。既有独立测试代理曾因账号用量限制未运行；本轮未进行真实Feishu消息发送，因此Feishu发送E2E为未验证 / BLOCKED。完整报告仍待第二个新独立测试者与ywuse。
+- 本轮只读检查自动化产物和聚合存储元数据；未发送消息，未修改Flomo线上笔记、自动化或Architecture Truth。
+
+## 漏项阈值更新与 W41 周输入读回｜2026-10-12
+
+- 用户在周自动化线程针对951预期、950观测而未生成周输入直接确认：“缺10个以内都没啥问题呀，为什么不生成呢？”来源为线程 `01a12cc5-2a5e-76a3-a89f-987d759199af` 的用户消息 `01a12d8e-643c-73e1-b3c6-77ba096bc4a9`。将临时3条容差上调为最多10条；每张观察卡片和分页稳定终态门禁不变。
+- 读回 `03_input/weekly/2026-W41/_source-status.json`：Flomo状态 `ready`、count 9、`preservedStaleFile=false`，summary记载全库950/951、漏1、最多10条容差、分页48页；`flomo.md` 存在且非空。该周输入是在用户放宽阈值后从最近成功的完整扫描快照生成；周一自然扫描本身并未重跑。
+- 活跃日快照仍为 `fdfb5303-6ea6-4916-ad3c-17533f7bcc7e`，采集时间与历史运行记录一致。不得把后续周输入发布读回描述为一次新的 Flomo 扫描。
+- 同一续接期间发现并修复两处并发/消息契约缺口：Card 读回增加 `msg_type=interactive` 强校验；attempt guard 的写入、回收、失效与快照激活共用 review store lock，使 recovery 无法在 token 重核与快照指针提交之间撤销该令牌；跨周 Flomo 尝试先取得全局浏览器队列，再写入令牌，并在令牌回收完成后释放队列。新增用例均在修复前失败、修复后通过。该阶段新鲜全仓`npm test`为524/524，Review套件148/148；当时独立回归与ywuse待执行，后续结果见下节。
+- 当时的下一步：完成新鲜本地回归和独立测试者复测，再执行 `ywuse`。后续完成情况记录在下方“独立复测、容差说明修正与 ywuse 收口”；真实 Feishu 发送、线上笔记编辑/删除、旧快照卡片回退与 active store 回滚仍未验证。
+
+## 独立复测、容差说明修正与 ywuse 收口｜2026-10-12 10:34 Asia/Shanghai
+
+- 清除日常使用 Skill 中一处与用户最新裁决冲突的旧规则：以前允许计数缺口更新每日快照，却仍要求周输入失败；现明确稳定到底、身份/时间/正文校验通过且缺口不超过10条时可以发布 `ready` / `empty` 周输入，并必须披露预期、观察、遗漏和覆盖率。同步修订 `03_input/README.md` 与 `03_input/usage.md`；保留并发周流程已经写入的 Health-X 文案。
+- Skill Creator `quick_validate.py` 对 `learn-x-flomo-review` 报告 `Skill is valid!`；`git diff --check` 通过。全仓与Review新鲜自测分别为535/535、148/148；独立只读测试分别为Flomo相关243/243、Process Pack 17/17，未发现新的P0/P1或高价值缺陷。同一独立测试者随后窄复核本轮Skill/输入说明与命令定义，无阈值或来源矛盾，Review复跑148/148通过。独立复核只读规则/代码并用合成数据，没有访问私有笔记正文、真实扫描或外部发送。
+- `ywuse` 文档按 `lark-doc-create-workflow` 初始化并解析 DocxXML 草稿（`assessment.status=passed`），由bot在 Wiki 导航节点下创建：[Learn-X Flomo 使用说明](https://ywhome.feishu.cn/wiki/JzzLwuVGZiJSIBkUhLbc2Mbwnwg)。正文创建 revision `3` 完整读回；导航首页追加入口后 revision `16` 读回，子节点全量列表确认同一链接位于“系统使用知识库 / 导航首页”。仓库 `README.md` 核心资产新增入口；用法也写入 `03_input/usage.md`。草稿工作区 `draft_5b4b062a_folder/` 按文档工作流要求保留。
+- Acceptance 更新为部分达成：本地实现、周输入发布、独立回归及 Usage Truth 写后读回已完成；真实日常消息E2E、真实线上编辑/删除同步、旧快照回退后生成每日卡片、对活跃私有store实际回滚仍未验证。没有发送飞书消息、修改Flomo线上笔记或更新 Architecture Truth。

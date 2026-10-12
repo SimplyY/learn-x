@@ -1,6 +1,6 @@
 # Architecture Truth｜Learn-X
 
-> 回答「系统现在真实是什么样」。由技术架构与规划节点在架构变化时增量维护。首次建立：2026-09-24（Case：[wechat-evidence-source](cases/wechat-evidence-source/case.md)）。最后核对：2026-10-08（Case：[周记自动化效率优化](cases/2026-10-weekly-workflow-efficiency/case.md)）。
+> 回答「系统现在真实是什么样」。由技术架构与规划节点在架构变化时增量维护。首次建立：2026-09-24（Case：[wechat-evidence-source](cases/wechat-evidence-source/case.md)）。最后核对：2026-10-12（Case：[周记自动化效率优化](cases/2026-10-weekly-workflow-efficiency/case.md)）。
 
 ## 定位
 
@@ -24,7 +24,8 @@ Learn-X 是个人 AI native 知行进化系统：输入（证据与反馈）→ 
 ```
 
 - 来源状态契约（`learn-x-input/scripts/lib/source-status.mjs`）：每来源一个状态（`ready/empty/needs_review/failed/unavailable`）＋规范文件名（`SOURCE_FILES`，wechat → `wechat.md`、jingdu → `jingdu.md`）。消费方按状态过滤输入文件。
-- 周自动化（`learn-x-weekly-automation`）：05:00运行有界来源重试与预处理；重要来源首次失败后最多重试4次、可选来源最多2次，间隔至少20分钟；07:00只对仍安全可恢复的来源补试一次，不清零此前次数。执行状态和不含私人正文的诊断写入周目录侧车并由同周锁保护；CLI最多3路并行、浏览器单队列。每个来源成功后可单独触发准备流程。采集快照记录原始文件哈希，预处理缓存绑定来源哈希、generation、采集器和规则版本；过期采集候选不能覆盖更新输入。确认周记后，`input:weekly`按已保存飞书段落锚点窄范围采回，`process:weekly`复用有效缓存快速组装，不压缩周记；明确的采集子进程失败优先于 sidecar 成功状态。Process Pack 用配置排序的“重要来源 / 可选来源”两张表呈现，周记单列为阶段前提，并统一报告来源正文、上周对照及完整 Pack 字符数。交付时同条消息附不含记忆内容、也不构成授权的收尾范围预览；Chat Pack完成后阶段3生成真实Memory候选并与完整执行范围合成一次确认卡。`jingdu.md` 由外部 Code X 精读自动化在飞书交互后按外部拥有者模式写回（写文件 + `npm run input:source-status`），缺失或 empty 不阻断但提示缺口。
+- 周自动化（`learn-x-weekly-automation`）：05:00运行有界重试与预处理；第一层针对瞬态错误每来源最多一次简单重试，第二层核对既有产物、日期、版本与任务回执并执行安全的已知恢复，第三层只在一手根因、独立审查、共同截止时间和原失败/反例回归均通过时应用受控小补丁。`recovery-patch-guard.mjs` 限制补丁范围并在并发改动时保留现场。07:00补查不清零05:00次数；执行预算统一为100分钟，CLI最多3路并行、浏览器单队列。周诊断写状态侧车；Skill 本地 `state/recovery-incidents.jsonl` 是问题事件真源，`recovery-playbook.json` 可重建，记录失败、恢复和人工修复证据，不保存私人正文、Prompt、凭据或任意命令。每个新 AI run 预先持久化 UUID 并透传到共享 Bridge；中断后只观察绑定的原 run，旧记录缺少稳定 ID 时不猜测归属。Codex Build 续跑收据绑定自动化线程、宿主和目标 ISO 周，续跑机会原子限制为一次；收据目录逐级拒绝符号链接并校验真实路径仍位于仓库内。共享 Bridge 的 Learn-X 短时结果收据只有在 task space 清理确认后才标记可恢复；清理失败保留未确认结果和有界租约，`observe` 重试清理成功后才返回成功，收据写入失败会单独暴露状态。该 Bridge 行为已实现并通过隔离定向测试，部署与真实运行尚未验证。Process Pack 中确认周记与有效日记是硬门槛；补充来源缺失或未验证时排除正文并可生成带缺口状态的 Pack。采集快照记录原始文件哈希，预处理缓存绑定来源哈希、generation、采集器和规则版本；过期采集候选不能覆盖更新输入。确认周记后，`input:weekly`按已保存飞书段落锚点窄范围采回，`process:weekly`复用有效缓存快速组装，不压缩周记；明确的采集子进程失败优先于 sidecar 成功状态。交付时同条消息附不含记忆内容、也不构成授权的收尾范围预览；Chat Pack完成后阶段3生成真实Memory候选并与完整执行范围合成一次确认卡。`jingdu.md` 由外部 Code X 精读自动化在飞书交互后按外部拥有者模式写回（写文件 + `npm run input:source-status`），缺失或 empty 不阻断但提示缺口。
+- Health-X 周报导出有独立 `report --export-learn-x --week YYYY-Www` 路径：从目标周日输入生成本地报告、校验目标周与结构后不覆盖写入 Learn-X；该路径不调用 Health Base 同步。Learn-X 采集入口和 Health-X 导出器逐级核验周目录、拒绝符号链接及越界真实路径；采集器回读并校验目标文件后更新来源状态。Health Base 的读取与同步不在这条路径中。
 - 备份（`learn-x-process/scripts/backup-weekly.mjs`）：`BACKUP_ROOTS = ["01_core", "03_input", "04_output", "05_library"]` 整目录上传飞书云空间并存快照索引；restore 按 manifest.roots 子集校验（兼容旧 3 根归档）。
 - 现有微信入口（`wechat-weekly-input`）：仅人工截图转临时 JSON，追加为 `WeChat.md`（大写），不读取微信本体。
 

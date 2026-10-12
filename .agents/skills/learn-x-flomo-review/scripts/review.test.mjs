@@ -150,7 +150,7 @@ async function feedbackSetup(t) {
   const run = (content, version, incomplete = false, replyExtra = {}) => async args => {
     const batch = ledger.batches[date];
     assert.equal(args[args.indexOf('--profile') + 1], profile);
-    if (args[1] === '+messages-mget') return envelope({ messages: [{ message_id: 'om_sent', chat_id: chatId, sender: { id: appId, sender_type: 'app' }, content: JSON.stringify(batch.card), deleted: false, thread_id: 'omt_sent' }] });
+    if (args[1] === '+messages-mget') return envelope({ messages: [{ message_id: 'om_sent', chat_id: chatId, msg_type: 'interactive', sender: { id: appId, sender_type: 'app' }, content: JSON.stringify(batch.card), deleted: false, thread_id: 'omt_sent' }] });
     return envelope({ has_more: incomplete, messages: [{ message_id: 'om_reply', chat_id: chatId, root_id: 'om_sent', thread_id: 'omt_sent', sender: { id: ownerId, sender_type: 'user' }, content, create_time: now.getTime(), ...(version ? { updated: true, update_time: now.getTime() + version } : {}), ...replyExtra }] });
   };
   return { root, run };
@@ -255,8 +255,14 @@ test('cards use original opening text as titles and include Flomo links', () => 
   const snapshot = { sourceMode: 'flomo-online-full', capturedAt: '2026-10-11T14:05:56.141Z', coverage: { observedCount: 950, expectedCount: 951 } };
   const result = renderReview(decision, notes, snapshot);
   assert.match(JSON.stringify(result.card), /1\. 诗：风来东湖/);
+  assert.match(JSON.stringify(result.card), /风来东湖涌，<br><br>桥卧山水间/);
+  assert.ok(!JSON.stringify(result.card).includes('风来东湖涌，\\n\\n桥卧山水间'));
   assert.match(JSON.stringify(result.card), /2\. 真实实验的判/);
   assert.match(JSON.stringify(result.card), /3\. 标题超过六个/);
+  for (const rendered of [result.markdown, JSON.stringify(result.card)]) {
+    assert.match(rendered, /第3条已回顾/);
+    assert.ok(!rendered.includes('第10条已回顾'));
+  }
   for (const rendered of [result.markdown, result.fullMarkdown, JSON.stringify(result.card)]) {
     assert.match(rendered, /笔记快照：2026-10-11 22:05 · 覆盖 950\/951/);
   }

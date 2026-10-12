@@ -2,10 +2,11 @@ import { createServer } from "node:http";
 import { createReadStream } from "node:fs";
 import { createHash } from "node:crypto";
 import { stat } from "node:fs/promises";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { watch } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { collectDocumentsMarkdown, readContextFile } from "./scripts/documents-context.mjs";
 import { buildUsageView, readLocalUsageStore, readUsageBaseline, recordLocalUsage } from "./scripts/chatpack-usage.mjs";
 import { readPromptAssets } from "./scripts/prompt-assets.mjs";
@@ -16,6 +17,7 @@ import { buildInsightContext } from "../../.agents/skills/learn-x-periodic-insig
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../..");
 const distRoot = path.join(repoRoot, "dist");
+const execFileAsync = promisify(execFile);
 const port = Number(process.env.PORT || 4173);
 const host = process.env.HOST || "127.0.0.1";
 const ignoredWatchDirs = new Set([".git", ".test-tmp", "node_modules", "dist"]);
@@ -23,6 +25,7 @@ let suppressWatchUntil = 0;
 let editorSaveInProgress = false;
 // ponytail: one process-wide request gate; the shared file lock protects other processes.
 let usageWriteInProgress = false;
+const chatPackPromptAssetCache = new Map();
 
 async function serveStatic(_req, res, url) {
   const pathname = decodeURIComponent(url.pathname);
@@ -192,17 +195,31 @@ async function handlePeriodicInsightContext(req, res, url) {
   } catch (error) { sendJson(res, 400, { error: error.message || "Unable to build periodic insight context" }); }
 }
 
-async function fetchLatestPromptAsset(promptId) {
+async function fetchLatestPromptAsset(promptId, { signal } = {}) {
   const readerPath = process.env.PROMPT_GOVERNANCE_FETCHER
     ? path.resolve(process.env.PROMPT_GOVERNANCE_FETCHER)
     : path.resolve(repoRoot, "../skills/prompt-governance/scripts/fetch-prompt.mjs");
-  const { fetchPrompt } = await import(pathToFileURL(readerPath).href);
-  return fetchPrompt(promptId);
+  let stdout;
+  try {
+    ({ stdout } = await execFileAsync(process.execPath, [readerPath, promptId], {
+      encoding: "utf8",
+      maxBuffer: 8 * 1024 * 1024,
+      signal
+    }));
+  } catch (error) {
+    throw new Error(error.stderr?.trim() || error.message || "Prompt reader failed");
+  }
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    throw new Error("Prompt reader returned invalid JSON");
+  }
 }
 
 export async function handleChatPackPromptsLatest(req, res, {
   readManifest = () => readPromptAssets(repoRoot, { optional: false }),
-  fetchAsset = fetchLatestPromptAsset
+  fetchAsset = fetchLatestPromptAsset,
+  cache = chatPackPromptAssetCache
 } = {}) {
   res.setHeader("cache-control", "no-store");
   if (!isLocalRequest(req)) {
@@ -215,12 +232,15 @@ export async function handleChatPackPromptsLatest(req, res, {
   }
 
   let promptIds;
+  let cacheOnly = false;
   try {
     const body = await readJsonBody(req);
     promptIds = body?.prompt_ids;
+    cacheOnly = body?.cache_only === true;
     if (!Array.isArray(promptIds) || promptIds.length < 1 || promptIds.length > 24 ||
         promptIds.some((id) => typeof id !== "string" || !/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(id)) ||
-        new Set(promptIds).size !== promptIds.length) {
+        new Set(promptIds).size !== promptIds.length ||
+        (body?.cache_only !== undefined && typeof body.cache_only !== "boolean")) {
       throw new Error("prompt_ids must contain 1–24 unique prompt_id values");
     }
   } catch (error) {
@@ -242,13 +262,39 @@ export async function handleChatPackPromptsLatest(req, res, {
     return;
   }
 
+  if (cacheOnly) {
+    const cacheHit = promptIds.every((promptId) => cache.has(promptId));
+    sendJson(res, 200, {
+      cache_hit: cacheHit,
+      assets: cacheHit ? Object.fromEntries(promptIds.map((promptId) => [promptId, cache.get(promptId)])) : {}
+    });
+    return;
+  }
+
   const assets = {};
-  for (const promptId of promptIds) {
+  for (let index = 0; index < promptIds.length; index += 2) {
+    const batchIds = promptIds.slice(index, index + 2);
+    const controller = new AbortController();
+    const reads = batchIds.map(async (promptId) => {
+      try {
+        const asset = await fetchAsset(promptId, { signal: controller.signal });
+        validateLatestPromptAsset(asset, promptId);
+        return asset;
+      } catch (error) {
+        const failure = new Error(error?.message || "invalid prompt-asset/v1");
+        failure.promptId = promptId;
+        throw failure;
+      }
+    });
     try {
-      const asset = await fetchAsset(promptId);
-      validateLatestPromptAsset(asset, promptId);
-      assets[promptId] = asset;
+      const batchAssets = await Promise.all(reads);
+      for (let offset = 0; offset < batchAssets.length; offset += 1) {
+        assets[batchIds[offset]] = batchAssets[offset];
+        cache.set(batchIds[offset], batchAssets[offset]);
+      }
     } catch (error) {
+      controller.abort();
+      const promptId = error.promptId || batchIds[0];
       sendJson(res, 502, {
         error: `飞书 Prompt ${promptId} 最新内容读取失败：${error.message || "invalid prompt-asset/v1"}`,
         prompt_id: promptId

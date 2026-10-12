@@ -77,6 +77,7 @@ Chat Pack 编辑器只在本地桌面端显示。排序、大类增删改、子�
 - `/api/context?scene=<场景>&include=<路径>`：按文件或目录切片生成上下文包。
 - `PUT /api/chatpack/editor`：仅本地回环地址和同源页面可用，校验并保存 Chat Pack 排序、文案、推荐上下文及单个 Prompt，然后重建本地静态数据。
 - `GET/POST /api/chatpack/usage`：仅本地回环地址和同源页面可用；读取本机统计视图或以幂等事件记录当前月份的使用次数。公开 Pages 不提供该接口。
+- `POST /api/chatpack/prompts/latest`：仅本地回环地址和同源页面可用；常规请求并发读取最多两个飞书 Prompt 并刷新服务端进程内缓存；`cache_only: true` 仅查询完整缓存集合并返回 `cache_hit`，不访问飞书。缓存只驻留当前服务进程，重启后冷启动；前端命中缓存时立即复制缓存版本并后台刷新，不覆盖已有剪贴板内容。
 - `GET /api/periodic-insights/context?taskId=&target=&range=&from=&to=&includeTypes=`：仅本地回环同源请求；`includeTypes` 逗号分隔覆盖默认材料类型（`target-output` 恒参与）；返回目标对象、范围、纳入/排除清单、字符数、哈希和预算化 Context。
 - Chat Pack 在前端组装，Context 来源统一来自 `/api/context`。
 

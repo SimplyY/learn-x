@@ -3,7 +3,7 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { validateSourceStatusDocument } from "../../learn-x-input/scripts/lib/source-status.mjs";
 import { flomoTags, learnXGeneratedReason } from "../../learn-x-input/scripts/lib/flomo-filter.mjs";
-import { validateFullFlomoScan } from "../../learn-x-input/scripts/lib/flomo-full-snapshot.mjs";
+import { maxMissingRecordsForCoveragePolicy, validateFullFlomoScan } from "../../learn-x-input/scripts/lib/flomo-full-snapshot.mjs";
 
 const ROOTS = ["03_input/weekly", "03_input/weekly-history", "03_input/monthly", "03_input/yearly"];
 const IDENTITY_BACKFILL_FILE = "03_input/_archives/flomo/identity-backfill.json";
@@ -317,11 +317,14 @@ export function scanOnlineSnapshot(snapshot, { previous, sourcePath } = {}) {
     termination: snapshot.termination, detailVerification: snapshot.detailVerification,
     records: snapshot.records.map((record) => ({ ...record, bodyText: record.body, bodyComplete: true })),
   });
-  if (!snapshot.coverage || snapshot.coverage.expectedCount !== validated.coverage.expectedCount ||
-      snapshot.coverage.observedCount !== validated.coverage.observedCount ||
-      snapshot.coverage.omittedCount !== validated.coverage.omittedCount ||
-      snapshot.coverage.status !== validated.coverage.status || snapshot.coverage.policy !== validated.coverage.policy ||
-      snapshot.coverage.ratio !== validated.coverage.ratio || snapshot.totalCount !== validated.records.length) {
+  const storedCoverage = snapshot.coverage;
+  const storedPolicyLimit = maxMissingRecordsForCoveragePolicy(storedCoverage?.policy);
+  if (!storedCoverage || storedPolicyLimit === null || storedCoverage.omittedCount > storedPolicyLimit ||
+      storedCoverage.expectedCount !== validated.coverage.expectedCount ||
+      storedCoverage.observedCount !== validated.coverage.observedCount ||
+      storedCoverage.omittedCount !== validated.coverage.omittedCount ||
+      storedCoverage.status !== validated.coverage.status ||
+      storedCoverage.ratio !== validated.coverage.ratio || snapshot.totalCount !== validated.records.length) {
     throw new Error("online-snapshot-coverage-invalid");
   }
   const oldNotes = previous?.notes || [];
@@ -394,6 +397,6 @@ export function scanOnlineSnapshot(snapshot, { previous, sourcePath } = {}) {
     lastCreatedAt: dates.length ? new Date(Math.max(...dates)).toISOString() : null,
   };
   return { schemaVersion: 1, sourceMode: snapshot.sourceMode, dedupeGeneration: previous?.dedupeGeneration || "legacy",
-    snapshot: { snapshotId: snapshot.snapshotId, capturedAt: snapshot.capturedAt, sourceMode: snapshot.sourceMode, coverage: structuredClone(validated.coverage) },
+    snapshot: { snapshotId: snapshot.snapshotId, capturedAt: snapshot.capturedAt, sourceMode: snapshot.sourceMode, coverage: structuredClone(storedCoverage) },
     notes, excluded, sources: [source], coverage };
 }

@@ -43,6 +43,32 @@ test("records a narrow target-week anchor and collects only the anchored, confir
   assert.equal(calls, 2);
 });
 
+test("accepts an edited confirmed heading on the same date and records the current title", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-weekly-journal-edited-title-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await recordWeeklyJournalAnchor({
+    week: "2026-W41",
+    writeDate: "2026-10-12",
+    targetTitle: "【待优化】AI 基础草稿：10.12",
+    targetBlockId: "blkTarget2026W41",
+    documentId: "docWeeklyJournal01",
+    repoRoot: root
+  });
+  const section = "## 10.12\n\n本周周记已完成确认，包含具体经历、事实和判断。";
+  const result = await collectConfirmedWeeklyJournal({
+    week: "2026-W41",
+    repoRoot: root,
+    fetchSection: async () => ({
+      ok: true,
+      identity: "bot",
+      data: { document: { document_id: "docWeeklyJournal01", revision_id: 73, content: `<fragment mode=\"section\">${section}</fragment>` } }
+    })
+  });
+  const saved = await readFile(result.outputPath, "utf8");
+  assert.match(saved, /周记写作日标题：10\.12/);
+  assert.ok(saved.endsWith(`${section}\n`));
+});
+
 test("refuses stale, wrong-document, or still-draft journal sections without writing weekly.md", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-weekly-journal-gate-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -67,6 +93,11 @@ test("refuses stale, wrong-document, or still-draft journal sections without wri
     repoRoot: root,
     fetchSection: async () => ({ ok: true, identity: "bot", data: { document: { document_id: "docWeeklyJournal01", content: "## 10.5\n\n【待优化】AI 基础草稿\n\n模板内容不能确认。" } } })
   }), /still contains the draft marker/);
+  await assert.rejects(collectConfirmedWeeklyJournal({
+    week: "2026-W40",
+    repoRoot: root,
+    fetchSection: async () => ({ ok: true, identity: "bot", data: { document: { document_id: "docWeeklyJournal01", content: "## 10.6\n\n这不是当前目标周标题，虽然正文足够长。" } } })
+  }), /target heading does not match expected write date/);
   await assert.rejects(readFile(output), { code: "ENOENT" });
 });
 

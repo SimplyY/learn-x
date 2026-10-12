@@ -111,6 +111,7 @@ let lastAutoAssembledPrompt = "";
 let periodicInsightRequestId = 0;
 let selectedContextStatsRequestId = 0;
 let contextGenerationSequence = 0;
+let chatPackGenerationRequestId = 0;
 const contextFileContentPromises = new Map();
 const periodicInsightContextApi = window.LEARN_X_PERIODIC_INSIGHT_CONTEXT_API || "";
 
@@ -1603,12 +1604,63 @@ async function resetPrompt() {
 }
 
 async function generateChatPack() {
+  const generationRequestId = ++chatPackGenerationRequestId;
+  els.learningStatus.textContent = "正在检查 Prompt 缓存…";
+
   let livePromptAssets;
   let promptSelection;
+  let promptIds = [];
+  let usedPromptCache = false;
+  let latestRefreshState = "none";
+  let latestRefreshError = "";
+  let copyFinished = false;
+  let copied = false;
+  let usageWarning = "";
+  const renderGenerationStatus = () => {
+    if (!copyFinished || generationRequestId !== chatPackGenerationRequestId ||
+        !sameChatPackPromptSelection(promptSelection)) return;
+    const delivery = copied ? "Chat Pack 已生成并复制。" : "Chat Pack 已生成。（浏览器未允许自动复制）";
+    let freshness = "";
+    if (promptIds.length) {
+      const promptStatus = usedPromptCache && latestRefreshState !== "updated" ? "缓存状态" : "已更新状态";
+      freshness = `（Prompt：${promptStatus}`;
+      if (usedPromptCache && latestRefreshState === "pending") freshness += "；正在后台拉取最新版本";
+      if (usedPromptCache && latestRefreshState === "updated") freshness += "（最新 Prompt 已拉取并更新缓存；本次剪贴板仍是缓存版）";
+      if (usedPromptCache && latestRefreshState === "failed") freshness += `（最新拉取失败，保留缓存：${latestRefreshError}）`;
+      freshness += "）";
+    }
+    els.learningStatus.textContent = `${delivery}${freshness}${usageWarning ? ` ${usageWarning}` : ""}`;
+  };
+
   try {
     await ensurePromptProtocols();
     promptSelection = captureChatPackPromptSelection();
-    livePromptAssets = await fetchSelectedLivePromptAssets();
+    promptIds = selectedManagedPromptIds();
+    if (promptIds.length) {
+      try {
+        livePromptAssets = await fetchSelectedLivePromptAssets(promptIds, { cacheOnly: true });
+      } catch {
+        livePromptAssets = null;
+      }
+      if (livePromptAssets) {
+        usedPromptCache = true;
+        latestRefreshState = "pending";
+        els.learningStatus.textContent = "已命中 Prompt 缓存（缓存状态），正在后台拉取最新版本…";
+        fetchSelectedLivePromptAssets(promptIds).then(() => {
+          latestRefreshState = "updated";
+          renderGenerationStatus();
+        }).catch((error) => {
+          latestRefreshState = "failed";
+          latestRefreshError = error.message || "未知错误";
+          renderGenerationStatus();
+        });
+      } else {
+        els.learningStatus.textContent = "Prompt 缓存未命中，正在读取飞书最新 Prompt…";
+        livePromptAssets = await fetchSelectedLivePromptAssets(promptIds);
+      }
+    } else {
+      livePromptAssets = {};
+    }
   } catch (error) {
     els.learningStatus.textContent = `飞书最新 Prompt 读取失败，本轮未生成也未复制：${error.message || "未知错误"}`;
     return;
@@ -1628,11 +1680,13 @@ async function generateChatPack() {
   }
   logPromptFetchEvidence(livePromptAssets);
   const chatPack = buildChatPack({ livePromptAssets });
-  const copied = await copyText(chatPack, "Chat Pack 已生成并复制。");
+  els.learningStatus.textContent = "正在复制 Chat Pack 到剪贴板…";
+  copied = await copyText(chatPack, "Chat Pack 已生成并复制。");
+  copyFinished = true;
+  renderGenerationStatus();
   const usageResult = await recordGeneratedUsage(livePromptAssets, promptSelection);
-  if (usageResult.warning) {
-    els.learningStatus.textContent = `${copied ? "Chat Pack 已生成并复制。" : "Chat Pack 已生成。"}${usageResult.warning}`;
-  }
+  usageWarning = usageResult.warning || "";
+  renderGenerationStatus();
   if (copied) showToast("已复制到剪贴板，请去 ai chat");
 }
 
@@ -1644,7 +1698,7 @@ function managedPromptUnavailableReason(item) {
   return "";
 }
 
-async function fetchSelectedLivePromptAssets() {
+function selectedManagedPromptIds() {
   const selected = [
     activeDialogueSubtype(),
     ...selectedEnhancers().filter((enhancer) => enhancer.group !== "length")
@@ -1652,7 +1706,7 @@ async function fetchSelectedLivePromptAssets() {
   const managed = selected
     .map((item) => ({ item, asset: item.managedAsset || item.managedPrompt }))
     .filter(({ asset }) => asset?.prompt_id);
-  if (!managed.length) return {};
+  if (!managed.length) return [];
 
   const unavailable = managed.find(({ item, asset }) => managedPromptUnavailableReason(item) || asset.unavailable);
   if (unavailable) {
@@ -1662,12 +1716,16 @@ async function fetchSelectedLivePromptAssets() {
     throw new Error("当前运行环境无法读取受治理 Prompt 的飞书最新版本。");
   }
 
-  const promptIds = [...new Set(managed.map(({ asset }) => asset.prompt_id))];
+  return [...new Set(managed.map(({ asset }) => asset.prompt_id))];
+}
+
+async function fetchSelectedLivePromptAssets(promptIds = selectedManagedPromptIds(), { cacheOnly = false } = {}) {
+  if (!promptIds.length) return {};
   const response = await fetch("api/chatpack/prompts/latest", {
     method: "POST",
     cache: "no-store",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ prompt_ids: promptIds })
+    body: JSON.stringify({ prompt_ids: promptIds, ...(cacheOnly ? { cache_only: true } : {}) })
   });
   let payload;
   try {
@@ -1676,6 +1734,7 @@ async function fetchSelectedLivePromptAssets() {
     throw new Error(`实时读取接口返回无效 JSON（HTTP ${response.status}）。`);
   }
   if (!response.ok) throw new Error(payload.error || `实时读取接口失败（HTTP ${response.status}）。`);
+  if (cacheOnly && payload?.cache_hit !== true) return null;
   const assets = payload?.assets;
   if (!assets || typeof assets !== "object" || Array.isArray(assets) ||
       Object.keys(assets).length !== promptIds.length || promptIds.some((id) => !Object.hasOwn(assets, id))) {

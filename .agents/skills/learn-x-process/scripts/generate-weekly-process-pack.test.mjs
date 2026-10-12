@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -18,8 +19,8 @@ test("source audit separates config groups in config order and keeps the journal
     const files = [...section.matchAll(/\| ([\w-]+\.md) \|/g)].map((match) => match[1]);
     assert.deepEqual(files, WEEKLY_SOURCE_CONFIG.filter((source) => source.group === group).map((source) => source.file));
   }
-  assert.match(important, /daily\.md \| failed/);
-  assert.match(optional, /\| P0 \| 日志 \| Health-X/);
+  assert.match(important, /\| P0 \| 🔴 \*\*失败\*\* \| 日志 \| 飞书日记 \| daily\.md/);
+  assert.match(optional, /\| P0 \| 未发现 \| 日志 \| Health-X/);
   assert.match(table, /\*\*阶段前提：\*\* 飞书周记/);
   assert.doesNotMatch(important + optional, /weekly\.md/);
 });
@@ -160,6 +161,31 @@ test("prepare mode writes only private preprocessing state; failed mandatory gat
   await assert.rejects(readFile(path.join(root, "04_output/weekly/2026-40.md")), { code: "ENOENT" });
 });
 
+test("confirmed weekly journal and valid daily produce a partial Process Pack when all supplements are missing", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-weekly-partial-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const weekDir = path.join(root, "03_input/weekly", week);
+  await mkdir(weekDir, { recursive: true });
+  await writeFile(path.join(root, "package.json"), JSON.stringify({ type: "module", scripts: {} }), "utf8");
+  await writeFile(path.join(weekDir, "daily.md"), "2026-09-28\n本周记录了一项真实行动和具体判断。", "utf8");
+  await writeFile(path.join(weekDir, "weekly.md"), [
+    `# 周记输入｜${week}`, `目标周：${week}`, "目标覆盖范围：2026-09-28 至 2026-10-04",
+    "## 本周记录", "这是已审核确认的周记内容，保留了具体事实与反思。"
+  ].join("\n\n"), "utf8");
+  await updateWeeklySourceStatus({ weekRoot: weekDir, week, source: "daily", status: "ready", file: "daily.md", count: 1, summary: "目标周有日记", preservedStaleFile: false });
+
+  await generateWeeklyProcessPack({ week, repoRoot: root, prepare: true });
+  const result = await generateWeeklyProcessPack({ week, repoRoot: root });
+  assert.equal(result.processPayload.week, week);
+  assert.equal(result.processPayload.files.length, 2);
+  assert.ok(result.processPayload.excludedSources.ai);
+  const pack = await readFile(result.outputPath, "utf8");
+  assert.match(pack, /🔴 存在失败/);
+  assert.match(pack, /AI 周回顾/);
+  assert.match(pack, /🔴 \*\*未验收\*\*/);
+});
+
 test("confirmed target week with ready required inputs and verified empty sources assembles from cached preprocessing", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-weekly-fast-path-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -170,7 +196,7 @@ test("confirmed target week with ready required inputs and verified empty source
   await writeFile(path.join(root, "package.json"), JSON.stringify({ type: "module", scripts: {} }), "utf8");
 
   await writeFile(path.join(weekDir, "daily.md"), "2026-09-28\n日记记录了本周的真实事项和判断。", "utf8");
-  await writeFile(path.join(weekDir, "ai.md"), [
+  const manualAiReview = [
     `# AI 周回顾｜${week}`,
     `目标回顾周期：${week}`,
     "## 具体的人和事",
@@ -181,7 +207,8 @@ test("confirmed target week with ready required inputs and verified empty source
     "保留核心问题与答案。",
     "## 核心洞察与判断变化",
     "写清楚判断如何变化。"
-  ].join("\n\n"), "utf8");
+  ].join("\n\n");
+  await writeFile(path.join(weekDir, "ai.md"), manualAiReview, "utf8");
   await writeFile(path.join(weekDir, "weekly.md"), [
     `# 周记输入｜${week}`,
     `目标周：${week}`,
@@ -212,7 +239,10 @@ test("confirmed target week with ready required inputs and verified empty source
     "### 芒格之魂洞察",
     "从多个思维模型交叉验证风险与长期结果。".repeat(60)
   ].join("\n"), "utf8");
-  await writeFile(path.join(weekDir, "_ai-generated.json"), JSON.stringify({ schemaVersion: 1, targetWeek: week, status: "confirmed" }), "utf8");
+  await writeFile(path.join(weekDir, "_ai-generated.json"), JSON.stringify({
+    schemaVersion: 1, targetWeek: week, status: "confirmed", completionSource: "user-manual",
+    manualConfirmation: { sha256: createHash("sha256").update(manualAiReview, "utf8").digest("hex") }
+  }), "utf8");
 
   await updateWeeklySourceStatus({ weekRoot: weekDir, week, source: "daily", status: "ready", file: "daily.md", count: 1, summary: "目标周有日记", preservedStaleFile: false });
   await updateWeeklySourceStatus({ weekRoot: weekDir, week, source: "flomo", status: "empty", file: "flomo.md", count: 0, summary: "完整扫描 2026-09-28 00:00 至 2026-10-05 00:00 完成；下界已覆盖：是；0 条，确认无匹配（分页 1 页）", preservedStaleFile: false });
@@ -223,6 +253,10 @@ test("confirmed target week with ready required inputs and verified empty source
   await generateWeeklyProcessPack({ week, repoRoot: root, prepare: true });
   const result = await generateWeeklyProcessPack({ week, repoRoot: root });
   assert.equal(result.processPayload.week, week);
+  await writeFile(path.join(weekDir, "ai.md"), `${manualAiReview}\n后续未经确认的修改`, "utf8");
+  const changedManualAiGate = await validateWeeklyProcessInputs({ week, repoRoot: root, payload: await gatePayload });
+  assert.ok(changedManualAiGate.some((issue) => issue.includes("人工确认后的 ai.md 内容已变化")));
+  await writeFile(path.join(weekDir, "ai.md"), manualAiReview, "utf8");
   assert.equal(result.processPayload.preprocessing.exclusions.length, 0);
   const pack = await readFile(result.outputPath, "utf8");
   assert.match(pack, /2026-W40/);
@@ -242,7 +276,7 @@ test("confirmed target week with ready required inputs and verified empty source
   assert.ok((await validateWeeklyProcessInputs({ week, repoRoot: root, payload: statusMismatchPayload })).some((issue) => issue.includes("Voice-X 文件记录数与来源状态侧车不一致")));
   statusMismatchPayload.sourceStatuses.voice.count = 1;
   statusMismatchPayload.sourceStatuses.flomo.summary = "完整扫描 2026-09-21 00:00 至 2026-09-28 00:00 完成；下界已覆盖：是；0 条，确认无匹配（分页 1 页）";
-  assert.ok((await validateWeeklyProcessInputs({ week, repoRoot: root, payload: statusMismatchPayload })).some((issue) => issue.includes("Flomo flomo.md 必须完整采集成功")));
+  assert.ok((await validateWeeklyProcessInputs({ week, repoRoot: root, payload: statusMismatchPayload })).some((issue) => issue.includes("Flomo flomo.md 必须采集成功")));
 
   await writeFile(path.join(weekDir, "flomo.md"), [
     `# Flomo 周输入｜${week}`,
@@ -250,6 +284,7 @@ test("confirmed target week with ready required inputs and verified empty source
     "- 完整扫描：是",
     "- 下界已覆盖：是",
     "- 扫描记录：1",
+    "- 全库计数：观察到 1 / 1；未枚举 0 条",
     "- 分页：已完成（1 页）",
     "- 目标周记录：1",
     "",
@@ -258,11 +293,30 @@ test("confirmed target week with ready required inputs and verified empty source
     "",
     "本周记录了一项有事实和判断的真实工作。"
   ].join("\n"));
-  await updateWeeklySourceStatus({ weekRoot: weekDir, week, source: "flomo", status: "ready", file: "flomo.md", count: 1, summary: "完整扫描 2026-09-28 00:00 至 2026-10-05 00:00 完成；下界已覆盖：是；1 条（分页 1 页）", preservedStaleFile: false });
+  await updateWeeklySourceStatus({ weekRoot: weekDir, week, source: "flomo", status: "ready", file: "flomo.md", count: 1, summary: "完整扫描 2026-09-28 00:00 至 2026-10-05 00:00 完成；下界已覆盖：是；1 条；全库计数 1/1，未枚举 0 条（分页 1 页）", preservedStaleFile: false });
   const readyFlomoPayload = await (await import("./collect-weekly-input.mjs")).collectWeeklyInput({ week, repoRoot: root, allowOversized: true });
   assert.deepEqual(await validateWeeklyProcessInputs({ week, repoRoot: root, payload: readyFlomoPayload }), []);
-  readyFlomoPayload.sourceStatuses.flomo.count = 2;
-  assert.ok((await validateWeeklyProcessInputs({ week, repoRoot: root, payload: readyFlomoPayload })).some((issue) => issue.includes("Flomo 文件记录数与来源状态侧车不一致")));
+
+  await writeFile(path.join(weekDir, "flomo.md"), (await readFile(path.join(weekDir, "flomo.md"), "utf8"))
+    .replace("观察到 1 / 1；未枚举 0 条", "观察到 1 / 预期 2；未枚举 1 条（容差内，最多 10 条）"));
+  await updateWeeklySourceStatus({ weekRoot: weekDir, week, source: "flomo", status: "ready", file: "flomo.md", count: 1,
+    summary: "完整扫描 2026-09-28 00:00 至 2026-10-05 00:00 完成；下界已覆盖：是；1 条；全库计数 1/2，未枚举 1 条（容差内，最多 10 条）（分页 1 页）", preservedStaleFile: false });
+  const acceptedGapPayload = await (await import("./collect-weekly-input.mjs")).collectWeeklyInput({ week, repoRoot: root, allowOversized: true });
+  assert.deepEqual(await validateWeeklyProcessInputs({ week, repoRoot: root, payload: acceptedGapPayload }), []);
+
+  acceptedGapPayload.sourceStatuses.flomo = { ...acceptedGapPayload.sourceStatuses.flomo, status: "empty", count: 0,
+    summary: "完整扫描 2026-09-28 00:00 至 2026-10-05 00:00 完成；下界已覆盖：是；0 条（可见结果为 0，缺口可能影响本周覆盖）；全库计数 1/2，未枚举 1 条（容差内，最多 10 条）（分页 1 页）" };
+  assert.deepEqual(await validateWeeklyProcessInputs({ week, repoRoot: root, payload: acceptedGapPayload }), []);
+
+  const cleanFlomo = (await readFile(path.join(weekDir, "flomo.md"), "utf8"))
+    .replace("观察到 1 / 预期 2；未枚举 1 条（容差内，最多 10 条）", "观察到 1 / 1；未枚举 0 条");
+  await writeFile(path.join(weekDir, "flomo.md"), cleanFlomo);
+  await updateWeeklySourceStatus({ weekRoot: weekDir, week, source: "flomo", status: "ready", file: "flomo.md", count: 2,
+    summary: "完整扫描 2026-09-28 00:00 至 2026-10-05 00:00 完成；下界已覆盖：是；2 条；全库计数 1/1，未枚举 0 条（分页 1 页）", preservedStaleFile: false });
+  const mismatchPayload = await (await import("./collect-weekly-input.mjs")).collectWeeklyInput({ week, repoRoot: root, allowOversized: true });
+  assert.ok((await validateWeeklyProcessInputs({ week, repoRoot: root, payload: mismatchPayload })).some((issue) => issue.includes("Flomo 文件记录数与来源状态侧车不一致")));
+  await updateWeeklySourceStatus({ weekRoot: weekDir, week, source: "flomo", status: "ready", file: "flomo.md", count: 1,
+    summary: "完整扫描 2026-09-28 00:00 至 2026-10-05 00:00 完成；下界已覆盖：是；1 条；全库计数 1/1，未枚举 0 条（分页 1 页）", preservedStaleFile: false });
 
   const longJournalPath = path.join(weekDir, "weekly.md");
   const longJournal = `${await readFile(longJournalPath, "utf8")}\n\n${"这段确认过的周记原文需要完整保留，不经过压缩。".repeat(800)}\n\n超长周记原文末尾核验标记。`;
@@ -298,6 +352,7 @@ test("renders the full source-to-final character chain with failures and compres
     sourceStatuses: {
       daily: { status: "ready", file: "daily.md", count: 2, summary: "有日记" },
       flomo: { status: "failed", file: "flomo.md", count: 0, summary: "采集失败：页面不可用", preservedStaleFile: true },
+      ai: { status: "needs_review", file: "ai.md", count: 0, summary: "回复已生成但快照未验收", preservedStaleFile: false },
       voice: { status: "ready", file: "voice.md", count: 1, summary: "有洞察" },
       coach: { status: "empty", file: "coach.md", count: 0, summary: "本周 0 条记录，文件未生成", preservedStaleFile: false },
       "build-bot": { status: "unavailable", file: "build-bot.md", count: 0, summary: "机器人侧未完成", preservedStaleFile: false }
@@ -314,23 +369,25 @@ test("renders the full source-to-final character chain with failures and compres
 
   assert.equal(rows[0].file, "daily.md");
   assert.equal(rows.find((row) => row.file === "flomo.md").status, "failed");
-  assert.match(table, /\| 类型 \/ 产物 \| 来源 \| 文件 \| 状态 \|/);
+  assert.match(table, /\| 优先级 \| 状态 \| 类型 \/ 产物 \| 来源 \| 文件 \|/);
   assert.match(table, /字符链路（文件原始 → 清洗有效〔去重前〕→ 最终纳入）/);
   const tableRows = table.split("### 重要来源\n")[1].split("### 可选来源\n")[0].split("\n").filter((line) => /^\|/.test(line)).slice(2);
-  assert.match(tableRows[0], /\| P0 \| 日志 \| 飞书日记 \| \[daily\.md\]/);
-  assert.match(tableRows[1], /\| P0 \| 输入 \| Flomo \| \[flomo\.md\]/);
+  assert.match(tableRows[0], /\| P0 \| ✅ 成功 \| 日志 \| 飞书日记 \| \[daily\.md\]/);
+  assert.match(tableRows[1], /\| P0 \| 🔴 \*\*失败\*\* \| 输入 \| Flomo \| \[flomo\.md\]/);
+  assert.match(tableRows[2], /\| P0 \| 🔴 \*\*未验收\*\* \| 补充 \| AI 周回顾 \| ai\.md/);
   assert.match(table, /\*\*阶段前提：\*\* 飞书周记.*weekly\.md/);
   assert.doesNotMatch(table, /Action Feedback/);
   assert.doesNotMatch(table, /独立产物/);
   assert.match(table, /采集失败：页面不可用/);
   assert.match(table, /1000 → 1000 → 220（Voice-X 压缩，候选保留 22%）/);
   assert.doesNotMatch(table, /仅确定性清洗|未做语义压缩/);
-  assert.match(table, /build-bot\.md \| unavailable/);
+  assert.match(table, /🟠 不可用 \| 复盘 \| 飞书机器人 Build \| build-bot\.md/);
   assert.match(table, /旧文件保留但过期、不计入/);
-  assert.match(table, /wisdom\.md \| 未发现/);
-  assert.match(table, /本轮需关注：.*Flomo（flomo\.md：failed）/);
+  assert.match(table, /未发现 \| 输入 \| 智慧之门 \| wisdom\.md/);
+  assert.match(table, /本轮需关注：.*Flomo（flomo\.md：🔴 \*\*失败\*\*）/);
+  assert.match(table, /本轮状态：\*\* 🔴 存在失败：Flomo/);
   assert.doesNotMatch(table, /本轮需关注：.*微信聊天/);
-  assert.match(table, /wechat\.md \| 未发现/);
+  assert.match(table, /未发现 \| 输入 \| 微信聊天 \| wechat\.md/);
   assert.match(table, /\]\(learnx:\/\/03_input%2Fweekly%2F2026-W36%2Fdaily\.md\)/);
 });
 
@@ -393,13 +450,13 @@ test("Stage 1 automation requires a final character count for each included read
 
   assert.match(stage1Report, /Action Feedback 已退役，输入表中不再有独立产物行/);
   assert.match(stage1Report, /「重要来源」和「可选来源」两张表/);
-  assert.match(stage1Report, /`ai\.md` 是重要来源/);
+  assert.match(stage1Report, /`ai\.md` 是可选补充/);
   assert.doesNotMatch(stage1Report, /action:feedback/);
   assert.doesNotMatch(stage1Report, /在输入表后另列该草稿路径/);
   assert.match(stage1Report, /`countInputChars`（Unicode 码点数）/);
   assert.match(stage1Report, /链路写 `— → N`，不得把整格写成 `—`/);
-  assert.match(skill, /重要来源缺失，阶段 1 必须等待 07:00 补试执行器结束后再决定/);
-  assert.match(skill, /日记及全部阻断 Process Pack 的重要来源已成功时，可以在 07:00 前提前生成/);
+  assert.match(skill, /日记状态 `ready`、至少一条有效记录且目标周匹配时，立即调用 `learn-x-weekly-journal`/);
+  assert.match(skill, /日记就绪后可在执行器仍运行时写草稿/);
 });
 
 test("weekly automation no longer creates Action Feedback at Stage 1 (retired)", async () => {
@@ -416,7 +473,7 @@ test("weekly automation no longer creates Action Feedback at Stage 1 (retired)",
   assert.match(stage2, /回读 Process Pack 第 9 节/);
   assert.match(stage2, /上一 ISO 周.*完整的 `04_output\/weekly\/YYYY-WW\.md`/);
   assert.match(stage2, /阶段 2 汇报只报告上一周 Output 的周期、状态和绝对可点击文件链接，不复述旧 Output 正文或旧问答/);
-  assert.match(stage2, /AI 回顾缺失不阻塞日记有效时的阶段 1 周记草稿.*阶段 2 的 Process Pack 仍要求目标周有效 `ai\.md`/);
+  assert.match(stage2, /AI 回顾缺失不阻塞阶段 1 草稿，也不阻断阶段 2 Process Pack/);
   assert.match(stage2, /按来源配置顺序，已确认周记作为阶段前提单列/);
   assert.match(stage2, /「重要来源」和「可选来源」两张表/);
 });

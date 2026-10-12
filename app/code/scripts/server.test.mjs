@@ -114,6 +114,63 @@ test("latest Prompt endpoint reads only registered IDs and returns complete prom
   assert.equal(response.payload.assets["chatpack.two"].content, "# chatpack.two\n\nLatest body.");
 });
 
+test("latest Prompt endpoint serves its process cache without another Feishu read", async () => {
+  const cache = new Map();
+  let calls = 0;
+  const options = {
+    readManifest: async () => ({ assets: { "chatpack.cached": {} } }),
+    fetchAsset: async (promptId) => { calls += 1; return latestAsset(promptId); },
+    cache
+  };
+  const freshResponse = contextResponse();
+  await handleChatPackPromptsLatest(jsonRequest({ prompt_ids: ["chatpack.cached"] }), freshResponse, options);
+  assert.equal(freshResponse.status, 200);
+  assert.equal(calls, 1);
+
+  const cachedResponse = contextResponse();
+  await handleChatPackPromptsLatest(jsonRequest({ prompt_ids: ["chatpack.cached"], cache_only: true }), cachedResponse, options);
+  assert.equal(cachedResponse.status, 200);
+  assert.equal(cachedResponse.payload.cache_hit, true);
+  assert.equal(cachedResponse.payload.assets["chatpack.cached"].content, "# chatpack.cached\n\nLatest body.");
+  assert.equal(calls, 1);
+});
+
+test("cache-only Prompt lookup misses atomically when any selected Prompt is uncached", async () => {
+  let calls = 0;
+  const response = contextResponse();
+  await handleChatPackPromptsLatest(jsonRequest({ prompt_ids: ["chatpack.cached", "chatpack.cold"], cache_only: true }), response, {
+    readManifest: async () => ({ assets: { "chatpack.cached": {}, "chatpack.cold": {} } }),
+    fetchAsset: async () => { calls += 1; return latestAsset("chatpack.cold"); },
+    cache: new Map([["chatpack.cached", latestAsset("chatpack.cached")]])
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.payload.cache_hit, false);
+  assert.deepEqual(response.payload.assets, {});
+  assert.equal(calls, 0);
+});
+
+test("latest Prompt endpoint reads in pairs and keeps the batch bounded", async () => {
+  const promptIds = ["chatpack.one", "chatpack.two", "chatpack.three", "chatpack.four", "chatpack.five"];
+  const active = new Set();
+  let maxActive = 0;
+  const response = contextResponse();
+  await handleChatPackPromptsLatest(jsonRequest({ prompt_ids: promptIds }), response, {
+    readManifest: async () => ({ assets: Object.fromEntries(promptIds.map((id) => [id, {}])) }),
+    fetchAsset: async (promptId) => {
+      active.add(promptId);
+      maxActive = Math.max(maxActive, active.size);
+      await Promise.resolve();
+      active.delete(promptId);
+      return latestAsset(promptId);
+    }
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(maxActive, 2);
+  assert.deepEqual(Object.keys(response.payload.assets), promptIds);
+});
+
 test("latest Prompt endpoint fails closed for unregistered IDs before reading Feishu", async () => {
   let calls = 0;
   const response = contextResponse();
@@ -145,6 +202,29 @@ test("latest Prompt endpoint does not return a partial batch when a later live r
   assert.equal("assets" in response.payload, false);
   assert.equal(response.payload.prompt_id, "chatpack.second");
   assert.match(response.payload.error, /timeout/);
+});
+
+test("latest Prompt endpoint aborts the slow sibling when a batched read fails fast", async () => {
+  let slowSiblingAborted = false;
+  const response = contextResponse();
+  await handleChatPackPromptsLatest(jsonRequest({ prompt_ids: ["chatpack.slow", "chatpack.fast-fail"] }), response, {
+    readManifest: async () => ({ assets: { "chatpack.slow": {}, "chatpack.fast-fail": {} } }),
+    fetchAsset: async (promptId, { signal }) => {
+      if (promptId === "chatpack.fast-fail") throw new Error("permission denied");
+      return new Promise((resolve, reject) => {
+        signal.addEventListener("abort", () => {
+          slowSiblingAborted = true;
+          reject(new Error("aborted"));
+        }, { once: true });
+      });
+    }
+  });
+
+  assert.equal(response.status, 502);
+  assert.equal(response.payload.prompt_id, "chatpack.fast-fail");
+  assert.match(response.payload.error, /permission denied/);
+  assert.equal(slowSiblingAborted, true);
+  assert.equal("assets" in response.payload, false);
 });
 
 test("latest Prompt endpoint rejects invalid or mismatched prompt-asset/v1 data", async () => {

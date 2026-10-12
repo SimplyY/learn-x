@@ -3,7 +3,20 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { collectWereadWeekly, defaultWeeklyReviewWeek, isoWeekRangeShanghai, normalizeWeek, renderMarkdown, writeWereadWeekly } from "./collect-weread-weekly.mjs";
+import { collectWereadWeekly, defaultWeeklyReviewWeek, isoWeekRangeShanghai, normalizeWeek, readInstalledWereadSkillVersion, renderMarkdown, writeWereadWeekly } from "./collect-weread-weekly.mjs";
+
+test("reads the installed WeRead Skill version from its package metadata", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-weread-version-"));
+  const skillPath = path.join(root, "SKILL.md");
+  try {
+    await writeFile(skillPath, "---\nname: weread-skills\nversion: 2.3.4\n---\n", "utf8");
+    assert.equal(await readInstalledWereadSkillVersion(skillPath), "2.3.4");
+    await writeFile(skillPath, "---\nname: weread-skills\n---\n", "utf8");
+    await assert.rejects(readInstalledWereadSkillVersion(skillPath), /weread-skill-version-unverifiable/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("normalizes week ids and calculates Shanghai boundaries", () => {
   assert.equal(normalizeWeek("2026-24"), "2026-W24");
@@ -11,6 +24,9 @@ test("normalizes week ids and calculates Shanghai boundaries", () => {
     startEpoch: 1780848000,
     endEpoch: 1781452800
   });
+  assert.throws(() => normalizeWeek("2025-W53"), /Invalid ISO week number/);
+  assert.throws(() => isoWeekRangeShanghai("2025-W53"), /Invalid ISO week number/);
+  assert.equal(normalizeWeek("2026-W53"), "2026-W53");
 });
 
 test("defaults weekly review to previous week on weekdays and current week on weekends", () => {
@@ -54,8 +70,9 @@ test("collects only highlights and thoughts inside the requested week", async ()
     if (api_name === "/book/getprogress" && bookId === "book-3") return { book: { progress: 0 } };
     return responses.get(api_name);
   };
-  const payload = await collectWereadWeekly({ week: "2026-W24", apiKey: "test", callApi });
+  const payload = await collectWereadWeekly({ week: "2026-W24", apiKey: "test", callApi, skillVersion: "1.0.5" });
 
+  assert.equal(payload.skillVersion, "1.0.5");
   assert.equal(payload.stats.highlightCount, 1);
   assert.equal(payload.stats.thoughtCount, 1);
   assert.equal(payload.stats.readBookCount, 1);
@@ -95,6 +112,7 @@ test("records an empty weread source without creating a file", async () => {
     const result = await writeWereadWeekly({
       week: "2026-W25",
       apiKey: "test",
+      skillVersion: "1.0.5",
       outputRoot,
       callApi: async ({ api_name }) => emptyResponses.get(api_name)
     });
@@ -123,6 +141,7 @@ test("rejects a previous-week detail response without overwriting the existing f
       writeWereadWeekly({
         week: "2026-W25",
         apiKey: "test",
+        skillVersion: "1.0.5",
         outputRoot,
         callApi: async ({ api_name }) => responses.get(api_name)
       }),
@@ -141,6 +160,7 @@ test("writes reading activity even when there are no notes", async (t) => {
   const result = await writeWereadWeekly({
     week: "2026-W25",
     apiKey: "test",
+    skillVersion: "1.0.5",
     outputRoot,
     callApi: async ({ api_name }) => ({
       "/user/notebooks": { hasMore: 0, books: [] },

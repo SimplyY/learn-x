@@ -283,6 +283,12 @@ function displayTitle(note) {
   return [...String(firstLine).replace(/[^\p{Script=Han}\p{L}\p{N}]+/gu, '')].slice(0, 6).join('');
 }
 
+function cardBody(note) {
+  return [...String(note.body || '')].slice(0, 180).join('').trim()
+    .replace(/\r\n?/g, '\n')
+    .replace(/\n/g, '<br>');
+}
+
 function reviewSnapshotSubtitle(date, snapshot) {
   if (!snapshot || snapshot.sourceMode !== 'flomo-online-full' || !snapshot.coverage) return `回顾日期：${date}`;
   const at = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(snapshot.capturedAt));
@@ -309,7 +315,8 @@ export function renderReview(decision, notes, snapshot = null) {
     message.push(heading, '', ...quote.split('\n').map(x => `> ${x}`), '', `回顾理由：${reviewReason(item)}`, '', `[Flomo原文](${note.source.url})`, '');
     full.push(heading, '', `创建日期：${date}`, `来源：${note.source.url || `${note.source.path}:${note.source.line}`}`, '', note.body, '', `回顾理由：${item.reason}`, '', '---', '');
   }
-  message.push(`可以回复本条消息：“第2条有帮助”“第1条跳过”或“第${MAX_REVIEW_ITEMS}条已回顾”。`);
+  const lastItemNumber = decision.items.length;
+  message.push(`可以回复本条消息：“第2条有帮助”“第1条跳过”或“第${lastItemNumber}条已回顾”。`);
   const card = { schema: '2.0',
     header: {
       title: { tag: 'plain_text', content: `Flomo 回顾｜${decision.date}` },
@@ -321,13 +328,13 @@ export function renderReview(decision, notes, snapshot = null) {
     ...decision.items.flatMap((item, index) => {
       const note = notes.find(n => n.noteKey === item.noteKey);
       return [
-        { tag: 'markdown', content: `**${index + 1}. ${displayTitle(note)}**\n\n${[...note.body].slice(0, 180).join('').trim()}` },
+        { tag: 'markdown', content: `**${index + 1}. ${displayTitle(note)}**\n\n${cardBody(note)}` },
         { tag: 'markdown', content: `> 回顾理由：${reviewReason(item)}` },
         { tag: 'markdown', text_size: 'notation', content: `${shanghaiDate(new Date(note.createdAt))}${item.relevance === 'background' ? ' · 背景' : ''}${note.source.url ? ` · [Flomo原文](${note.source.url})` : ''}` },
         ...(index < decision.items.length - 1 ? [{ tag: 'hr' }] : []),
       ];
     }),
-    { tag: 'markdown', content: `可以回复本条消息：“第2条有帮助”“第1条跳过”或“第${MAX_REVIEW_ITEMS}条已回顾”。` },
+    { tag: 'markdown', content: `可以回复本条消息：“第2条有帮助”“第1条跳过”或“第${lastItemNumber}条已回顾”。` },
   ] } };
   return { markdown: `${message.join('\n')}\n`, fullMarkdown: `${full.join('\n')}\n`, card };
 }

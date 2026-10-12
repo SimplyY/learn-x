@@ -58,3 +58,6 @@ AGENTS.md.backup-*
 .agents/skills/build-bot-log/scripts/build-bot-memory.json
 retired/skills/retired-long-article-research/scripts/research-memory.json
 scripts/build-bot-memory.json
+.agents/skills/learn-x-weekly-automation/state/
+03_input/weekly/*/_codex-build-run.json
+03_input/weekly/*/_codex-build-run.lock
