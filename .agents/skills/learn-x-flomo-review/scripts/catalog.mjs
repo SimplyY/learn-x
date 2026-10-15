@@ -195,9 +195,47 @@ function uniqueSources(sources) {
 }
 function localKey(memo) { return `local:${bodyHash(`${new Date(memo.createdAt).toISOString()}\n${memo.body}`)}`; }
 function realKey(memo) { return memo.memoId ? `flomo:${memo.memoId}` : localKey(memo); }
+
+function restoredQuote(quote, body) {
+  if (typeof quote !== "string" || !quote.trim()) return null;
+  const pattern = new RegExp([...quote].map((char) => char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s*"));
+  return body.match(pattern)?.[0] || null;
+}
+
 function previousQuality(previous, memo) {
   const q = previous?.quality;
-  return q && q.bodyHash === memo.bodyHash && q.policyVersion === "1" && Number.isInteger(q.score) && q.score >= 0 && q.score <= 4 && typeof q.reason === "string" ? { ...q } : null;
+  if (!q || q.policyVersion !== "1" || !Number.isInteger(q.score) || q.score < 0 || q.score > 4 || typeof q.reason !== "string") return null;
+  if (q.bodyHash === memo.bodyHash) return { ...q };
+  if (q.bodyHash === bodyHash(previous.body) && whitespacelessBody(previous.body) === whitespacelessBody(memo.body)) {
+    const quote = restoredQuote(q.quote, memo.body);
+    return quote ? { ...q, bodyHash: memo.bodyHash, quote } : null;
+  }
+  return null;
+}
+
+function whitespacelessBody(body) { return String(body).replace(/\s+/gu, ""); }
+
+function displayableLegacyBody(body) {
+  const attachment = body.lastIndexOf("\n**附件**");
+  return attachment === -1 ? body : normalizeBody(body.slice(0, attachment));
+}
+
+function uniqueLegacyBodies(legacyCatalog) {
+  if (!legacyCatalog) return null;
+  if (legacyCatalog.schemaVersion !== 1 || !Array.isArray(legacyCatalog.notes) || !Array.isArray(legacyCatalog.excluded)) {
+    throw new Error("legacy-body-catalog-invalid");
+  }
+  const candidates = [...legacyCatalog.notes, ...legacyCatalog.excluded.map((entry) => entry.previousNote).filter(Boolean)];
+  const grouped = new Map();
+  for (const note of candidates) {
+    if (!note || typeof note.body !== "string" || !Number.isFinite(Date.parse(note.createdAt))) {
+      throw new Error("legacy-body-catalog-invalid");
+    }
+    const body = displayableLegacyBody(note.body);
+    const key = `${Math.floor(Date.parse(note.createdAt) / 60000)}:${whitespacelessBody(body)}`;
+    grouped.set(key, [...(grouped.get(key) || []), note]);
+  }
+  return new Map([...grouped].filter(([, notes]) => notes.length === 1).map(([key, [note]]) => [key, displayableLegacyBody(note.body)]));
 }
 
 /** Reads archive files only; callers own persistence and semantic quality assessment. */
@@ -304,7 +342,7 @@ export async function scanArchive(repoRoot, { previous } = {}) {
 }
 
 /** Builds the daily catalog only from a validated Flomo online snapshot. */
-export function scanOnlineSnapshot(snapshot, { previous, sourcePath } = {}) {
+export function scanOnlineSnapshot(snapshot, { previous, sourcePath, legacyCatalog } = {}) {
   if (!snapshot || snapshot.schemaVersion !== 1 || snapshot.sourceMode !== "flomo-online-full" ||
       typeof snapshot.snapshotId !== "string" || !snapshot.snapshotId || !Array.isArray(snapshot.records)) {
     throw new Error("online-snapshot-invalid");
@@ -317,6 +355,7 @@ export function scanOnlineSnapshot(snapshot, { previous, sourcePath } = {}) {
     termination: snapshot.termination, detailVerification: snapshot.detailVerification,
     records: snapshot.records.map((record) => ({ ...record, bodyText: record.body, bodyComplete: true })),
   });
+  const legacyBodies = uniqueLegacyBodies(legacyCatalog);
   const storedCoverage = snapshot.coverage;
   const storedPolicyLimit = maxMissingRecordsForCoveragePolicy(storedCoverage?.policy);
   if (!storedCoverage || storedPolicyLimit === null || storedCoverage.omittedCount > storedPolicyLimit ||
@@ -357,13 +396,15 @@ export function scanOnlineSnapshot(snapshot, { previous, sourcePath } = {}) {
     if (previousById.length > 1) throw new Error("previous-online-identity-conflict");
     const prior = previousById[0] || null;
     if (prior) usedOld.add(prior);
-    const current = { ...memo, source: memoSource, reason: exclusionReason(memo.bodyText, memo.tags) };
+    const legacyBody = legacyBodies?.get(`${Math.floor(Date.parse(memo.createdAt) / 60000)}:${whitespacelessBody(memo.bodyText)}`) ?? null;
+    const body = legacyBody ?? memo.bodyText;
+    const current = { ...memo, bodyText: body, body, bodyHash: bodyHash(body), source: memoSource, reason: exclusionReason(body, memo.tags) };
     const noteKey = prior?.noteKey || realKey(current);
     const aliases = [...new Set([noteKey, `flomo:${memo.memoId}`, ...(prior?.aliases || [])])].sort();
     const previousQualityValue = canReuseQuality ? previousQuality(prior, current) : null;
     const note = { noteKey, memoId: memo.memoId, aliases, groupKey: prior?.groupKey || `content:${memo.bodyHash}`,
-      groupAliases: [...new Set(prior?.groupAliases || [])], createdAt: memo.createdAt, body: memo.bodyText, tags: memo.tags || [],
-      bodyHash: memo.bodyHash, source: memoSource, sources: [memoSource], quality: previousQualityValue };
+      groupAliases: [...new Set(prior?.groupAliases || [])], createdAt: memo.createdAt, body, tags: memo.tags || [],
+      bodyHash: current.bodyHash, source: memoSource, sources: [memoSource], quality: previousQualityValue };
     if (current.reason) {
       excluded.push({ source: memoSource, memoId: memo.memoId, noteKey, previousNote: note, reason: current.reason, count: 1 });
       continue;

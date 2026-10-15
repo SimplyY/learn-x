@@ -52,8 +52,8 @@ Learn-X 是个人 AI native 知行进化系统：输入（证据与反馈）→ 
 
 ## Flomo 每日回顾
 
-- Flomo 来源仍由周度 Ego Lite 采集写入 `03_input/weekly/YYYY-Www/flomo.md`；每周来源状态通过完整性门禁后，周自动化 Skill 调用 `npm run flomo:review -- archive` 更新私有累计目录 `03_input/_archives/flomo/catalog.json`。这代表已知历史归档加可信周增量，不代表远端全量或历史编辑同步。
-- `.agents/skills/learn-x-flomo-review` 从最近周/月 Output、实时正式《道》、活跃 Memory 与个人理解材料构建上下文；模型以5–8条为常规目标选择高质量回顾候选，质量不足时不凑数（3–4条需说明原因，少于3条不推送），Node 校验原文哈希、身份、质量分≥3、同周零重复、滚动四周重叠与重复预算。入选原文与反馈只写私有 `_dist`，不自动改写 Core、Memory、道或 Flomo。
+- Flomo 历史来源仍由周度 Ego Lite 采集写入 `03_input/weekly/YYYY-Www/flomo.md`；每周来源状态通过完整性门禁后，周自动化 Skill 调用 `npm run flomo:review -- archive` 更新私有累计目录 `03_input/_archives/flomo/catalog.json`。线上全量快照路径可用同一分钟加去空白正文唯一匹配从 legacy catalog 回填换行，歧义或正文变化不回填；它代表已知历史归档加可信增量，仍不代表远端全量或历史编辑同步。
+- `.agents/skills/learn-x-flomo-review` 从最近周/月 Output、实时正式《道》、活跃 Memory 与个人理解材料构建上下文；模型以7–8条为常规目标选择高质量回顾候选，单次允许5–10条，质量不足时按缺口说明原因。Node 校验原文哈希、身份、质量分≥3、同周零重复、滚动四周重叠与重复预算；卡片标题保留原文标点，正文按实际换行和列表渲染。入选原文与反馈只写私有 `_dist`，不自动改写 Core、Memory、道或 Flomo。
 - 新交付使用单条 Feishu post 并附当日完整 Markdown。发送前核验 bot、接收成员、profile 与频率；上传key与消息附件key分开保存；发送后读回正文及下载附件字节SHA。`needs_review`只读恢复，不自动重发。2026-10-06 有一批真实3条回顾完成消息和附件读回。
 - 当前本地目录646条，其中504条质量分≥3且正文哈希仍有效；远端全量覆盖未证实。以2026-10-12为起点的7日与28日容量模拟均可行，分别要求至少35与130条合格独立笔记。
 - 原生本地自动化`learn-x-flomo-20-00`已启用，按UTC 12:00调度（Asia/Shanghai 20:00），指向Learn-X项目；创建时实时成员与发送频率预检通过。首次定时唤醒和实际5–8条发送尚未观察。

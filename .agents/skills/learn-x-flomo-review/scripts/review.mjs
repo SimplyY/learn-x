@@ -87,7 +87,8 @@ export async function refreshArchive(root = repoRoot) {
       }
       const snapshotPath = path.join(p.privateRoot, state.activeSnapshotPath);
       const snapshot = await readJson(snapshotPath);
-      catalog = scanOnlineSnapshot(snapshot, { previous, sourcePath: snapshotPath });
+      const legacyCatalog = await scanArchive(root);
+      catalog = scanOnlineSnapshot(snapshot, { previous, sourcePath: snapshotPath, legacyCatalog });
     } else catalog = await scanArchive(root, { previous });
     catalog.updatedAt = new Date().toISOString(); catalog.catalogHash = catalogHash(catalog);
     await atomicJson(p.catalog, catalog);
@@ -275,18 +276,41 @@ export async function prepareReview(root = repoRoot, date = shanghaiDate(), opti
 }
 
 function displayTitle(note) {
-  if (flomoTags(note.body).includes('写诗')) {
-    const title = [...String(note.body || '').replace(/[^\p{Script=Han}\p{L}\p{N}]+/gu, '')].slice(0, 4).join('');
-    return `诗：${title || '一首'}`;
-  }
-  const firstLine = String(note.body || '').split('\n').find(line => line.trim() && !line.trim().startsWith('#') && !line.trim().startsWith('>')) || '回顾';
-  return [...String(firstLine).replace(/[^\p{Script=Han}\p{L}\p{N}]+/gu, '')].slice(0, 6).join('');
+  const poem = flomoTags(note.body).includes('写诗');
+  const firstLine = String(note.body || '').split('\n').find(line => line.trim() && !line.trim().startsWith('#') && !line.trim().startsWith('>'));
+  if (!firstLine) return poem ? '诗：一首' : '回顾';
+  const title = [...firstLine.trim()].slice(0, poem ? 4 : 6).join('').replace(/\s+$/u, '');
+  return poem ? `诗：${title}` : title;
 }
 
 function cardBody(note) {
-  return [...String(note.body || '')].slice(0, 180).join('').trim()
+  const source = [...String(note.body || '')].slice(0, 180).join('').trim()
     .replace(/\r\n?/g, '\n')
-    .replace(/\n/g, '<br>');
+    .split('\n');
+  const lines = [];
+  let inList = false;
+  let pendingBreak = '';
+  for (const rawLine of source) {
+    const list = rawLine.match(/^\s*([-*+]|\d+[.)、])(?:\s*)(.*)$/);
+    const text = rawLine.trim();
+    if (!text) {
+      pendingBreak = '<br><br>';
+      continue;
+    }
+    if (list) {
+      if (lines.length) lines.push(inList ? '\n' : '\n\n');
+      const marker = /^\d/.test(list[1]) ? `${list[1].replace(/[、)]$/, '.')} ` : '- ';
+      lines.push(`${marker}${list[2].trim()}`);
+      inList = true;
+      pendingBreak = '\n\n';
+    } else {
+      if (lines.length) lines.push(inList ? '\n\n' : pendingBreak);
+      lines.push(text);
+      inList = false;
+      pendingBreak = '';
+    }
+  }
+  return lines.join('').trim();
 }
 
 function reviewSnapshotSubtitle(date, snapshot) {

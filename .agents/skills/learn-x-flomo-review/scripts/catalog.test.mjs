@@ -366,6 +366,51 @@ test("online catalog excludes exact DOM tags when rendered body text runs into t
   assert.equal(catalog.excluded[0].reason, "excluded-tag");
 });
 
+test("online catalog restores whitespace only from one unique legacy match and invalidates quality", async (t) => {
+  const { root, put } = await fixture(t);
+  const body = "第一段完整正文。\n\n1. 第一项\n2. 第二项";
+  const flattened = "第一段完整正文。1. 第一项2. 第二项";
+  await put("03_input/monthly/2026-9/flomo.md", memo(body, null, "## 2026-10-09 09:00"));
+  const legacyCatalog = await scanArchive(root);
+  const prior = { schemaVersion: 1, sourceMode: "flomo-online-full", notes: [], excluded: [{ source: legacyCatalog.notes[0].source, previousNote: {
+    noteKey: "flomo:REMOTE-ID", memoId: "REMOTE-ID", aliases: ["flomo:REMOTE-ID"], groupKey: "content:old",
+    groupAliases: [], createdAt: "2026-10-09T09:00:00+08:00", body: flattened, bodyHash: hashBody(flattened),
+    source: legacyCatalog.notes[0].source, sources: [legacyCatalog.notes[0].source],
+    quality: { score: 4, reason: "旧判断", quote: flattened, bodyHash: hashBody(flattened), policyVersion: "1" },
+  }, noteKey: "flomo:REMOTE-ID", reason: "online-note-not-present", count: 1 }] };
+  const result = scanOnlineSnapshot(onlineSnapshot([{ id: "REMOTE-ID", body: flattened, createdAt: "2026-10-09T01:00:00.000Z" }]), { previous: prior, legacyCatalog });
+  assert.equal(result.notes[0].body, body);
+  assert.equal(result.notes[0].bodyHash, hashBody(body));
+  assert.equal(result.notes[0].quality.bodyHash, hashBody(body));
+  assert.equal(result.notes[0].quality.quote, body);
+  assert.equal(result.notes[0].groupKey, "content:old");
+});
+
+test("online catalog does not use ambiguous or changed legacy bodies", async (t) => {
+  const { root, put } = await fixture(t);
+  const flattened = "同一条正文。";
+  await put("03_input/monthly/2026-9/flomo.md", memo("同一条\n正文。", null, "## 2026-10-09 09:00"));
+  await put("03_input/weekly-history/2026-W40/flomo.md", memo("同一条\n\n正文。", null, "## 2026-10-09 09:00"));
+  const legacyCatalog = await scanArchive(root);
+  const ambiguous = scanOnlineSnapshot(onlineSnapshot([{ id: "REMOTE-ID", body: flattened, createdAt: "2026-10-09T01:00:00.000Z" }]), { legacyCatalog });
+  assert.equal(ambiguous.notes[0].body, flattened);
+
+  await rm(path.join(root, "03_input/weekly-history/2026-W40/flomo.md"));
+  await put("03_input/monthly/2026-9/flomo.md", memo("不同的正文。", null, "## 2026-10-09 09:00"));
+  const changed = scanOnlineSnapshot(onlineSnapshot([{ id: "REMOTE-ID", body: flattened, createdAt: "2026-10-09T01:00:00.000Z" }]), { legacyCatalog: await scanArchive(root) });
+  assert.equal(changed.notes[0].body, flattened);
+});
+
+test("online catalog restores seconds-different legacy bodies and removes attachment footer", async (t) => {
+  const { root, put } = await fixture(t);
+  const body = "#记录/播客\n1. 第一句\n2. 第二句";
+  const flattened = "#记录/播客 1. 第一句2. 第二句";
+  await put("03_input/monthly/2026-9/flomo.md", memo(`${body}\n\n**附件**\n\n![memo image](/tmp/note.jpg)`, null, "## 2026-10-09 09:00:04"));
+  const legacyCatalog = await scanArchive(root);
+  const result = scanOnlineSnapshot(onlineSnapshot([{ id: "REMOTE-ID", body: flattened, createdAt: "2026-10-09T01:00:00.000Z" }]), { legacyCatalog });
+  assert.equal(result.notes[0].body, body);
+});
+
 test("online catalog resets legacy quality, keeps same-ID exposure through edits, and records deletions", () => {
   const originalBody = "一次真实实验让我记录了最初的判断和后来得到的反馈。";
   const editedBody = "一次真实实验让我记录了修改后的判断和后来得到的反馈。";
