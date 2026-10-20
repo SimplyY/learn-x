@@ -123,6 +123,24 @@
                       <button id="copyChatPackUsageBtn" type="button" hidden>复制使用记录</button>
                       <button id="generateChatPackBtn" class="primary-action" type="button">生成 Chat Pack</button>
                     </div>
+                    <div class="chatpack-feedback">
+                      <p id="chatPackOperationStatus" class="chatpack-operation-status" role="status" aria-live="polite">就绪，可生成 Chat Pack。</p>
+                      <section id="chatPackCachePanel" class="chatpack-cache-panel" aria-label="Chat Pack 缓存状态" hidden>
+                        <div class="chatpack-cache-heading">
+                          <span id="chatPackCacheSummary">正在读取缓存状态…</span>
+                          <div class="chatpack-cache-actions">
+                            <button id="refreshChatPackCacheBtn" type="button">刷新全部缓存</button>
+                            <button id="retryCopyChatPackBtn" type="button" hidden>复制</button>
+                            <button id="reloadChatPackAfterClipboardHangBtn" type="button" hidden>刷新页面恢复操作</button>
+                          </div>
+                        </div>
+                        <div id="chatPackCacheRefreshStatus" class="chatpack-cache-refresh-status" aria-live="polite"></div>
+                        <details id="chatPackCacheDetails" class="chatpack-cache-details">
+                          <summary>查看缓存详情</summary>
+                          <ul id="chatPackCacheResourceList"></ul>
+                        </details>
+                      </section>
+                    </div>
                   </div>
                   <div class="section-title compact">
                     <span>大类</span>

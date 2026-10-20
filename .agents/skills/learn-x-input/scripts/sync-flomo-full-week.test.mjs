@@ -117,6 +117,21 @@ test("rejects more than ten missing records without replacing an old week file o
   assert.equal(status.sources.flomo.status, "failed");
 });
 
+test("preserves a safe Flomo scan error code and stage in failed source status", async (t) => {
+  const { root, weekRoot, attemptToken } = await fixture(t);
+  const error = Object.assign(new Error("ego-detail-body-mismatch"), {
+    stage: "verify-longest-detail",
+    bodyText: "private memo text",
+    memoId: "private-memo-id",
+  });
+  await assert.rejects(syncFlomoFullWeek({ week, attemptToken, repoRoot: root, collect: async () => { throw error; } }), /ego-detail-body-mismatch/);
+  const status = await readWeeklySourceStatus(weekRoot, week);
+  const summary = status.sources.flomo.summary;
+  assert.match(summary, /ego-detail-body-mismatch stage=verify-longest-detail/);
+  assert.match(summary, /scan-integrity-check-failed/);
+  assert.doesNotMatch(summary, /private memo text|private-memo-id/);
+});
+
 test("late attempt token is rejected before the active snapshot pointer changes", async (t) => {
   const { root, weekRoot, attemptToken } = await fixture(t);
   const collect = async () => {

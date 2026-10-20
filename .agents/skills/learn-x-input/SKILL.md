@@ -82,7 +82,7 @@ Run `npm run input:voice -- --week YYYY-Www` to read the fixed Voice-X Base with
 
 Run `npm run input:daily-coach -- --week YYYY-Www` to collect the 日常记录 Base and AI Coach Base with `lark-cli --as bot`.
 
-- Verify live tables and fields, filter the target Asia/Shanghai week server-side, and traverse every page before writing `daily.md`; write `coach.md` only when at least one Coach record remains after filtering.
+- Verify live tables and fields, filter the target Asia/Shanghai week server-side, and traverse every page before writing `daily.md`. For 日记, select fields from the live schema on each run: keep the unique `日期` datetime field and current non-computed content fields, excluding duplicate date and calendar-sync metadata; do not require removed or renamed content fields through a stale hardcoded list. Write `coach.md` only when at least one Coach record remains after filtering.
 - Both sources update `_source-status.json`; zero records preserve any old file but mark it stale, and failures preserve it while marking the source failed.
 - Coach filtering is table-specific: `服务对象` and `项目` use `创建时间`; `服务记录` uses its service `日期`; `ai coach thinking` uses `更新时间` only to find candidates and removes records with the `已推送轮次` + `回顾状态` + `上次推送时间` review signature. New records remain in `coach.md`; review updates are marked and excluded by this collector.
 - If all Coach tables have zero retained records, report `0 条记录，文件未生成`; this is a successful empty source, not a collection failure.

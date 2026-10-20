@@ -8,7 +8,9 @@ import { WEEKLY_SOURCE_CONFIG } from "../../learn-x-input/scripts/lib/weekly-sou
 import { isoWeeksInYear } from "../../learn-x-input/scripts/lib/iso-week.mjs";
 import { ensureWeeklyDirectory } from "../../learn-x-input/scripts/lib/weekly-path.mjs";
 import { readWeeklySourceStatus } from "../../learn-x-input/scripts/lib/source-status.mjs";
-import { canResubmitUncertainAi } from "./generate-ai-review.mjs";
+import { validateAiReview } from "../../learn-x-process/scripts/monthly-process-input.mjs";
+import { canResubmitUncertainAi, normalizeAiReviewText, promoteAiReview, sha256 } from "./generate-ai-review.mjs";
+import { tryAcquireWeeklyAiLock, validateWeeklyAiLockToken } from "./lib/weekly-ai-lock.mjs";
 import { hasVerifiedSmallPatch, prepareRecoveryIncident, queryRecoveryPlaybook, recordRecoveryIncident, recoveryLayerForAttempt } from "./recovery-memory.mjs";
 import { withLock } from "../../learn-x-flomo-review/scripts/review.mjs";
 import { readBuildCoverageHeader } from "../../learn-x-process/scripts/collect-weekly-input.mjs";
@@ -18,10 +20,29 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const defaultRepoRoot = path.resolve(__dirname, "../../../..");
 const DEFAULT_RETRY_GAP_MS = 20 * 60_000;
 const FLOMO_RETRY_GAP_MS = 10 * 60_000;
+const AI_UNCERTAIN_RESUBMIT_AFTER_MS = 20 * 60_000;
+const AI_REPLACEMENT_PROCESS_BUDGET_MS = 5 * 60_000;
+const AI_REPLACEMENT_OBSERVATION_MS = 20 * 60_000;
+const AI_REPLACEMENT_FINAL_OBSERVE_PROCESS_BUDGET_MS = 150_000;
+const AI_RESUBMISSION_FINALIZATION_MARGIN_MS = 2 * 60_000;
+const AI_ORIGINAL_BOUNDARY_PROCESS_BUDGET_MS = 150_000;
+const AI_STATE_LOCK_REACQUIRE_MARGIN_MS = 30_000;
+const AI_REPLACEMENT_FINALIZATION_BUDGET_MS = AI_REPLACEMENT_FINAL_OBSERVE_PROCESS_BUDGET_MS
+  + AI_RESUBMISSION_FINALIZATION_MARGIN_MS + AI_STATE_LOCK_REACQUIRE_MARGIN_MS;
+const AI_RESUBMISSION_REQUIRED_BUDGET_MS = AI_REPLACEMENT_PROCESS_BUDGET_MS
+  + AI_REPLACEMENT_OBSERVATION_MS + AI_REPLACEMENT_FINALIZATION_BUDGET_MS;
+const AI_WAIT_REACQUIRE_MIN_BUDGET_MS = AI_ORIGINAL_BOUNDARY_PROCESS_BUDGET_MS
+  + AI_RESUBMISSION_REQUIRED_BUDGET_MS + AI_STATE_LOCK_REACQUIRE_MARGIN_MS;
 const STATE_FILE = "_weekly-retry-state.json";
 const LOCK_FILE = "_weekly-retry-state.lock";
 const BROWSER_QUEUE_LOCK_FILE = ".browser-queue.lock";
 const LOG_LIMIT = 500;
+const AI_TERMINAL_OBSERVATION_REASONS = new Set([
+  "chatgpt-rate-limited", "login-required", "captcha-or-blocked", "ego-bootstrap-permission",
+  "conversation-session-mismatch", "conversation-session-not-bound", "observer-identity-mismatch",
+  "original-run-identity-mismatch", "submission-unconfirmed", "new-user-message-not-found",
+  "formal-ai-md-has-human-content", "formal-ai-md-changed-after-promotion", "confirmed-ai-md-changed", "confirmed-ai-md-missing",
+]);
 const RECOVERY_ACTIONS = Object.freeze({
   "verify-only": { layer: 2, note: "执行只读核验后重查", preconditions: ["status-readback-valid"] },
   "manual-repair": { layer: 2, note: "完成经核验的来源修复后重采", preconditions: ["user-confirmed-scope"] },
@@ -52,11 +73,17 @@ export function classifyWeeklyFailure(message, { sourceId = "", code = "" } = {}
   if (/weread-skill-upgrade-required|weread-skill-version-unverifiable|skill.{0,20}(upgrade|version)|upgrade_info/.test(value)) {
     return { errorClass: "source-version-mismatch", retryable: false, retryAfterMs: 0 };
   }
+  if (/\bEPERM\b|operation not permitted/i.test(value)) {
+    return { errorClass: "local-execution-permission-denied", retryable: false, retryAfterMs: 0 };
+  }
   if (/permission|forbidden|unauthori[sz]ed|login|captcha|user.control|bootstrap.permission|scope|identity/.test(value)) {
     return { errorClass: "permission-or-human-control", retryable: false, retryAfterMs: 0 };
   }
   if (/schema|field.contract|invalid.field|contract.mismatch|unsupported.field|target.mismatch|snapshot-gap|completeness-contract/.test(value)) {
     return { errorClass: "source-contract-mismatch", retryable: false, retryAfterMs: 0 };
+  }
+  if (sourceId === "flomo" && /scan-integrity-check-failed|flomo-(?:scan|weekly|full-scan|week-snapshot)-(?:incomplete|invalid|termination-unproven|coverage-invalid|record-incomplete)|ego-(?:memo-id-missing|body-incomplete|pagination-incomplete|pagination-control-missing|detail-[a-z-]+|library-count-[a-z-]+|scan-conflict|scan-record-conflict|task-exit-unconfirmed)/.test(value)) {
+    return { errorClass: "source-integrity-failed", retryable: false, retryAfterMs: 0 };
   }
   if (/manual|human.review|needs_review|timestamp[-_ ]density[-_ ]review[-_ ]required/.test(value)) {
     return { errorClass: "manual-review-required", retryable: false, retryAfterMs: 0 };
@@ -142,7 +169,8 @@ export async function runWeeklyRetrySupervisor({
     if (recoveryActionCode === "upgrade-official-skill" && !/^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/.test(expectedSourceVersion)) {
       throw new Error("recovery-expected-version-required");
     }
-  } else if (recoveryActionCode || expectedSourceVersion || confirmedRecovery) {
+  } else if (recoveryActionCode || expectedSourceVersion
+    || (confirmedRecovery && !(mode === "manual" && sourceId === "ai" && resubmitUncertainAi))) {
     throw new Error("recovery-action-requires-recovery-mode");
   }
   if (sourceId != null && mode !== "recovery" && (!WEEKLY_SOURCE_CONFIG.some((source) => source.id === sourceId && source.collector) || mode !== "manual" || !supportedManualSource)) {
@@ -169,15 +197,75 @@ export async function runWeeklyRetrySupervisor({
   }
   if (!lock) return { week: normalizedWeek, mode, skipped: "supervisor-already-running", waitedMs: lockWaitMs };
   let state;
+  let stateLockLost = false;
+  let stateLockDiagnostic = null;
   let saveQueue = Promise.resolve();
   let preparationQueue = Promise.resolve();
   let recoveryQueue = Promise.resolve();
   let aiRecoveryStarted = false;
   const recoveryWriteErrors = [];
   const save = () => {
+    if (!lock || stateLockLost) return Promise.reject(new Error("weekly-retry-state-lock-not-held"));
     state.updatedAt = new Date(now()).toISOString();
     saveQueue = saveQueue.then(() => atomicWrite(statePath, `${JSON.stringify(state, null, 2)}\n`));
     return saveQueue;
+  };
+  const releaseStateLockForAiWait = async (waitPhase = "original") => {
+    if (!lock) return async () => false;
+    const requiredReacquireBudgetMs = waitPhase === "replacement"
+      ? AI_REPLACEMENT_FINALIZATION_BUDGET_MS : AI_WAIT_REACQUIRE_MIN_BUDGET_MS;
+    // Finish every queued mutation while this process still owns the state lock.
+    await preparationQueue;
+    await recoveryQueue;
+    await saveQueue;
+    await save();
+    await saveQueue;
+    const releasedLock = lock;
+    event({ step: "supervisor-state-lock", sourceId: "ai", outcome: "released-for-ai-deadline-wait",
+      waitPhase, evidence: STATE_FILE });
+    await save();
+    await saveQueue;
+    lock = null;
+    await releasedLock.release();
+    return async () => {
+      const deadline = startedAt + maxDurationMs;
+      const reacquireStartedAt = now();
+      while (deadline - now() >= requiredReacquireBudgetMs) {
+        const acquired = await tryAcquireRunLock(lockPath);
+        if (acquired) {
+          lock = acquired;
+          state = await loadState(statePath, normalizedWeek) || createWeeklyRetryState(normalizedWeek);
+          state.pendingRecoveryEvents = Array.isArray(state.pendingRecoveryEvents) ? state.pendingRecoveryEvents : [];
+          if (deadline - now() < requiredReacquireBudgetMs) {
+            event({ step: "supervisor-state-lock", sourceId: "ai", outcome: "reacquired-with-insufficient-ai-budget",
+              waitPhase,
+              remainingMs: Math.max(0, deadline - now()), requiredBudgetMs: requiredReacquireBudgetMs, evidence: STATE_FILE });
+            await save();
+            await lock.release();
+            lock = null;
+            stateLockLost = true;
+            stateLockDiagnostic = { step: "supervisor-state-lock", outcome: "reacquired-with-insufficient-ai-budget", waitPhase,
+              elapsedMs: Math.max(0, now() - reacquireStartedAt), remainingMs: Math.max(0, deadline - now()),
+              requiredBudgetMs: requiredReacquireBudgetMs };
+            return false;
+          }
+          event({ step: "supervisor-state-lock", sourceId: "ai", outcome: "reacquired-after-ai-deadline-wait",
+            waitPhase,
+            durationMs: Math.max(0, now() - reacquireStartedAt), evidence: STATE_FILE });
+          for (const pending of [...state.pendingRecoveryEvents]) queueRecoveryWrite(pending);
+          await save();
+          return true;
+        }
+        const remaining = deadline - now() - requiredReacquireBudgetMs;
+        if (remaining <= 0) break;
+        await sleep(Math.min(1_000, remaining));
+      }
+      stateLockLost = true;
+      stateLockDiagnostic = { step: "supervisor-state-lock", outcome: "reacquire-budget-exhausted", waitPhase,
+        elapsedMs: Math.max(0, now() - reacquireStartedAt), remainingMs: Math.max(0, deadline - now()),
+        requiredBudgetMs: requiredReacquireBudgetMs };
+      return false;
+    };
   };
   const recoveryStateRoot = path.join(repoRoot, ".agents/skills/learn-x-weekly-automation/state");
   const queueRecoveryWrite = (input) => {
@@ -263,12 +351,24 @@ export async function runWeeklyRetrySupervisor({
     });
     return preparationQueue;
   } : undefined;
-  const sourceContext = () => ({ state, now, sleep, runSource, readOutcome, save, event, mode, week: normalizedWeek, repoRoot,
-    enableFlomoReviewImport, importFlomoReviews, executionId,
-    recoveryActionCode, expectedSourceVersion,
-    maxDurationMs, prepareAfterSuccess, drainPreparation: () => preparationQueue, resubmitUncertainAi,
-    remainingDurationMs: () => Math.max(0, maxDurationMs - (now() - startedAt)),
-    beginAiRecovery: () => { if (aiRecoveryStarted) return false; aiRecoveryStarted = true; return true; } });
+  const sourceContext = () => {
+    const context = { state, now, sleep, runSource, readOutcome, save, event, mode, week: normalizedWeek, repoRoot,
+      enableFlomoReviewImport, importFlomoReviews, executionId,
+      recoveryActionCode, expectedSourceVersion,
+      maxDurationMs, prepareAfterSuccess, drainPreparation: () => preparationQueue, resubmitUncertainAi,
+      remainingDurationMs: () => Math.max(0, maxDurationMs - (now() - startedAt)),
+      runBatch: (sources, kind, overrides = {}) => runBatch(sources, kind, { ...sourceContext(), ...overrides }),
+      beginAiRecovery: () => { if (aiRecoveryStarted) return false; aiRecoveryStarted = true; return true; } };
+    context.releaseStateLockForAiWait = async (waitPhase = "original") => {
+      const reacquire = await releaseStateLockForAiWait(waitPhase);
+      return async () => {
+        const recovered = await reacquire();
+        if (recovered) context.state = state;
+        return recovered;
+      };
+    };
+    return context;
+  };
 
   try {
     state = await loadState(statePath, normalizedWeek);
@@ -286,12 +386,11 @@ export async function runWeeklyRetrySupervisor({
     if (lockWaitMs) event({ step: "retry-rescue-wait", outcome: "waited-for-active-run", durationMs: lockWaitMs, evidence: STATE_FILE });
     await save();
 
-    if (!sourceId && ["initial", "rescue"].includes(mode)) await runEligibleAiResubmission(sourceContext());
-
     if (mode === "initial") {
       const dueFirst = selectedSources.filter((source) => source.collector && state.sources[source.id]?.attempts === 0 && state.sources[source.id]?.status === "pending");
       await runBatch(dueFirst, "first", sourceContext());
       if (!sourceId) await runEligibleAiResubmission(sourceContext());
+      if (stateLockLost || !lock) return await unlockedAiWaitResult();
     }
 
     if (mode === "recovery") {
@@ -449,7 +548,6 @@ export async function runWeeklyRetrySupervisor({
           for (const source of dueRescue) state.sources[source.id].rescueUsed = true;
           await save();
           await runBatch(dueRescue, "rescue", sourceContext());
-          if (!sourceId) await runEligibleAiResubmission(sourceContext());
           continue;
         }
         const pendingTimes = selectedSources
@@ -471,11 +569,23 @@ export async function runWeeklyRetrySupervisor({
         event({ step: "retry-rescue", outcome: "bounded-window-ended", evidence: STATE_FILE });
         await save();
       }
+      if (!sourceId) await runEligibleAiResubmission(sourceContext());
+      if (stateLockLost || !lock) return await unlockedAiWaitResult();
     }
 
     await save();
     await recoveryQueue;
     await save();
+    let manualFallback;
+    if (["failed", "needs_review"].includes(state.sources.ai?.status)) {
+      try {
+        const sidecar = JSON.parse(await readFile(path.join(weekRoot, "_ai-generated.json"), "utf8"));
+        if (sidecar.targetWeek === normalizedWeek && typeof sidecar.manualPrompt === "string" && sidecar.manualPrompt.length > 0) {
+          manualFallback = { status: sidecar.status, reason: sidecar.reason || null,
+            path: `03_input/weekly/${normalizedWeek}/ai.md`, prompt: sidecar.manualPrompt };
+        }
+      } catch { /* Missing or invalid business sidecar remains an explicit unknown. */ }
+    }
     const recoveryAdvice = {};
     const adviceLayer = recoveryActionCode === "small-patch" ? 3 : ["rescue", "recovery", "manual"].includes(mode) ? 2 : 1;
     for (const [id, entry] of Object.entries(state.sources)) {
@@ -494,13 +604,33 @@ export async function runWeeklyRetrySupervisor({
         lastErrorClass: item.lastErrorClass, nextRetryAt: item.nextRetryAt }])),
       alerts: await repeatedFailureAlerts(state, repoRoot),
       recoveryAdvice,
+      ...(manualFallback ? { manualFallback } : {}),
       recoveryMemory: { status: recoveryWriteErrors.length ? "partial" : "ready", writeFailures: recoveryWriteErrors.length,
         pendingEvents: state.pendingRecoveryEvents.length }
     };
   } finally {
     await saveQueue.catch(() => {});
     await recoveryQueue.catch(() => {});
-    await lock.release();
+    await lock?.release();
+  }
+
+  async function unlockedAiWaitResult() {
+    const latest = await loadState(statePath, normalizedWeek).catch(() => null);
+    let manualFallback;
+    try {
+      const sidecar = JSON.parse(await readFile(path.join(weekRoot, "_ai-generated.json"), "utf8"));
+      if (sidecar.targetWeek === normalizedWeek && typeof sidecar.manualPrompt === "string" && sidecar.manualPrompt.length > 0) {
+        manualFallback = { status: sidecar.status, reason: sidecar.reason || null,
+          path: `03_input/weekly/${normalizedWeek}/ai.md`, prompt: sidecar.manualPrompt };
+      }
+    } catch { /* A missing business sidecar stays unknown; never write while unlocked. */ }
+    return { week: normalizedWeek, mode, statePath, skipped: "supervisor-state-lock-reacquire-timeout",
+      sources: latest ? Object.fromEntries(Object.entries(latest.sources).map(([id, item]) => [id, { status: item.status,
+        attempts: item.attempts, retries: item.retries, rescueUsed: item.rescueUsed, recoveryActions: item.recoveryActions || [],
+        problemRunId: item.problemRunId || null, lastErrorClass: item.lastErrorClass, nextRetryAt: item.nextRetryAt }])) : {},
+      diagnostic: stateLockDiagnostic || { step: "supervisor-state-lock", outcome: "reacquire-failed",
+        requiredBudgetMs: AI_WAIT_REACQUIRE_MIN_BUDGET_MS },
+      ...(manualFallback ? { manualFallback } : {}) };
   }
 }
 
@@ -565,36 +695,320 @@ async function runEligibleFlomoReviewImport(context) {
 async function runEligibleAiResubmission(context) {
   const source = WEEKLY_SOURCE_CONFIG.find((item) => item.id === "ai");
   const entry = context.state.sources.ai;
-  if (entry?.status !== "needs_review") return false;
+  if (!["needs_review", "succeeded"].includes(entry?.status)) return false;
+  let isReservedReplacement = false;
+  let priorAi;
   try {
-    const priorAi = JSON.parse(await readFile(path.join(context.repoRoot, "03_input/weekly", context.week, "_ai-generated.json"), "utf8"));
-    if (priorAi?.status !== "needs_review" || priorAi.targetWeek !== context.week
+    priorAi = JSON.parse(await readFile(path.join(context.repoRoot, "03_input/weekly", context.week, "_ai-generated.json"), "utf8"));
+    isReservedReplacement = priorAi?.resubmissionCount === 1 && Boolean(priorAi.resubmissionOf);
+    if (priorAi.targetWeek !== context.week
       || typeof priorAi.runId !== "string" || typeof priorAi.conversationUrl !== "string") return false;
+    if (entry.status === "needs_review" && priorAi.status !== "needs_review"
+      && !(isReservedReplacement && ["generated", "confirmed"].includes(priorAi.status))) return false;
+    if (entry.status === "succeeded" && !(isReservedReplacement && ["generated", "confirmed"].includes(priorAi.status))) return false;
   } catch { return false; }
   if (context.beginAiRecovery && !context.beginAiRecovery()) return false;
-  context.event({ step: "ai-uncertain-observation", sourceId: "ai", outcome: "started", evidence: "_ai-generated.json 原 runId 与会话地址" });
-  await context.save();
-  const remainingMs = context.remainingDurationMs?.() ?? 810_000;
-  if (remainingMs <= 90_000) return false;
-  const observeSeconds = Math.max(1, Math.min(720, Math.floor(remainingMs / 1000) - 90));
-  await runBatch([source], "observe-existing", { ...context, observeUncertainAi: true, observeWaitSeconds: observeSeconds });
-  if (context.state.sources.ai?.status === "succeeded") return true;
-  let priorAi;
-  try { priorAi = JSON.parse(await readFile(path.join(context.repoRoot, "03_input/weekly", context.week, "_ai-generated.json"), "utf8")); }
-  catch { return true; }
-  if (priorAi.observation?.reason !== "snapshot-mismatch") return true;
-  let eligible = false;
-  try { eligible = await canResubmitUncertainAi({ repoRoot: context.repoRoot, week: context.week }); }
-  catch { return false; }
-  if (!eligible) return false;
-  if ((context.remainingDurationMs?.() ?? 0) < 5 * 60_000) {
-    context.event({ step: "ai-uncertain-resubmission", sourceId: "ai", outcome: "skipped-deadline", evidence: "剩余执行预算不足 5 分钟" });
+  const weekDir = path.join(context.repoRoot, "03_input/weekly", context.week);
+  const aiLock = await tryAcquireWeeklyAiLock(weekDir);
+  if (!aiLock) {
+    context.event({ step: "ai-uncertain-observation", sourceId: "ai", outcome: "skipped-active-ai-run", evidence: "03_input/weekly/<week>/.weekly-ai.lock" });
+    await context.save();
+    return false;
+  }
+  const lockedContext = { ...context, weeklyAiLockToken: aiLock.token };
+  try {
+    context.event({ step: "ai-uncertain-observation", sourceId: "ai", outcome: "started", evidence: "_ai-generated.json 原 runId 与会话地址" });
+    await context.save();
+    if (isReservedReplacement && ["generated", "confirmed"].includes(priorAi.status)) {
+      return await observeReservedAiReplacement(context, lockedContext, source, weekDir, priorAi);
+    }
+    const remainingMs = context.remainingDurationMs?.() ?? 810_000;
+    if (remainingMs <= 90_000) {
+      context.event({ step: "ai-uncertain-observation", sourceId: "ai", outcome: "skipped-insufficient-observation-budget",
+        remainingMs, evidence: "保留完整手动提示词；不启动超出共享截止时间的观察" });
+      await context.save();
+      return true;
+    }
+    const observeSeconds = Math.max(1, Math.min(60, Math.floor(remainingMs / 1000) - 30));
+    try { priorAi = JSON.parse(await readFile(path.join(context.repoRoot, "03_input/weekly", context.week, "_ai-generated.json"), "utf8")); }
+    catch { return false; }
+    if (priorAi.resubmissionCount === 1 && priorAi.resubmissionOf) {
+      return await observeReservedAiReplacement(context, lockedContext, source, weekDir, priorAi);
+    }
+    await context.runBatch([source], "observe-existing", { ...lockedContext, observeUncertainAi: true, observeWaitSeconds: observeSeconds });
+    if (context.state.sources.ai?.status === "succeeded") return true;
+    try { priorAi = JSON.parse(await readFile(path.join(context.repoRoot, "03_input/weekly", context.week, "_ai-generated.json"), "utf8")); }
+    catch { return true; }
+    let eligible = false;
+    try { eligible = await canResubmitUncertainAi({ repoRoot: context.repoRoot, week: context.week, nowMs: context.now() }); }
+    catch { return false; }
+    if (!eligible) {
+      const dispatchStartedAt = Date.parse(priorAi.dispatchStartedAt || priorAi.startedAt || "");
+      const resubmitAt = Number.isFinite(dispatchStartedAt) ? dispatchStartedAt + AI_UNCERTAIN_RESUBMIT_AFTER_MS : NaN;
+      const waitMs = resubmitAt - context.now();
+      if (Number.isFinite(resubmitAt) && waitMs > 0) {
+        let eligibleAtDeadline = false;
+        try {
+          // This hypothetical-time check proves every non-time gate before we wait.
+          eligibleAtDeadline = await canResubmitUncertainAi({ repoRoot: context.repoRoot, week: context.week, nowMs: resubmitAt });
+        } catch { return false; }
+        if (!eligibleAtDeadline) {
+          context.event({ step: "ai-uncertain-resubmission", sourceId: "ai", outcome: "blocked-by-non-time-gate",
+            reasonCode: "resubmission-eligibility-failed-at-deadline", evidence: "20分钟假定边界不满足会话、身份、prompt或产物门禁；保留手动提示词" });
+          await context.save();
+          return true;
+        }
+        const requiredBudgetMs = waitMs + AI_WAIT_REACQUIRE_MIN_BUDGET_MS;
+        if ((context.remainingDurationMs?.() ?? 0) < requiredBudgetMs) {
+          context.event({ step: "ai-uncertain-resubmission", sourceId: "ai", outcome: "skipped-deadline-budget",
+            waitMs, requiredBudgetMs, evidence: "剩余预算不足以等到20分钟门限、复看原run并完成单次重开观察；保留完整手动提示词" });
+          await context.save();
+          return true;
+        }
+        const originalRunId = priorAi.runId;
+        context.event({ step: "ai-uncertain-resubmission", sourceId: "ai", outcome: "waiting-for-20m-deadline",
+          waitMs, deadlineAt: new Date(resubmitAt).toISOString(), requiredBudgetMs,
+          evidence: "身份、会话、prompt指纹及可重开原因均已通过；等待期间释放周记状态锁和Browser队列，保留周记AI锁" });
+        await context.save();
+        const reacquireStateLock = await context.releaseStateLockForAiWait?.();
+        await context.sleep(waitMs);
+        if (reacquireStateLock) {
+          if (!await reacquireStateLock()) return true;
+          lockedContext.state = context.state;
+        }
+        if (context.now() < resubmitAt) {
+          context.event({ step: "ai-uncertain-resubmission", sourceId: "ai", outcome: "deadline-wait-incomplete",
+            waitMs: Math.max(0, resubmitAt - context.now()), evidence: "单次定时等待提前返回；不重开" });
+          await context.save();
+          return true;
+        }
+        let atDeadlineSidecar;
+        try { atDeadlineSidecar = JSON.parse(await readFile(path.join(weekDir, "_ai-generated.json"), "utf8")); }
+        catch { return true; }
+        if (atDeadlineSidecar.targetWeek !== context.week || atDeadlineSidecar.runId !== originalRunId
+          || atDeadlineSidecar.localAttemptId !== originalRunId) {
+          context.event({ step: "ai-uncertain-resubmission", sourceId: "ai", outcome: "stopped-original-identity-changed",
+            evidence: "等待后原run标识或目标周发生变化；不观察不明任务、不重开" });
+          await context.save();
+          return true;
+        }
+        context.event({ step: "ai-uncertain-resubmission", sourceId: "ai", outcome: "deadline-reobserving-original",
+          evidence: "到达派发后20分钟边界，重新观察绑定的原run" });
+        await context.save();
+        await context.runBatch([source], "observe-original-at-20m-deadline", {
+          ...lockedContext, observeUncertainAi: true, observeWaitSeconds: 60
+        });
+        if (context.state.sources.ai?.status === "succeeded") {
+          context.event({ step: "ai-uncertain-resubmission", sourceId: "ai", outcome: "late-original-result",
+            evidence: "原run在20分钟门限复看时取得并校验为可用结果" });
+          await context.save();
+          return true;
+        }
+        try { priorAi = JSON.parse(await readFile(path.join(weekDir, "_ai-generated.json"), "utf8")); }
+        catch { return true; }
+        try { eligible = await canResubmitUncertainAi({ repoRoot: context.repoRoot, week: context.week, nowMs: context.now() }); }
+        catch { return false; }
+        if (!eligible) {
+          context.event({ step: "ai-uncertain-resubmission", sourceId: "ai", outcome: "stopped-after-deadline-recheck",
+            evidence: "边界复看后重新读取sidecar、正式ai.md及结果；身份、产物或安全门槛不再满足" });
+          await context.save();
+          return true;
+        }
+      }
+    }
+    if (!eligible) return false;
+    // Reserve the bridge dispatch budget, the full late-result window and finalization margin.
+    if ((context.remainingDurationMs?.() ?? 0) < AI_RESUBMISSION_REQUIRED_BUDGET_MS) {
+      context.event({ step: "ai-uncertain-resubmission", sourceId: "ai", outcome: "skipped-deadline", evidence: "剩余执行预算不足以派发并完整观察第二个20分钟窗口" });
+      return true;
+    }
+    context.event({ step: "ai-uncertain-resubmission", sourceId: "ai", outcome: "one-shot-resubmission-eligible", evidence: "原 run 已观察满20分钟、身份与 prompt 指纹匹配" });
+    await context.save();
+    await context.runBatch([source], "uncertain-resubmission", { ...lockedContext, resubmitUncertainAi: true, automaticResubmitAi: true });
+    let replacement;
+    try { replacement = JSON.parse(await readFile(path.join(context.repoRoot, "03_input/weekly", context.week, "_ai-generated.json"), "utf8")); }
+    catch {
+      context.event({ step: "ai-resubmission-observation", sourceId: "ai", outcome: "unknown-dispatch-receipt", evidence: "_ai-generated.json" });
+      await context.save();
+      return true;
+    }
+    const replacementId = replacement.localAttemptId || replacement.runId;
+    const replacementStartedAt = Date.parse(replacement.dispatchStartedAt || "");
+    if (replacement.resubmissionCount !== 1 || !replacement.resubmissionOf || typeof replacementId !== "string"
+      || !Number.isFinite(replacementStartedAt)) {
+      context.event({ step: "ai-resubmission-observation", sourceId: "ai", outcome: "unknown-dispatch-receipt", evidence: "_ai-generated.json" });
+      await context.save();
+      return true;
+    }
+    context.event({ step: "ai-uncertain-resubmission", sourceId: "ai", outcome: "one-shot-reserved-dispatched",
+      runId: replacementId, parentAttemptId: replacement.resubmissionOf.runId || null,
+      reservedAt: replacement.resubmissionReservedAt || null, dispatchStartedAt: replacement.dispatchStartedAt,
+      dispatchStatus: ["dispatching", "needs_review", "generated", "confirmed", "failed"].includes(replacement.status) ? replacement.status : "unknown",
+      evidence: "_ai-generated.json 的原子 resubmissionCount 与父run读回" });
+    await context.save();
+    return await observeReservedAiReplacement(context, lockedContext, source, weekDir, replacement);
+  } finally {
+    await aiLock.release();
+  }
+}
+
+async function observeReservedAiReplacement(context, lockedContext, source, weekDir, receipt) {
+  const replacementId = receipt.localAttemptId || receipt.runId;
+  const replacementStartedAt = Date.parse(receipt.dispatchStartedAt || "");
+  if (receipt.targetWeek !== context.week || receipt.resubmissionCount !== 1 || !receipt.resubmissionOf
+    || typeof replacementId !== "string" || !Number.isFinite(replacementStartedAt)) {
+    context.event({ step: "ai-resubmission-observation", sourceId: "ai", outcome: "unknown-dispatch-receipt", evidence: "_ai-generated.json" });
+    await context.save();
     return true;
   }
-  context.event({ step: "ai-uncertain-resubmission", sourceId: "ai", outcome: "one-shot-resubmission-eligible", evidence: "观察原 run 后的 snapshot-mismatch 证据与当前 prompt 指纹" });
+  if (receipt.status === "generated") {
+    let promotion;
+    try {
+      promotion = await promoteAiReview({ repoRoot: context.repoRoot, week: context.week, confirm: true,
+        weeklyAiLockToken: lockedContext.weeklyAiLockToken });
+    } catch (error) {
+      const entry = context.state.sources.ai;
+      entry.status = "needs_review";
+      entry.lastErrorClass = "ai-submission-state-uncertain";
+      entry.lastErrorSignal = safeFailureSignal(error, entry.lastErrorClass);
+      context.event({ step: "ai-resubmission-observation", sourceId: "ai", outcome: "replacement-generated-promotion-failed",
+        runId: replacementId, errorClass: entry.lastErrorClass, errorSignal: entry.lastErrorSignal,
+        rootCauseStatus: "unconfirmed", evidence: "generated结果保留；正式ai.md晋升失败，不重复生成" });
+      await context.save();
+      return true;
+    }
+    if (promotion.status === "confirmed") {
+      const entry = context.state.sources.ai;
+      entry.status = "succeeded";
+      entry.lastSuccessAt ||= new Date(context.now()).toISOString();
+      entry.lastErrorClass = null;
+      entry.lastErrorSignal = null;
+      entry.nextRetryAt = null;
+      entry.problemRunId = null;
+    } else {
+      const entry = context.state.sources.ai;
+      entry.status = "needs_review";
+      entry.lastErrorClass = promotion.reason === "formal-ai-md-has-human-content"
+        ? "manual-review-required" : "ai-submission-state-uncertain";
+      entry.lastErrorSignal = safeFailureSignal(promotion.reason || "generated-promotion-unconfirmed", entry.lastErrorClass);
+      entry.nextRetryAt = null;
+    }
+    context.event({ step: "ai-resubmission-observation", sourceId: "ai",
+      outcome: promotion.status === "confirmed" ? "replacement-generated-promoted" : "replacement-generated-promotion-needs-review",
+      runId: replacementId, errorClass: context.state.sources.ai.lastErrorClass || null,
+      errorSignal: context.state.sources.ai.lastErrorSignal || null,
+      evidence: promotion.status === "confirmed" ? "generated正文、ai.md和confirmed侧车摘要读回一致；不等待或重复观察"
+        : "generated结果保留；正式ai.md晋升需要人工核验" });
+    await context.save();
+    return true;
+  }
+  if (receipt.status === "confirmed") {
+    const readbackIssue = await confirmedReplacementReadbackIssue(weekDir, receipt);
+    if (!readbackIssue) {
+      const entry = context.state.sources.ai;
+      entry.status = "succeeded";
+      entry.lastSuccessAt ||= new Date(context.now()).toISOString();
+      entry.lastErrorClass = null;
+      entry.lastErrorSignal = null;
+      entry.nextRetryAt = null;
+      entry.problemRunId = null;
+      context.event({ step: "ai-resubmission-observation", sourceId: "ai", outcome: "replacement-delivery-readback-verified",
+        runId: replacementId, evidence: "目标周ai.md摘要与confirmed侧车读回一致" });
+      await context.save();
+      return true;
+    }
+    const entry = context.state.sources.ai;
+    entry.status = "needs_review";
+    entry.lastErrorClass = "ai-submission-state-uncertain";
+    entry.lastErrorSignal = readbackIssue;
+    entry.nextRetryAt = null;
+    context.event({ step: "ai-resubmission-observation", sourceId: "ai", outcome: "replacement-delivery-readback-failed",
+      runId: replacementId, reasonCode: readbackIssue, evidence: "不等待已确认但缺失/改变的正式ai.md；保留完整手动提示词" });
+    await context.save();
+    return true;
+  }
+  const deadline = replacementStartedAt + AI_REPLACEMENT_OBSERVATION_MS;
+  if (AI_TERMINAL_OBSERVATION_REASONS.has(receipt.reason) || AI_TERMINAL_OBSERVATION_REASONS.has(receipt.observation?.reason)) {
+    context.event({ step: "ai-resubmission-observation", sourceId: "ai", outcome: "stopped-terminal-reason",
+      reasonCode: AI_TERMINAL_OBSERVATION_REASONS.has(receipt.reason) ? receipt.reason : receipt.observation.reason,
+      elapsedMs: Math.max(0, context.now() - replacementStartedAt),
+      evidence: "已知身份、权限、提交或人工内容门禁失败；保留完整手动提示词" });
+    await context.save();
+    return true;
+  }
+  const waitMs = Math.max(0, deadline - context.now());
+  const requiredBudgetMs = waitMs + AI_REPLACEMENT_FINALIZATION_BUDGET_MS;
+  if ((context.remainingDurationMs?.() ?? 0) < requiredBudgetMs) {
+    context.event({ step: "ai-resubmission-observation", sourceId: "ai", outcome: "skipped-replacement-window-budget",
+      waitMs, requiredBudgetMs, evidence: "剩余预算不足以等待replacement边界并完成一次最终观察；保留完整手动提示词" });
+    await context.save();
+    return true;
+  }
+  if (waitMs > 0) {
+    context.event({ step: "ai-resubmission-observation", sourceId: "ai", outcome: "waiting-for-replacement-20m-deadline",
+      waitMs, deadlineAt: new Date(deadline).toISOString(),
+      evidence: "保留周记AI锁；释放共享周记状态锁与Browser队列，避免阻塞人工Flomo和阶段记录" });
+    await context.save();
+    const reacquireStateLock = await context.releaseStateLockForAiWait?.("replacement");
+    await context.sleep(waitMs);
+    if (reacquireStateLock) {
+      if (!await reacquireStateLock()) return true;
+      lockedContext.state = context.state;
+    }
+    if (context.now() < deadline) {
+      context.event({ step: "ai-resubmission-observation", sourceId: "ai", outcome: "replacement-deadline-wait-incomplete",
+        waitMs: Math.max(0, deadline - context.now()), evidence: "单次定时等待提前返回；不重复提交" });
+      await context.save();
+      return true;
+    }
+  }
+  const current = await readFile(path.join(weekDir, "_ai-generated.json"), "utf8")
+    .then((value) => JSON.parse(value)).catch(() => null);
+  if (!current || current.targetWeek !== context.week
+    || (current.localAttemptId || current.runId) !== replacementId
+    || current.resubmissionCount !== 1 || current.resubmissionOf?.runId !== receipt.resubmissionOf.runId) {
+    context.event({ step: "ai-resubmission-observation", sourceId: "ai", outcome: "stopped-replacement-identity-changed",
+      evidence: "replacement收据、目标周或父run发生变化；保留完整手动提示词" });
+    await context.save();
+    return true;
+  }
+  if (AI_TERMINAL_OBSERVATION_REASONS.has(current.reason) || AI_TERMINAL_OBSERVATION_REASONS.has(current.observation?.reason)) {
+    context.event({ step: "ai-resubmission-observation", sourceId: "ai", outcome: "stopped-terminal-reason",
+      reasonCode: AI_TERMINAL_OBSERVATION_REASONS.has(current.reason) ? current.reason : current.observation.reason,
+      elapsedMs: Math.max(0, context.now() - replacementStartedAt),
+      evidence: "已知身份、权限、提交或人工内容门禁失败；保留完整手动提示词" });
+    await context.save();
+    return true;
+  }
+  context.event({ step: "ai-resubmission-observation", sourceId: "ai", outcome: "observing-replacement-at-20m-deadline",
+    runId: replacementId, elapsedMs: Math.max(0, context.now() - replacementStartedAt),
+    evidence: "在replacement派发后20分钟边界执行一次最终观察" });
   await context.save();
-  await runBatch([source], "uncertain-resubmission", { ...context, resubmitUncertainAi: true });
+  await context.runBatch([source], "observe-resubmitted-run", {
+    ...lockedContext, observeUncertainAi: true, observeWaitSeconds: 60
+  });
+  if (context.state.sources.ai?.status !== "succeeded") {
+    context.event({ step: "ai-resubmission-observation", sourceId: "ai", outcome: "window-ended",
+      elapsedMs: Math.max(0, context.now() - replacementStartedAt),
+      evidence: "20分钟边界观察未取得可晋升结果；保留完整手动提示词" });
+    await context.save();
+  }
   return true;
+}
+
+async function confirmedReplacementReadbackIssue(weekDir, receipt) {
+  let raw;
+  try { raw = await readFile(path.join(weekDir, "ai.md"), "utf8"); }
+  catch (error) { return error.code === "ENOENT" ? "confirmed-ai-md-missing" : "confirmed-ai-md-changed"; }
+  const normalized = normalizeAiReviewText(raw);
+  if (!validateAiReview(normalized).valid) return "confirmed-ai-md-changed";
+  if (receipt.manualConfirmation?.sha256) {
+    return sha256(raw) === receipt.manualConfirmation.sha256 ? null : "confirmed-ai-md-changed";
+  }
+  const actualHash = sha256(normalized);
+  if (receipt.outputSha256 !== actualHash
+    || (receipt.readbackSha256 && receipt.readbackSha256 !== actualHash)) return "confirmed-ai-md-changed";
+  return null;
 }
 
 async function runOneSource(source, kind, context) {
@@ -606,6 +1020,23 @@ async function runOneSource(source, kind, context) {
     context.event({ step: "source-collection", sourceId: source.id, attemptKind: kind, outcome: "skipped-deadline", evidence: STATE_FILE });
     await context.save();
     return;
+  }
+  let weeklyAiLock = null;
+  if (source.id === "ai") {
+    if (context.weeklyAiLockToken) {
+      if (!await validateWeeklyAiLockToken(path.join(context.repoRoot, "03_input/weekly", context.week), context.weeklyAiLockToken)) {
+        context.event({ step: "source-collection", sourceId: source.id, attemptKind: kind, outcome: "skipped-invalid-ai-lock", evidence: "03_input/weekly/<week>/.weekly-ai.lock" });
+        await context.save();
+        return;
+      }
+    } else {
+      weeklyAiLock = await tryAcquireWeeklyAiLock(path.join(context.repoRoot, "03_input/weekly", context.week));
+      if (!weeklyAiLock) {
+        context.event({ step: "source-collection", sourceId: source.id, attemptKind: kind, outcome: "skipped-active-ai-run", evidence: "03_input/weekly/<week>/.weekly-ai.lock" });
+        await context.save();
+        return;
+      }
+    }
   }
   const attempt = entry.attempts + 1;
   const began = context.now();
@@ -620,7 +1051,8 @@ async function runOneSource(source, kind, context) {
   }
   if (kind === "rescue") entry.rescueUsed = true;
   context.event({ step: "source-collection", sourceId: source.id, attempt, attemptKind: kind, outcome: "started", evidence: STATE_FILE });
-  await context.save();
+  try { await context.save(); }
+  catch (error) { await weeklyAiLock?.release(); throw error; }
 
   let outcome;
   let browserQueueLock = null;
@@ -636,8 +1068,10 @@ async function runOneSource(source, kind, context) {
       recoveryActionCode: context.recoveryActionCode,
       expectedSourceVersion: context.expectedSourceVersion,
       attemptToken,
-      resubmitUncertainAi: context.resubmitUncertainAi && source.id === "ai",
-      observeUncertainAi: context.observeUncertainAi && source.id === "ai",
+      resubmitUncertainAi: Boolean(context.resubmitUncertainAi && source.id === "ai"),
+      automaticResubmit: Boolean(context.automaticResubmitAi && source.id === "ai"),
+      weeklyAiLockToken: source.id === "ai" ? (context.weeklyAiLockToken || weeklyAiLock?.token) : undefined,
+      observeUncertainAi: Boolean(context.observeUncertainAi && source.id === "ai"),
       observeWaitSeconds: context.observeWaitSeconds,
       timeoutMs: context.remainingDurationMs?.(),
       allowFlomoReviewImport: context.enableFlomoReviewImport && source.id === "wisdom",
@@ -706,7 +1140,9 @@ async function runOneSource(source, kind, context) {
   } finally {
     await browserQueueLock?.release();
   }
-  const classified = classifyOutcome(source.id, outcome);
+  let classified;
+  try {
+  classified = classifyOutcome(source.id, outcome);
   const durationMs = Math.max(0, context.now() - began);
   const previousErrorClass = entry.lastErrorClass;
   const errorSignal = ["failed", "needs_review", "unavailable"].includes(classified.status)
@@ -771,11 +1207,16 @@ async function runOneSource(source, kind, context) {
     phase: outcome?.diagnostics?.phase
   });
   await context.save();
+  } finally {
+    await weeklyAiLock?.release();
+  }
   if (classified.status === "succeeded") context.prepareAfterSuccess?.(source);
 }
 
 export async function runConfiguredSource(source, { week, repoRoot, onDependencyResult, attemptToken,
   resubmitUncertainAi = false,
+  automaticResubmit = false,
+  weeklyAiLockToken,
   observeUncertainAi = false,
   observeWaitSeconds = 720,
   timeoutMs,
@@ -796,7 +1237,9 @@ export async function runConfiguredSource(source, { week, repoRoot, onDependency
     script = path.resolve(repoRoot, tokens[1]);
     args = [...tokens.slice(2), "--week", week,
       ...(source.id === "ai" && observeUncertainAi ? ["--observe-uncertain", "--observe-seconds", String(observeWaitSeconds)] : []),
-      ...(source.id === "ai" && resubmitUncertainAi ? ["--resubmit-uncertain", "--confirm"] : [])];
+      ...(source.id === "ai" && resubmitUncertainAi ? ["--resubmit-uncertain", "--confirm"] : []),
+      ...(source.id === "ai" && automaticResubmit ? ["--automatic-resubmit"] : []),
+      ...(source.id === "ai" && typeof weeklyAiLockToken === "string" ? ["--weekly-ai-lock-token", weeklyAiLockToken] : [])];
   }
   try {
     const sourceTimeoutMs = source.id === "ai" && observeUncertainAi ? (observeWaitSeconds + 90) * 1000 : source.id === "ai" ? 5 * 60_000 : source.id === "flomo" ? 32 * 60_000 : 12 * 60_000;
@@ -879,7 +1322,7 @@ export async function readCurrentSourceOutcome(source, week, repoRoot = defaultR
         error: sidecar.reason || sidecar.errorClass || "",
         code: sidecar.code,
         diagnostics: sidecar.diagnostics,
-        updatedAt: sidecar.confirmedAt || sidecar.completedAt || sidecar.startedAt
+        updatedAt: sidecar.observation?.observedAt || sidecar.confirmedAt || sidecar.completedAt || sidecar.startedAt
       };
     } catch (error) {
       if (error.code === "ENOENT") return null;

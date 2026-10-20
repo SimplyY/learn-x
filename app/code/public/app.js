@@ -112,6 +112,15 @@ let periodicInsightRequestId = 0;
 let selectedContextStatsRequestId = 0;
 let contextGenerationSequence = 0;
 let chatPackGenerationRequestId = 0;
+let chatPackGenerationController = null;
+let chatPackGenerationBusy = false;
+let chatPackGenerationMonitor = null;
+let chatPackCachePollTimer = null;
+let chatPackCacheStatusRequestId = 0;
+let chatPackCacheSnapshot = null;
+let lastChatPackCacheUse = null;
+let chatPackCopyRetryText = "";
+let clipboardWriteInProgress = false;
 const contextFileContentPromises = new Map();
 const periodicInsightContextApi = window.LEARN_X_PERIODIC_INSIGHT_CONTEXT_API || "";
 
@@ -166,6 +175,7 @@ async function boot() {
   renderTopNav();
   renderEditorAvailability();
   bindEvents();
+  initializeChatPackCacheUI();
   applyChatPackSelection("已加载 Chat Pack 类型体系。");
   setMode(state.mode);
   window.addEventListener("hashchange", applyModeFromRoute);
@@ -175,6 +185,159 @@ async function boot() {
     if (first) await openFile(first.path);
   }
   scheduleWarmup();
+}
+
+function initializeChatPackCacheUI() {
+  const local = state.runtime?.target === "local";
+  if (els.chatPackCachePanel) els.chatPackCachePanel.hidden = !local;
+  if (!local) return;
+  void refreshChatPackCacheStatus();
+  if (chatPackCachePollTimer === null) {
+    chatPackCachePollTimer = window.setInterval(() => { void refreshChatPackCacheStatus(); }, 5_000);
+  }
+}
+
+async function refreshChatPackCacheStatus({ signal } = {}) {
+  if (state.runtime?.target !== "local" || !els.chatPackCachePanel) return null;
+  const requestId = ++chatPackCacheStatusRequestId;
+  try {
+    const response = await fetch("api/chatpack/cache/status", { cache: "no-store", ...(signal ? { signal } : {}) });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    if (requestId !== chatPackCacheStatusRequestId) return null;
+    chatPackCacheSnapshot = payload;
+    renderChatPackCacheStatus();
+    return payload;
+  } catch (error) {
+    if (requestId !== chatPackCacheStatusRequestId) return null;
+    if (signal?.aborted) return null;
+    chatPackCacheSnapshot = null;
+    if (els.chatPackCacheSummary) els.chatPackCacheSummary.textContent = `缓存服务不可用：${error.message || "连接失败"}`;
+    if (els.chatPackCacheRefreshStatus) {
+      els.chatPackCacheRefreshStatus.dataset.state = "error";
+      els.chatPackCacheRefreshStatus.textContent = "缓存状态无法读取；请检查本地服务后重试。";
+    }
+    if (els.chatPackCacheResourceList) els.chatPackCacheResourceList.replaceChildren();
+    return null;
+  }
+}
+
+function renderChatPackCacheStatus() {
+  const payload = chatPackCacheSnapshot;
+  if (!payload || !els.chatPackCacheSummary) return;
+  const available = payload.summary?.available || 0;
+  const total = payload.summary?.total || 0;
+  const used = lastChatPackCacheUse;
+  if (used?.length) {
+    const oldest = Math.max(...used.map((item) => item.age_ms || 0));
+    const remaining = Math.max(0, 14 * 24 * 60 * 60 * 1000 - oldest);
+    els.chatPackCacheSummary.textContent = `本次使用：${formatAge(oldest)}拉取的缓存 · 有效期剩余 ${formatDuration(remaining)}`;
+  } else {
+    els.chatPackCacheSummary.textContent = `缓存可用 ${available}/${total} 项 · 14 天有效`;
+  }
+  const refresh = payload.refresh || {};
+  const refreshLabels = {
+    running: `正在更新 ${refresh.completed || 0}/${refresh.total || total}${refresh.current ? ` · ${cacheResourceLabel(refresh.current)}` : ""}`,
+    cooldown: `冷却等待 ${formatWait(refresh.next_allowed_at)}`,
+    succeeded: `更新成功 ${refresh.succeeded || total}/${refresh.total || total}`,
+    partial: `部分失败 ${refresh.failed || 0}/${refresh.total || total}`,
+    failed: `更新失败${refresh.error ? `：${refresh.error}` : ""}`,
+    idle: available ? "待更新；生成时将触发后台全量更新。" : "尚未完成首次拉取。"
+  };
+  const refreshLabel = refreshLabels[refresh.state] || refreshLabels.idle;
+  const storageSuffix = [
+    refresh.storage_error ? `持久保存失败：${refresh.storage_error}` : "",
+    refresh.file_corrupt ? `缓存文件校验失败：${refresh.file_error || "文件结构无效"}` : ""
+  ].filter(Boolean).join(" · ");
+  if (els.chatPackCacheRefreshStatus) {
+    els.chatPackCacheRefreshStatus.dataset.state = refresh.state === "failed" || (refresh.state === "partial" && refresh.failed) || storageSuffix ? "error" : "";
+    els.chatPackCacheRefreshStatus.textContent = `后台更新：${refreshLabel}${storageSuffix ? ` · ${storageSuffix}` : ""}`;
+  }
+  if (els.chatPackCacheResourceList) {
+    const nodes = (payload.resources || []).map((resource) => {
+      const item = document.createElement("li");
+      item.dataset.state = resource.cache_status === "available" ? "available" : "error";
+      const age = resource.fetched_at ? `上次成功 ${formatDateTime(resource.fetched_at)}（${formatAge(resource.age_ms || 0)}前） · revision ${resource.revision}` : "未成功拉取";
+      const cacheState = {
+        not_fetched: "未拉取",
+        available: "可用",
+        expired: "已过期",
+        integrity_invalid: "校验失败",
+        source_changed: "来源映射已变化"
+      }[resource.cache_status] || resource.cache_status;
+      const error = resource.refresh_error ? ` · 更新失败：${resource.refresh_error}` : "";
+      item.textContent = `${cacheResourceLabel(resource.key)}：${cacheState} · ${age}${error}`;
+      return item;
+    });
+    els.chatPackCacheResourceList.replaceChildren(...nodes);
+  }
+}
+
+function cacheResourceLabel(key) {
+  if (key === "core:dao") return "Core《道》";
+  if (key === "core:fa") return "Core《法》";
+  return key.startsWith("prompt:") ? `Prompt ${key.slice("prompt:".length)}` : key;
+}
+
+function formatAge(milliseconds) {
+  const minutes = Math.max(0, Math.floor(milliseconds / 60_000));
+  if (minutes < 60) return `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时`;
+  const days = Math.floor(hours / 24);
+  return `${days} 天`;
+}
+
+function formatElapsed(milliseconds) {
+  const seconds = Math.max(0, milliseconds) / 1000;
+  return `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)} 秒`;
+}
+
+function formatDuration(milliseconds) {
+  const days = Math.floor(milliseconds / (24 * 60 * 60 * 1000));
+  if (days) return `${days} 天`;
+  const hours = Math.floor(milliseconds / (60 * 60 * 1000));
+  return `${hours} 小时`;
+}
+
+function formatWait(value) {
+  const remaining = Math.max(0, Date.parse(value) - Date.now());
+  if (!Number.isFinite(remaining)) return "时间未知";
+  const seconds = Math.ceil(remaining / 1000);
+  return seconds >= 60 ? `${Math.ceil(seconds / 60)} 分钟` : `${seconds} 秒`;
+}
+
+function formatDateTime(value) {
+  if (!value) return "未知";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "未知" : new Intl.DateTimeFormat("zh-CN", { dateStyle: "short", timeStyle: "short" }).format(date);
+}
+
+async function refreshChatPackCacheManually() {
+  if (state.runtime?.target !== "local") return;
+  els.refreshChatPackCache.disabled = true;
+  try {
+    const response = await fetch("api/chatpack/cache/refresh", {
+      method: "POST", cache: "no-store", headers: { "content-type": "application/json" }, body: JSON.stringify({})
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    await refreshChatPackCacheStatus();
+  } catch (error) {
+    if (els.chatPackCacheRefreshStatus) {
+      els.chatPackCacheRefreshStatus.dataset.state = "error";
+      els.chatPackCacheRefreshStatus.textContent = `手动刷新失败：${error.message || "未知错误"}`;
+    }
+  } finally {
+    els.refreshChatPackCache.disabled = false;
+  }
+}
+
+function setChatPackOperationStatus(message, stateName = "") {
+  if (!els.chatPackOperationStatus) return;
+  els.chatPackOperationStatus.textContent = message;
+  if (stateName) els.chatPackOperationStatus.dataset.state = stateName;
+  else delete els.chatPackOperationStatus.dataset.state;
 }
 
 async function loadGraph() {
@@ -229,14 +392,14 @@ async function refreshLocalUsage() {
   }
 }
 
-async function getJson(url) {
+async function getJson(url, { signal } = {}) {
   const parsedUrl = new URL(url, window.location.href);
   if (parsedUrl.pathname.endsWith("/api/file")) {
     const filePath = parsedUrl.searchParams.get("path");
     const file = state.contextFileMap.get(filePath) || state.files.find((item) => item.path === filePath);
     if (!file) throw new Error(`File not found in static graph: ${filePath}`);
     if (file.external) {
-      const response = await fetch(parsedUrl, file.live ? { cache: "no-store" } : undefined);
+      const response = await fetch(parsedUrl, { ...(file.live ? { cache: "no-store" } : {}), ...(signal ? { signal } : {}) });
       if (!response.ok) throw new Error(`Unable to read Documents context: ${response.status}`);
       return response.json();
     }
@@ -376,6 +539,9 @@ function bindEvents() {
   els.applyCustomContext.addEventListener("click", applyCustomContextSelections);
 
   els.generateChatPack.addEventListener("click", generateChatPack);
+  els.refreshChatPackCache?.addEventListener("click", refreshChatPackCacheManually);
+  els.retryCopyChatPack?.addEventListener("click", retryCopyChatPack);
+  els.reloadChatPackAfterClipboardHang?.addEventListener("click", () => window.location.reload());
   els.copyChatPackUsage.addEventListener("click", copyChatPackUsage);
   els.resetPrompt.addEventListener("click", resetPrompt);
   els.editPromptCategories.addEventListener("click", () => openPromptEditor("category"));
@@ -1500,10 +1666,10 @@ function strategyTooltip(strategy, scope = "file") {
   return `${strategyLabel(strategy)}；点击切换为下一个状态`;
 }
 
-async function generateContext() {
+async function generateContext({ coreAssets = {}, signal, isCurrent = () => true } = {}) {
   if (activeDialogueType()?.id === "insight") {
     const payload = await loadPeriodicInsightContext();
-    if (!payload?.content) return false;
+    if (!isCurrent() || !payload?.content) return false;
     setProgress(100);
     return true;
   }
@@ -1522,8 +1688,12 @@ async function generateContext() {
 
   try {
     setProgress(48);
-    const filesWithContent = await loadContextContents(selectedFiles);
-    if (generationId !== contextGenerationSequence) return false;
+    const filesWithContent = await loadContextContents(selectedFiles, {
+      coreAssets,
+      signal,
+      requireCachedCore: state.runtime?.target === "local"
+    });
+    if (generationId !== contextGenerationSequence || !isCurrent()) return false;
     setProgress(82);
     const weighted = buildWeightedContext(filesWithContent);
     state.context = weighted;
@@ -1532,7 +1702,7 @@ async function generateContext() {
     renderChatPackPreview();
     return true;
   } catch (error) {
-    if (generationId !== contextGenerationSequence) return false;
+    if (generationId !== contextGenerationSequence || !isCurrent()) return false;
     state.context = "";
     setProgress(0);
     els.learningStatus.textContent = `上下文读取失败，本轮未生成：${error.message || "未知错误"}`;
@@ -1563,7 +1733,8 @@ function refreshSelectedContextStats() {
   const hasLiveFiles = measurableFiles.length !== fileCount;
   const missing = measurableFiles.filter((file) => contextFileCharCount(file) === null);
   const totalChars = missing.length ? null : measurableFiles.reduce((total, file) => total + contextFileCharCount(file), 0);
-  const status = missing.length ? "正在统计字数" : hasLiveFiles ? "Core 正文在生成时实时读取" : "";
+  const coreStatus = state.runtime.target === "local" ? "Core 正文使用 Chat Pack 缓存" : "Core 正文在生成时实时读取";
+  const status = missing.length ? "正在统计字数" : hasLiveFiles ? coreStatus : "";
   renderSelectedContextStats(fileCount, totalChars, status);
 
   if (missing.length) {
@@ -1604,90 +1775,398 @@ async function resetPrompt() {
 }
 
 async function generateChatPack() {
+  if (chatPackGenerationBusy) return;
+  if (clipboardWriteInProgress) {
+    setChatPackOperationStatus("已有剪贴板写入仍在处理；完成后再生成，避免旧结果晚到覆盖。", "error");
+    return;
+  }
   const generationRequestId = ++chatPackGenerationRequestId;
-  els.learningStatus.textContent = "正在检查 Prompt 缓存…";
-
-  let livePromptAssets;
-  let promptSelection;
-  let promptIds = [];
-  let usedPromptCache = false;
-  let latestRefreshState = "none";
-  let latestRefreshError = "";
-  let copyFinished = false;
-  let copied = false;
-  let usageWarning = "";
-  const renderGenerationStatus = () => {
-    if (!copyFinished || generationRequestId !== chatPackGenerationRequestId ||
-        !sameChatPackPromptSelection(promptSelection)) return;
-    const delivery = copied ? "Chat Pack 已生成并复制。" : "Chat Pack 已生成。（浏览器未允许自动复制）";
-    let freshness = "";
-    if (promptIds.length) {
-      const promptStatus = usedPromptCache && latestRefreshState !== "updated" ? "缓存状态" : "已更新状态";
-      freshness = `（Prompt：${promptStatus}`;
-      if (usedPromptCache && latestRefreshState === "pending") freshness += "；正在后台拉取最新版本";
-      if (usedPromptCache && latestRefreshState === "updated") freshness += "（最新 Prompt 已拉取并更新缓存；本次剪贴板仍是缓存版）";
-      if (usedPromptCache && latestRefreshState === "failed") freshness += `（最新拉取失败，保留缓存：${latestRefreshError}）`;
-      freshness += "）";
-    }
-    els.learningStatus.textContent = `${delivery}${freshness}${usageWarning ? ` ${usageWarning}` : ""}`;
+  chatPackGenerationBusy = true;
+  els.generateChatPack.disabled = true;
+  const originalButtonText = els.generateChatPack.textContent;
+  els.generateChatPack.textContent = "准备 Chat Pack…";
+  els.retryCopyChatPack.hidden = true;
+  els.reloadChatPackAfterClipboardHang.hidden = true;
+  chatPackCopyRetryText = "";
+  const startedAt = Date.now();
+  let stageMessage = "准备中：正在载入提示词配置…";
+  let stageState = "busy";
+  let lastDurationPaint = 0;
+  const setStage = (message, stateName = "busy") => {
+    stageMessage = message;
+    stageState = stateName;
+    lastDurationPaint = Date.now();
+    setChatPackOperationStatus(`${message} · ${formatElapsed(Date.now() - startedAt)}`, stateName);
   };
-
+  const controller = new AbortController();
+  chatPackGenerationController = controller;
+  let timeoutReached = false;
+  let cancelledForChange = false;
+  const deadlineTimer = window.setTimeout(() => {
+    timeoutReached = true;
+    controller.abort("generation-timeout");
+  }, 90_000);
+  let initialSelection;
+  let initialPrompt;
+  let initialPromptWasAuto;
+  let generationSnapshot = null;
+  let cacheRead = null;
+  let generatedText = "";
+  let generationCopyOutcome = null;
+  let restoreSelectionControls = null;
+  const isCurrent = () => {
+    try {
+      return generationRequestId === chatPackGenerationRequestId && Boolean(generationSnapshot) &&
+        captureChatPackGenerationSnapshot() === generationSnapshot;
+    } catch { return false; }
+  };
+  const ensureCurrent = () => {
+    if (generationRequestId !== chatPackGenerationRequestId) throw new Error("本次生成已取消。");
+    if (generationSnapshot && !isCurrent()) {
+      cancelledForChange = true;
+      controller.abort("selection-changed");
+      throw new Error("生成期间的问题、Prompt、周期或 Context 选择发生变化，本次已取消。");
+    }
+    if (timeoutReached) throw new Error("生成等待超过 90 秒，本次已超时。后台缓存更新仍会继续。");
+  };
   try {
-    await ensurePromptProtocols();
-    promptSelection = captureChatPackPromptSelection();
-    promptIds = selectedManagedPromptIds();
-    if (promptIds.length) {
-      try {
-        livePromptAssets = await fetchSelectedLivePromptAssets(promptIds, { cacheOnly: true });
-      } catch {
-        livePromptAssets = null;
+    initialSelection = captureChatPackGenerationSelection();
+    initialPrompt = els.metaPrompt.value;
+    initialPromptWasAuto = initialPrompt === lastAutoAssembledPrompt;
+    setStage(stageMessage, stageState);
+    await raceWithSignal(ensurePromptProtocols(), controller.signal);
+    if (captureChatPackGenerationSelection() !== initialSelection) {
+      cancelledForChange = true;
+      throw new Error("等待准备期间的选择发生变化，本次已取消。");
+    }
+    if (initialPromptWasAuto) {
+      if (els.metaPrompt.value !== lastAutoAssembledPrompt) {
+        cancelledForChange = true;
+        throw new Error("等待准备期间装配 Prompt 被修改，本次已取消。");
       }
-      if (livePromptAssets) {
-        usedPromptCache = true;
-        latestRefreshState = "pending";
-        els.learningStatus.textContent = "已命中 Prompt 缓存（缓存状态），正在后台拉取最新版本…";
-        fetchSelectedLivePromptAssets(promptIds).then(() => {
-          latestRefreshState = "updated";
-          renderGenerationStatus();
-        }).catch((error) => {
-          latestRefreshState = "failed";
-          latestRefreshError = error.message || "未知错误";
-          renderGenerationStatus();
-        });
+    } else if (els.metaPrompt.value !== initialPrompt) {
+      cancelledForChange = true;
+      throw new Error("等待准备期间装配 Prompt 被修改，本次已取消。");
+    }
+    if (!els.metaPrompt.value.trim()) setAutoAssembledPrompt();
+    generationSnapshot = captureChatPackGenerationSnapshot();
+    chatPackGenerationMonitor = window.setInterval(() => {
+      if (!isCurrent()) {
+        cancelledForChange = true;
+        controller.abort("selection-changed");
+      } else if (Date.now() - lastDurationPaint >= 500) {
+        lastDurationPaint = Date.now();
+        setChatPackOperationStatus(`${stageMessage} · ${formatElapsed(Date.now() - startedAt)}`, stageState);
+      }
+    }, 75);
+    ensureCurrent();
+
+    const promptIds = selectedManagedPromptIds();
+    let promptAssets = {};
+    let coreAssets = {};
+    if (state.runtime?.target === "local") {
+      const coreKinds = requiredChatPackCoreKinds();
+      els.generateChatPack.textContent = "等待缓存资源…";
+      setStage("准备中：请求后台全量更新，并检查本次所需资源…", "busy");
+      const refreshResponse = await fetch("api/chatpack/cache/refresh", {
+        method: "POST", cache: "no-store", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ prompt_ids: promptIds, core_kinds: coreKinds }), signal: controller.signal
+      });
+      const refreshPayload = await readJsonResponse(refreshResponse, "缓存刷新接口");
+      if (!refreshResponse.ok) throw new Error(refreshPayload.error || `缓存刷新接口失败（HTTP ${refreshResponse.status}）`);
+      void refreshChatPackCacheStatus();
+
+      cacheRead = await readRequiredChatPackCache({ promptIds, coreKinds, controller, ensureCurrent, timeoutReached: () => timeoutReached, onStage: setStage });
+      ensureCurrent();
+      promptAssets = cacheRead.prompts || {};
+      coreAssets = cacheRead.cores || {};
+    } else if (promptIds.length) {
+      setChatPackOperationStatus("准备中：正在读取可用的受治理 Prompt…", "busy");
+      promptAssets = await raceWithSignal(fetchSelectedLivePromptAssets(promptIds), controller.signal);
+    }
+    lastChatPackCacheUse = [
+      ...Object.values(promptAssets).map((asset) => ({ age_ms: asset.cache_age_ms || 0 })),
+      ...Object.values(coreAssets).map((asset) => ({ age_ms: asset.cache_age_ms || 0 }))
+    ];
+    renderChatPackCacheStatus();
+    logPromptFetchEvidence(promptAssets);
+
+    els.generateChatPack.textContent = "组装中…";
+    setStage("组装中：正在读取本地 Context 并生成 Chat Pack…", "busy");
+    if (chatPackContextEnabled()) {
+      const contextReady = await generateContext({ coreAssets, signal: controller.signal, isCurrent });
+      ensureCurrent();
+      if (!contextReady) throw new Error("Context 尚未就绪，本次未复制。请检查选择后重试。");
+    }
+    ensureCurrent();
+    generatedText = buildChatPack({ livePromptAssets: promptAssets });
+    state.chatPack = generatedText;
+    els.chatPackPreview.value = generatedText;
+    chatPackCopyRetryText = generatedText;
+    const promptSelection = captureChatPackPromptSelection();
+    setStage("复制中：正在写入剪贴板…", "busy");
+    els.generateChatPack.textContent = "复制中…";
+    ensureCurrent();
+    restoreSelectionControls = lockChatPackSelectionControls();
+    const copied = await copyText(generatedText, "Chat Pack 已生成并复制。", {
+      statusElement: els.chatPackOperationStatus,
+      signal: controller.signal,
+      onWriteSettled: ({ copied }) => {
+        restoreSelectionControls?.();
+        restoreSelectionControls = null;
+        generationCopyOutcome = copied ? "copied" : "failed";
+        if (timeoutReached && generationRequestId === chatPackGenerationRequestId) {
+          els.reloadChatPackAfterClipboardHang.hidden = true;
+          if (copied) {
+            chatPackCopyRetryText = "";
+            els.retryCopyChatPack.hidden = true;
+            setChatPackOperationStatus("复制状态已确认：Chat Pack 已在超时后写入剪贴板。", "success");
+          } else {
+            els.retryCopyChatPack.hidden = false;
+            setChatPackOperationStatus("复制状态已确认：剪贴板写入失败，结果已保留，可点击“复制”重试。", "error");
+          }
+          if (!chatPackGenerationBusy) els.generateChatPack.disabled = false;
+        }
+      }
+    });
+    ensureCurrent();
+    if (generationRequestId !== chatPackGenerationRequestId) return;
+    if (copied) {
+      chatPackCopyRetryText = "";
+      els.retryCopyChatPack.hidden = true;
+      setChatPackOperationStatus(`已完成：Chat Pack 已复制（使用 ${cacheUseDescription(lastChatPackCacheUse)}）。 · ${formatElapsed(Date.now() - startedAt)}`);
+      showToast("已复制到剪贴板，请去 ai chat");
+    } else {
+      els.chatPackPreview.value = generatedText;
+      els.retryCopyChatPack.hidden = false;
+      setChatPackOperationStatus(`生成已完成，但剪贴板未确认写入。结果已保留，可点击“复制”重试。 · ${formatElapsed(Date.now() - startedAt)}`, "error");
+    }
+    void recordGeneratedUsage(promptAssets, promptSelection).then((result) => {
+      if (generationRequestId !== chatPackGenerationRequestId || !result.warning) return;
+      setChatPackOperationStatus(`${copied ? "已完成并复制。" : "已生成，尚未复制。"}${result.warning}`, "error");
+    }).catch((error) => {
+      if (generationRequestId === chatPackGenerationRequestId) setChatPackOperationStatus(`Chat Pack 已交付；使用统计异常：${error.message || "未知错误"}`, "error");
+    });
+  } catch (error) {
+    if (generationRequestId !== chatPackGenerationRequestId) return;
+    if (cancelledForChange || controller.signal.reason === "selection-changed") {
+      setChatPackOperationStatus(`已取消：生成期间的选择发生变化，本次未复制；请按当前选择重新生成。 · ${formatElapsed(Date.now() - startedAt)}`, "error");
+    } else if (timeoutReached || controller.signal.reason === "generation-timeout") {
+      if (clipboardWriteInProgress && generatedText) {
+        els.reloadChatPackAfterClipboardHang.hidden = false;
+        setChatPackOperationStatus(`复制状态未知：浏览器剪贴板请求超过 90 秒仍未返回，结果已保留，页面正等待该请求结束。可刷新页面恢复操作。 · ${formatElapsed(Date.now() - startedAt)}`, "error");
+      } else if (generationCopyOutcome === "copied") {
+        setChatPackOperationStatus(`生成等待超过 90 秒，但剪贴板写入已确认；后台缓存更新仍会继续。 · ${formatElapsed(Date.now() - startedAt)}`, "error");
+      } else if (generationCopyOutcome === "failed") {
+        els.retryCopyChatPack.hidden = false;
+        setChatPackOperationStatus(`生成等待超过 90 秒，剪贴板写入已确认失败；结果已保留，可点击“复制”重试。 · ${formatElapsed(Date.now() - startedAt)}`, "error");
       } else {
-        els.learningStatus.textContent = "Prompt 缓存未命中，正在读取飞书最新 Prompt…";
-        livePromptAssets = await fetchSelectedLivePromptAssets(promptIds);
+        setChatPackOperationStatus(`失败：生成等待超过 90 秒，已停止本次生成；后台缓存更新仍会继续。 · ${formatElapsed(Date.now() - startedAt)}`, "error");
       }
     } else {
-      livePromptAssets = {};
+      setChatPackOperationStatus(`失败：${error.message || "未知系统错误"}；请修复后点击重试。 · ${formatElapsed(Date.now() - startedAt)}`, "error");
     }
-  } catch (error) {
-    els.learningStatus.textContent = `飞书最新 Prompt 读取失败，本轮未生成也未复制：${error.message || "未知错误"}`;
-    return;
+  } finally {
+    window.clearTimeout(deadlineTimer);
+    if (chatPackGenerationMonitor !== null) window.clearInterval(chatPackGenerationMonitor);
+    chatPackGenerationMonitor = null;
+    if (restoreSelectionControls && !clipboardWriteInProgress) {
+      restoreSelectionControls();
+      restoreSelectionControls = null;
+    }
+    if (chatPackGenerationController === controller) chatPackGenerationController = null;
+    if (generationRequestId === chatPackGenerationRequestId) {
+      chatPackGenerationBusy = false;
+      els.generateChatPack.disabled = clipboardWriteInProgress;
+      els.generateChatPack.textContent = originalButtonText;
+    }
+    void refreshChatPackCacheStatus();
   }
-  if (!sameChatPackPromptSelection(promptSelection)) {
-    els.learningStatus.textContent = "Prompt 选择在读取期间发生变化，本轮已停止，未生成也未复制；请重新生成。";
-    return;
+}
+
+function lockChatPackSelectionControls() {
+  const workspace = document.querySelector("#learningWorkspace");
+  if (!workspace) return () => {};
+  const excluded = new Set(["generateChatPackBtn", "refreshChatPackBtn", "retryCopyChatPackBtn", "reloadChatPackAfterClipboardHangBtn"]);
+  const previous = [...workspace.querySelectorAll("button, input, select, textarea")]
+    .filter((element) => !excluded.has(element.id))
+    .map((element) => [element, element.disabled]);
+  for (const [element] of previous) element.disabled = true;
+  return () => {
+    for (const [element, wasDisabled] of previous) element.disabled = wasDisabled;
+  };
+}
+
+function captureChatPackGenerationSelection() {
+  return JSON.stringify({
+    typeId: state.activeDialogueTypeId,
+    subtypeId: state.activeDialogueSubtypeId,
+    enhancerIds: [...state.activeEnhancerIds],
+    domain: state.selectedDomain,
+    question: els.currentQuestion.value,
+    contextEnabled: chatPackContextEnabled(),
+    periods: { ...state.activePeriodValues },
+    contextFiles: selectedContextFiles().map(({ path, strategy }) => ({ path, strategy })),
+    periodicInsight: {
+      target: state.periodicInsight.target,
+      range: state.periodicInsight.range,
+      from: els.insightFromDate?.value || "",
+      to: els.insightToDate?.value || "",
+      materialTypes: [...(els.insightMaterialTypes?.querySelectorAll(".insight-type-toggle:checked") || [])].map((input) => input.value)
+    }
+  });
+}
+
+function captureChatPackGenerationSnapshot() {
+  return JSON.stringify({ selection: captureChatPackGenerationSelection(), prompt: els.metaPrompt.value });
+}
+
+function requiredChatPackCoreKinds() {
+  if (!chatPackContextEnabled() || activeDialogueType()?.id === "insight") return [];
+  const kinds = new Set();
+  for (const file of selectedContextFiles().filter((item) => item.live)) {
+    const kind = file.path === "Core/道" ? "dao" : file.path === "Core/法" ? "fa" : "";
+    if (!kind) throw new Error(`不支持的实时 Context 来源：${file.path}`);
+    kinds.add(kind);
   }
-  if (!els.metaPrompt.value.trim()) setAutoAssembledPrompt();
-  if (chatPackContextEnabled()) {
-    const contextReady = await generateContext();
-    if (!contextReady) return;
+  return [...kinds];
+}
+
+async function readRequiredChatPackCache({ promptIds, coreKinds, controller, ensureCurrent, timeoutReached, onStage }) {
+  while (true) {
+    ensureCurrent();
+    if (timeoutReached()) throw new Error("生成等待超过 90 秒");
+    const response = await fetch("api/chatpack/cache/read", {
+      method: "POST", cache: "no-store", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt_ids: promptIds, core_kinds: coreKinds }), signal: controller.signal
+    });
+    const payload = await readJsonResponse(response, "缓存读取接口");
+    if (response.ok) {
+      validateChatPackCacheRead(payload, promptIds, coreKinds);
+      return payload;
+    }
+    if (response.status !== 409) throw new Error(payload.error || `缓存读取失败（HTTP ${response.status}）`);
+    const status = await refreshChatPackCacheStatus({ signal: controller.signal });
+    if (!status) throw new Error("缓存服务不可用，无法确认必需资源状态");
+    const missing = payload.missing || [];
+    const missingLabels = missing.map((item) => cacheResourceLabel(item.key)).join("、");
+    onStage(`等待资源：${missingLabels || "必需缓存"}（${missing.map((item) => item.cache_status).join("、")}）。`, "busy");
+    const requiredFailure = missing.find((item) => item.refresh_status === "failed");
+    if (requiredFailure) {
+      throw new Error(`${cacheResourceLabel(requiredFailure.key)}更新失败：${requiredFailure.refresh_error}`);
+    }
+    if (status?.refresh?.state === "partial" || status?.refresh?.state === "failed" || status?.refresh?.state === "succeeded") {
+      const stuck = missing[0];
+      throw new Error(`${cacheResourceLabel(stuck?.key || "必需资源")}仍不可用：${stuck?.cache_status || "缓存刷新已结束"}${stuck?.refresh_error ? `；${stuck.refresh_error}` : ""}`);
+    }
+    await delayWithSignal(500, controller.signal);
   }
-  if (!sameChatPackPromptSelection(promptSelection)) {
-    els.learningStatus.textContent = "Prompt 选择在生成期间发生变化，本轮已停止，未生成也未复制；请重新生成。";
-    return;
+}
+
+function validateChatPackCacheRead(payload, promptIds, coreKinds) {
+  if (payload?.source !== "learn-x-chatpack-cache" || !payload.prompts || !payload.cores) throw new Error("缓存读取结果缺少来源标记或资源集合");
+  if (Object.keys(payload.prompts).length !== promptIds.length || promptIds.some((id) => !Object.hasOwn(payload.prompts, id))) throw new Error("缓存读取未返回全部必需 Prompt");
+  if (Object.keys(payload.cores).length !== coreKinds.length || coreKinds.some((id) => !Object.hasOwn(payload.cores, id))) throw new Error("缓存读取未返回全部必需 Core 正文");
+  for (const id of promptIds) {
+    const asset = payload.prompts[id];
+    if (asset?.contract_version !== "prompt-asset/v1" || asset.prompt_id !== id || !Number.isInteger(asset.prompt_revision) ||
+        typeof asset.content !== "string" || !asset.content.trim() || !/^[a-f0-9]{64}$/.test(asset.prompt_sha256 || "") ||
+        !asset.prompt_fetched_at || Number.isNaN(Date.parse(asset.prompt_fetched_at)) || !Number.isFinite(asset.cache_age_ms)) {
+      throw new Error(`缓存中的 Prompt ${id} 校验失败`);
+    }
   }
-  logPromptFetchEvidence(livePromptAssets);
-  const chatPack = buildChatPack({ livePromptAssets });
-  els.learningStatus.textContent = "正在复制 Chat Pack 到剪贴板…";
-  copied = await copyText(chatPack, "Chat Pack 已生成并复制。");
-  copyFinished = true;
-  renderGenerationStatus();
-  const usageResult = await recordGeneratedUsage(livePromptAssets, promptSelection);
-  usageWarning = usageResult.warning || "";
-  renderGenerationStatus();
-  if (copied) showToast("已复制到剪贴板，请去 ai chat");
+  for (const id of coreKinds) {
+    const asset = payload.cores[id];
+    if (asset?.kind !== id || typeof asset.content !== "string" || !asset.content.trim() || !/^[a-f0-9]{64}$/.test(asset.sha256 || "") ||
+        !asset.documentId || !asset.sourceUrl || !Number.isInteger(asset.revision) || !Number.isFinite(asset.cache_age_ms)) {
+      throw new Error(`缓存中的 Core ${id} 校验失败`);
+    }
+  }
+}
+
+async function readJsonResponse(response, label) {
+  try { return await response.json(); }
+  catch { throw new Error(`${label}返回无效 JSON（HTTP ${response.status}）`); }
+}
+
+function delayWithSignal(milliseconds, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) { reject(new Error("本次生成已取消")); return; }
+    const timer = window.setTimeout(done, milliseconds);
+    function done() { signal.removeEventListener("abort", abort); resolve(); }
+    function abort() { window.clearTimeout(timer); signal.removeEventListener("abort", abort); reject(new Error("本次生成已取消")); }
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
+function raceWithSignal(promise, signal) {
+  if (signal.aborted) return Promise.reject(new Error("本次生成已取消"));
+  return new Promise((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener("abort", abort);
+    const abort = () => { cleanup(); reject(new Error("本次生成已取消")); };
+    signal.addEventListener("abort", abort, { once: true });
+    promise.then((value) => { cleanup(); resolve(value); }, (error) => { cleanup(); reject(error); });
+  });
+}
+
+function cacheUseDescription(resources) {
+  if (!resources?.length) return "无外部缓存资源";
+  return `最旧资源 ${formatAge(Math.max(...resources.map((item) => item.age_ms || 0)))}前拉取`;
+}
+
+async function retryCopyChatPack() {
+  if (!chatPackCopyRetryText || clipboardWriteInProgress) return;
+  const retryText = chatPackCopyRetryText;
+  const controller = new AbortController();
+  let timeoutReached = false;
+  let copyOutcome = null;
+  const deadlineTimer = window.setTimeout(() => {
+    timeoutReached = true;
+    controller.abort("clipboard-timeout");
+  }, 90_000);
+  els.retryCopyChatPack.disabled = true;
+  els.generateChatPack.disabled = true;
+  els.reloadChatPackAfterClipboardHang.hidden = true;
+  setChatPackOperationStatus("复制中：正在重试写入剪贴板…", "busy");
+  try {
+    const copied = await copyText(retryText, "Chat Pack 已生成并复制。", {
+      statusElement: els.chatPackOperationStatus,
+      signal: controller.signal,
+      onWriteSettled: ({ copied: settledCopied }) => {
+        copyOutcome = settledCopied ? "copied" : "failed";
+        if (!timeoutReached) return;
+        els.reloadChatPackAfterClipboardHang.hidden = true;
+        if (settledCopied) {
+          chatPackCopyRetryText = "";
+          els.retryCopyChatPack.hidden = true;
+          setChatPackOperationStatus("复制状态已确认：重试在超时后写入剪贴板。", "success");
+        } else {
+          els.retryCopyChatPack.hidden = false;
+          setChatPackOperationStatus("复制状态已确认：重试写入失败，结果已保留，可再次点击“复制”。", "error");
+        }
+        els.retryCopyChatPack.disabled = false;
+        if (!chatPackGenerationBusy) els.generateChatPack.disabled = false;
+      }
+    });
+    if (timeoutReached && clipboardWriteInProgress) {
+      els.reloadChatPackAfterClipboardHang.hidden = false;
+      setChatPackOperationStatus("复制状态未知：浏览器剪贴板请求超过 90 秒仍未返回，结果已保留，页面正等待该请求结束。可刷新页面恢复操作。", "error");
+    } else if (copied || copyOutcome === "copied") {
+      chatPackCopyRetryText = "";
+      els.retryCopyChatPack.hidden = true;
+      setChatPackOperationStatus(timeoutReached ? "复制状态已确认：重试在超时后写入剪贴板。" : "已完成：Chat Pack 已复制。", "success");
+      showToast("已复制到剪贴板，请去 ai chat");
+    } else if (copyOutcome === "failed") {
+      els.retryCopyChatPack.hidden = false;
+      setChatPackOperationStatus("复制状态已确认：剪贴板写入失败，结果已保留，可点击“复制”重试。", "error");
+    } else {
+      setChatPackOperationStatus("剪贴板仍未确认写入；生成结果已保留，请稍后重试。", "error");
+    }
+  } finally {
+    window.clearTimeout(deadlineTimer);
+    els.retryCopyChatPack.disabled = clipboardWriteInProgress;
+    if (!clipboardWriteInProgress && !chatPackGenerationBusy) els.generateChatPack.disabled = false;
+  }
 }
 
 function managedPromptUnavailableReason(item) {
@@ -1758,9 +2237,11 @@ function logPromptFetchEvidence(assets) {
     prompt_id: asset.prompt_id,
     revision: asset.prompt_revision,
     sha256: asset.prompt_sha256,
-    fetched_at: asset.prompt_fetched_at
+    fetched_at: asset.prompt_fetched_at,
+    source: asset.cache_age_ms === undefined ? "latest" : "chatpack-cache",
+    cache_age_ms: asset.cache_age_ms
   }));
-  if (evidence.length) console.info("Learn-X Feishu Prompt latest", evidence);
+  if (evidence.length) console.info("Learn-X Chat Pack Prompt source", evidence);
 }
 
 function createUsageEventId() {
@@ -2007,24 +2488,28 @@ function selectedContextFiles() {
     .filter((file) => file.strategy !== "none");
 }
 
-async function loadContextContents(files) {
+async function loadContextContents(files, { coreAssets = {}, signal, requireCachedCore = false } = {}) {
   return Promise.all(
     files.map(async (file) => {
       if (file.live) {
-        const loaded = await getJson(`api/file?path=${encodeURIComponent(file.path)}`);
-        if (typeof loaded.content !== "string" || !loaded.content.trim()) throw new Error(`Core 来源内容为空：${file.path}`);
-        return { ...file, ...loaded };
+        const coreKind = file.path === "Core/道" ? "dao" : file.path === "Core/法" ? "fa" : "";
+        const loaded = coreKind ? coreAssets[coreKind] : null;
+        if (!loaded && requireCachedCore) throw new Error(`必需 Core 缓存不可用：${file.path}`);
+        const live = loaded || await getJson(`api/file?path=${encodeURIComponent(file.path)}`, { signal });
+        if (!live) throw new Error(`Core 来源不可用：${file.path}`);
+        if (typeof live.content !== "string" || !live.content.trim()) throw new Error(`Core 来源内容为空：${file.path}`);
+        return { ...file, ...live, path: file.path, content: live.content };
       }
       if (typeof file.content === "string") return file;
-      const content = await loadContextFileContent(file);
+      const content = await loadContextFileContent(file, { signal });
       return { ...file, content };
     })
   );
 }
 
-function loadContextFileContent(file) {
+function loadContextFileContent(file, { signal } = {}) {
   if (file.live) {
-    return getJson(`api/file?path=${encodeURIComponent(file.path)}`).then((loaded) => {
+    return getJson(`api/file?path=${encodeURIComponent(file.path)}`, { signal }).then((loaded) => {
       if (typeof loaded.content !== "string" || !loaded.content.trim()) throw new Error(`Core 来源内容为空：${file.path}`);
       return loaded.content;
     });
@@ -2032,7 +2517,8 @@ function loadContextFileContent(file) {
   if (typeof file.content === "string") return Promise.resolve(file.content);
   const pending = contextFileContentPromises.get(file.path);
   if (pending) return pending;
-  const request = getJson(`api/file?path=${encodeURIComponent(file.path)}`).then((loaded) => {
+  const request = getJson(`api/file?path=${encodeURIComponent(file.path)}`, { signal }).then((loaded) => {
+    if (typeof loaded.content !== "string" || !loaded.content.trim()) throw new Error(`上下文来源内容为空：${file.path}`);
     const content = loaded.content || "";
     file.content = content;
     const cached = state.contextFileMap.get(file.path);
@@ -2279,15 +2765,32 @@ function formatNumber(value) {
   return new Intl.NumberFormat("zh-CN").format(value);
 }
 
-async function copyText(text, message) {
-  const target = currentModule() === "learning" ? els.learningStatus : els.status;
+async function copyText(text, message, { statusElement, signal, onWriteSettled } = {}) {
+  const target = statusElement || (currentModule() === "learning" ? els.learningStatus : els.status);
+  if (clipboardWriteInProgress) {
+    if (target) target.textContent = "已有一次剪贴板写入仍在处理，请稍后重试。";
+    return false;
+  }
+  clipboardWriteInProgress = true;
+  let write;
+  let settled = false;
+  const settleWrite = (copied) => {
+    if (settled) return;
+    settled = true;
+    clipboardWriteInProgress = false;
+    onWriteSettled?.({ copied });
+  };
   try {
-    await navigator.clipboard.writeText(text);
-    target.textContent = message;
+    write = Promise.resolve(navigator.clipboard.writeText(text));
+    write.then(() => settleWrite(true), () => settleWrite(false));
+    await (signal ? raceWithSignal(write, signal) : write);
+    if (target) target.textContent = message;
     return true;
   } catch {
-    target.textContent = `${message.replace("已生成并复制", "已生成")}（浏览器未允许自动复制）`;
+    if (target) target.textContent = `${message.replace("已生成并复制", "已生成")}（剪贴板未确认写入）`;
     return false;
+  } finally {
+    if (!write) settleWrite(false);
   }
 }
 

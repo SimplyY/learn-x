@@ -6,6 +6,7 @@
 - [研究&学习](https://ywhome.feishu.cn/wiki/KcTcwG90OiZh3rksu0ucvwx5nFe)
 - [人生核心议题](https://ywhome.feishu.cn/wiki/QIaQwXf07iMvqokKQf3cp3XmnMC)
 - [Learn-X Flomo 使用说明](https://ywhome.feishu.cn/wiki/JzzLwuVGZiJSIBkUhLbc2Mbwnwg)
+- [Learn-X Chat Pack 使用说明](https://ywhome.feishu.cn/wiki/NUkgwfx7Qi9HhxkB3OQcm8nVnSd)
 - [learn-x](https://simplyy.github.io/learn-x/index.html#learning)
 
 ## 核心目标

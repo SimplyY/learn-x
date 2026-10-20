@@ -6,12 +6,14 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { validateAiReview } from "../../learn-x-process/scripts/monthly-process-input.mjs";
 import { isoWeekRange } from "../../learn-x-process/scripts/collect-weekly-input.mjs";
+import { tryAcquireWeeklyAiLock, validateWeeklyAiLockToken } from "./lib/weekly-ai-lock.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const defaultRepoRoot = path.resolve(__dirname, "../../../..");
 const defaultBridgePath = path.join(homedir(), ".codex/skills/chatgpt-web-bridge/scripts/bridge.mjs");
 const maxInputChars = 15_000;
 const defaultBridgeConversationUrl = "https://chatgpt.com/";
+const uncertainAiResubmitAfterMs = 20 * 60_000;
 // Bridge 默认预算为 120 秒观察 + 90 秒传输/清理余量；适配器必须覆盖完整协议预算。
 export const DEFAULT_BRIDGE_TIMEOUT_MS = 240_000;
 // Bridge image 模式（生图）观察预算为 600 秒（对齐 Voice-X / Read-X），适配器覆盖完整预算。
@@ -29,14 +31,125 @@ export function sha256(value) {
   return createHash("sha256").update(String(value), "utf8").digest("hex");
 }
 
+const safeWeeklyAiReasons = new Set([
+  "snapshot-mismatch", "observer-window-ended", "observer-timeout", "assistant-selector-missing",
+  "chatgpt-rate-limited", "login-required", "captcha-or-blocked", "ego-bootstrap-permission",
+  "bridge-observation-identity-mismatch", "empty-ai-review", "ai-review-too-large", "invalid-ai-review",
+  "promotion-readback-hash-mismatch", "promotion-status-readback-failed", "promotion-refuses-substantive-ai-md",
+  "manual-ai-review-invalid", "manual-ai-review-changed-after-confirmation", "weekly-ai-run-in-progress",
+  "formal-ai-md-has-human-content", "confirmed-ai-md-changed", "confirmed-ai-md-missing",
+  "formal-ai-md-changed-after-promotion", "bridge-conversation-url-missing", "bridge-observe-interface-unavailable",
+  "bridge-observe-unavailable", "previous-run-needs-review", "substantive-ai-md-exists", "uncertain-resubmission-in-progress",
+  "promotion-reconciliation-readback-failed", "uncertain-ai-resubmission-requires-confirmed-eligible-snapshot-mismatch",
+  "uncertain-ai-resubmission-refuses-to-replace-substantive-ai-md", "manual-ai-review-state-not-eligible",
+  "weekly-ai-resubmission-outcome-uncertain", "weekly-ai-resubmission-exhausted",
+  "conversation-session-mismatch", "conversation-session-not-bound", "observer-identity-mismatch",
+  "original-run-identity-mismatch", "submission-unconfirmed", "new-user-message-not-found",
+  "new-assistant-message-not-found", "assistant-order-invalid", "generation-in-progress",
+  "image-output-not-ready", "output-markers-missing", "response-body-not-ready", "response-text-unstable",
+  "observer-state-unavailable", "original-run-result-pending", "original-run-not-observable",
+  "recoverable-result-unavailable", "ego-runtime-evaluate-timeout", "ego-script-process-timeout",
+  "ego-script-outcome-unknown", "ego-operation-failed", "ego-host-error", "task-space-cleanup-failed",
+  "cleanup-failed", "image-fetch-failed", "image-read-failed", "image-extract-failed", "image-src-missing",
+  "output-boundary-invalid", "history-verification-failed", "local-state-unavailable", "bridge-internal-error",
+  "submit-timeout", "submit-observer-unavailable", "composer-missing", "composer-not-empty",
+  "prompt-fill-not-confirmed", "send-button-missing", "conversation-history-not-ready",
+  "conversation-navigation-not-confirmed", "runner-request-timeout", "ego-host-unavailable",
+  "ego-host-connect-failed", "ego-host-disconnected", "ego-host-timeout", "ego-host-protocol-error",
+  "ego-browser-unavailable", "local-rate-limit-cooldown", "bridge-busy", "image-mode-exact-input-unsupported",
+  "invalid-observe-request", "invalid-preallocated-run-id", "invalid-request-id", "invalid-runner-request",
+  "invalid-bridge-transport", "invalid-observer-output", "invalid-submit-result", "invalid-bridge-result-status",
+  "bridge-result-status-missing", "invalid-caller-label", "invalid-prompt", "invalid-mode",
+  "unsupported-runner-version", "unsupported-runner-operation", "invalid-response-path", "invalid-runner-json",
+  "invalid-client-request", "assistant-selector-missing", "observer-window-ended", "observer-timeout",
+  "snapshot-mismatch", "chatgpt-rate-limited", "login-required", "captcha-or-blocked", "empty-prompt",
+  "prompt-too-large", "invalid-conversation-url", "invalid-max-wait", "original-run-receipt-invalid",
+  "original-run-receipt-unavailable", "recovery-lease-unavailable", "receipt-write-failed", "append-failed",
+  "diagnostic-write-failed", "ego-bootstrap-permission", "composer-missing", "chat-mode-switch-failed",
+]);
+const safeSystemErrorCodes = new Set([
+  "EACCES", "EAGAIN", "EBUSY", "EEXIST", "EIO", "EINVAL", "EISDIR", "EMFILE", "ENFILE", "ENOENT",
+  "ENOSPC", "ENOTDIR", "EPERM", "EPIPE", "ETIMEDOUT", "EWOULDBLOCK",
+]);
+
+function weeklyAiOutcomeEvent(result = {}) {
+  const attemptId = result.localAttemptId || result.runId;
+  if (typeof attemptId !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/.test(attemptId)) return null;
+  const succeeded = result.status === "confirmed";
+  const failed = result.status === "failed";
+  const generated = result.status === "generated";
+  const startAt = Date.parse(result.resubmissionOf?.dispatchStartedAt || result.dispatchStartedAt || result.startedAt || "");
+  const endAt = Date.parse(result.confirmedAt || result.completedAt || "");
+  const durationMs = Number.isFinite(startAt) && Number.isFinite(endAt) && endAt >= startAt ? endAt - startAt : undefined;
+  const parentAttemptId = result.resubmissionOf?.runId;
+  const currentReason = result.observation?.reason || result.reason;
+  const originalReason = result.originalReason || result.resubmissionOf?.reason
+    || (result.observation?.reason && result.reason !== result.observation.reason ? result.reason : undefined);
+  return {
+    type: "weekly-ai-outcome",
+    ...(result.targetWeek ? { week: result.targetWeek } : {}),
+    attemptId,
+    ...(typeof result.runId === "string" ? { runId: result.runId, taskRunId: result.runId } : {}),
+    clientRequestId: attemptId,
+    ...(typeof parentAttemptId === "string" ? { parentAttemptId } : {}),
+    caller: "learn-x:weekly-ai",
+    status: succeeded ? "succeeded" : generated ? "submitted" : failed ? "failed" : "needs_review",
+    phase: "delivery",
+    failureStage: succeeded ? "delivery" : "unknown",
+    ...(typeof currentReason === "string" ? { reason: safeWeeklyAiReasons.has(currentReason) ? currentReason : "unknown" } : {}),
+    ...(typeof originalReason === "string" ? { originalReason: safeWeeklyAiReasons.has(originalReason) ? originalReason : "unknown" } : {}),
+    ...(durationMs !== undefined ? { durationMs } : {}),
+    ...(Number.isSafeInteger(result.resubmissionCount) ? { attempts: result.resubmissionCount + 1 } : {}),
+    deliveryStatus: succeeded ? "succeeded" : generated ? "pending" : failed ? "failed" : "needs_review",
+    businessValidationStatus: succeeded || generated ? "succeeded" : "unknown",
+    promotionStatus: succeeded ? "succeeded" : generated ? "pending" : "unknown",
+    readbackStatus: succeeded ? "succeeded" : generated ? "pending" : "unknown",
+    ...(typeof result.outputSha256 === "string" && /^[a-f0-9]{64}$/.test(result.outputSha256) ? { sourceFingerprint: result.outputSha256 } : {}),
+  };
+}
+
+async function appendWeeklyAiDiagnostic(event, options = {}) {
+  if (!event) return;
+  if (typeof options.diagnosticWriter === "function") {
+    try { await options.diagnosticWriter(event); }
+    catch (error) {
+      const code = safeSystemErrorCodes.has(String(error?.code || "").toUpperCase()) ? String(error.code).toUpperCase() : "unknown";
+      process.stderr.write(`${JSON.stringify({ event: "learn-x-weekly-ai-diagnostic-write-failed", errorCode: "diagnostic-write-failed", systemErrorCode: code })}\n`);
+    }
+    return;
+  }
+  // Temporary-repository tests and previews must never write into the user's production journal.
+  if (options.repoRoot && path.resolve(options.repoRoot) !== path.resolve(defaultRepoRoot)) return;
+  if (process.env.EGO_GOVERNANCE_DISABLED === "1") return;
+  try {
+    const modulePath = path.resolve(defaultRepoRoot, "../browser-runtime-governance/runtime/lib/journal.mjs");
+    const { append, DEFAULT_RUNTIME_DIR } = await import(pathToFileURL(modulePath).href);
+    await append(process.env.EGO_RUNTIME_DIR || DEFAULT_RUNTIME_DIR, "learn-x-weekly-ai", event);
+  } catch (error) {
+    const code = safeSystemErrorCodes.has(String(error?.code || "").toUpperCase()) ? String(error.code).toUpperCase() : "unknown";
+    process.stderr.write(`${JSON.stringify({ event: "learn-x-weekly-ai-diagnostic-write-failed", errorCode: "diagnostic-write-failed", systemErrorCode: code })}\n`);
+  }
+}
+
 function conversationOriginMatches(requestedUrl, observedUrl) {
   try {
     const requested = new URL(requestedUrl);
     const observed = new URL(observedUrl);
-    return requested.protocol === "https:" && observed.protocol === "https:" && requested.origin === observed.origin;
+    const requestedPath = requested.pathname.replace(/\/+$/, "") || "/";
+    const observedPath = observed.pathname.replace(/\/+$/, "") || "/";
+    return requested.protocol === "https:" && observed.protocol === "https:"
+      && requested.origin === observed.origin && requestedPath === observedPath;
   } catch {
     return false;
   }
+}
+
+function isBoundChatGptConversationUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.origin === "https://chatgpt.com"
+      && /^\/c\/[^/]+\/?$/.test(url.pathname) && !/^\/c\/new\/?$/i.test(url.pathname);
+  } catch { return false; }
 }
 
 export function manualAiShell(week) {
@@ -213,6 +326,19 @@ function isSubstantiveExisting(text) {
   return Boolean(normalized) && !/^(x+|待补充|暂无|无|todo|placeholder)$/i.test(normalized) && !isTemplateLike(text);
 }
 
+async function promoteGeneratedSafely(repoRoot, week, prompt) {
+  const paths = weekPaths(repoRoot, week);
+  try { return await promoteAiReviewUnlocked({ repoRoot, week, confirm: true }); }
+  catch (error) {
+    if (error?.message !== "promotion-refuses-substantive-ai-md") throw error;
+    const previous = await readJson(paths.sidecarPath) || {};
+    const conflict = { ...previous, status: "needs_review", targetWeek: week, reason: "formal-ai-md-has-human-content",
+      promotionStatus: "blocked-by-existing-content", manualPrompt: previous.manualPrompt || prompt, manualPath: paths.formalPath };
+    await writeAtomic(paths.sidecarPath, `${JSON.stringify(conflict, null, 2)}\n`, "status");
+    return conflict;
+  }
+}
+
 function resultBase(week, prompt, startedAt) {
   return {
     schemaVersion: 1,
@@ -223,7 +349,7 @@ function resultBase(week, prompt, startedAt) {
   };
 }
 
-export async function generateAiReview(options = {}) {
+async function generateAiReviewUnlocked(options = {}) {
   const repoRoot = options.repoRoot || defaultRepoRoot;
   const week = normalizeWeek(options.week);
   const paths = weekPaths(repoRoot, week);
@@ -231,17 +357,50 @@ export async function generateAiReview(options = {}) {
   await mkdir(paths.weekDir, { recursive: true });
 
   let previous = await readJson(paths.sidecarPath);
-  if (previous?.status === "confirmed" && await exists(paths.formalPath)) {
-    return { status: "confirmed", targetWeek: week, formalPath: paths.formalPath };
-  }
-  if (await exists(paths.generatedPath)) {
-    return await promoteAiReview({ repoRoot, week, confirm: true });
-  }
   const template = await readFile(paths.templatePath, "utf8");
   const prompt = buildReviewPrompt(template, week);
-  let resubmissionOf = null;
+  if (previous?.status === "confirmed") {
+    if (!await exists(paths.formalPath)) return { ...previous, status: "needs_review", targetWeek: week, reason: "confirmed-ai-md-missing", manualPrompt: previous.manualPrompt || prompt };
+    const rawFormal = await readFile(paths.formalPath, "utf8");
+    const contentMatches = previous.manualConfirmation?.sha256
+      ? sha256(rawFormal) === previous.manualConfirmation.sha256
+      : previous.outputSha256 && sha256(normalizeAiReviewText(rawFormal)) === previous.outputSha256;
+    if (contentMatches) return { ...previous, targetWeek: week, formalPath: paths.formalPath };
+    return { ...previous, status: "needs_review", targetWeek: week, reason: "confirmed-ai-md-changed", manualPrompt: previous.manualPrompt || prompt, manualPath: paths.formalPath };
+  }
+  if (previous?.status === "generated" && await exists(paths.formalPath)) {
+    const formalText = normalizeAiReviewText(await readFile(paths.formalPath, "utf8"));
+    if (sha256(formalText) === previous.outputSha256 && validateAiReview(formalText).valid) {
+      const reconciled = { ...previous, status: "confirmed", confirmedAt: new Date().toISOString(), formalPath: paths.formalPath,
+        promotionRecovered: true, readbackSha256: sha256(formalText) };
+      await writeAtomic(paths.sidecarPath, `${JSON.stringify(reconciled, null, 2)}\n`, "confirmed");
+      const readback = JSON.parse(await readFile(paths.sidecarPath, "utf8"));
+      if (readback.status !== "confirmed" || readback.readbackSha256 !== sha256(formalText)) throw new Error("promotion-reconciliation-readback-failed");
+      if (await exists(paths.generatedPath)) await unlink(paths.generatedPath);
+      return { ...reconciled, targetWeek: week };
+    }
+    if (isSubstantiveExisting(formalText)) {
+      const conflict = { ...previous, status: "needs_review", reason: "formal-ai-md-changed-after-promotion", manualPrompt: previous.manualPrompt || prompt,
+        manualPath: paths.formalPath, promotionStatus: "blocked-by-existing-content" };
+      await writeAtomic(paths.sidecarPath, `${JSON.stringify(conflict, null, 2)}\n`, "status");
+      return { ...conflict, targetWeek: week };
+    }
+  }
+  if (await exists(paths.generatedPath)) {
+    return await promoteGeneratedSafely(repoRoot, week, prompt);
+  }
+  if (previous?.resubmissionCount === 1 && !options.observeUncertain && !options.retry && !options.resubmitUncertain) {
+    const exhausted = { ...previous, status: "needs_review", targetWeek: week,
+      reason: previous.status === "dispatching" ? "weekly-ai-resubmission-outcome-uncertain" : previous.reason || "weekly-ai-resubmission-exhausted",
+      manualPrompt: previous.manualPrompt || prompt, manualPath: paths.formalPath };
+    await ensureManualAiShell(paths, week);
+    if (previous.status === "dispatching") await writeAtomic(paths.sidecarPath, `${JSON.stringify(exhausted, null, 2)}\n`, "status");
+    return exhausted;
+  }
+  let resubmissionOf = previous?.resubmissionOf || null;
   let bridge;
   let dispatchedRunId;
+  let dispatchedStartedAt;
   const conversationUrl = options.conversationUrl || defaultBridgeConversationUrl;
 
   if (previous?.status === "needs_review" && previous.reason === "invalid-ai-review" && previous.promptSha256 === sha256(prompt) && await exists(paths.invalidPath)) {
@@ -260,7 +419,7 @@ export async function generateAiReview(options = {}) {
       };
       await writeAtomic(paths.generatedPath, `${recoveredText}\n`, "draft");
       await writeAtomic(paths.sidecarPath, `${JSON.stringify(recovered, null, 2)}\n`, "status");
-      return await promoteAiReview({ repoRoot, week, confirm: true });
+      return await promoteGeneratedSafely(repoRoot, week, prompt);
     }
   }
   if (previous?.status === "dispatching" || previous?.dispatchState === "started") {
@@ -303,9 +462,15 @@ export async function generateAiReview(options = {}) {
     try { bridge = await observe(previous, options); }
     catch (error) { bridge = { result: { status: "needs_review", runId: previous.runId, reason: "bridge-observe-unavailable", diagnostics: { errorCode: error?.code || "observer-error" } } }; }
     const observed = bridge?.result;
+    const expectedActualUrl = previous.actualConversationUrl || (isBoundChatGptConversationUrl(previous.conversationUrl) ? previous.conversationUrl : null);
+    const observedActualUrl = observed?.actualConversationUrl || observed?.conversationUrl;
+    const observationIdentityMatches = expectedActualUrl
+      ? isBoundChatGptConversationUrl(observedActualUrl) && conversationOriginMatches(expectedActualUrl, observedActualUrl)
+      : conversationOriginMatches(previous.requestedConversationUrl || previous.conversationUrl, observed?.requestedConversationUrl)
+        && isBoundChatGptConversationUrl(observedActualUrl) && observed?.submissionConfirmed === true;
     const observationMatches = observed?.status === "succeeded"
       && observed.runId === previous.runId
-      && conversationOriginMatches(previous.conversationUrl, observed.conversationUrl)
+      && observationIdentityMatches
       && typeof observed.text === "string" && observed.text.trim().length > 0;
     if (!observationMatches) {
       const observation = {
@@ -314,10 +479,17 @@ export async function generateAiReview(options = {}) {
           ? "bridge-observation-identity-mismatch"
           : observed?.reason || "bridge-observe-result-missing",
         runId: observed?.runId || previous.runId,
+        submissionConfirmed: observed?.submissionConfirmed,
+        requestedConversationUrl: observed?.requestedConversationUrl,
+        actualConversationUrl: observed?.actualConversationUrl || observed?.conversationUrl,
         diagnostics: observed?.diagnostics,
         observedAt: new Date().toISOString()
       };
-      const updated = { ...previous, observation };
+      const updated = { ...previous, observation,
+        ...(observed?.submissionConfirmed === true ? { submissionConfirmed: true } : {}),
+        ...(typeof observed?.requestedConversationUrl === "string" ? { requestedConversationUrl: observed.requestedConversationUrl } : {}),
+        ...(typeof (observed?.actualConversationUrl || observed?.conversationUrl) === "string"
+          ? { actualConversationUrl: observed.actualConversationUrl || observed.conversationUrl, conversationUrl: observed.actualConversationUrl || observed.conversationUrl } : {}) };
       await writeAtomic(paths.sidecarPath, `${JSON.stringify(updated, null, 2)}\n`, "status");
       await ensureManualAiShell(paths, week);
       return { ...updated, targetWeek: week, manualPath: paths.formalPath };
@@ -335,18 +507,27 @@ export async function generateAiReview(options = {}) {
       runId: previous.runId,
       reason: previous.reason,
       completedAt: previous.completedAt,
+      dispatchStartedAt: previous.dispatchStartedAt || previous.startedAt,
       promptSha256: previous.promptSha256,
-      authorizedBy: "user-explicit-resubmission",
+      authorizedBy: options.automaticResubmit ? "weekly-ai-20m-policy" : "user-explicit-resubmission",
       startedAt
     };
     await writeAtomic(paths.sidecarPath, `${JSON.stringify({
       ...resultBase(week, prompt, startedAt),
       status: "needs_review",
       runId: previous.runId,
+      localAttemptId: previous.localAttemptId,
+      dispatchStartedAt: previous.dispatchStartedAt || previous.startedAt,
+      submissionConfirmed: previous.submissionConfirmed === true,
+      requestedConversationUrl: previous.requestedConversationUrl || conversationUrl,
+      actualConversationUrl: previous.actualConversationUrl || previous.conversationUrl,
       reason: "uncertain-resubmission-in-progress",
       conversationUrl: previous.conversationUrl,
       diagnostics: previous.diagnostics,
       resubmissionOf,
+      resubmissionCount: 1,
+      resubmissionReservedAt: startedAt,
+      automaticResubmit: options.automaticResubmit === true,
       manualPrompt: prompt,
       manualPath: paths.formalPath
     }, null, 2)}\n`, "status");
@@ -358,19 +539,39 @@ export async function generateAiReview(options = {}) {
 
   if (!bridge) {
     const runner = options.runBridge || runBridgeCli;
+    dispatchedStartedAt = new Date().toISOString();
     const dispatchIntent = {
       ...resultBase(week, prompt, startedAt),
       status: "dispatching",
       dispatchState: "started",
       conversationUrl,
+      requestedConversationUrl: conversationUrl,
+      dispatchStartedAt: dispatchedStartedAt,
       localAttemptId: randomUUID(),
       ...(resubmissionOf ? { reason: "uncertain-resubmission-in-progress" } : {}),
       callerLabel: options.callerLabel || "learn-x:weekly-ai",
-      ...(resubmissionOf ? { resubmissionOf } : {})
+      ...(resubmissionOf ? { resubmissionOf, resubmissionCount: 1,
+        resubmissionReservedAt: previous?.resubmissionReservedAt || startedAt,
+        automaticResubmit: options.automaticResubmit === true } : {})
     };
     dispatchIntent.runId = dispatchIntent.localAttemptId;
     dispatchedRunId = dispatchIntent.runId;
     await writeAtomic(paths.sidecarPath, `${JSON.stringify(dispatchIntent, null, 2)}\n`, "dispatch");
+    await appendWeeklyAiDiagnostic({
+      type: "weekly-ai-dispatch",
+      week,
+      runId: dispatchIntent.runId,
+      taskRunId: dispatchIntent.runId,
+      clientRequestId: dispatchIntent.runId,
+      attemptId: dispatchIntent.runId,
+      ...(typeof resubmissionOf?.runId === "string" ? { parentAttemptId: resubmissionOf.runId } : {}),
+      caller: "learn-x:weekly-ai",
+      status: "submitted",
+      phase: "submit",
+      deliveryStatus: "pending",
+      recoveryAction: resubmissionOf ? "one-shot-resubmit" : "none",
+      ...(resubmissionOf ? { recoveryStatus: "pending" } : {}),
+    }, options);
     try {
       bridge = await runner(prompt, { ...options, conversationUrl, preallocatedRunId: dispatchIntent.runId, sourceId: "ai", callerLabel: options.callerLabel || "learn-x:weekly-ai" });
     } catch (error) {
@@ -379,7 +580,27 @@ export async function generateAiReview(options = {}) {
   }
 
   const bridgeResult = bridge?.result;
-  const base = { ...resultBase(week, prompt, startedAt), ...(resubmissionOf ? { resubmissionOf } : {}) };
+  const base = { ...resultBase(week, prompt, startedAt), ...(resubmissionOf ? {
+    resubmissionOf, resubmissionCount: 1, resubmissionReservedAt: startedAt,
+    automaticResubmit: options.automaticResubmit === true
+  } : {}) };
+  if (bridgeResult?.status === "succeeded") {
+    const expectedRunId = options.observeUncertain ? previous?.runId : dispatchedRunId;
+    const actualUrl = bridgeResult.actualConversationUrl || bridgeResult.conversationUrl;
+    const identityVerified = typeof expectedRunId === "string" && bridgeResult.runId === expectedRunId
+      && bridgeResult.submissionConfirmed === true
+      && isBoundChatGptConversationUrl(actualUrl)
+      && conversationOriginMatches(actualUrl, bridgeResult.conversationUrl);
+    if (!identityVerified) {
+      const failure = { ...base, status: "needs_review", runId: bridgeResult.runId || expectedRunId,
+        reason: "bridge-observation-identity-mismatch", requestedConversationUrl: bridgeResult.requestedConversationUrl || conversationUrl,
+        actualConversationUrl: actualUrl, conversationUrl: actualUrl, submissionConfirmed: bridgeResult.submissionConfirmed === true,
+        completedAt: new Date().toISOString(), manualPrompt: prompt, manualPath: paths.formalPath };
+      await ensureManualAiShell(paths, week);
+      await writeAtomic(paths.sidecarPath, `${JSON.stringify(failure, null, 2)}\n`, "status");
+      return { ...failure, targetWeek: week };
+    }
+  }
   if (bridgeResult?.status !== "succeeded") {
     const status = bridgeResult?.status === "failed" ? "failed" : "needs_review";
     const failure = {
@@ -390,6 +611,11 @@ export async function generateAiReview(options = {}) {
       runId: bridgeResult?.runId || (status === "needs_review" ? dispatchedRunId || previous?.runId : undefined),
       reason: bridgeResult?.reason || bridge?.exit?.error || (bridge?.exit?.timedOut ? "bridge-timeout" : "bridge-result-missing"),
       conversationUrl: bridgeResult?.conversationUrl || previous?.conversationUrl || conversationUrl,
+      requestedConversationUrl: bridgeResult?.requestedConversationUrl || previous?.requestedConversationUrl || conversationUrl,
+      actualConversationUrl: bridgeResult?.actualConversationUrl || bridgeResult?.conversationUrl || previous?.actualConversationUrl,
+      ...(typeof bridgeResult?.submissionConfirmed === "boolean" ? { submissionConfirmed: bridgeResult.submissionConfirmed } : {}),
+      ...(dispatchedRunId ? { localAttemptId: dispatchedRunId } : previous?.localAttemptId ? { localAttemptId: previous.localAttemptId } : {}),
+      ...(dispatchedStartedAt || previous?.dispatchStartedAt ? { dispatchStartedAt: dispatchedStartedAt || previous.dispatchStartedAt } : {}),
       callerLabel: options.callerLabel || "learn-x:weekly-ai",
       ...(options.observeUncertain ? { observation: { status: "succeeded", runId: bridgeResult.runId, observedAt: new Date().toISOString(), outputSha256: bridgeResult.text ? sha256(bridgeResult.text) : undefined } } : {}),
       retryAfterSeconds: bridgeResult?.retryAfterSeconds,
@@ -429,8 +655,13 @@ export async function generateAiReview(options = {}) {
     ...base,
     status: "generated",
     runId: bridgeResult.runId,
+    ...(dispatchedRunId ? { localAttemptId: dispatchedRunId } : previous?.localAttemptId ? { localAttemptId: previous.localAttemptId } : {}),
+    ...(dispatchedStartedAt || previous?.dispatchStartedAt ? { dispatchStartedAt: dispatchedStartedAt || previous.dispatchStartedAt } : {}),
     outputSha256: sha256(text),
     conversationUrl: bridgeResult.conversationUrl,
+    requestedConversationUrl: bridgeResult.requestedConversationUrl || conversationUrl,
+    actualConversationUrl: bridgeResult.actualConversationUrl || bridgeResult.conversationUrl,
+    submissionConfirmed: bridgeResult.submissionConfirmed === true,
     callerLabel: options.callerLabel || "learn-x:weekly-ai",
     ...(options.observeUncertain ? { observation: { status: "succeeded", runId: bridgeResult.runId, observedAt: new Date().toISOString(), verification: bridgeResult.verification, outputSha256: sha256(text) } } : {}),
     completedAt: bridgeResult.completedAt || new Date().toISOString(),
@@ -443,16 +674,70 @@ export async function generateAiReview(options = {}) {
     try { await unlink(paths.generatedPath); } catch {}
     throw error;
   }
-  return await promoteAiReview({ repoRoot, week, confirm: true });
+  return await promoteGeneratedSafely(repoRoot, week, prompt);
 }
 
-function isEligibleUncertainResubmission(previous, week, promptSha256) {
+export async function generateAiReview(options = {}) {
+  const repoRoot = options.repoRoot || defaultRepoRoot;
+  const week = normalizeWeek(options.week);
+  if (options.weeklyAiLockToken) {
+    if (!await validateWeeklyAiLockToken(weekPaths(repoRoot, week).weekDir, options.weeklyAiLockToken)) {
+      throw new Error("weekly-ai-lock-token-invalid");
+    }
+    const result = await generateAiReviewUnlocked(options);
+    await appendWeeklyAiDiagnostic(weeklyAiOutcomeEvent(result), options);
+    return result;
+  }
+  const paths = weekPaths(repoRoot, week);
+  const lock = await tryAcquireWeeklyAiLock(paths.weekDir);
+  if (!lock) {
+    const template = await readFile(paths.templatePath, "utf8");
+    const result = { status: "needs_review", targetWeek: week, reason: "weekly-ai-run-in-progress",
+      manualPrompt: buildReviewPrompt(template, week), manualPath: paths.formalPath, dispatchState: "not-started" };
+    await appendWeeklyAiDiagnostic({
+      type: "weekly-ai-local-gate", week, attemptId: randomUUID(), status: "needs_review",
+      phase: "validation", failureStage: "local-gate", reason: "weekly-ai-run-in-progress",
+      deliveryStatus: "needs_review", businessValidationStatus: "unknown", promotionStatus: "unknown", readbackStatus: "unknown",
+    }, { ...options, repoRoot });
+    return result;
+  }
+  try {
+    const result = await generateAiReviewUnlocked({ ...options, repoRoot, week });
+    await appendWeeklyAiDiagnostic(weeklyAiOutcomeEvent(result), { ...options, repoRoot });
+    return result;
+  }
+  finally { await lock.release(); }
+}
+
+function isEligibleUncertainResubmission(previous, week, promptSha256, nowMs = Date.now()) {
   const diagnostics = previous?.diagnostics;
-  return previous?.status === "needs_review"
-    && previous.reason === "snapshot-mismatch"
-    && previous.targetWeek === week
-    && previous.promptSha256 === promptSha256
-    && !previous.resubmissionOf
+  const runId = previous?.runId;
+  const actualConversationUrl = previous?.actualConversationUrl || previous?.conversationUrl;
+  const observationReason = previous?.observation?.reason || previous?.reason;
+  const forbiddenReasons = new Set([
+    "chatgpt-rate-limited", "login-required", "captcha-or-blocked", "ego-bootstrap-permission",
+    "conversation-session-mismatch", "conversation-session-not-bound", "observer-identity-mismatch",
+    "original-run-identity-mismatch", "submission-unconfirmed", "new-user-message-not-found",
+  ]);
+  const retryableObservationReasons = new Set([
+    "snapshot-mismatch", "observer-window-ended", "observer-timeout", "new-assistant-message-not-found",
+    "response-body-not-ready", "response-text-unstable", "generation-in-progress", "output-markers-missing",
+    "observer-state-unavailable", "original-run-result-pending",
+  ]);
+  const startedAt = Date.parse(previous?.dispatchStartedAt || previous?.startedAt || "");
+  const sameBoundRun = typeof runId === "string" && runId === previous?.localAttemptId
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(runId)
+    && previous?.submissionConfirmed === true
+    && /^https:\/\/chatgpt\.com\/c\/[^/]+\/?$/.test(actualConversationUrl || "")
+    && conversationOriginMatches(actualConversationUrl, previous?.conversationUrl);
+  const safelyUnresolved = !forbiddenReasons.has(previous?.reason)
+    && !forbiddenReasons.has(observationReason)
+    && retryableObservationReasons.has(observationReason)
+    && previous?.observation?.status === "needs_review"
+    && previous?.observation?.runId === runId
+    && diagnostics?.rateLimited !== true
+    && previous?.observation?.diagnostics?.rateLimited !== true;
+  const snapshotMismatch = previous?.reason === "snapshot-mismatch"
     && diagnostics?.conversationMatched === true
     && diagnostics?.promptSeen === true
     && diagnostics?.assistantPresent === true
@@ -462,9 +747,19 @@ function isEligibleUncertainResubmission(previous, week, promptSha256) {
     && diagnostics?.rateLimited !== true
     && Number(diagnostics?.stableReadCount) >= 2
     && diagnostics?.snapshot?.ok === false;
+  return previous?.status === "needs_review"
+    && previous?.targetWeek === week
+    && previous?.promptSha256 === promptSha256
+    && !previous?.resubmissionOf
+    && previous?.resubmissionCount !== 1
+    && sameBoundRun
+    && safelyUnresolved
+    && Number.isFinite(startedAt)
+    && nowMs - startedAt >= uncertainAiResubmitAfterMs
+    && (snapshotMismatch || retryableObservationReasons.has(observationReason));
 }
 
-export async function canResubmitUncertainAi({ repoRoot = defaultRepoRoot, week: weekInput } = {}) {
+export async function canResubmitUncertainAi({ repoRoot = defaultRepoRoot, week: weekInput, nowMs = Date.now() } = {}) {
   const week = normalizeWeek(weekInput);
   const paths = weekPaths(repoRoot, week);
   const [previous, hasGenerated, hasInvalid, formalExists] = await Promise.all([
@@ -473,10 +768,10 @@ export async function canResubmitUncertainAi({ repoRoot = defaultRepoRoot, week:
   if (hasGenerated || hasInvalid) return false;
   if (formalExists && isSubstantiveExisting(await readFile(paths.formalPath, "utf8"))) return false;
   const template = await readFile(paths.templatePath, "utf8");
-  return isEligibleUncertainResubmission(previous, week, sha256(buildReviewPrompt(template, week)));
+  return isEligibleUncertainResubmission(previous, week, sha256(buildReviewPrompt(template, week)), nowMs);
 }
 
-export async function promoteAiReview(options = {}) {
+async function promoteAiReviewUnlocked(options = {}) {
   if (!options.confirm) throw new Error("promotion-requires-confirm");
   const repoRoot = options.repoRoot || defaultRepoRoot;
   const week = normalizeWeek(options.week);
@@ -494,13 +789,17 @@ export async function promoteAiReview(options = {}) {
   const auditPath = path.join(paths.archiveDir, `ai.generated.${Date.now()}.md`);
   if (await exists(paths.formalPath)) {
     const current = await readFile(paths.formalPath, "utf8");
+    const currentText = normalizeAiReviewText(current);
+    if (sha256(currentText) === sidecar.outputSha256 && validateAiReview(currentText).valid) {
+      const reconciled = { ...sidecar, status: "confirmed", confirmedAt: sidecar.confirmedAt || new Date().toISOString(),
+        formalPath: paths.formalPath, promotionRecovered: true, readbackSha256: sha256(currentText) };
+      await writeAtomic(paths.sidecarPath, `${JSON.stringify(reconciled, null, 2)}\n`, "confirmed");
+      if (await exists(paths.generatedPath)) await unlink(paths.generatedPath);
+      return { ...reconciled, targetWeek: week };
+    }
+    if (isSubstantiveExisting(current)) throw new Error("promotion-refuses-substantive-ai-md");
     rollbackPath = path.join(paths.archiveDir, `.ai.rollback.${process.pid}.${Date.now()}.md`);
     await rename(paths.formalPath, rollbackPath);
-    if (isSubstantiveExisting(current)) {
-      backupPath = path.join(paths.archiveDir, `ai.previous.${Date.now()}.md`);
-      await rename(rollbackPath, backupPath);
-      rollbackPath = null;
-    }
   }
 
   try {
@@ -512,9 +811,13 @@ export async function promoteAiReview(options = {}) {
       confirmedAt: new Date().toISOString(),
       formalPath: paths.formalPath,
       backupPath,
-      auditPath
+      auditPath,
+      readbackSha256: sha256(normalizeAiReviewText(await readFile(paths.formalPath, "utf8")))
     };
+    if (confirmed.readbackSha256 !== sidecar.outputSha256) throw new Error("promotion-readback-hash-mismatch");
     await writeAtomic(paths.sidecarPath, `${JSON.stringify(confirmed, null, 2)}\n`, "confirmed");
+    const readback = JSON.parse(await readFile(paths.sidecarPath, "utf8"));
+    if (readback.status !== "confirmed" || readback.outputSha256 !== confirmed.readbackSha256) throw new Error("promotion-status-readback-failed");
     if (rollbackPath) {
       try { await unlink(rollbackPath); } catch {}
     }
@@ -531,7 +834,28 @@ export async function promoteAiReview(options = {}) {
   }
 }
 
-export async function confirmManualAiReview(options = {}) {
+export async function promoteAiReview(options = {}) {
+  const repoRoot = options.repoRoot || defaultRepoRoot;
+  const week = normalizeWeek(options.week);
+  if (options.weeklyAiLockToken) {
+    if (!await validateWeeklyAiLockToken(weekPaths(repoRoot, week).weekDir, options.weeklyAiLockToken)) {
+      throw new Error("weekly-ai-lock-token-invalid");
+    }
+    const result = await promoteAiReviewUnlocked(options);
+    await appendWeeklyAiDiagnostic(weeklyAiOutcomeEvent(result), { ...options, repoRoot });
+    return result;
+  }
+  const lock = await tryAcquireWeeklyAiLock(weekPaths(repoRoot, week).weekDir);
+  if (!lock) throw new Error("weekly-ai-run-in-progress");
+  try {
+    const result = await promoteAiReviewUnlocked({ ...options, repoRoot, week });
+    await appendWeeklyAiDiagnostic(weeklyAiOutcomeEvent(result), { ...options, repoRoot });
+    return result;
+  }
+  finally { await lock.release(); }
+}
+
+async function confirmManualAiReviewUnlocked(options = {}) {
   if (!options.confirm) throw new Error("manual-confirmation-requires-explicit-confirmation");
   const repoRoot = options.repoRoot || defaultRepoRoot;
   const week = normalizeWeek(options.week);
@@ -567,7 +891,28 @@ export async function confirmManualAiReview(options = {}) {
   return { ...confirmed, targetWeek: week };
 }
 
-function parseArgs(argv) {
+export async function confirmManualAiReview(options = {}) {
+  const repoRoot = options.repoRoot || defaultRepoRoot;
+  const week = normalizeWeek(options.week);
+  if (options.weeklyAiLockToken) {
+    if (!await validateWeeklyAiLockToken(weekPaths(repoRoot, week).weekDir, options.weeklyAiLockToken)) {
+      throw new Error("weekly-ai-lock-token-invalid");
+    }
+    const result = await confirmManualAiReviewUnlocked(options);
+    if (!result.alreadyConfirmed) await appendWeeklyAiDiagnostic(weeklyAiOutcomeEvent(result), { ...options, repoRoot });
+    return result;
+  }
+  const lock = await tryAcquireWeeklyAiLock(weekPaths(repoRoot, week).weekDir);
+  if (!lock) throw new Error("weekly-ai-run-in-progress");
+  try {
+    const result = await confirmManualAiReviewUnlocked({ ...options, repoRoot, week });
+    if (!result.alreadyConfirmed) await appendWeeklyAiDiagnostic(weeklyAiOutcomeEvent(result), { ...options, repoRoot });
+    return result;
+  }
+  finally { await lock.release(); }
+}
+
+export function parseGenerateAiReviewArgs(argv) {
   const options = { confirm: false };
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === "--week") options.week = argv[++index];
@@ -578,12 +923,14 @@ function parseArgs(argv) {
     else if (argv[index] === "--resubmit-uncertain") options.resubmitUncertain = true;
     else if (argv[index] === "--observe-uncertain") options.observeUncertain = true;
     else if (argv[index] === "--observe-seconds") options.observeWaitSeconds = Number(argv[++index]);
+    else if (argv[index] === "--automatic-resubmit") options.automaticResubmit = true;
+    else if (argv[index] === "--weekly-ai-lock-token") options.weeklyAiLockToken = argv[++index];
   }
   return options;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const options = parseArgs(process.argv.slice(2));
+  const options = parseGenerateAiReviewArgs(process.argv.slice(2));
   const result = options.confirmManual
     ? await confirmManualAiReview(options)
     : options.promote

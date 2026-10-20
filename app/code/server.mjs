@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { createReadStream } from "node:fs";
 import { createHash } from "node:crypto";
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { execFile, spawn } from "node:child_process";
 import { watch } from "node:fs";
 import path from "node:path";
@@ -10,13 +10,15 @@ import { promisify } from "node:util";
 import { collectDocumentsMarkdown, readContextFile } from "./scripts/documents-context.mjs";
 import { buildUsageView, readLocalUsageStore, readUsageBaseline, recordLocalUsage } from "./scripts/chatpack-usage.mjs";
 import { readPromptAssets } from "./scripts/prompt-assets.mjs";
-import { containsPromptFragment } from "../../../skills/prompt-governance/scripts/fetch-prompt.mjs";
+import { containsPromptFragment, loadRegistry } from "../../../skills/prompt-governance/scripts/fetch-prompt.mjs";
+import { ChatPackCache } from "./scripts/chatpack-cache.mjs";
 import { readChatPackConfig } from "./scripts/static-graph.mjs";
 import { buildInsightContext } from "../../.agents/skills/learn-x-periodic-insight/scripts/periodic-insight-core.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../..");
-const distRoot = path.join(repoRoot, "dist");
+const defaultDistRoot = path.join(repoRoot, "dist");
+const distRoot = resolveDistRoot(process.env.LEARN_X_DIST_DIR);
 const execFileAsync = promisify(execFile);
 const port = Number(process.env.PORT || 4173);
 const host = process.env.HOST || "127.0.0.1";
@@ -26,13 +28,52 @@ let editorSaveInProgress = false;
 // ponytail: one process-wide request gate; the shared file lock protects other processes.
 let usageWriteInProgress = false;
 const chatPackPromptAssetCache = new Map();
+const chatPackCache = new ChatPackCache({
+  filePath: path.join(__dirname, ".local", "chatpack-cache", "cache.json"),
+  promptDescriptors: async () => {
+    const [manifest, registry] = await Promise.all([readPromptAssets(repoRoot, { optional: false }), loadRegistry()]);
+    return Object.entries(manifest.assets).map(([id, asset]) => {
+      const source = registry.prompts?.[id]?.source;
+      if (!source) throw new Error(`Prompt 来源映射缺失：${id}`);
+      return { id, source, document_id: asset.synced.document_id };
+    });
+  },
+  coreDescriptors: async () => {
+    const configPath = path.resolve(repoRoot, "../core/config/core-truth.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    if (config.schemaVersion !== "core-truth/v1" || config.lifecycle !== "official") throw new Error("Core 正式来源映射无效");
+    return ["dao", "fa"].map((id) => {
+      const document = config.documents?.[id];
+      if (!document || typeof document.wikiUrl !== "string" || typeof document.documentId !== "string") throw new Error(`Core 来源映射缺失：${id}`);
+      return { id, source: document.wikiUrl, document_id: document.documentId };
+    });
+  },
+  fetchPrompt: async (descriptor) => {
+    const asset = await fetchLatestPromptAsset(descriptor.id);
+    validateLatestPromptAsset(asset, descriptor.id);
+    if (asset.prompt_source !== descriptor.source || asset.prompt_document_id !== descriptor.document_id) throw new Error("飞书 Prompt 来源身份与登记映射不一致");
+    return asset;
+  },
+  fetchCore: async (descriptor) => {
+    const kind = descriptor.id === "dao" ? "Core/道" : "Core/法";
+    const asset = await readContextFile(kind);
+    if (asset.sourceUrl !== descriptor.source || asset.documentId !== descriptor.document_id) throw new Error("Core 来源身份与登记映射不一致");
+    return asset;
+  }
+});
+let chatPackCacheInitialization;
+
+function ensureChatPackCache() {
+  if (!chatPackCacheInitialization) chatPackCacheInitialization = chatPackCache.initialize();
+  return chatPackCacheInitialization;
+}
 
 async function serveStatic(_req, res, url) {
   const pathname = decodeURIComponent(url.pathname);
   const requested = pathname === "/" ? "/index.html" : pathname.endsWith("/") ? `${pathname}index.html` : pathname;
   const absolutePath = path.resolve(distRoot, `.${requested}`);
 
-  if (!absolutePath.startsWith(distRoot)) {
+  if (absolutePath !== distRoot && !absolutePath.startsWith(`${distRoot}${path.sep}`)) {
     res.writeHead(403);
     res.end("Forbidden");
     return;
@@ -61,6 +102,14 @@ async function serveStatic(_req, res, url) {
     res.writeHead(404);
     res.end("Not found");
   }
+}
+
+function resolveDistRoot(configuredPath) {
+  if (!configuredPath) return defaultDistRoot;
+  const resolved = path.resolve(repoRoot, configuredPath);
+  const relative = path.relative(defaultDistRoot, resolved);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("LEARN_X_DIST_DIR must stay inside dist/");
+  return resolved;
 }
 
 export function staticResponseHeaders(ext, contentTypes = {}) {
@@ -204,9 +253,11 @@ async function fetchLatestPromptAsset(promptId, { signal } = {}) {
     ({ stdout } = await execFileAsync(process.execPath, [readerPath, promptId], {
       encoding: "utf8",
       maxBuffer: 8 * 1024 * 1024,
+      timeout: 65_000,
       signal
     }));
   } catch (error) {
+    if (error.code === "ETIMEDOUT") throw new Error("Prompt 子进程读取超时（65 秒）");
     throw new Error(error.stderr?.trim() || error.message || "Prompt reader failed");
   }
   try {
@@ -214,6 +265,81 @@ async function fetchLatestPromptAsset(promptId, { signal } = {}) {
   } catch {
     throw new Error("Prompt reader returned invalid JSON");
   }
+}
+
+export async function handleChatPackCacheStatus(req, res, { cache = chatPackCache, initialize = ensureChatPackCache } = {}) {
+  res.setHeader("cache-control", "no-store");
+  if (!isLocalRequest(req)) {
+    sendJson(res, 403, { error: "Local Chat Pack cache requests only" });
+    return;
+  }
+  try {
+    await initialize();
+    sendJson(res, 200, await cache.status());
+  } catch (error) {
+    sendJson(res, 503, { error: error.message || "Chat Pack cache service unavailable", cache_service: "unavailable" });
+  }
+}
+
+export async function handleChatPackCacheRefresh(req, res, { cache = chatPackCache, initialize = ensureChatPackCache } = {}) {
+  res.setHeader("cache-control", "no-store");
+  if (!isLocalRequest(req)) {
+    sendJson(res, 403, { error: "Local Chat Pack cache requests only" });
+    return;
+  }
+  if (!(req.headers["content-type"] || "").toLowerCase().startsWith("application/json")) {
+    sendJson(res, 415, { error: "Content-Type must be application/json" });
+    return;
+  }
+  try {
+    const payload = await readJsonBody(req);
+    const promptIds = payload?.prompt_ids ?? [];
+    const coreKinds = payload?.core_kinds ?? [];
+    if (!validCacheSelection(promptIds, 24) || !validCacheSelection(coreKinds, 2) ||
+        coreKinds.some((kind) => !new Set(["dao", "fa"]).has(kind))) {
+      throw new Error("prompt_ids/core_kinds must contain unique registered resource IDs");
+    }
+    await initialize();
+    const result = cache.requestRefresh({ priority: [
+      ...promptIds.map((id) => `prompt:${id}`),
+      ...coreKinds.map((id) => `core:${id}`)
+    ] });
+    sendJson(res, 202, { accepted: true, ...result });
+  } catch (error) {
+    sendJson(res, 400, { error: error.message || "Unable to request Chat Pack cache refresh" });
+  }
+}
+
+export async function handleChatPackCacheRead(req, res, { cache = chatPackCache, initialize = ensureChatPackCache } = {}) {
+  res.setHeader("cache-control", "no-store");
+  if (!isLocalRequest(req)) {
+    sendJson(res, 403, { error: "Local Chat Pack cache requests only" });
+    return;
+  }
+  if (!(req.headers["content-type"] || "").toLowerCase().startsWith("application/json")) {
+    sendJson(res, 415, { error: "Content-Type must be application/json" });
+    return;
+  }
+  try {
+    const payload = await readJsonBody(req);
+    const promptIds = payload?.prompt_ids ?? [];
+    const coreKinds = payload?.core_kinds ?? [];
+    if (!validCacheSelection(promptIds, 24) || !validCacheSelection(coreKinds, 2) ||
+        coreKinds.some((kind) => !new Set(["dao", "fa"]).has(kind))) {
+      throw new Error("prompt_ids/core_kinds must contain unique registered resource IDs");
+    }
+    await initialize();
+    const result = await cache.read({ promptIds, coreKinds });
+    sendJson(res, result.status, result.body);
+  } catch (error) {
+    sendJson(res, 503, { error: error.message || "Chat Pack cache service unavailable", cache_service: "unavailable" });
+  }
+}
+
+function validCacheSelection(value, maximum) {
+  return Array.isArray(value) && value.length <= maximum &&
+    value.every((item) => typeof item === "string" && /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(item)) &&
+    new Set(value).size === value.length;
 }
 
 export async function handleChatPackPromptsLatest(req, res, {
@@ -420,6 +546,18 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
       await handleChatPackPromptsLatest(req, res);
       return;
     }
+    if (req.method === "GET" && url.pathname === "/api/chatpack/cache/status") {
+      await handleChatPackCacheStatus(req, res);
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/chatpack/cache/refresh") {
+      await handleChatPackCacheRefresh(req, res);
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/chatpack/cache/read") {
+      await handleChatPackCacheRead(req, res);
+      return;
+    }
     if (url.pathname === "/api/chatpack/usage" && new Set(["GET", "POST"]).has(req.method)) {
       await handleChatPackUsage(req, res);
       return;
@@ -437,6 +575,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
 
   server.listen(port, host, () => {
     console.log(`Learn-X static preview running at http://${host}:${port}`);
+    void ensureChatPackCache().catch((error) => console.error(`Chat Pack cache initialization failed: ${error.message || error}`));
   });
 
   server.on("close", () => watcher.close());

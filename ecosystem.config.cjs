@@ -14,7 +14,7 @@ module.exports = {
       max_restarts: 10,
       time: true,
       watch: ["app/code", "00_config/chatpack.config.json", "02_prompts/chatpack"],
-      ignore_watch: [".git", "node_modules", "dist", "app/code/.test-tmp"],
+      ignore_watch: [".git", "node_modules", "dist", "app/code/.test-tmp", "app/code/.local", "app/code/.local/**", "**/app/code/.local/**"],
       watch_delay: 1_000,
       env: {
         HOST: "127.0.0.1",

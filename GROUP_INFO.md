@@ -7,10 +7,10 @@ repo_path: "/Users/yuwei/code/learn-x"
 repo_url: null
 group_info_path: "/Users/yuwei/code/learn-x/GROUP_INFO.md"
 registry_source: "live"
-registry_fetched_at: "2026-10-12T21:00:46.596Z"
+registry_fetched_at: "2026-10-20T05:47:29.688Z"
 registry_age_seconds: 0
 registry_degraded: false
-updated_at: "2026-10-12T21:00:51.561Z"
+updated_at: "2026-10-20T05:47:35.671Z"
 icon: "🧠"
 name_zh: "learn-x"
 summary: "认知进化系统。核心功能 chat pack（chat 上下文提示词） + 定期（周、月、年）复盘 IPO (输入、处理、输出)"
@@ -31,6 +31,7 @@ priority: 1
 - 链接：研究&学习 → https://ywhome.feishu.cn/wiki/KcTcwG90OiZh3rksu0ucvwx5nFe
 - 链接：人生核心议题 → https://ywhome.feishu.cn/wiki/QIaQwXf07iMvqokKQf3cp3XmnMC
 - 链接：Learn-X Flomo 使用说明 → https://ywhome.feishu.cn/wiki/JzzLwuVGZiJSIBkUhLbc2Mbwnwg
+- 链接：Learn-X Chat Pack 使用说明 → https://ywhome.feishu.cn/wiki/NUkgwfx7Qi9HhxkB3OQcm8nVnSd
 - 链接：learn-x → https://simplyy.github.io/learn-x/index.html#learning
 - 默认机器人：Codex / Code X bot
 - 注册表来源：live，约 0 秒前读取
@@ -60,19 +61,20 @@ priority: 1
 - 研究&学习：https://ywhome.feishu.cn/wiki/KcTcwG90OiZh3rksu0ucvwx5nFe
 - 人生核心议题：https://ywhome.feishu.cn/wiki/QIaQwXf07iMvqokKQf3cp3XmnMC
 - Learn-X Flomo 使用说明：https://ywhome.feishu.cn/wiki/JzzLwuVGZiJSIBkUhLbc2Mbwnwg
+- Learn-X Chat Pack 使用说明：https://ywhome.feishu.cn/wiki/NUkgwfx7Qi9HhxkB3OQcm8nVnSd
 - learn-x：https://simplyy.github.io/learn-x/index.html#learning
 - README.md：[研究&学习](https://ywhome.feishu.cn/wiki/KcTcwG90OiZh3rksu0ucvwx5nFe)
 - README.md：[人生核心议题](https://ywhome.feishu.cn/wiki/QIaQwXf07iMvqokKQf3cp3XmnMC)
 - README.md：[Learn-X Flomo 使用说明](https://ywhome.feishu.cn/wiki/JzzLwuVGZiJSIBkUhLbc2Mbwnwg)
+- README.md：[Learn-X Chat Pack 使用说明](https://ywhome.feishu.cn/wiki/NUkgwfx7Qi9HhxkB3OQcm8nVnSd)
 - README.md：| 器 | tool，工具实现层 | flomo、飞书、Codex、脚本、书籍 |
 - README.md：7. 人工确认后，才允许更新 Core 飞书《道》《法》；Learn-X 只保留周期 Memory 与候选材料，不是真源。
 - README.md：原则：Learn-X 是个人 AI native 的知行进化系统；Weekly / Monthly / Yearly Output 是其中的认知审稿环节，Memory 是跨周上下文；Core 飞书《道》《法》是正式道法唯一真源。
 - README.md：| `01_core/` | Learn-X 周期 Memory 与相关过程材料；正式道法由 Core 飞书《道》《法》维护。 |
-- README.md：Core 飞书《道》《法》是正式道法真源；附录和 Learn-X 候选均不是 Truth。AI 不得自动升级，只有用户明确确认后才可更新 Core。
 
 ## 状态
 - 工作目录：可访问
-- 链接数：4
+- 链接数：5
 - Skill 扫描：正常
 - 注册表新鲜度：可用
-- 最近更新时间：2026-10-12T21:00:51.561Z
+- 最近更新时间：2026-10-20T05:47:35.671Z

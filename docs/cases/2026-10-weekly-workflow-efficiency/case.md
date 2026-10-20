@@ -119,3 +119,34 @@
 - 第二轮发现的问题已修复：不同未知错误使用脱敏哈希信号，不同指纹分离、相同指纹稳定；WeRead、supervisor 与 recovery-memory 共用 ISO 周规则；Learn-X Health collector 与 Health-X exporter 对周目录逐级拒绝软链接并核验真实路径。
 - 最新收据：Learn-X `rtk proxy npm test` **592/592**；Health-X exporter **3/3**；Health collector **6/6**；恢复主链 **85/85**。仅使用合成夹具，未读取真实健康输入。
 - Deep 验收报告：[acceptance.md](acceptance.md)。整体结论为部分达成；真实来源、Bridge 部署、Build 续跑、自动化唤醒及 TOCTOU 压力边界仍待后续验证。
+
+## 2026-10-20 Bridge 诊断闭环回链
+
+- 当前跨仓库主方案：[Ego Lite / ChatGPT Bridge 核心故障修复与持续诊断闭环](/Users/yuwei/code/browser-runtime-governance/docs/cases/2026-10-chatgpt-bridge-diagnostics/execution-plan.md)，来源为用户消息 01a15716-48ff-7e81-9921-f4b9ec9323ad。完整方案只保存在 Bridge Case，不在 Learn-X 复制。
+- 本仓库实施证据继续写入本 Case：聚焦周记 AI 20 分钟单次重开、跨入口额度和产物晋升幂等、Flomo 错误信号保真、最终手动提示词与用户可见结果。原有周记阶段门、来源完整性政策、人工确认与 Memory 门槛保持有效。
+- 2026-10-20 M0 工作区存在 9 个已修改路径和一个未跟踪目录；这些修改归属未核实前均作用户资产保护。另有会话 01a156f6-2e59-7ea1-9a00-33871816ec5c 处于 active，涉及相同周记脚本；修改前必须重读当前差异并避免覆盖并发编辑。
+
+### 2026-10-20 实施验收补充
+
+- 周记 AI 入口现在共用按目标周的令牌锁；CLI 不能用旧布尔参数绕锁。20分钟从实际派发时间起算，原任务先观察；条件满足后原子预留一次额度并派发 replacement，再观察最多20分钟。迟到结果可接纳；仍无结果时返回完整手动提示词，不再自动发第三次。
+- 正式 `ai.md` 已写入但确认侧车未更新时，后续调用按输出摘要对账并补确认；已有实质人工内容不会被自动覆盖。Flomo 来源信号保留安全系统错误码，不将高层同步失败覆盖为另一类原始故障。
+- Bridge 详细身份/提交错误经业务事件写入时保留原码，原始失败与后续观察阻塞分列；未知码仍折叠为 `unknown`。六个身份/提交原因、未知哨兵过滤及观察新原因/原始原因并列已覆盖测试，并经独立 reviewer 通过。
+- 本仓库周记 AI、supervisor 和 lock 定向测试 **85/85**；Learn-X 技能层完整回归此前 **547/547**（新增一个 reason 用例前）。没有真实 AI 运行、真实 Feishu 写入或生产 journal 追加。完整仓库 `npm test` 有两项并发 ChatPack UI 测试失败并挂起，未记为通过；并发 UI 改动保留原样。
+- 运行时是否已加载修复尚未验证；Bridge 主 Case 的 M4 状态为待排空加载，日常 06:00 诊断配置与周一报告配置已读回 ACTIVE。完整范围与验收见 [Bridge Case](../../../../browser-runtime-governance/docs/cases/2026-10-chatgpt-bridge-diagnostics/case.md) 及其 [验收报告](../../../../browser-runtime-governance/docs/cases/2026-10-chatgpt-bridge-diagnostics/acceptance.md)。
+
+### 2026-10-20 Bridge 改动后的周记回归续验
+
+- Bridge 源码近期增加共享准入、分离 runtime health 与 client failure，以及 Runner 维护能力校验；本仓库周记代码未因此改动。本次重跑 weekly automation 脚本测试 **140/140**，并重跑已修改的 Input/Process 测试 **31/31**。
+- 周记单次重开、20分钟门限、replacement 独立观察窗、完整手动提示词、原因码保真与崩溃后晋升对账均仍通过。测试使用临时目录、合成时钟和 fake Bridge；没有真实 AI 请求、真实 Flomo 扫描、Feishu 写入或生产日志追加。
+- Bridge 生产 Runner 目前不报告新准入 gate/源码清单能力，因此维护 CLI 会拒绝对它暂停；生产服务仍未加载本地改动。真实周记结果及其自动恢复行为只能在安全接管并加载后验证。
+- Learn-X 全仓 `npm test` 本轮未执行为通过结论；既有 ChatPack 并发修改保留，不纳入此处周记回归结果。完整生产停止条件和跨仓库验收见 [Bridge acceptance](../../../../browser-runtime-governance/docs/cases/2026-10-chatgpt-bridge-diagnostics/acceptance.md)。
+
+### 2026-10-20 20分钟门限回修与复核
+
+- 独立验收发现真实时序缺口：首次 AI Bridge 约 4 分钟返回 `needs_review` 后，本次 supervisor 先观察原任务再退出；当时尚未满 20 分钟，因此不会在 20 分钟边界继续，自动重开被推迟到下一次周一/07:00 调度。
+- supervisor 现在先完成该轮来源采集和瞬态重试，再处理 AI 恢复，避免 AI 等待拖住 Flomo 等来源。只有原 run 的身份、会话、提交确认、目标周、prompt 指纹、允许原因及无可用/人工产物等非时间门槛在假定的 20 分钟边界全部通过时，才会等待一次到达派发时间 + 20 分钟。
+- 等待预算必须覆盖剩余等待、原 run 边界复看、第二次 Bridge 4 分钟预算、replacement 20 分钟观察窗与收尾余量。等待期间保留同周 AI 锁，释放 supervisor 状态锁与 Browser 队列锁，让同周 Flomo 手动入口和阶段记录继续运行；结束后有界重取状态锁并加载并发写入后的最新状态，再复看原 run。没有定时轮询。新增隔离并发测试覆盖阶段记录、Flomo 手动采集、状态合并、锁重取预算不足与手动提示词返回。预算不足、等待被中断、身份改变或复看后门槛失效时不重开，结果包含完整手动提示词。
+- 门限到达后重新观察原 run，再读侧车、`ai.md` 与可用结果；迟到原结果优先交付。仅在安全门槛仍成立时调用已有原子预留，最多派发一个 replacement，并记录等待、预算跳过、原 run 迟到成功和预留派发事件。正式人工内容出现时不覆盖、不重开。
+- replacement 派发后采用自己的 20 分钟单次定时等待，到期后只做一次边界观察；等待期间也释放共享状态锁与 Browser 队列锁，保留周记 AI 锁。重取门槛按 replacement 的收尾预算计算（不沿用首次等待时包含完整重开窗口的门槛），并加载最新并发状态；进程中断后从持久侧车恢复同一 replacement，不产生第三次提交。原 run 已满 20 分钟时，启动后的 `observe-existing` 即作为它的边界观察，不额外重复观察。
+- 隔离回归：weekly-automation scripts 与 lib **152/152**，周记、Flomo 与 Process 受影响回归 **47/47**；覆盖原 run 与 replacement 的20分钟边界、迟到结果、单次额度、人工正文、预算不足、两个窗口期间的并发状态更新、中断续接及完整手动提示词。`node --check`、Learn-X `git diff --check` 通过。模拟时钟和 fake Bridge 不代表真实周记运行通过。
+- 同一独立验收者已受托复核此回修及并发/中断边界，结果待回传。生产 Runner 未加载，真实 AI 提交和 20 分钟墙钟恢复仍未验证；M4 还缺可验证的精确回滚来源与恢复路径，因此本轮保持生产服务原状。

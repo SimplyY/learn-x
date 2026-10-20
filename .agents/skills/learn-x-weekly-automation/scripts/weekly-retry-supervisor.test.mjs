@@ -11,6 +11,9 @@ import { WEEKLY_SOURCE_CONFIG } from "../../learn-x-input/scripts/lib/weekly-sou
 import { updateWeeklySourceStatus } from "../../learn-x-input/scripts/lib/source-status.mjs";
 import { withLock } from "../../learn-x-flomo-review/scripts/review.mjs";
 import { recordRecoveryIncident } from "./recovery-memory.mjs";
+import { buildReviewPrompt, sha256 } from "./generate-ai-review.mjs";
+
+const VALID_AI_REVIEW = "# Learn-X 周回顾\n\n## 具体的人和事（独立主线，优先保留）\n\n本周未发现可可靠提炼的具体人/事。\n\n## 本周议题\n\n真实判断\n\n## 精华议题摘要\n\n真实答案";
 
 async function seedFailedSource(root, week, sourceId, overrides = {}) {
   const weekRoot = path.join(root, "03_input/weekly", week);
@@ -26,6 +29,187 @@ async function seedFailedSource(root, week, sourceId, overrides = {}) {
   return weekRoot;
 }
 
+async function runOneShotWindowScenario(t, resolveAtMinute) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-ai-second-window-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const weekRoot = path.join(root, "03_input/weekly", week);
+  const templateDir = path.join(root, "03_input/weekly/00_template");
+  await mkdir(weekRoot, { recursive: true });
+  await mkdir(templateDir, { recursive: true });
+  await writeFile(path.join(templateDir, "ai.md"), "# synthetic template", "utf8");
+  const template = await readFile(path.join(templateDir, "ai.md"), "utf8");
+  const state = createWeeklyRetryState(week);
+  for (const source of WEEKLY_SOURCE_CONFIG) state.sources[source.id].status = source.collector ? "succeeded" : "recheck-only";
+  state.sources.ai.status = "needs_review";
+  state.sources.ai.attempts = 1;
+  await writeFile(path.join(weekRoot, "_weekly-retry-state.json"), `${JSON.stringify(state)}\n`);
+  const originalRunId = "123e4567-e89b-42d3-a456-426614174334";
+  const replacementRunId = "123e4567-e89b-42d3-a456-426614174335";
+  const conversationUrl = `https://chatgpt.com/c/${originalRunId}`;
+  const sidecar = path.join(weekRoot, "_ai-generated.json");
+  let nowMs = Date.parse("2026-10-05T07:00:00Z");
+  const originalDispatchAt = new Date(nowMs - 21 * 60_000).toISOString();
+  await writeFile(sidecar, JSON.stringify({
+    status: "needs_review", targetWeek: week, promptSha256: sha256(buildReviewPrompt(template, week)),
+    runId: originalRunId, localAttemptId: originalRunId, dispatchStartedAt: originalDispatchAt, startedAt: originalDispatchAt,
+    submissionConfirmed: true, requestedConversationUrl: "https://chatgpt.com/", actualConversationUrl: conversationUrl,
+    conversationUrl, reason: "observer-window-ended", manualPrompt: "Complete synthetic manual prompt"
+  }));
+  const calls = [];
+  const readOutcome = async () => {
+    const current = JSON.parse(await readFile(sidecar, "utf8"));
+    return { status: current.status, error: current.reason, updatedAt: current.completedAt || current.dispatchStartedAt };
+  };
+  const result = await runWeeklyRetrySupervisor({
+    week, mode: "initial", repoRoot: root, maxDurationMs: 45 * 60_000,
+    now: () => nowMs,
+    sleep: async (ms) => { nowMs += Math.max(ms, 60_000); },
+    readOutcome,
+    runSource: async (_source, context) => {
+      calls.push({ observe: context.observeUncertainAi, resubmit: context.resubmitUncertainAi, token: context.weeklyAiLockToken });
+      const current = JSON.parse(await readFile(sidecar, "utf8"));
+      if (context.resubmitUncertainAi) {
+        current.status = "needs_review";
+        current.runId = replacementRunId;
+        current.localAttemptId = replacementRunId;
+        current.dispatchStartedAt = new Date(nowMs).toISOString();
+        current.resubmissionCount = 1;
+        current.resubmissionOf = { runId: originalRunId };
+        current.reason = "observer-window-ended";
+        await writeFile(sidecar, JSON.stringify(current));
+        return { status: "needs_review", error: "observer-window-ended" };
+      }
+      if (context.observeUncertainAi && current.resubmissionCount === 1) {
+        const elapsed = nowMs - Date.parse(current.dispatchStartedAt);
+        if (resolveAtMinute != null && elapsed >= resolveAtMinute * 60_000) {
+          current.status = "confirmed";
+          current.completedAt = new Date(nowMs).toISOString();
+          current.reason = undefined;
+          await writeFile(sidecar, JSON.stringify(current));
+          return { status: "confirmed" };
+        }
+        current.observation = { status: "needs_review", runId: replacementRunId, reason: "original-run-result-pending", observedAt: new Date(nowMs).toISOString() };
+        await writeFile(sidecar, JSON.stringify(current));
+        return { status: "needs_review", error: "original-run-result-pending" };
+      }
+      current.observation = { status: "needs_review", runId: originalRunId, reason: "original-run-result-pending", observedAt: new Date(nowMs).toISOString() };
+      await writeFile(sidecar, JSON.stringify(current));
+      return { status: "needs_review", error: "original-run-result-pending" };
+    }
+  });
+  return { result, calls, sidecar, now: () => nowMs, replacementRunId };
+}
+
+async function runFreshUncertainAiScenario(t, { maxDurationMs = 60 * 60_000, lateOriginal = false, humanDuringWait = false,
+  duringWait, duringReplacementWait, interruptDuringWait = false, terminalReplacementReason, replacementImmediateStatus } = {}) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-ai-invocation-deadline-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const weekRoot = path.join(root, "03_input/weekly", week);
+  const templateDir = path.join(root, "03_input/weekly/00_template");
+  const browserQueuePath = path.join(root, "03_input/weekly/.browser-queue.lock");
+  await mkdir(weekRoot, { recursive: true });
+  await mkdir(templateDir, { recursive: true });
+  await writeFile(path.join(templateDir, "ai.md"), "# synthetic template", "utf8");
+  const state = createWeeklyRetryState(week);
+  for (const source of WEEKLY_SOURCE_CONFIG) state.sources[source.id].status = source.collector ? "succeeded" : "recheck-only";
+  state.sources.ai.status = "pending";
+  state.sources.ai.attempts = 0;
+  await writeFile(path.join(weekRoot, "_weekly-retry-state.json"), `${JSON.stringify(state)}\n`);
+  const originalRunId = "123e4567-e89b-42d3-a456-426614174336";
+  const replacementRunId = "123e4567-e89b-42d3-a456-426614174337";
+  const conversationUrl = `https://chatgpt.com/c/${originalRunId}`;
+  const sidecar = path.join(weekRoot, "_ai-generated.json");
+  let nowMs = Date.parse("2026-10-05T07:00:00Z");
+  let originalDispatchAt;
+  const calls = [];
+  const sleeps = [];
+  const events = [];
+  let waitResult;
+  let result;
+  let error;
+  try { result = await runWeeklyRetrySupervisor({
+    week, mode: "initial", repoRoot: root, maxDurationMs,
+    now: () => nowMs,
+    sleep: async (ms) => {
+      sleeps.push(ms);
+      assert.equal(await readFile(browserQueuePath, "utf8").then(() => true, () => false), false,
+        "the timed wait never holds the Browser queue");
+      nowMs += ms;
+      if (duringWait && ms > 10 * 60_000 && !waitResult) waitResult = await duringWait({ root, week, weekRoot });
+      const current = await readFile(sidecar, "utf8").then((value) => JSON.parse(value), () => null);
+      if (duringReplacementWait && current?.resubmissionCount === 1 && ms > 10 * 60_000 && !waitResult) {
+        waitResult = await duringReplacementWait({ root, week, weekRoot });
+      }
+      const interruptReplacement = interruptDuringWait === "replacement" && current?.resubmissionCount === 1;
+      const interruptOriginal = interruptDuringWait === true && current?.resubmissionCount !== 1;
+      if ((interruptReplacement || interruptOriginal) && ms > 10 * 60_000) throw new Error("synthetic-process-interruption");
+      if (humanDuringWait && ms > 10 * 60_000) await writeFile(path.join(weekRoot, "ai.md"), "# 用户人工周记\n保留这段正文。\n", "utf8");
+    },
+    readOutcome: async () => {
+      const current = JSON.parse(await readFile(sidecar, "utf8"));
+      return { status: current.status, error: current.reason || "", updatedAt: current.observation?.observedAt || current.completedAt || current.dispatchStartedAt };
+    },
+    onEvent: (event) => events.push(event),
+    runSource: async (_source, context) => {
+      calls.push({ observe: context.observeUncertainAi, resubmit: context.resubmitUncertainAi,
+        automatic: context.automaticResubmit, at: nowMs });
+      if (!context.observeUncertainAi && !context.resubmitUncertainAi) {
+        originalDispatchAt = new Date(nowMs).toISOString();
+        nowMs += 4 * 60_000;
+        await writeFile(sidecar, JSON.stringify({
+          status: "needs_review", targetWeek: week, promptSha256: sha256(buildReviewPrompt("# synthetic template", week)),
+          runId: originalRunId, localAttemptId: originalRunId, dispatchStartedAt: originalDispatchAt, startedAt: originalDispatchAt,
+          submissionConfirmed: true, requestedConversationUrl: "https://chatgpt.com/", actualConversationUrl: conversationUrl,
+          conversationUrl, reason: "observer-window-ended", manualPrompt: "Complete synthetic manual prompt"
+        }));
+        return { status: "needs_review", error: "observer-window-ended" };
+      }
+      const current = JSON.parse(await readFile(sidecar, "utf8"));
+      if (context.resubmitUncertainAi) {
+        current.status = replacementImmediateStatus || "needs_review";
+        current.runId = replacementRunId;
+        current.localAttemptId = replacementRunId;
+        current.dispatchStartedAt = new Date(nowMs).toISOString();
+        current.resubmissionCount = 1;
+        current.resubmissionOf = { runId: originalRunId, dispatchStartedAt: originalDispatchAt, reason: "observer-window-ended" };
+        current.reason = terminalReplacementReason || "observer-window-ended";
+        current.actualConversationUrl = `https://chatgpt.com/c/${replacementRunId}`;
+        current.conversationUrl = current.actualConversationUrl;
+        if (["generated", "confirmed"].includes(replacementImmediateStatus)) {
+          current.outputSha256 = sha256(VALID_AI_REVIEW);
+          if (replacementImmediateStatus === "confirmed") {
+            current.readbackSha256 = current.outputSha256;
+            current.completedAt = new Date(nowMs).toISOString();
+            delete current.reason;
+            await writeFile(path.join(weekRoot, "ai.md"), `${VALID_AI_REVIEW}\n`, "utf8");
+          } else {
+            await writeFile(path.join(weekRoot, "ai.generated.md"), `${VALID_AI_REVIEW}\n`, "utf8");
+          }
+        }
+        await writeFile(sidecar, JSON.stringify(current));
+        return { status: current.status, error: current.reason };
+      }
+      if (nowMs >= Date.parse(originalDispatchAt) + 20 * 60_000 && lateOriginal && current.resubmissionCount !== 1) {
+        current.status = "confirmed";
+        current.completedAt = new Date(nowMs).toISOString();
+        delete current.reason;
+        delete current.observation;
+        await writeFile(sidecar, JSON.stringify(current));
+        return { status: "confirmed" };
+      }
+      const observedRunId = current.resubmissionCount === 1 ? replacementRunId : originalRunId;
+      current.observation = { status: "needs_review", runId: observedRunId,
+        reason: "original-run-result-pending", submissionConfirmed: true,
+        actualConversationUrl: `https://chatgpt.com/c/${observedRunId}`, observedAt: new Date(nowMs).toISOString() };
+      await writeFile(sidecar, JSON.stringify(current));
+      return { status: "needs_review", error: "original-run-result-pending" };
+    }
+  }); } catch (caught) { error = caught; }
+  return { result, error, calls, sleeps, events, sidecar, weekRoot, root, waitResult, now: () => nowMs, originalRunId, replacementRunId };
+}
+
 test("classifies recoverable network faults separately from login, schema, and uncertain AI submissions", () => {
   assert.deepEqual(classifyWeeklyFailure("ECONNRESET"), { errorClass: "network-transient", retryable: true, retryAfterMs: 20 * 60_000 });
   assert.deepEqual(classifyWeeklyFailure("ECONNRESET", { sourceId: "flomo" }), { errorClass: "network-transient", retryable: true, retryAfterMs: 10 * 60_000 });
@@ -35,7 +219,13 @@ test("classifies recoverable network faults separately from login, schema, and u
     errorClass: "manual-review-required", retryable: false, retryAfterMs: 0
   });
   assert.equal(classifyWeeklyFailure("login expired").retryable, false);
+  assert.deepEqual(classifyWeeklyFailure("operation not permitted", { sourceId: "flomo", code: "EPERM" }), {
+    errorClass: "local-execution-permission-denied", retryable: false, retryAfterMs: 0,
+  });
   assert.equal(classifyWeeklyFailure("field contract mismatch").errorClass, "source-contract-mismatch");
+  assert.deepEqual(classifyWeeklyFailure("Flomo 全量快照同步失败（ego-detail-body-mismatch stage=verify-longest-detail）：scan-integrity-check-failed", { sourceId: "flomo" }), {
+    errorClass: "source-integrity-failed", retryable: false, retryAfterMs: 0,
+  });
   assert.deepEqual(classifyWeeklyFailure("weread-skill-upgrade-required: please upgrade"), {
     errorClass: "source-version-mismatch", retryable: false, retryAfterMs: 0
   });
@@ -127,6 +317,400 @@ test("automatic AI recovery observes the original run before considering a resub
   assert.deepEqual(calls, [{ observe: true, resubmit: false }]);
   assert.equal(result.sources.ai.status, "needs_review");
   assert.equal(JSON.parse(await readFile(sidecar, "utf8")).observation.reason, "chatgpt-rate-limited");
+});
+
+test("automatic weekly AI recovery reopens at most once after twenty minutes with confirmed same-run identity", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-ai-20m-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const weekRoot = path.join(root, "03_input/weekly", week);
+  const templateDir = path.join(root, "03_input/weekly/00_template");
+  await mkdir(weekRoot, { recursive: true });
+  await mkdir(templateDir, { recursive: true });
+  await writeFile(path.join(templateDir, "ai.md"), "# synthetic template", "utf8");
+  const state = createWeeklyRetryState(week);
+  for (const source of WEEKLY_SOURCE_CONFIG) state.sources[source.id].status = source.collector ? "succeeded" : "recheck-only";
+  state.sources.ai.status = "needs_review";
+  state.sources.ai.attempts = 1;
+  await writeFile(path.join(weekRoot, "_weekly-retry-state.json"), `${JSON.stringify(state)}\n`);
+  const template = await readFile(path.join(templateDir, "ai.md"), "utf8");
+  const runId = "123e4567-e89b-42d3-a456-426614174333";
+  const nowMs = Date.parse("2026-10-05T07:00:00Z");
+  const dispatchStartedAt = new Date(nowMs - 21 * 60_000).toISOString();
+  const conversationUrl = `https://chatgpt.com/c/${runId}`;
+  const sidecar = path.join(weekRoot, "_ai-generated.json");
+  await writeFile(sidecar, JSON.stringify({
+    status: "needs_review", targetWeek: week, promptSha256: sha256(buildReviewPrompt(template, week)), runId, localAttemptId: runId,
+    dispatchStartedAt, startedAt: dispatchStartedAt, submissionConfirmed: true, requestedConversationUrl: "https://chatgpt.com/",
+    actualConversationUrl: conversationUrl, conversationUrl, reason: "observer-window-ended"
+  }));
+  const calls = [];
+  const result = await runWeeklyRetrySupervisor({
+    week, mode: "initial", repoRoot: root, maxDurationMs: 30 * 60_000, now: () => nowMs,
+    readOutcome: async () => null,
+    runSource: async (_source, context) => {
+      calls.push({ observe: context.observeUncertainAi, resubmit: context.resubmitUncertainAi, automatic: context.automaticResubmit });
+      const current = JSON.parse(await readFile(sidecar, "utf8"));
+      if (context.observeUncertainAi) {
+        current.observation = { status: "needs_review", runId, reason: "original-run-result-pending", submissionConfirmed: true,
+          actualConversationUrl: conversationUrl, observedAt: new Date(nowMs).toISOString() };
+        await writeFile(sidecar, JSON.stringify(current));
+        return { status: "needs_review", error: "original-run-result-pending" };
+      }
+      assert.equal(context.resubmitUncertainAi, true);
+      current.status = "confirmed";
+      current.resubmissionCount = 1;
+      await writeFile(sidecar, JSON.stringify(current));
+      return { status: "confirmed" };
+    }
+  });
+  assert.deepEqual(calls, [
+    { observe: true, resubmit: false, automatic: false },
+    { observe: false, resubmit: true, automatic: true },
+  ]);
+  assert.equal(result.sources.ai.status, "succeeded");
+  assert.equal(JSON.parse(await readFile(sidecar, "utf8")).resubmissionCount, 1);
+});
+
+test("the one-shot replacement is observed through its own twenty-minute window and accepts a late result", async (t) => {
+  const { result, calls, sidecar, now, replacementRunId } = await runOneShotWindowScenario(t, 19);
+  const finalSidecar = JSON.parse(await readFile(sidecar, "utf8"));
+  assert.equal(result.sources.ai.status, "succeeded");
+  assert.equal(finalSidecar.status, "confirmed");
+  assert.equal(finalSidecar.runId, replacementRunId);
+  assert.equal(finalSidecar.resubmissionCount, 1);
+  assert.ok(now() - Date.parse(finalSidecar.dispatchStartedAt) >= 19 * 60_000);
+  assert.equal(calls.filter((call) => call.resubmit).length, 1);
+  assert.ok(calls.filter((call) => call.observe).length >= 2, "observe original and replacement runs separately");
+  assert.ok(calls.every((call) => typeof call.token === "string"), "the outer business lock remains held across observations");
+});
+
+test("the one-shot replacement returns the full manual prompt after its second twenty-minute window", async (t) => {
+  const { result, calls, sidecar, replacementRunId } = await runOneShotWindowScenario(t, null);
+  const finalSidecar = JSON.parse(await readFile(sidecar, "utf8"));
+  assert.equal(result.sources.ai.status, "needs_review");
+  assert.equal(result.manualFallback.prompt, "Complete synthetic manual prompt");
+  assert.equal(finalSidecar.runId, replacementRunId);
+  assert.equal(finalSidecar.resubmissionCount, 1);
+  assert.equal(calls.filter((call) => call.resubmit).length, 1);
+  assert.equal(calls.filter((call) => call.observe).length, 2, "observe the original once, then the replacement at its deadline");
+});
+
+test("a known terminal replacement reason skips its remaining wait and preserves the manual prompt", async (t) => {
+  const { result, calls, sleeps, events, sidecar } = await runFreshUncertainAiScenario(t, {
+    terminalReplacementReason: "login-required"
+  });
+  const finalSidecar = JSON.parse(await readFile(sidecar, "utf8"));
+  assert.equal(result.sources.ai.status, "needs_review");
+  assert.equal(result.manualFallback.prompt, "Complete synthetic manual prompt");
+  assert.equal(finalSidecar.resubmissionCount, 1);
+  assert.equal(calls.filter((call) => call.resubmit).length, 1);
+  assert.equal(calls.filter((call) => call.observe).length, 2, "no replacement boundary observation follows a login block");
+  assert.equal(sleeps.filter((ms) => ms > 10 * 60_000).length, 1, "only the original run's required boundary wait occurs");
+  assert.ok(events.some((event) => event.outcome === "stopped-terminal-reason" && event.reasonCode === "login-required"));
+});
+
+test("a fresh uncertain weekly AI run waits once to its twenty-minute boundary and accepts the late original result", async (t) => {
+  const { result, calls, sleeps, events, sidecar, now, originalRunId } = await runFreshUncertainAiScenario(t, { lateOriginal: true });
+  const finalSidecar = JSON.parse(await readFile(sidecar, "utf8"));
+  assert.equal(result.sources.ai.status, "succeeded");
+  assert.equal(finalSidecar.status, "confirmed");
+  assert.equal(finalSidecar.runId, originalRunId);
+  assert.equal(calls.filter((call) => !call.observe && !call.resubmit).length, 1, "one initial submission");
+  assert.equal(calls.filter((call) => call.resubmit).length, 0, "a late original result prevents replacement submission");
+  assert.equal(sleeps.filter((ms) => ms > 10 * 60_000).length, 1, "one deadline wait, without polling");
+  assert.equal(now(), Date.parse(finalSidecar.dispatchStartedAt) + 20 * 60_000);
+  assert.ok(events.some((event) => event.outcome === "waiting-for-20m-deadline"));
+  assert.ok(events.some((event) => event.outcome === "late-original-result"));
+});
+
+test("a fresh uncertain weekly AI run reserves at most one replacement after re-observing the original", async (t) => {
+  const { result, calls, sleeps, sidecar, now, originalRunId, replacementRunId } = await runFreshUncertainAiScenario(t);
+  const finalSidecar = JSON.parse(await readFile(sidecar, "utf8"));
+  assert.equal(result.sources.ai.status, "needs_review");
+  assert.equal(result.manualFallback.prompt, "Complete synthetic manual prompt");
+  assert.equal(finalSidecar.runId, replacementRunId);
+  assert.equal(finalSidecar.resubmissionCount, 1);
+  assert.equal(finalSidecar.resubmissionOf.runId, originalRunId);
+  assert.equal(calls.filter((call) => !call.observe && !call.resubmit).length, 1, "one initial submission");
+  assert.equal(calls.filter((call) => call.resubmit).length, 1, "one reserved replacement submission");
+  assert.ok(calls.some((call) => call.observe && call.at >= Date.parse(finalSidecar.resubmissionOf.dispatchStartedAt) + 20 * 60_000),
+    "the original run was re-observed at the eligibility boundary");
+  assert.ok(now() >= Date.parse(finalSidecar.dispatchStartedAt) + 20 * 60_000, "replacement receives its own observation window");
+});
+
+test("the twenty-minute AI wait releases the weekly state lock and merges concurrent stage and manual Flomo results", async (t) => {
+  const { result, events, weekRoot, waitResult } = await runFreshUncertainAiScenario(t, {
+    duringWait: async ({ root: repoRoot, week }) => {
+      const stage = await recordWeeklyStage({ week, stage: "preprocess", durationMs: 1234, repoRoot });
+      const manual = await runWeeklyRetrySupervisor({
+        week, mode: "manual", sourceId: "flomo", repoRoot, now: () => Date.parse("2026-10-05T07:10:00Z"),
+        readOutcome: async () => null, runSource: async () => ({ status: "ready", count: 2 })
+      });
+      return { stage, manual };
+    }
+  });
+  assert.equal(waitResult.stage.skipped, undefined, "stage recording succeeds during the AI deadline wait");
+  assert.equal(waitResult.manual.skipped, undefined, "manual Flomo is no longer blocked by the AI wait");
+  assert.equal(waitResult.manual.sources.flomo.status, "succeeded");
+  assert.equal(result.sources.ai.status, "needs_review");
+  const saved = JSON.parse(await readFile(path.join(weekRoot, "_weekly-retry-state.json"), "utf8"));
+  assert.equal(saved.sources.flomo.status, "succeeded", "resuming AI observation does not overwrite the concurrent Flomo result");
+  assert.ok(saved.diagnostics.some((entry) => entry.step === "preprocess"), "concurrent stage evidence survives the AI resume");
+  assert.ok(events.some((entry) => entry.outcome === "released-for-ai-deadline-wait" && entry.waitPhase === "original"));
+  assert.ok(events.some((entry) => entry.outcome === "reacquired-after-ai-deadline-wait" && entry.waitPhase === "original"));
+});
+
+test("the replacement deadline also releases the shared state lock and merges concurrent Flomo and stage results", async (t) => {
+  const { result, events, weekRoot, waitResult } = await runFreshUncertainAiScenario(t, {
+    duringReplacementWait: async ({ root: repoRoot, week }) => {
+      const stage = await recordWeeklyStage({ week, stage: "preprocess", durationMs: 2345, repoRoot });
+      const manual = await runWeeklyRetrySupervisor({
+        week, mode: "manual", sourceId: "flomo", repoRoot, now: () => Date.parse("2026-10-05T07:10:00Z"),
+        readOutcome: async () => null, runSource: async () => ({ status: "ready", count: 3 })
+      });
+      return { stage, manual };
+    }
+  });
+  assert.equal(waitResult.stage.skipped, undefined);
+  assert.equal(waitResult.manual.skipped, undefined);
+  assert.equal(waitResult.manual.sources.flomo.status, "succeeded");
+  assert.equal(result.sources.ai.status, "needs_review");
+  const saved = JSON.parse(await readFile(path.join(weekRoot, "_weekly-retry-state.json"), "utf8"));
+  assert.equal(saved.sources.flomo.status, "succeeded", "resuming replacement observation merges current Flomo state");
+  assert.ok(saved.diagnostics.some((entry) => entry.step === "preprocess"), "replacement wait preserves concurrent stage evidence");
+  assert.ok(events.some((entry) => entry.outcome === "released-for-ai-deadline-wait" && entry.waitPhase === "replacement"));
+  assert.ok(events.some((entry) => entry.outcome === "reacquired-after-ai-deadline-wait" && entry.waitPhase === "replacement"));
+});
+
+test("the AI wait does not save stale weekly state when lock reacquisition would leave insufficient budget", async (t) => {
+  let competingLock;
+  const { result, calls, waitResult } = await runFreshUncertainAiScenario(t, {
+    maxDurationMs: 53 * 60_000,
+    duringWait: async ({ weekRoot }) => {
+      competingLock = path.join(weekRoot, "_weekly-retry-state.lock");
+      await writeFile(competingLock, JSON.stringify({ pid: process.pid, token: "synthetic-owner", createdAt: new Date().toISOString() }));
+      return { competingLock };
+    }
+  });
+  t.after(() => rm(competingLock, { force: true }));
+  assert.equal(result.skipped, "supervisor-state-lock-reacquire-timeout");
+  assert.equal(result.diagnostic?.outcome, "reacquire-budget-exhausted", JSON.stringify(result));
+  assert.equal(result.manualFallback.prompt, "Complete synthetic manual prompt");
+  assert.equal(calls.filter((call) => call.resubmit).length, 0);
+  const owner = JSON.parse(await readFile(competingLock, "utf8"));
+  assert.equal(owner.token, "synthetic-owner", "the losing invocation does not remove or overwrite the new lock owner");
+  assert.ok(waitResult.competingLock);
+});
+
+test("an interrupted AI deadline wait resumes from the durable run receipt without duplicate submission", async (t) => {
+  const first = await runFreshUncertainAiScenario(t, { interruptDuringWait: true });
+  assert.equal(first.error.message, "synthetic-process-interruption");
+  const stateLock = path.join(first.weekRoot, "_weekly-retry-state.lock");
+  const aiLock = path.join(first.weekRoot, ".weekly-ai.lock");
+  assert.equal(await readFile(stateLock, "utf8").then(() => true, () => false), false,
+    "the interrupted waiter leaves the shared state lock available");
+  assert.equal(await readFile(aiLock, "utf8").then(() => true, () => false), false,
+    "the interrupted process releases its AI lock for deterministic recovery");
+
+  let nowMs = first.now();
+  const calls = [];
+  let replacementRunId;
+  const result = await runWeeklyRetrySupervisor({
+    week: "2026-W40", mode: "initial", repoRoot: first.root, maxDurationMs: 40 * 60_000,
+    now: () => nowMs, sleep: async (ms) => { nowMs += ms; },
+    readOutcome: async () => {
+      const current = JSON.parse(await readFile(first.sidecar, "utf8"));
+      return { status: current.status, error: current.reason || "",
+        updatedAt: current.observation?.observedAt || current.completedAt || current.dispatchStartedAt };
+    },
+    runSource: async (_source, context) => {
+      calls.push({ observe: context.observeUncertainAi, resubmit: context.resubmitUncertainAi });
+      const current = JSON.parse(await readFile(first.sidecar, "utf8"));
+      if (context.resubmitUncertainAi) {
+        replacementRunId = "123e4567-e89b-42d3-a456-426614174338";
+        current.status = "needs_review";
+        current.runId = replacementRunId;
+        current.localAttemptId = replacementRunId;
+        current.dispatchStartedAt = new Date(nowMs).toISOString();
+        current.resubmissionReservedAt = new Date(nowMs).toISOString();
+        current.resubmissionCount = 1;
+        current.resubmissionOf = { runId: first.originalRunId, dispatchStartedAt: current.startedAt,
+          reason: "observer-window-ended" };
+        current.reason = "observer-window-ended";
+        current.conversationUrl = "https://chatgpt.com/c/" + replacementRunId;
+        current.actualConversationUrl = current.conversationUrl;
+        await writeFile(first.sidecar, JSON.stringify(current));
+        return { status: "needs_review", error: "observer-window-ended" };
+      }
+      if (context.observeUncertainAi && current.resubmissionCount === 1) {
+        current.status = "confirmed";
+        current.completedAt = new Date(nowMs).toISOString();
+        delete current.reason;
+        await writeFile(first.sidecar, JSON.stringify(current));
+        return { status: "confirmed" };
+      }
+      current.observation = { status: "needs_review", runId: first.originalRunId,
+        reason: "original-run-result-pending", submissionConfirmed: true,
+        actualConversationUrl: current.conversationUrl, observedAt: new Date(nowMs).toISOString() };
+      await writeFile(first.sidecar, JSON.stringify(current));
+      return { status: "needs_review", error: "original-run-result-pending" };
+    }
+  });
+
+  const finalSidecar = JSON.parse(await readFile(first.sidecar, "utf8"));
+  assert.equal(result.sources.ai.status, "succeeded");
+  assert.equal(finalSidecar.resubmissionCount, 1);
+  assert.equal(finalSidecar.resubmissionOf.runId, first.originalRunId);
+  assert.equal(finalSidecar.runId, replacementRunId);
+  assert.equal(calls.filter((call) => call.resubmit).length, 1);
+  assert.ok(calls.filter((call) => call.observe).length >= 2, "the restarted invocation observes the original before the replacement");
+});
+
+test("an interrupted replacement wait resumes the reserved run and never submits a third task", async (t) => {
+  const first = await runFreshUncertainAiScenario(t, { interruptDuringWait: "replacement" });
+  assert.equal(first.error.message, "synthetic-process-interruption");
+  const stateLock = path.join(first.weekRoot, "_weekly-retry-state.lock");
+  const aiLock = path.join(first.weekRoot, ".weekly-ai.lock");
+  assert.equal(await readFile(stateLock, "utf8").then(() => true, () => false), false);
+  assert.equal(await readFile(aiLock, "utf8").then(() => true, () => false), false);
+  const reserved = JSON.parse(await readFile(first.sidecar, "utf8"));
+  assert.equal(reserved.resubmissionCount, 1);
+  assert.equal(first.now(), Date.parse(reserved.dispatchStartedAt) + 20 * 60_000);
+
+  let nowMs = first.now();
+  const calls = [];
+  const result = await runWeeklyRetrySupervisor({
+    week: "2026-W40", mode: "initial", repoRoot: first.root, maxDurationMs: 10 * 60_000,
+    now: () => nowMs, sleep: async (ms) => { nowMs += ms; },
+    readOutcome: async () => {
+      const current = JSON.parse(await readFile(first.sidecar, "utf8"));
+      return { status: current.status, error: current.reason || "", updatedAt: current.completedAt || current.dispatchStartedAt };
+    },
+    runSource: async (_source, context) => {
+      calls.push({ observe: context.observeUncertainAi, resubmit: context.resubmitUncertainAi });
+      const current = JSON.parse(await readFile(first.sidecar, "utf8"));
+      assert.equal(current.resubmissionCount, 1);
+      if (context.observeUncertainAi) {
+        current.status = "confirmed";
+        current.completedAt = new Date(nowMs).toISOString();
+        delete current.reason;
+        await writeFile(first.sidecar, JSON.stringify(current));
+        return { status: "confirmed" };
+      }
+      return { status: "needs_review", error: "unexpected-resubmission" };
+    }
+  });
+  const finalSidecar = JSON.parse(await readFile(first.sidecar, "utf8"));
+  assert.equal(result.sources.ai.status, "succeeded");
+  assert.equal(finalSidecar.resubmissionCount, 1);
+  assert.equal(calls.filter((call) => call.resubmit).length, 0);
+  assert.equal(calls.filter((call) => call.observe).length, 1, "restart performs one boundary observation of the reserved replacement");
+});
+
+test("an immediately confirmed replacement verifies ai.md and does not wait another twenty minutes", async (t) => {
+  const { result, events, sleeps, sidecar, weekRoot } = await runFreshUncertainAiScenario(t, {
+    replacementImmediateStatus: "confirmed"
+  });
+  const confirmed = JSON.parse(await readFile(sidecar, "utf8"));
+  assert.equal(result.sources.ai.status, "succeeded");
+  assert.equal(confirmed.status, "confirmed");
+  assert.equal(confirmed.resubmissionCount, 1);
+  assert.equal(sha256((await readFile(path.join(weekRoot, "ai.md"), "utf8")).trim()), confirmed.outputSha256);
+  assert.equal(sleeps.length, 1, "only the original run's remaining 20-minute window is awaited");
+  assert.ok(events.some((event) => event.outcome === "replacement-delivery-readback-verified"));
+  assert.ok(!events.some((event) => event.outcome === "waiting-for-replacement-20m-deadline"));
+});
+
+test("an immediately generated replacement does not wait for a second result window", async (t) => {
+  const { result, events, sleeps, sidecar, weekRoot } = await runFreshUncertainAiScenario(t, {
+    replacementImmediateStatus: "generated"
+  });
+  const confirmed = JSON.parse(await readFile(sidecar, "utf8"));
+  assert.equal(result.sources.ai.status, "succeeded");
+  assert.equal(confirmed.status, "confirmed", "an available generated result is promoted without another Bridge request");
+  assert.equal(confirmed.resubmissionCount, 1);
+  assert.equal(confirmed.readbackSha256, confirmed.outputSha256);
+  assert.equal(sha256((await readFile(path.join(weekRoot, "ai.md"), "utf8")).trim()), confirmed.outputSha256);
+  assert.equal(sleeps.length, 1, "the available replacement result ends observation immediately");
+  assert.ok(events.some((event) => event.outcome === "replacement-generated-promoted"));
+  assert.ok(!events.some((event) => event.outcome === "waiting-for-replacement-20m-deadline"));
+});
+
+test("a restarted supervisor reconciles a confirmed replacement by reading back ai.md without observing again", async (t) => {
+  const first = await runFreshUncertainAiScenario(t, { interruptDuringWait: "replacement" });
+  assert.equal(first.error.message, "synthetic-process-interruption");
+  const hash = sha256(VALID_AI_REVIEW);
+  const receipt = JSON.parse(await readFile(first.sidecar, "utf8"));
+  receipt.status = "confirmed";
+  receipt.outputSha256 = hash;
+  receipt.readbackSha256 = hash;
+  receipt.completedAt = new Date(first.now()).toISOString();
+  delete receipt.reason;
+  await writeFile(first.sidecar, JSON.stringify(receipt));
+  await writeFile(path.join(first.weekRoot, "ai.md"), `${VALID_AI_REVIEW}\n`, "utf8");
+
+  const calls = [];
+  const sleeps = [];
+  const result = await runWeeklyRetrySupervisor({
+    week: "2026-W40", mode: "initial", repoRoot: first.root, maxDurationMs: 10 * 60_000,
+    now: first.now, sleep: async (ms) => { sleeps.push(ms); },
+    readOutcome: async () => {
+      const current = JSON.parse(await readFile(first.sidecar, "utf8"));
+      return { status: current.status, error: current.reason || "", updatedAt: current.completedAt || current.dispatchStartedAt };
+    },
+    runSource: async (_source, context) => {
+      calls.push({ observe: context.observeUncertainAi, resubmit: context.resubmitUncertainAi });
+      return { status: "needs_review", error: "unexpected-ai-call" };
+    }
+  });
+  assert.equal(result.sources.ai.status, "succeeded");
+  assert.equal(receipt.resubmissionCount, 1);
+  assert.equal(calls.length, 0, "the confirmed receipt is reconciled locally without a Bridge call");
+  assert.equal(sleeps.length, 0, "a confirmed delivery does not wait for its deadline");
+});
+
+test("the twenty-minute wait stops when human ai.md content appears before the boundary", async (t) => {
+  const { result, calls, sidecar, weekRoot } = await runFreshUncertainAiScenario(t, { humanDuringWait: true });
+  const finalSidecar = JSON.parse(await readFile(sidecar, "utf8"));
+  assert.equal(result.sources.ai.status, "needs_review");
+  assert.equal(result.manualFallback.prompt, "Complete synthetic manual prompt");
+  assert.match(await readFile(path.join(weekRoot, "ai.md"), "utf8"), /用户人工周记/);
+  assert.equal(finalSidecar.resubmissionCount, undefined);
+  assert.equal(calls.filter((call) => call.resubmit).length, 0);
+});
+
+test("insufficient deadline budget surfaces the manual prompt without waiting or resubmitting", async (t) => {
+  const { result, calls, sleeps, events, sidecar } = await runFreshUncertainAiScenario(t, { maxDurationMs: 35 * 60_000 });
+  const finalSidecar = JSON.parse(await readFile(sidecar, "utf8"));
+  assert.equal(result.sources.ai.status, "needs_review");
+  assert.equal(result.manualFallback.prompt, "Complete synthetic manual prompt");
+  assert.equal(finalSidecar.resubmissionCount, undefined);
+  assert.equal(calls.filter((call) => call.resubmit).length, 0);
+  assert.equal(sleeps.length, 0);
+  assert.ok(events.some((event) => event.outcome === "skipped-deadline-budget"));
+});
+
+test("returns the complete business manual prompt when weekly AI remains unresolved", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-ai-manual-prompt-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const weekRoot = path.join(root, "03_input/weekly", week);
+  await mkdir(weekRoot, { recursive: true });
+  const state = createWeeklyRetryState(week);
+  for (const source of WEEKLY_SOURCE_CONFIG) state.sources[source.id].status = source.collector ? "succeeded" : "recheck-only";
+  state.sources.ai.status = "needs_review";
+  state.sources.ai.attempts = 1;
+  await writeFile(path.join(weekRoot, "_weekly-retry-state.json"), `${JSON.stringify(state)}\n`);
+  const manualPrompt = "Complete synthetic manual prompt\nwith all lines intact";
+  await writeFile(path.join(weekRoot, "_ai-generated.json"), JSON.stringify({
+    targetWeek: week, status: "needs_review", reason: "observer-window-ended", manualPrompt
+  }));
+  const result = await runWeeklyRetrySupervisor({
+    week, repoRoot: root, maxDurationMs: 0, now: () => Date.parse("2026-10-05T08:00:00Z"), readOutcome: async () => null
+  });
+  assert.equal(result.manualFallback.prompt, manualPrompt);
+  assert.equal(result.manualFallback.path, `03_input/weekly/${week}/ai.md`);
 });
 
 test("migrates only untouched Health-X recheck-only state into the managed report collector", async (t) => {

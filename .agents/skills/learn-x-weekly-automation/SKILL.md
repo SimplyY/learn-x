@@ -27,6 +27,7 @@ npm run weekly:stage -- --week 2026-W27 --record-stage <stage> --duration-ms <me
 npm run input:wisdom -- --week 2026-W27
 npm run input:core -- --week 2026-W27
 npm run ai:weekly -- --week 2026-W27
+npm run ai:weekly -- --week 2026-W27 --confirm-manual --confirm
 npm run sync:life-core
 npm run process:weekly -- --week 2026-W27
 npm run process:weekly -- --week 2026-W27 --prepare
@@ -48,7 +49,7 @@ npm run memory:weekly -- --week 2026-W27
 
 用户已明确授予持续授权：本自动化在阶段 1 可使用用户身份，将目标周输入生成的草稿写入固定文档 `https://ywhome.feishu.cn/wiki/EOlbwTVLyiQp7Fkrr9ucdI9hnac` 的 `周记` 区域，仅限目标周结束日次日对应的新周记段落和模板安全空位。允许复制缺失模板、填写空白字段并保留 `【待优化】AI 基础草稿` 标题标记；`回顾最近笔记 & flomo 洞察` 字段也纳入自动草稿，但只可在新复制模板的空位中原样填入运行日期所在 ISO 周之前最近一个已结束周（Asia/Shanghai，周一至周日）的全部有效 Flomo 笔记。此定义不随手动指定的目标周改变，并在汇报中同时列出目标周和笔记来源周。若来源周就是目标周，复用已验证的目标周 `flomo.md`；否则只读核验来源周目录。仅当来源状态为 `ready`、范围和记录数匹配，且完整扫描或最多 10 条容差缺口都有文件头与侧车证据时才填入全部可见笔记；存在缺口时在笔记前明确说明观察数、预期数和遗漏数，不省略或改写笔记。状态为 `empty`、数量为 0 且扫描无缺口时保留模板提示并报告“0 条笔记”；若 0 条观察结果伴随容差缺口，也保留模板提示并说明“可见 0 条，覆盖不确定”；`failed`、`unavailable`、缺少完整性证据或范围不符时保留模板空位并报告原因。`flomo.md` 沿用现有过滤边界，排除 Learn-X 生成内容。不得按运行时刻滚动取最近 7×24 小时、使用不完整周或旧文件替代。保留模板提示和笔记边界，不总结、筛选、改写或截断。若目标字段已有实质人工内容或草稿，停止并报告，不覆盖。不得修改其他周或其他文档。
 
-周记中的 Flomo 笔记分块排版、逐项回读，以及“一周核心总结”对目标周 `calendar.md` 的深读和交叉核验，按 `.agents/skills/learn-x-weekly-journal/SKILL.md` 执行；日历不满足该 Skill 的来源门禁时，只跳过核心总结字段，不以日历计划推断已完成事实。
+周记中的 Flomo 笔记分块排版与逐项回读，按 `.agents/skills/learn-x-weekly-journal/SKILL.md` 执行。`calendar.md` 只用于独立采集状态与阶段 2 Process Pack 的计划上下文；不得读取、传入、引用或交叉核验它来生成周记，日历状态也不影响周记门禁。
 
 该持续授权不涵盖 `weekly.md`、Weekly Output、Memory、备份、Flomo 同步、AI/ChatGPT 外发或任何其他外部写入。目标文档、目标段落、用户身份、写入范围或删除动作发生变化时必须停止并重新确认；在授权范围内无需每周重复询问，但每次写入后仍必须定位核验并回读确认。
 
@@ -97,9 +98,9 @@ Deep Code X 另有一个独立的周日调度（`learn-x-voice-insight`，20:00�
 ## 阶段判断
 
 - 定时触发，或用户没有明确继续指令：执行阶段 1；自动化执行器负责自动来源与 AI 周回顾，随后生成飞书周记草稿，不等待用户确认才启动 AI 生成。
-- `继续` 按当前流程位置解释：阶段 1 已自动生成草稿时不重复生成，仍停在周记人工确认门槛；阶段 2 完成后进入阶段 3。不要把同一短指令按固定全局含义解释。
-- 阶段 1 的 `ai:weekly` 由重试执行器按 AI 不确定提交规则运行；完成后调用 `learn-x-weekly-journal`，不能再单独启动第二次。AI 生成通过结构校验后默认自动从 `ai.generated.md` 正式化为 `ai.md`，汇报中提示用户复核，但不把 AI 确认设为额外硬门槛。不采集 `weekly.md`，不生成正式 `input.json`、`process-pack.md` 或 Weekly Output 壳，也不生成 `action-feedback.md`（已退役）。如果 AI 生成失败，仍继续生成不含 AI 补充的飞书草稿；同时确保目标周 `ai.md` 存在可粘贴的手动完成空壳（只在缺失时创建，不覆盖已有实质人工内容），并在汇报中提供完整 `manualPrompt`。
-- 每次新提交前，`_ai-generated.json` 先持久化 UUID `runId`，并通过 Bridge CLI `--run-id` 贯穿到真实 Bridge run 和回执；调用进程超时或中断后只观察这个预分配 ID。已存在 `ai.generated.md` 时不得重复发送。旧记录没有稳定 runId 时保持 `needs_review`，不得猜测归属。观察只核验原 run、调用者、会话地址和回复标记，不提交新 Prompt；没有匹配回执、观察未完成、限流或生成中时停在 `needs_review`，不得重发。
+- `继续` 按当前流程位置解释：阶段 1 草稿标题仍有 `【待优化】` 标记时，不视为确认；用户已移除该标记并明确说“继续”时，视为本轮周记已确认，直接进入阶段 2，不要求重复口令。阶段 2 完成后，“继续”进入阶段 3。不要把同一短指令按固定全局含义解释。
+- 阶段 1 的 `ai:weekly` 由重试执行器按 AI 不确定提交规则运行；完成后调用 `learn-x-weekly-journal`，不能再单独启动第二次。AI 生成通过结构校验后默认自动从 `ai.generated.md` 正式化为 `ai.md`，汇报中提示用户复核，但不把 AI 确认设为额外硬门槛。不采集 `weekly.md`，不生成正式 `input.json`、`process-pack.md` 或 Weekly Output 壳，也不生成 `action-feedback.md`（已退役）。如果 AI 生成失败，仍继续生成不含 AI 补充的飞书草稿；同时确保目标周 `ai.md` 存在可粘贴的手动完成空壳（只在缺失时创建，不覆盖已有实质人工内容）。仅有该空壳、且没有通过校验的 AI 正文时，AI 周回顾必须报告为不可用，不能因 `ai.md` 文件存在而报成功。此时汇报必须把侧车中的完整 `manualPrompt` 原样、无省略地显示在用户回复的可复制代码块中；只给路径、链接或摘要不算提供。侧车缺少提示词时，按当前模板和目标周确定性重建后显示；无法重建或校验时，明确报告阻塞，不得编造或省略提示词。
+- 每次新提交前，`_ai-generated.json` 先持久化 UUID `runId`，并通过 Bridge CLI `--run-id` 贯穿到真实 Bridge run 和回执；调用进程超时或中断后先观察这个预分配 ID。已存在 `ai.generated.md` 时不得重复发送。旧记录没有稳定 runId 时保持 `needs_review`，不得猜测归属。观察只核验原 run、调用者、会话地址和回复标记，不提交新 Prompt；默认不自动重发。用户明确要求重试时，若原 run 已超过 20 分钟、同一 run 的观察明确返回 `recovery-lease-unavailable`、周与提示词指纹仍一致、没有已保存输出或实质 `ai.md` 且没有历史 `resubmissionOf`，可由 supervisor 留痕后新开一次独立 ChatGPT 任务，使用全新预分配 UUID；重复、限流、并发忙或其他停止信号仍须停止。原 run 与新 run 的关联写入 `resubmissionOf`，不改写旧 run 证据。
 - 若返回 `ego-bootstrap-permission`，说明当前沙箱不能让 Node 子进程连接 Ego Lite；请求 Full Access 后，仅使用 `npm run ai:weekly -- --week YYYY-Www --retry` 重试这次未提交调用，禁止切换到 Chrome、CDP 或其它浏览器。已提交后的超时、归属不确定或输出不完整不得用 `--retry` 重发。
 - AI 生成通过校验后自动执行等价于 `npm run ai:weekly -- --week YYYY-Www --promote --confirm` 的正式化；已有实质 `ai.md` 时先备份到对应 `_dist` 目录再覆盖。`AI 周回顾已确认` 仍可作为人工复核口令，但不再阻塞流程；`--promote --confirm` 主要保留给旧的待处理草稿或恢复场景。
 - 用户说 `周记已确认`、`继续生成周报材料` 或同义表达：表示飞书周记草稿已审核通过；对同一目标周进入阶段 2，采集已确认的 `weekly.md`，仅发布其中唯一的“新周计划”表格行，再生成 `_dist`。
@@ -154,7 +155,7 @@ Codex Build 原线程恢复：Build 自动化启动时，用当前自动化线�
 确认额度耗尽后最多观察 12 分钟：用 Codex 用量工具核验额度，用任务工具查询收据所绑定的同一线程。线程仍在运行时只等待；线程已停止但仍限流时不发消息。额度恢复且同一线程处于 `idle`、`failed` 或 `needs_attention` 时，先运行 `--claim-resume --task-status <状态> --quota-available` 原子预占唯一机会，再把命令返回的 `followUpPrompt` 发给该收据指定的原线程；不得创建新线程或替换目标。发送已接受后运行 `--mark-resume-submitted --claim-id <claimId>`。发送结果不明时保留已预占状态，绝不再次发送。最后运行 `--verify-artifact`；只有 `build.md` 的覆盖周与目标 ISO 周匹配才记为完成。错周、缺失、不可读或身份不匹配都保持待核验，不改标签、不认领为目标周。
 
 - 飞书身份闸门：周记草稿写入前用 `lark-cli auth status --json --verify` 核验登录态。任何身份核验失败、写入身份不符或目标段落无法回读时，周记写入失败关闭，不猜测、不回退 user。
-- ChatGPT Bridge 提交状态不明时先观察原 run；单次观察最长 12 分钟，受当前 100 分钟共同截止时间约束。仅当原侧车为 `snapshot-mismatch`，观察到同一 run 的完整标记回复且仅快照核验失败，原模板指纹未变、无生成中/限流/停止信号、无已保存结果且未重发过时，weekly supervisor 可原子预占并重发一次。观察回执不匹配、旧 Bridge 无法提供回执、观察超时或原因不是快照不匹配时只保留缺口。重发前写入 `resubmissionOf` 一次性标记，不能由 `--retry` 泛化绕过。
+   - ChatGPT Bridge 提交状态不明时先观察绑定的原 run；单次观察最长 12 分钟，受当前 100 分钟共同截止时间约束。仅周记 AI 可在原始派发后满 20 分钟仍无可用结果时自动重开一次：原子预留前必须确认提交状态、run/session 身份、目标周、prompt 指纹和允许的未决原因，且没有生成/无效草稿或实质人工 `ai.md`。若首次 Bridge 在 20 分钟前返回，本次 supervisor 仅在剩余预算覆盖等待至门限、边界复看原 run、第二次 Bridge 4 分钟预算、replacement 自己派发后 20 分钟的边界观察及收尾余量时等待一次；两个窗口都只做一次定时等待，不轮询。等待期间释放共享周记状态锁与 Browser 队列锁，保留周记 AI 锁；结束后有界重取状态锁并读取并发入口的最新周状态。replacement 等待被进程中断后按持久侧车恢复同一 run，不能再次提交。到门限后重新观察原 run，并重读侧车、正式文件和可用结果，再由既有原子额度门禁最多派发一个 replacement。登录、验证码、限流、权限、身份不明、人工内容、提示词变化、结果已存在、预算不足或额度已用时停止重开并返回完整手动提示词；提交预留后的普通重跑不能发第三次。其他业务的提交不确定仍只观察，不自动重发。用户显式确认的人工恢复入口继续执行独立的身份、范围和一次性校验。
 - Flomo 与智慧之门：智慧之门 Base 采集进入首次 CLI 并行批次，不等 Flomo 扫描、AI 观察或浏览器冷却。Flomo 失败时仍采集 `wisdom.md`。两项来源状态都成功后，再把需回顾导入作为独立浏览器队列增强步骤；按 `来源标识=flomo:<memo_id>` 去重，导入失败只记录脱敏诊断，不改变 Base 采集状态。部分成功后重跑由来源键和读回去重。权限、登录、字段契约、人工接管和需人工判断的问题不循环重试。
 
 问题修复记忆保存在本 Skill 的本地 `state/recovery-incidents.jsonl` 和可重建的 `state/recovery-playbook.json`；这两个文件被 Git 忽略，不进入 Input、Memory 或学习上下文。仅追加错误码、层级、阶段、动作编号、前提代码、结果、来源状态/版本/哈希/计数与侧车路径；不保存私人正文、健康数值、Prompt、凭据、原始响应、任意命令或补丁正文。三层共用同一问题 ID；未知错误各自隔离。同一执行中的不同恢复层只计一次复发。人工修复先记为候选：`npm run weekly:recovery -- --record-repair --week YYYY-Www --source <来源> --symptom <错误码> --action-code <动作编号> --note "不含私人正文的短说明" --evidence <相对证据路径> --verification candidate`；可附 `--run-id`、`--problem-id`、`--source-version`、`--layer`、`--preconditions`、`--target-week`、`--source-status` 和计数/哈希证据。只有读回或复现证据通过后才将 `--verification` 设为 `verified`，根因仍未证明时保持 `--root-cause unconfirmed`。达到复发阈值后，只有根因修复与回归都通过才用 `--event-type prevention --verification verified --root-cause confirmed` 关闭预防候选。历史经验版本不匹配或前提未核实时只作诊断参考，不自动执行。索引损坏时从事件重建；事件损坏时停止经验推荐，不猜测修复事实。诊断记忆写入失败只标记待补写，不阻塞可安全生成的内容。
@@ -181,7 +182,7 @@ npm run weekly:stage -- --week YYYY-Www --record-stage <preprocess|weekly_journa
    - 微信读书：按 `learn-x-input` 执行 `npm run input:weread -- --week YYYY-Www`。版本从已安装 Skill 元数据读取。若返回 `upgrade_info`，第二层按官方安装指引核对来源和新版本，升级并回读版本后对目标周重采一次；升级无法核验时只标记 WeRead 失败，不重试旧版本，也不阻塞其他来源。验证输出保留目标周、Asia/Shanghai 范围、生成时间、阅读统计、进度快照、个人划线和想法，并包含完整 7 天，包括 0 分钟日期。
    - Time-X 日历：按 `learn-x-input` 执行一次 `npm run input:calendar -- --week YYYY-Www`，读取固定 `Time-X｜随时记` 共享日历与用户可读的主日历/自有共享日历，按同时存在的定时日程数分摊重叠时间，将有效时间汇总及每个日历块的日期、起止、原始区间、标题、描述和有效投入写入 `calendar.md`。只做导入阶段的只读计算，不修改日历；不保存日历人员、地点、ID、链接或系统元数据。
    - Voice-X：按 `learn-x-input` 执行 `npm run input:voice -- --week YYYY-Www`，只读取目标 ISO 周已归档的新版 AI 洞察文档，将完整结构化洞察写入 `voice.md`。缺失/占位计入 `pending`，旧格式计入 `legacy`，不回退到处理后原文；30,000 字符只是强提示线，不是采集门槛。`pending` 记录必须在阶段 1 汇报中逐条列出可点击的 Voice-X core 文档链接与录制时间。预处理阶段只对 `voice.md` 压缩一次，目标保留 10%–15%（预算中心 12.5%），记录逐文件字符链路。周日 `npm run voice:insight -- --week YYYY-Www` 是独立阶段，不由周一流程隐式触发；0 条、查询或文档失败均按来源状态处理并保留旧文件。
-   - 飞书日记与 AI Coach：分别由 `input:daily` 和 `input:coach` 采集。采集器先用 `--as bot` 现场核验 Base、表和字段，再按各表边界筛选并遍历全部分页；状态独立写入 `_source-status.json`。Coach 0 条只记录 `empty`，不影响日记；旧文件可保留但标记过期，失败时不计入本轮。
+   - 飞书日记与 AI Coach：分别由 `input:daily` 和 `input:coach` 采集。采集器用 `--as bot` 现场核验 Base、表和字段，再按各表边界筛选并遍历全部分页；日记每次从实时字段表选择当前非计算、非同步元数据字段，唯一 `日期` datetime 字段负责筛选和排序，不依赖硬编码的旧内容字段。状态独立写入 `_source-status.json`。Coach 0 条只记录 `empty`，不影响日记；旧文件可保留但标记过期，失败时不计入本轮。
    - 智慧之门：执行 `npm run input:wisdom -- --week YYYY-Www`。通过 `collect-base-weekly.mjs` 遍历 Base 创建时间与 Flomo 原始时间对应的目标周分页；普通记录按 Base `创建时间`、Flomo 导入记录按 `Flomo创建时间`筛选。0 条时报告“0 条记录，文件未生成”，失败不得伪装成空结果。
    - 核心议题镜像：先执行 `npm run sync:life-core` 同步核心议题镜像；Action Feedback 已退役，不读取 Base 的 `continue` 行动，不生成 `open-actions.md`。
    - Core V1 确认复盘：执行 `npm run input:core -- --week YYYY-Www`。在目标周窗口内选择 frozenAt 最新的确认导出写入 `core.md`；无导出时报告缺失（`unavailable`，可选来源不阻断），不等待同覆盖周 Core，不回退更早版本。Core 回流是历史认知背景，与底层经历同源，不构成第二份独立现实证据；行动归属按覆盖周理解。
@@ -193,7 +194,7 @@ npm run weekly:stage -- --week YYYY-Www --record-stage <preprocess|weekly_journa
 
    - 所有自动来源统一遵守：`ready` 才进入下游；成功 0 条写 `empty` 并报告“0 条记录，文件未生成”；`failed/unavailable` 单独报告，旧文件只保留在磁盘不计入本轮。状态文件为 `03_input/weekly/YYYY-Www/_source-status.json`，外部拥有者可调用 `npm run input:source-status -- --week YYYY-Www --source <source> --status <status> --file <file> --count <n> --summary "..."`。
    - 如果目标周是周六、周日自动判定的当前周提前稿，`daily.md` / `flomo.md` / `weread.md` / `wisdom.md` / `calendar.md` 可以只覆盖截至运行时；文件和汇报必须标出缺失日期 / 未来日期。
-3. 读取执行器写入的 AI 结果与状态。`ai.generated.md` 经完整性校验后可正式化为 `ai.md`，供周记和 Process 使用；失败、超时或提交状态不明时保留 `needs_review`，只观察原请求，不自动再次发送。只有未提交的明确运行环境错误才可按本 Skill 的单次安全恢复规则重跑。Flomo 笔记回顾字段由 `learn-x-weekly-journal` 按持续授权自动填入，不交给 ChatGPT 总结或代写。
+3. 读取执行器写入的 AI 结果与状态。`ai.generated.md` 经完整性校验后可正式化为 `ai.md`，供周记和 Process 使用；失败、超时或提交状态不明时保留 `needs_review`，默认只观察原请求，不自动再次发送。明确的用户重试可按上方“超 20 分钟且原 run lease 不可恢复”的一次性受限恢复开新任务。未提交的明确运行环境错误仍可按本 Skill 的单次安全恢复规则重跑。Flomo 笔记回顾字段由 `learn-x-weekly-journal` 按持续授权自动填入，不交给 ChatGPT 总结或代写。
 4. 每个来源成功后由重试执行器立即触发 `npm run process:weekly -- --week YYYY-Www --prepare`，逐来源复用确定性预处理并更新私有缓存；不等待其他来源或周记确认。对缓存提出的语义压缩请求由 Codex 完成后再运行准备命令确认版本；不压缩周记，不生成正式 `input.json`、`process-pack.md`、Weekly Output 或 Memory。阶段 1 不采集线上确认版 `weekly.md`。
 5. 执行器的 ChatGPT 输入只读取 `03_input/weekly/00_template/ai.md` 提示词并附加目标周范围；不发送本地周材料。失败时汇报原因、`ai.md` 手动空壳路径和完整人工 fallback prompt；成功结果先落为 `ai.generated.md`，完整性校验通过后正式化为 `ai.md` 并保留审计副本。回复未通过结构验收时写入 `_ai-invalid.generated.md` 和验证原因；代码可确定性恢复时优先本地恢复，不重复外发，只有用户显式 `--retry` 才能重新提交。
 
@@ -207,11 +208,11 @@ npm run weekly:stage -- --week YYYY-Www --record-stage <preprocess|weekly_journa
 目标：从已落盘周输入生成飞书周记草稿，停在人工确认门槛前。
 
 1. 验证 `daily.md` 与 Flomo 状态；`daily` 必须为 `ready`、目标周匹配且文件有效。Flomo 可为 `ready` 且文件、计数及实际覆盖范围与采集状态一致，允许全库最多 10 条已明确标注的缺口；或为 `empty` 且计数为 0、成功扫描范围与目标周允许范围一致。存在缺口且目标周可见 0 条时，保留模板提示并说明覆盖不确定。不得读取状态为 `empty/failed/unavailable` 时仍留在磁盘上的旧 `flomo.md`。`daily` 未通过时停止周记写入；Flomo 缺失、失败或范围证据不足时，只保留该字段空位并醒目标记。优先读取已确认的 `ai.md`，否则仅在生成侧车为 `generated` 时读取 `ai.generated.md` 作为未确认草稿；AI 文件无效、空壳或缺失不阻塞周记草稿。
-   - 另核验 `calendar.md` 的来源状态、目标周和实际覆盖范围，并将目标周文件完整提供给周记生成步骤。日历缺失、非 `ready`、范围不符或明细不完整时，不阻断其他安全字段，但“一周核心总结”必须保留模板空位并在汇报中说明原因。
+   - 不读取或提供 `calendar.md` 给周记生成步骤；日历来源状态不影响周记生成。其余字段继续按 `learn-x-weekly-journal` 的来源门禁处理。
 2. 对“回顾最近笔记 & flomo 洞察”，计算运行日期所在 ISO 周的上一周。先读取该周 `_source-status.json`；只有状态为 `ready` 时才打开并校验 `flomo.md`。若来源周等于目标周，复用步骤 1 已验证的状态；若不同，只读来源周目录。`ready` 且文件头含完整目标范围、采集时间、记录数、早于周一下界的最早读取时间和 `下界已覆盖：是`，并与侧车周/计数一致时填入全部笔记；`empty` 且侧车计数为 0、`summary` 含完整扫描起止时间、`下界已覆盖：是` 及“0 条、确认无匹配”时只保留模板提示并报告“0 条笔记”，绝不打开可能残留的 `flomo.md`；其他状态或完整性无法确认时同样不打开该文件，保留模板空位并报告原因。随后调用 `learn-x-weekly-journal`：它按目标周结束日的下一天定位周记标题，复制模板并填新模板的安全空位；其他字段仍只使用本次目标周输入。已有实质内容或草稿时跳过，不覆盖、不刷新。
-   - Flomo 全部笔记按 `.agents/skills/learn-x-weekly-journal/SKILL.md` 独立分块呈现，不合并成段或省略。周记生成前深读目标周 `calendar.md` 的逐日汇总与全部事项明细；总结对照日记、Flomo 与可用 AI，明确区分日历记录/安排和已核实的实际行动。
+   - Flomo 全部笔记按 `.agents/skills/learn-x-weekly-journal/SKILL.md` 独立分块呈现，不合并成段或省略。周记各字段只使用该 Skill 允许的非日历来源；不读取或交叉核验日历。
 3. 周记草稿生成后停止并让用户审核 / 修改。`周记已确认` 表示周记草稿已审核通过（Action Feedback 已退役，不再有配套草稿需要共同确认）。
-4. 用户确认后必须回复 `周记已确认` 或 `继续生成周报材料`；只有该指令才能进入阶段 2。
+4. 用户确认后，回复 `周记已确认`、`继续生成周报材料`，或在已移除草稿标记后明确回复 `继续`，即可进入阶段 2。
 
 本阶段汇报必须包含上述两张分组表和周记阶段前提、目标周、使用的本地来源、飞书草稿链接、跳过字段、阻塞项、当前位置、下一步（审核 / 修改周记草稿）和再下一步（阶段 2 采集已确认的 `weekly.md`，一次生成 Process Pack）。
 
@@ -219,7 +220,7 @@ npm run weekly:stage -- --week YYYY-Www --record-stage <preprocess|weekly_journa
 
 目标：采集已人工确认的周记，验证必要输入，然后生成 `_dist` 和 Output 最小壳。
 
-1. 按“周记日期映射”计算写作日。阶段 1 生成并回读周记草稿后，已保存该目标周的标题、底层 `document_id` 和目标 block 锚点。只有用户明确回复 `周记已确认` 或 `继续生成周报材料` 后才执行 `npm run input:weekly -- --week YYYY-Www`，窄范围采回锚定段落，不搜索或读取相邻周兜底。采回只验证线上标题与草稿标记；仍含 `【待优化】AI 基础草稿` 时停止。成功采回后，该命令校验本地 `weekly.md` 并仅发布唯一“新周计划”表格行到 `04_output/_dist/shared-context/weekly/`；不发布其他周记内容或 AI 输出。`weekly.md` 保留来源 URL、revision（缺失时为 unknown）、写作日标题、覆盖范围、定位依据和采集时间，原文不压缩。共享版本不记录猜测的确认时间；采集时间不能替代确认时间。记录 `weekly_journal_fetch` 阶段耗时。
+1. 按“周记日期映射”计算写作日。阶段 1 生成并回读周记草稿后，已保存该目标周的标题、底层 `document_id` 和目标 block 锚点。用户回复 `周记已确认`、`继续生成周报材料`，或在已移除草稿标记后明确回复 `继续`，即可执行 `npm run input:weekly -- --week YYYY-Www`，窄范围采回锚定段落，不搜索或读取相邻周兜底。采回只验证线上标题与草稿标记；仍含 `【待优化】AI 基础草稿` 时停止。周记生成时排除 Calendar 是生成规则；不得追溯拦截已由用户确认的既有周记，也不得仅因旧草稿含 Calendar 内容要求重写。成功采回后，该命令校验本地 `weekly.md` 并仅发布唯一“新周计划”表格行到 `04_output/_dist/shared-context/weekly/`；不发布其他周记内容或 AI 输出。`weekly.md` 保留来源 URL、revision（缺失时为 unknown）、写作日标题、覆盖范围、定位依据和采集时间，原文不压缩。共享版本不记录猜测的确认时间；采集时间不能替代确认时间。记录 `weekly_journal_fetch` 阶段耗时。
    - 采集前如果发现缺少飞书周记所需授权，先一次性列出并请求全部缺失 scopes，再继续，不要一项一项分开打断用户。
 2. Process Pack 组装时按目标周计算上一 ISO 周，只读取上一周完整的 `04_output/weekly/YYYY-WW.md`，并将它作为“仅作对照”材料完整嵌入第 9 节；不读取旧周记替代旧 Output。旧 Output 不能作为本周事实，本周事实以当前 Process Pack 的本周材料为准。基线缺失、为空或只是自动 Output 空壳时，保留第 9 节并标注 `missing`、`empty` 或 `shell`，明确不可比较；不得回退到更早周。
    - 阶段 2 汇报只报告上一周 Output 的周期、状态和绝对可点击文件链接，不复述旧 Output 正文或旧问答。
@@ -236,6 +237,7 @@ npm run weekly:stage -- --week YYYY-Www --record-stage <preprocess|weekly_journa
    - `build-bot.md`（只验证是否已由飞书侧完成；不存在时报告缺口，但本流程不生成）
    - `weekly.md`
    - `ai.md`（可选补充；只有目标周标记、结构和运行状态均通过校验时才纳入，不得把空壳、模板或提示词当作内容）
+   - 若 AI 失败后用户把完整回顾手动粘贴到目标周 `ai.md`，且用户明确表示已完成或确认，执行 `npm run ai:weekly -- --week YYYY-Www --confirm-manual --confirm`。该命令校验目标周、正文结构和当前失败侧车，并以 SHA-256 记录人工完成，不改写 `ai.md`。随后先运行 `npm run process:weekly -- --week YYYY-Www --prepare` 刷新快照，再生成 Process Pack；文件存在本身不代表已确认，正文哈希变化时必须重新确认。
    对周六、周日提前写当周的场景，允许自动来源是截至运行时的部分覆盖，但 `weekly.md` 必须是目标周真实回顾内容。AI 回顾缺失不阻塞阶段 1 草稿，也不阻断阶段 2 Process Pack；缺失或无效时在状态表醒目标记并排除。
 6. `build.md` 属于单独的 `Learn-X 每周「 Codex Build 复盘」` 自动化。本流程不得创建、改写或追加 `build.md`。如果已有有效 `build.md`，`learn-x-process` 可以纳入处理。`build-bot.md` 属于飞书机器人侧流程；本流程只提示自查，不调用 `build-bot-log`。
 7. 在采回后核验必需来源状态和预处理清单，再运行：

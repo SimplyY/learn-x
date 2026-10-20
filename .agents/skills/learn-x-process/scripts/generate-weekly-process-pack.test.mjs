@@ -8,6 +8,7 @@ import { buildFileSummaries, buildInputAuditRows, classifyWeeklyOutput, compress
 import { updateWeeklySourceStatus } from "../../learn-x-input/scripts/lib/source-status.mjs";
 import { WEEKLY_SOURCE_CONFIG } from "../../learn-x-input/scripts/lib/weekly-source-config.mjs";
 import { countInputChars } from "../../learn-x-input/scripts/lib/input-limits.mjs";
+import { confirmManualAiReview } from "../../learn-x-weekly-automation/scripts/generate-ai-review.mjs";
 
 test("source audit separates config groups in config order and keeps the journal as a stage prerequisite", () => {
   const payload = { selection: { path: "03_input/weekly/2026-W40" }, sourceStatuses: { daily: { status: "failed", file: "daily.md", count: 0 } }, excludedFiles: [] };
@@ -184,6 +185,54 @@ test("confirmed weekly journal and valid daily produce a partial Process Pack wh
   assert.match(pack, /🔴 存在失败/);
   assert.match(pack, /AI 周回顾/);
   assert.match(pack, /🔴 \*\*未验收\*\*/);
+});
+
+test("a user-confirmed manual AI paste changes Stage 2 from excluded to included without rewriting ai.md", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-weekly-manual-ai-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const weekDir = path.join(root, "03_input/weekly", week);
+  await mkdir(weekDir, { recursive: true });
+  await writeFile(path.join(root, "package.json"), JSON.stringify({ type: "module", scripts: {} }), "utf8");
+  await writeFile(path.join(weekDir, "daily.md"), "2026-09-28\n日记记录了目标周的具体经历与判断。", "utf8");
+  await writeFile(path.join(weekDir, "weekly.md"), [
+    `# 周记输入｜${week}`, `目标周：${week}`, "目标覆盖范围：2026-09-28 至 2026-10-04",
+    "## 本周记录", "这是已审核确认的周记内容，保留了本周事实与反思。"
+  ].join("\n\n"), "utf8");
+  const aiText = [
+    `# AI 周回顾｜${week}`, `目标回顾周期：${week}`,
+    "## 具体的人和事（独立主线，优先保留）", "手动粘贴的 AI 正文，保留一个可识别的事实。",
+    "## 本周议题", "用户据此形成的真实议题。",
+    "## 精华议题摘要", "精华议题与判断。",
+    "## 核心洞察与判断变化", "说明判断变化的证据。"
+  ].join("\n\n") + "\n";
+  const aiPath = path.join(weekDir, "ai.md");
+  await writeFile(aiPath, aiText, "utf8");
+  await writeFile(path.join(weekDir, "_ai-generated.json"), JSON.stringify({
+    schemaVersion: 1, targetWeek: week, status: "needs_review", reason: "observer-window-ended",
+    manualPrompt: "manual fallback prompt", manualPath: aiPath
+  }), "utf8");
+  await updateWeeklySourceStatus({ weekRoot: weekDir, week, source: "daily", status: "ready", file: "daily.md", count: 1, summary: "目标周有日记" });
+
+  await generateWeeklyProcessPack({ week, repoRoot: root, prepare: true });
+  const before = await generateWeeklyProcessPack({ week, repoRoot: root });
+  assert.ok(before.payload.excludedSources.ai);
+  assert.match(await readFile(before.outputPath, "utf8"), /🔴 \*\*未验收\*\*.*AI 周回顾/s);
+
+  const confirmed = await confirmManualAiReview({ repoRoot: root, week, confirm: true });
+  assert.equal(confirmed.status, "confirmed");
+  assert.equal(confirmed.completionSource, "user-manual");
+  assert.equal(confirmed.manualConfirmation.sha256, createHash("sha256").update(aiText, "utf8").digest("hex"));
+  assert.equal(await readFile(aiPath, "utf8"), aiText);
+
+  await generateWeeklyProcessPack({ week, repoRoot: root, prepare: true });
+  const after = await generateWeeklyProcessPack({ week, repoRoot: root });
+  assert.ok(after.payload.files.some((file) => file.path.endsWith("/ai.md")));
+  assert.equal(after.payload.excludedSources.ai, undefined);
+  const pack = await readFile(after.outputPath, "utf8");
+  assert.match(pack, /✅ 成功（人工）.*AI 周回顾.*ai\.md/s);
+  assert.match(pack, /纳入（人工文件）/);
+  assert.ok(pack.includes("手动粘贴的 AI 正文，保留一个可识别的事实。"));
 });
 
 test("confirmed target week with ready required inputs and verified empty sources assembles from cached preprocessing", async (t) => {

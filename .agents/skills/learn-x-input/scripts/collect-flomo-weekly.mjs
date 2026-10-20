@@ -946,8 +946,16 @@ const state = async () => {
         const href = inlineLink.href;
         if (href) inlineLink.replaceWith(document.createTextNode(href));
       }
+      const bodyHost = document.createElement('div');
+      bodyHost.style.position = 'absolute';
+      bodyHost.style.left = '-10000px';
+      bodyHost.style.top = '0';
+      bodyHost.style.whiteSpace = 'pre-wrap';
+      if (bodyCopy) bodyHost.append(bodyCopy);
+      document.body.append(bodyHost);
       const bodyText = normalize(bodyCopy?.innerText || '');
       const bodySourceText = normalize(bodyCopy?.textContent || '');
+      bodyHost.remove();
       const tags = [...(bodyCopy?.querySelectorAll('.tag') || [])]
         .map((tag) => (tag.innerText || tag.textContent || '').trim().replace(/^#+/u, '').toLowerCase())
         .filter(Boolean);

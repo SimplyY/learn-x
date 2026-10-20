@@ -39,10 +39,12 @@ export async function syncFlomoFullWeek({ week, attemptToken, repoRoot = default
     if (error?.message !== "flomo-attempt-token-stale") {
       const reason = classifyFlomoError(error);
       const status = reason === "ego-login-or-control-required" ? "unavailable" : "failed";
+      const errorCode = /^[a-z0-9-]{1,96}$/.test(String(error?.message || "")) ? error.message : "unknown";
+      const stage = /^[a-z0-9-]{1,64}$/.test(String(error?.stage || "")) ? ` stage=${error.stage}` : "";
       await updateWeeklySourceStatus({ weekRoot, week: targetWeek, source: "flomo", status, file: "flomo.md", count: 0,
         summary: reason === "timestamp-density-review-required"
           ? "失败：同一小时超过 5 条笔记，时间需核验；旧快照和旧 flomo.md 已保留"
-          : `Flomo 全量快照同步失败：${reason}；保留最近成功快照和已有周输入`, preservedStaleFile: await fileExists(notesPath) });
+          : `Flomo 全量快照同步失败（${errorCode}${stage}）：${reason}；保留最近成功快照和已有周输入`, preservedStaleFile: await fileExists(notesPath) });
     }
     throw error;
   }

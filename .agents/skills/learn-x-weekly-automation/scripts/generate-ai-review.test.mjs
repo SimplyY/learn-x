@@ -5,16 +5,19 @@ import path from "node:path";
 import test from "node:test";
 import {
   buildReviewPrompt,
+  canResubmitUncertainAi,
   confirmManualAiReview,
   DEFAULT_BRIDGE_TIMEOUT_MS,
   generateAiReview,
   manualAiShell,
   normalizeAiReviewText,
+  parseGenerateAiReviewArgs,
   promoteAiReview,
   runBridgeCli,
   sha256,
   stripOuterMarkdownFence
 } from "./generate-ai-review.mjs";
+import { tryAcquireWeeklyAiLock } from "./lib/weekly-ai-lock.mjs";
 
 async function fixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-ai-review-"));
@@ -26,6 +29,12 @@ async function fixture() {
 }
 
 const validReview = "# Learn-X 周回顾\n\n## 具体的人和事（独立主线，优先保留）\n\n本周未发现可可靠提炼的具体人/事。\n\n## 本周议题\n\n真实判断\n\n## 精华议题摘要\n\n真实答案";
+const successfulBridgeResult = (text, options = {}) => {
+  const runId = options.preallocatedRunId || "123e4567-e89b-42d3-a456-426614174000";
+  const url = `https://chatgpt.com/c/${runId}`;
+  return { result: { status: "succeeded", runId, requestedConversationUrl: options.conversationUrl || "https://chatgpt.com/",
+    actualConversationUrl: url, conversationUrl: url, submissionConfirmed: true, text, format: "markdown" } };
+};
 
 test("bridge adapter timeout covers the Bridge protocol budget", () => {
   assert.ok(DEFAULT_BRIDGE_TIMEOUT_MS >= 210_000);
@@ -45,6 +54,11 @@ test("Bridge adapter passes the preallocated stable run ID through its CLI", asy
 
 test("manual fallback shell is stable and does not contain the prompt", () => {
   assert.equal(manualAiShell("2026-W27"), "# AI 周回顾｜2026-W27\n\n<!-- 手动完成后，将 ChatGPT 返回的完整 Markdown 正文粘贴到这里；不要粘贴提示词或外层代码块。 -->\n");
+});
+
+test("the public CLI ignores the legacy lock-held bypass and accepts only a token field", () => {
+  assert.equal(parseGenerateAiReviewArgs(["--week", "2026-W27", "--weekly-ai-lock-held"]).weeklyAiLockHeld, undefined);
+  assert.equal(parseGenerateAiReviewArgs(["--week", "2026-W27", "--weekly-ai-lock-token", "lock-token"]).weeklyAiLockToken, "lock-token");
 });
 
 test("confirms a valid user-completed manual fallback without resubmitting or rewriting ai.md", async (t) => {
@@ -121,24 +135,113 @@ test("builds target-week prompt and strips only the outer markdown fence", () =>
 test("auto-confirms a valid generated draft into formal ai.md", async () => {
   const root = await fixture();
   try {
+    const diagnosticEvents = [];
     const result = await generateAiReview({
       repoRoot: root,
       week: "2026-W27",
-      runBridge: async () => ({ result: { status: "succeeded", runId: "run-1", text: `\`\`\`markdown\n${validReview}\n\`\`\`` } })
+      diagnosticWriter: async (event) => diagnosticEvents.push(event),
+      runBridge: async (_prompt, options) => successfulBridgeResult(`\`\`\`markdown\n${validReview}\n\`\`\``, options)
     });
     assert.equal(result.status, "confirmed");
     assert.equal(await readFile(path.join(root, "03_input/weekly/2026-W27/ai.md"), "utf8"), `${validReview}\n`);
     assert.equal(await readdir(path.join(root, "03_input/weekly/2026-W27")).then((files) => files.includes("ai.generated.md")), false);
+    assert.deepEqual(diagnosticEvents.map(({ type }) => type), ["weekly-ai-dispatch", "weekly-ai-outcome"]);
+    assert.equal(diagnosticEvents[1].deliveryStatus, "succeeded");
+    assert.equal(diagnosticEvents[1].readbackStatus, "succeeded");
+    assert.equal(diagnosticEvents[1].week, "2026-W27");
+    assert.equal(diagnosticEvents[1].clientRequestId, diagnosticEvents[0].clientRequestId);
+    for (const event of diagnosticEvents) {
+      assert.equal("prompt" in event, false);
+      assert.equal("text" in event, false);
+      assert.equal("conversationUrl" in event, false);
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("preserves detailed Bridge identity and submission reasons in weekly AI events", async (t) => {
+  const reasons = [
+    "conversation-session-mismatch", "conversation-session-not-bound", "observer-identity-mismatch",
+    "original-run-identity-mismatch", "submission-unconfirmed", "new-user-message-not-found",
+  ];
+  for (const [index, reason] of reasons.entries()) {
+    const root = await fixture();
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const events = [];
+    const result = await generateAiReview({
+      repoRoot: root,
+      week: `2026-W${String(27 + index).padStart(2, "0")}`,
+      diagnosticWriter: async (event) => events.push(event),
+      runBridge: async (_prompt, options) => ({ result: {
+        status: "needs_review", runId: options.preallocatedRunId, reason,
+      } }),
+    });
+    assert.equal(result.reason, reason);
+    assert.equal(events.at(-1).type, "weekly-ai-outcome");
+    assert.equal(events.at(-1).reason, reason);
+  }
+
+  const root = await fixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const events = [];
+  await generateAiReview({
+    repoRoot: root,
+    week: "2026-W34",
+    diagnosticWriter: async (event) => events.push(event),
+    runBridge: async (_prompt, options) => ({ result: {
+      status: "needs_review", runId: options.preallocatedRunId, reason: "private-body-sentinel",
+    } }),
+  });
+  assert.equal(events.at(-1).reason, "unknown");
+  assert.doesNotMatch(JSON.stringify(events.at(-1)), /private-body-sentinel/);
+});
+
+test("a lock token must match the live weekly lock; the legacy boolean cannot bypass it", async (t) => {
+  const root = await fixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W27";
+  const weekDir = path.join(root, "03_input/weekly", week);
+  const lock = await tryAcquireWeeklyAiLock(weekDir);
+  let submissions = 0;
+  const forged = await generateAiReview({ repoRoot: root, week, weeklyAiLockHeld: true,
+    runBridge: async () => { submissions += 1; return successfulBridgeResult(validReview); } });
+  assert.equal(forged.reason, "weekly-ai-run-in-progress");
+  assert.equal(submissions, 0);
+
+  const accepted = await generateAiReview({ repoRoot: root, week, weeklyAiLockToken: lock.token,
+    runBridge: async (_prompt, options) => { submissions += 1; return successfulBridgeResult(validReview, options); } });
+  assert.equal(accepted.status, "confirmed");
+  assert.equal(submissions, 1);
+  await lock.release();
+  await assert.rejects(() => generateAiReview({ repoRoot: root, week, weeklyAiLockToken: lock.token }), /weekly-ai-lock-token-invalid/);
+});
+
+test("a reserved one-shot resubmission is never dispatched again by an ordinary invocation", async (t) => {
+  const root = await fixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W27";
+  const weekDir = path.join(root, "03_input/weekly", week);
+  await import("node:fs/promises").then(({ mkdir }) => mkdir(weekDir, { recursive: true }));
+  const manualPrompt = "Complete synthetic prompt\nall lines intact";
+  await writeFile(path.join(weekDir, "_ai-generated.json"), JSON.stringify({
+    targetWeek: week, status: "needs_review", runId: "123e4567-e89b-42d3-a456-426614174000",
+    localAttemptId: "123e4567-e89b-42d3-a456-426614174001", resubmissionCount: 1,
+    resubmissionOf: { runId: "123e4567-e89b-42d3-a456-426614174000" },
+    reason: "observer-window-ended", manualPrompt
+  }));
+  let submissions = 0;
+  const result = await generateAiReview({ repoRoot: root, week, runBridge: async () => { submissions += 1; } });
+  assert.equal(result.status, "needs_review");
+  assert.equal(result.manualPrompt, manualPrompt);
+  assert.equal(submissions, 0);
 });
 
 test("does not resend after an automatically confirmed draft", async () => {
   const root = await fixture();
   try {
     let calls = 0;
-    const options = { repoRoot: root, week: "2026-W27", runBridge: async () => { calls += 1; return { result: { status: "succeeded", runId: "run-1", text: validReview } }; } };
+    const options = { repoRoot: root, week: "2026-W27", runBridge: async (_prompt, bridgeOptions) => { calls += 1; return successfulBridgeResult(validReview, bridgeOptions); } };
     assert.equal((await generateAiReview(options)).status, "confirmed");
     assert.equal((await generateAiReview(options)).status, "confirmed");
     assert.equal(calls, 1);
@@ -158,7 +261,7 @@ test("only retries explicitly approved pre-submit environment failures", async (
       repoRoot: root,
       week: "2026-W27",
       retry: true,
-      runBridge: async () => { calls += 1; return { result: { status: "succeeded", runId: "run-retry", text: validReview } }; }
+      runBridge: async (_prompt, options) => { calls += 1; return successfulBridgeResult(validReview, options); }
     });
     assert.equal(result.status, "confirmed");
     assert.equal(calls, 1);
@@ -178,7 +281,7 @@ test("lets an explicit retry re-check an expired local cooldown", async () => {
       repoRoot: root,
       week: "2026-W27",
       retry: true,
-      runBridge: async () => { calls += 1; return { result: { status: "succeeded", runId: "run-cooldown-retry", text: validReview } }; }
+      runBridge: async (_prompt, options) => { calls += 1; return successfulBridgeResult(validReview, options); }
     });
     assert.equal(result.status, "confirmed");
     assert.equal(calls, 1);
@@ -321,7 +424,9 @@ test("observes a stable Bridge run ID after a crash between dispatch intent and 
       observeBridge: async (previous) => {
         observations += 1;
         assert.equal(previous.runId, runId);
-        return { result: { status: "succeeded", runId, conversationUrl: "https://chatgpt.com/c/recovered", text: validReview } };
+        return { result: { status: "succeeded", runId, requestedConversationUrl: "https://chatgpt.com/",
+          actualConversationUrl: "https://chatgpt.com/c/recovered", conversationUrl: "https://chatgpt.com/c/recovered",
+          submissionConfirmed: true, format: "markdown", text: validReview } };
       },
       runBridge: async () => { submissions += 1; throw new Error("must-not-resubmit"); }
     });
@@ -347,7 +452,9 @@ test("does not guess a missing conversation URL for a legacy interrupted dispatc
     let observations = 0;
     const result = await generateAiReview({
       repoRoot: root, week, observeUncertain: true,
-      observeBridge: async () => { observations += 1; return { result: { status: "succeeded", runId, text: validReview } }; },
+      observeBridge: async () => { observations += 1; return { result: { status: "succeeded", runId, requestedConversationUrl: "https://chatgpt.com/",
+        actualConversationUrl: "https://chatgpt.com/c/ai-observed", conversationUrl: "https://chatgpt.com/c/ai-observed",
+        submissionConfirmed: true, format: "markdown", text: validReview } }; },
       runBridge: async () => { throw new Error("must-not-resubmit"); }
     });
     assert.equal(result.status, "needs_review");
@@ -380,7 +487,8 @@ test("observes the original uncertain Bridge run and formalizes its returned res
         observed += 1;
         assert.equal(previous.runId, runId);
         assert.equal(options.observeUncertain, true);
-        return { result: { status: "succeeded", runId, conversationUrl, text: validReview, format: "markdown" } };
+        return { result: { status: "succeeded", runId, requestedConversationUrl: conversationUrl,
+          actualConversationUrl: conversationUrl, conversationUrl, submissionConfirmed: true, text: validReview, format: "markdown" } };
       },
       runBridge: async () => { submitted += 1; throw new Error("must-not-resubmit"); }
     });
@@ -408,8 +516,10 @@ test("records an unsuccessful observe-only check without resubmitting", async ()
       conversationUrl: "https://chatgpt.com/c/ai-observed", reason: "observer-window-ended", manualPrompt: prompt
     }));
     let submitted = 0;
+    const diagnosticEvents = [];
     const result = await generateAiReview({
       repoRoot: root, week, observeUncertain: true,
+      diagnosticWriter: async (event) => diagnosticEvents.push(event),
       observeBridge: async () => ({ result: { status: "needs_review", runId, reason: "chatgpt-rate-limited", diagnostics: { rateLimited: true } } }),
       runBridge: async () => { submitted += 1; }
     });
@@ -417,6 +527,8 @@ test("records an unsuccessful observe-only check without resubmitting", async ()
     assert.equal(result.observation.reason, "chatgpt-rate-limited");
     assert.equal(submitted, 0);
     assert.equal(JSON.parse(await readFile(path.join(weekDir, "_ai-generated.json"), "utf8")).observation.status, "needs_review");
+    assert.equal(diagnosticEvents.at(-1).reason, "chatgpt-rate-limited");
+    assert.equal(diagnosticEvents.at(-1).originalReason, "observer-window-ended");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -430,26 +542,34 @@ test("allows one explicitly confirmed retry only for this exact complete snapsho
     await import("node:fs/promises").then(({ mkdir }) => mkdir(weekDir, { recursive: true }));
     const template = await readFile(path.join(root, "03_input/weekly/00_template/ai.md"), "utf8");
     const prompt = buildReviewPrompt(template, week);
+    const runId = "123e4567-e89b-42d3-a456-426614174111";
+    const conversationUrl = `https://chatgpt.com/c/${runId}`;
+    const dispatchedAt = new Date(Date.now() - 21 * 60_000).toISOString();
     await writeFile(path.join(weekDir, "_ai-generated.json"), JSON.stringify({
-      status: "needs_review", targetWeek: week, promptSha256: sha256(prompt), runId: "old-run",
-      reason: "snapshot-mismatch", completedAt: "2026-10-11T21:05:45.951Z",
+      status: "needs_review", targetWeek: week, promptSha256: sha256(prompt), runId, localAttemptId: runId,
+      dispatchStartedAt: dispatchedAt, startedAt: dispatchedAt, submissionConfirmed: true,
+      requestedConversationUrl: "https://chatgpt.com/", actualConversationUrl: conversationUrl, conversationUrl,
+      reason: "snapshot-mismatch", completedAt: dispatchedAt,
+      observation: { status: "needs_review", runId, reason: "snapshot-mismatch", observedAt: dispatchedAt },
       diagnostics: { conversationMatched: true, promptSeen: true, assistantPresent: true, outputReady: true, markersSeen: true, stop: false, rateLimited: false, stableReadCount: 8, snapshot: { ok: false } }
     }));
     let calls = 0;
     const result = await generateAiReview({
       repoRoot: root, week, resubmitUncertain: true, confirm: true,
-      runBridge: async () => {
+      runBridge: async (_prompt, options) => {
         calls += 1;
         const started = JSON.parse(await readFile(path.join(weekDir, "_ai-generated.json"), "utf8"));
         assert.equal(started.reason, "uncertain-resubmission-in-progress", "persist the one-shot guard before external submission");
-        assert.equal(started.resubmissionOf.runId, "old-run");
-        return { result: { status: "succeeded", runId: "new-run", text: validReview } };
+        assert.equal(started.resubmissionOf.runId, runId);
+        assert.equal(started.resubmissionCount, 1);
+        return successfulBridgeResult(validReview, options);
       }
     });
     assert.equal(calls, 1);
     assert.equal(result.status, "confirmed");
-    assert.equal(result.runId, "new-run");
-    assert.equal(result.resubmissionOf.runId, "old-run");
+    assert.notEqual(result.runId, runId);
+    assert.equal(result.resubmissionCount, 1);
+    assert.equal(result.resubmissionOf.runId, runId);
     const repeated = await generateAiReview({ repoRoot: root, week, resubmitUncertain: true, confirm: true, runBridge: async () => { calls += 1; } });
     assert.equal(repeated.status, "confirmed", "a completed resubmission is idempotently observed");
     assert.equal(calls, 1, "a repeated call does not submit another external request");
@@ -479,6 +599,30 @@ test("requires explicit confirmation and refuses unrelated uncertain states", as
   }
 });
 
+test("one-shot automatic resubmission becomes eligible at exactly twenty minutes only with confirmed identity", async (t) => {
+  const root = await fixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W27";
+  const weekDir = path.join(root, "03_input/weekly", week);
+  await import("node:fs/promises").then(({ mkdir }) => mkdir(weekDir, { recursive: true }));
+  const template = await readFile(path.join(root, "03_input/weekly/00_template/ai.md"), "utf8");
+  const prompt = buildReviewPrompt(template, week);
+  const runId = "123e4567-e89b-42d3-a456-426614174222";
+  const dispatchMs = Date.parse("2026-10-20T00:00:00.000Z");
+  await writeFile(path.join(weekDir, "_ai-generated.json"), JSON.stringify({
+    status: "needs_review", targetWeek: week, promptSha256: sha256(prompt), runId, localAttemptId: runId,
+    dispatchStartedAt: new Date(dispatchMs).toISOString(), submissionConfirmed: true,
+    actualConversationUrl: `https://chatgpt.com/c/${runId}`, conversationUrl: `https://chatgpt.com/c/${runId}`,
+    reason: "observer-window-ended", observation: { status: "needs_review", runId, reason: "original-run-result-pending" }
+  }));
+  assert.equal(await canResubmitUncertainAi({ repoRoot: root, week, nowMs: dispatchMs + 19 * 60_000 + 59_999 }), false);
+  assert.equal(await canResubmitUncertainAi({ repoRoot: root, week, nowMs: dispatchMs + 20 * 60_000 }), true);
+  const current = JSON.parse(await readFile(path.join(weekDir, "_ai-generated.json"), "utf8"));
+  current.submissionConfirmed = false;
+  await writeFile(path.join(weekDir, "_ai-generated.json"), JSON.stringify(current));
+  assert.equal(await canResubmitUncertainAi({ repoRoot: root, week, nowMs: dispatchMs + 25 * 60_000 }), false);
+});
+
 test("preserves substantive manual ai.md when automatic review needs review", async () => {
   const root = await fixture();
   try {
@@ -505,7 +649,7 @@ test("rejects invalid output and returns the manual fallback prompt", async () =
     const result = await generateAiReview({
       repoRoot: root,
       week: "2026-W27",
-      runBridge: async () => ({ result: { status: "succeeded", runId: "run-2", text: "不完整" } })
+      runBridge: async (_prompt, options) => successfulBridgeResult("不完整", options)
     });
     assert.equal(result.status, "needs_review");
     assert.equal(result.reason, "invalid-ai-review");
@@ -524,7 +668,7 @@ test("rejects output over the 15000-character boundary", async () => {
     const result = await generateAiReview({
       repoRoot: root,
       week: "2026-W27",
-      runBridge: async () => ({ result: { status: "succeeded", runId: "run-large", text: `${validReview}\n${"x".repeat(15_000)}` } })
+      runBridge: async (_prompt, options) => successfulBridgeResult(`${validReview}\n${"x".repeat(15_000)}`, options)
     });
     assert.equal(result.status, "needs_review");
     assert.equal(result.reason, "ai-review-too-large");
@@ -534,27 +678,67 @@ test("rejects output over the 15000-character boundary", async () => {
   }
 });
 
-test("promotes a confirmed draft and backs up substantive ai.md", async () => {
+test("preserves substantive manual ai.md and leaves a generated draft pending review", async () => {
   const root = await fixture();
   try {
     const weekDir = path.join(root, "03_input/weekly/2026-W27");
     await import("node:fs/promises").then(({ mkdir }) => mkdir(weekDir, { recursive: true }));
     await writeFile(path.join(weekDir, "ai.md"), "# 旧的人工回顾\n\n保留证据", "utf8");
+    const diagnosticEvents = [];
     const generated = await generateAiReview({
       repoRoot: root,
       week: "2026-W27",
-      runBridge: async () => ({ result: { status: "succeeded", runId: "run-3", text: validReview } })
+      diagnosticWriter: async (event) => diagnosticEvents.push(event),
+      runBridge: async (_prompt, options) => successfulBridgeResult(validReview, options)
     });
-    assert.equal(generated.status, "confirmed");
-    assert.equal(await readFile(path.join(weekDir, "ai.md"), "utf8"), `${validReview}\n`);
+    assert.equal(generated.status, "needs_review");
+    assert.equal(generated.reason, "formal-ai-md-has-human-content");
+    assert.equal(await readFile(path.join(weekDir, "ai.md"), "utf8"), "# 旧的人工回顾\n\n保留证据");
     assert.equal(sha256(validReview), generated.outputSha256);
+    assert.equal(diagnosticEvents.at(-1).reason, "formal-ai-md-has-human-content");
     const archive = await readdir(path.join(root, "04_output/_dist/weekly/2026-W27"));
-    assert.equal(archive.some((file) => file.startsWith("ai.previous.")), true);
-    assert.equal(archive.some((file) => file.startsWith("ai.generated.") && file.endsWith(".md")), true);
-    assert.equal(generated.auditPath.endsWith(".md"), true);
+    assert.equal(archive.some((file) => file.startsWith("ai.previous.")), false);
+    assert.equal(await readFile(path.join(weekDir, "ai.generated.md"), "utf8"), `${validReview}\n`);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("reconciles a completed ai.md promotion after the process crashed before sidecar confirmation", async (t) => {
+  const root = await fixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W27";
+  const weekDir = path.join(root, "03_input/weekly", week);
+  await import("node:fs/promises").then(({ mkdir }) => mkdir(weekDir, { recursive: true }));
+  await writeFile(path.join(weekDir, "ai.md"), `${validReview}\n`, "utf8");
+  await writeFile(path.join(weekDir, "_ai-generated.json"), JSON.stringify({
+    schemaVersion: 1, targetWeek: week, status: "generated", outputSha256: sha256(validReview), promptSha256: "a".repeat(64)
+  }));
+  let submissions = 0;
+  const recovered = await generateAiReview({ repoRoot: root, week, runBridge: async () => { submissions += 1; throw new Error("must-not-resubmit"); } });
+  assert.equal(recovered.status, "confirmed");
+  assert.equal(recovered.promotionRecovered, true);
+  assert.equal(recovered.readbackSha256, sha256(validReview));
+  assert.equal(submissions, 0);
+});
+
+test("does not replace a human edit made after the generated draft was staged", async (t) => {
+  const root = await fixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W27";
+  const weekDir = path.join(root, "03_input/weekly", week);
+  await import("node:fs/promises").then(({ mkdir }) => mkdir(weekDir, { recursive: true }));
+  const manual = "# 人工修订\n\n保留内容";
+  await writeFile(path.join(weekDir, "ai.md"), manual, "utf8");
+  await writeFile(path.join(weekDir, "_ai-generated.json"), JSON.stringify({
+    schemaVersion: 1, targetWeek: week, status: "generated", outputSha256: sha256(validReview), promptSha256: "a".repeat(64)
+  }));
+  let submissions = 0;
+  const result = await generateAiReview({ repoRoot: root, week, runBridge: async () => { submissions += 1; } });
+  assert.equal(result.status, "needs_review");
+  assert.equal(result.reason, "formal-ai-md-changed-after-promotion");
+  assert.equal(await readFile(path.join(weekDir, "ai.md"), "utf8"), manual);
+  assert.equal(submissions, 0);
 });
 
 test("refuses promotion after the generated draft is tampered with", async () => {

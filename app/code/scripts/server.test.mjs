@@ -2,7 +2,15 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import test from "node:test";
-import { handleChatPackPromptsLatest, handleDocumentsContext, isLocalRequest, staticResponseHeaders } from "../server.mjs";
+import {
+  handleChatPackCacheRead,
+  handleChatPackCacheRefresh,
+  handleChatPackCacheStatus,
+  handleChatPackPromptsLatest,
+  handleDocumentsContext,
+  isLocalRequest,
+  staticResponseHeaders
+} from "../server.mjs";
 
 test("local HTML is never cached across hashed asset rebuilds", () => {
   assert.equal(staticResponseHeaders(".html")["cache-control"], "no-store");
@@ -70,6 +78,42 @@ test("usage endpoint accepts only loopback same-origin requests", () => {
   assert.equal(isLocalRequest(request("::1", "localhost:4173", "http://localhost:4173")), true);
   assert.equal(isLocalRequest(request("10.0.0.2", "localhost:4173")), false);
   assert.equal(isLocalRequest(request("127.0.0.1", "localhost:4173", "https://evil.example")), false);
+});
+
+test("Chat Pack cache status exposes metadata only and rejects nonlocal reads", async () => {
+  const cache = { status: async () => ({ resources: [{ key: "prompt:chatpack.one", cache_status: "available", revision: 2 }], summary: { total: 1, available: 1, unavailable: 0 } }) };
+  const response = contextResponse();
+  await handleChatPackCacheStatus(localContextRequest, response, { cache, initialize: async () => {} });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers["cache-control"], "no-store");
+  assert.equal(JSON.stringify(response.payload).includes("content"), false);
+
+  const remote = contextResponse();
+  await handleChatPackCacheStatus({ socket: { remoteAddress: "10.0.0.3" }, headers: { host: "127.0.0.1:4173" } }, remote, { cache, initialize: async () => {} });
+  assert.equal(remote.status, 403);
+});
+
+test("cache refresh accepts full-refresh priority and immediately returns its coalesced state", async () => {
+  let received;
+  const cache = { requestRefresh: (options) => { received = options; return { state: "running", merged: true }; } };
+  const response = contextResponse();
+  await handleChatPackCacheRefresh(jsonRequest({ prompt_ids: ["chatpack.weekly-output"], core_kinds: ["dao"] }), response, {
+    cache, initialize: async () => {}
+  });
+  assert.equal(response.status, 202);
+  assert.deepEqual(received.priority, ["prompt:chatpack.weekly-output", "core:dao"]);
+  assert.equal(response.payload.merged, true);
+});
+
+test("cache read returns an explicit miss without leaking a partial resource set", async () => {
+  const cache = { read: async () => ({ status: 409, body: { error: "必需缓存尚不可用", missing: [{ key: "core:dao", cache_status: "expired" }] } }) };
+  const response = contextResponse();
+  await handleChatPackCacheRead(jsonRequest({ prompt_ids: ["chatpack.weekly-output"], core_kinds: ["dao"] }), response, {
+    cache, initialize: async () => {}
+  });
+  assert.equal(response.status, 409);
+  assert.equal("prompts" in response.payload, false);
+  assert.equal(response.payload.missing[0].cache_status, "expired");
 });
 
 function jsonRequest(payload, overrides = {}) {
