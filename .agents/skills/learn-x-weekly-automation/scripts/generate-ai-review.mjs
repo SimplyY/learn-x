@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { readFile, mkdir, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { readFile, link, mkdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { validateAiReview } from "../../learn-x-process/scripts/monthly-process-input.mjs";
@@ -39,6 +39,8 @@ const safeWeeklyAiReasons = new Set([
   "manual-ai-review-invalid", "manual-ai-review-changed-after-confirmation", "weekly-ai-run-in-progress",
   "formal-ai-md-has-human-content", "confirmed-ai-md-changed", "confirmed-ai-md-missing",
   "formal-ai-md-changed-after-promotion", "bridge-conversation-url-missing", "bridge-observe-interface-unavailable",
+  "formal-ai-md-exists-during-promotion",
+  "formal-ai-md-changed-during-promotion",
   "bridge-observe-unavailable", "previous-run-needs-review", "substantive-ai-md-exists", "uncertain-resubmission-in-progress",
   "promotion-reconciliation-readback-failed", "uncertain-ai-resubmission-requires-confirmed-eligible-snapshot-mismatch",
   "uncertain-ai-resubmission-refuses-to-replace-substantive-ai-md", "manual-ai-review-state-not-eligible",
@@ -285,20 +287,40 @@ async function readJson(filePath) {
 }
 
 async function ensureManualAiShell(paths, week) {
-  if (await exists(paths.formalPath)) return false;
-  await writeAtomic(paths.formalPath, manualAiShell(week), "manual");
-  return true;
+  return await writeExclusive(paths.formalPath, manualAiShell(week), "manual");
+}
+
+async function ensureManualAiShellForUnrecoverableFailure(paths, week, runId) {
+  const stableRunId = typeof runId === "string"
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(runId);
+  if (stableRunId) return false;
+  return await ensureManualAiShell(paths, week);
 }
 
 async function writeAtomic(filePath, content, suffix = "tmp") {
   await mkdir(path.dirname(filePath), { recursive: true });
-  const tempPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${suffix}`);
+  const tempPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.${suffix}`);
   try {
     await writeFile(tempPath, content, "utf8");
     await rename(tempPath, filePath);
   } catch (error) {
     try { await unlink(tempPath); } catch {}
     throw error;
+  }
+}
+
+async function writeExclusive(filePath, content, suffix = "tmp") {
+  await mkdir(path.dirname(filePath), { recursive: true });
+  const tempPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.${suffix}`);
+  try {
+    await writeFile(tempPath, content, "utf8");
+    await link(tempPath, filePath);
+    return true;
+  } catch (error) {
+    if (error?.code === "EEXIST") return false;
+    throw error;
+  } finally {
+    try { await unlink(tempPath); } catch {}
   }
 }
 
@@ -328,12 +350,15 @@ function isSubstantiveExisting(text) {
 
 async function promoteGeneratedSafely(repoRoot, week, prompt) {
   const paths = weekPaths(repoRoot, week);
-  try { return await promoteAiReviewUnlocked({ repoRoot, week, confirm: true }); }
+  try { return await promoteAiReviewUnlocked({ repoRoot, week, confirm: true, manualPrompt: prompt }); }
   catch (error) {
-    if (error?.message !== "promotion-refuses-substantive-ai-md") throw error;
+    if (!["promotion-refuses-substantive-ai-md", "promotion-refuses-existing-ai-md"].includes(error?.message)) throw error;
     const previous = await readJson(paths.sidecarPath) || {};
-    const conflict = { ...previous, status: "needs_review", targetWeek: week, reason: "formal-ai-md-has-human-content",
-      promotionStatus: "blocked-by-existing-content", manualPrompt: previous.manualPrompt || prompt, manualPath: paths.formalPath };
+    const hasHumanContent = error.message === "promotion-refuses-substantive-ai-md";
+    const conflict = { ...previous, status: "needs_review", targetWeek: week,
+      reason: hasHumanContent ? "formal-ai-md-has-human-content" : "formal-ai-md-exists-during-promotion",
+      promotionStatus: "blocked-by-existing-content",
+      manualPrompt: previous.manualPrompt || prompt, manualPath: paths.formalPath };
     await writeAtomic(paths.sidecarPath, `${JSON.stringify(conflict, null, 2)}\n`, "status");
     return conflict;
   }
@@ -373,11 +398,9 @@ async function generateAiReviewUnlocked(options = {}) {
     if (sha256(formalText) === previous.outputSha256 && validateAiReview(formalText).valid) {
       const reconciled = { ...previous, status: "confirmed", confirmedAt: new Date().toISOString(), formalPath: paths.formalPath,
         promotionRecovered: true, readbackSha256: sha256(formalText) };
-      await writeAtomic(paths.sidecarPath, `${JSON.stringify(reconciled, null, 2)}\n`, "confirmed");
-      const readback = JSON.parse(await readFile(paths.sidecarPath, "utf8"));
-      if (readback.status !== "confirmed" || readback.readbackSha256 !== sha256(formalText)) throw new Error("promotion-reconciliation-readback-failed");
-      if (await exists(paths.generatedPath)) await unlink(paths.generatedPath);
-      return { ...reconciled, targetWeek: week };
+      const readback = await persistConfirmedPromotion(paths, reconciled, { week, manualPrompt: prompt });
+      if (readback.status === "confirmed" && await exists(paths.generatedPath)) await unlink(paths.generatedPath);
+      return { ...readback, targetWeek: week };
     }
     if (isSubstantiveExisting(formalText)) {
       const conflict = { ...previous, status: "needs_review", reason: "formal-ai-md-changed-after-promotion", manualPrompt: previous.manualPrompt || prompt,
@@ -455,7 +478,7 @@ async function generateAiReviewUnlocked(options = {}) {
     if (typeof previous.conversationUrl !== "string" || !conversationOriginMatches(previous.conversationUrl, previous.conversationUrl)) {
       const updated = { ...previous, reason: "bridge-conversation-url-missing", observation: { status: "needs_review", reason: "bridge-conversation-url-missing", observedAt: new Date().toISOString() } };
       await writeAtomic(paths.sidecarPath, `${JSON.stringify(updated, null, 2)}\n`, "status");
-      await ensureManualAiShell(paths, week);
+      await ensureManualAiShellForUnrecoverableFailure(paths, week, updated.runId);
       return { ...updated, targetWeek: week, manualPath: paths.formalPath };
     }
     const observe = options.observeBridge || observeBridgeCli;
@@ -491,7 +514,7 @@ async function generateAiReviewUnlocked(options = {}) {
         ...(typeof (observed?.actualConversationUrl || observed?.conversationUrl) === "string"
           ? { actualConversationUrl: observed.actualConversationUrl || observed.conversationUrl, conversationUrl: observed.actualConversationUrl || observed.conversationUrl } : {}) };
       await writeAtomic(paths.sidecarPath, `${JSON.stringify(updated, null, 2)}\n`, "status");
-      await ensureManualAiShell(paths, week);
+      await ensureManualAiShellForUnrecoverableFailure(paths, week, updated.runId);
       return { ...updated, targetWeek: week, manualPath: paths.formalPath };
     }
   }
@@ -533,7 +556,7 @@ async function generateAiReviewUnlocked(options = {}) {
     }, null, 2)}\n`, "status");
   }
   if (previous?.status === "needs_review" && !resubmissionOf && !(options.retry && safeRetryReasons.has(previous.reason)) && !bridge) {
-    await ensureManualAiShell(paths, week);
+    await ensureManualAiShellForUnrecoverableFailure(paths, week, previous.runId);
     return { status: "needs_review", targetWeek: week, reason: "previous-run-needs-review", manualPrompt: previous.manualPrompt || prompt, manualPath: paths.formalPath };
   }
 
@@ -596,7 +619,7 @@ async function generateAiReviewUnlocked(options = {}) {
         reason: "bridge-observation-identity-mismatch", requestedConversationUrl: bridgeResult.requestedConversationUrl || conversationUrl,
         actualConversationUrl: actualUrl, conversationUrl: actualUrl, submissionConfirmed: bridgeResult.submissionConfirmed === true,
         completedAt: new Date().toISOString(), manualPrompt: prompt, manualPath: paths.formalPath };
-      await ensureManualAiShell(paths, week);
+      await ensureManualAiShellForUnrecoverableFailure(paths, week, failure.runId);
       await writeAtomic(paths.sidecarPath, `${JSON.stringify(failure, null, 2)}\n`, "status");
       return { ...failure, targetWeek: week };
     }
@@ -623,7 +646,7 @@ async function generateAiReviewUnlocked(options = {}) {
       completedAt: new Date().toISOString(),
       manualPrompt: prompt
     };
-    await ensureManualAiShell(paths, week);
+    await ensureManualAiShellForUnrecoverableFailure(paths, week, failure.runId);
     failure.manualPath = paths.formalPath;
     await writeAtomic(paths.sidecarPath, `${JSON.stringify(failure, null, 2)}\n`, "status");
     return { ...failure, targetWeek: week };
@@ -644,7 +667,7 @@ async function generateAiReviewUnlocked(options = {}) {
       completedAt: new Date().toISOString(),
       manualPrompt: prompt
     };
-    await ensureManualAiShell(paths, week);
+    await ensureManualAiShellForUnrecoverableFailure(paths, week, failure.runId);
     failure.manualPath = paths.formalPath;
     if (text) await writeAtomic(paths.invalidPath, `${text.slice(0, maxInputChars)}${text.length > maxInputChars ? "\n\n[输出已截断]" : ""}\n`, "invalid");
     await writeAtomic(paths.sidecarPath, `${JSON.stringify(failure, null, 2)}\n`, "status");
@@ -771,6 +794,27 @@ export async function canResubmitUncertainAi({ repoRoot = defaultRepoRoot, week:
   return isEligibleUncertainResubmission(previous, week, sha256(buildReviewPrompt(template, week)), nowMs);
 }
 
+async function persistConfirmedPromotion(paths, confirmed, { week = confirmed.targetWeek, manualPrompt } = {}) {
+  try {
+    await writeAtomic(paths.sidecarPath, `${JSON.stringify(confirmed, null, 2)}\n`, "confirmed");
+    const readback = JSON.parse(await readFile(paths.sidecarPath, "utf8"));
+    if (readback.status !== "confirmed" || readback.outputSha256 !== confirmed.readbackSha256) throw new Error("promotion-status-readback-failed");
+    const finalReadbackSha = sha256(normalizeAiReviewText(await readFile(paths.formalPath, "utf8")));
+    if (finalReadbackSha !== confirmed.readbackSha256) throw new Error("promotion-readback-hash-mismatch");
+    return readback;
+  } catch (error) {
+    if (error?.message !== "promotion-readback-hash-mismatch") throw error;
+    const previous = await readJson(paths.sidecarPath) || confirmed;
+    const { confirmedAt, readbackSha256, promotionRecovered, auditPath, ...unconfirmed } = previous;
+    const conflict = { ...unconfirmed, status: "needs_review", targetWeek: week,
+      reason: "formal-ai-md-changed-during-promotion", promotionStatus: "formal-file-changed-during-readback",
+      ...(previous.manualPrompt || manualPrompt ? { manualPrompt: previous.manualPrompt || manualPrompt } : {}),
+      manualPath: paths.formalPath };
+    await writeAtomic(paths.sidecarPath, `${JSON.stringify(conflict, null, 2)}\n`, "status");
+    return conflict;
+  }
+}
+
 async function promoteAiReviewUnlocked(options = {}) {
   if (!options.confirm) throw new Error("promotion-requires-confirm");
   const repoRoot = options.repoRoot || defaultRepoRoot;
@@ -784,52 +828,57 @@ async function promoteAiReviewUnlocked(options = {}) {
   }
 
   await mkdir(paths.archiveDir, { recursive: true });
-  let backupPath;
-  let rollbackPath;
   const auditPath = path.join(paths.archiveDir, `ai.generated.${Date.now()}.md`);
-  if (await exists(paths.formalPath)) {
-    const current = await readFile(paths.formalPath, "utf8");
-    const currentText = normalizeAiReviewText(current);
-    if (sha256(currentText) === sidecar.outputSha256 && validateAiReview(currentText).valid) {
-      const reconciled = { ...sidecar, status: "confirmed", confirmedAt: sidecar.confirmedAt || new Date().toISOString(),
-        formalPath: paths.formalPath, promotionRecovered: true, readbackSha256: sha256(currentText) };
-      await writeAtomic(paths.sidecarPath, `${JSON.stringify(reconciled, null, 2)}\n`, "confirmed");
-      if (await exists(paths.generatedPath)) await unlink(paths.generatedPath);
-      return { ...reconciled, targetWeek: week };
-    }
-    if (isSubstantiveExisting(current)) throw new Error("promotion-refuses-substantive-ai-md");
-    rollbackPath = path.join(paths.archiveDir, `.ai.rollback.${process.pid}.${Date.now()}.md`);
-    await rename(paths.formalPath, rollbackPath);
-  }
-
   try {
+    if (await exists(paths.formalPath)) {
+      const current = await readFile(paths.formalPath, "utf8");
+      const currentText = normalizeAiReviewText(current);
+      if (sha256(currentText) === sidecar.outputSha256 && validateAiReview(currentText).valid) {
+        const reconciled = { ...sidecar, status: "confirmed", confirmedAt: sidecar.confirmedAt || new Date().toISOString(),
+          formalPath: paths.formalPath, promotionRecovered: true, readbackSha256: sha256(currentText) };
+        const readback = await persistConfirmedPromotion(paths, reconciled, { week, manualPrompt: options.manualPrompt });
+        if (readback.status === "confirmed" && await exists(paths.generatedPath)) await unlink(paths.generatedPath);
+        return { ...readback, targetWeek: week };
+      }
+      if (isSubstantiveExisting(current)) throw new Error("promotion-refuses-substantive-ai-md");
+      throw new Error("promotion-refuses-existing-ai-md");
+    }
+
     await writeAtomic(auditPath, `${text}\n`, "audit");
-    await rename(paths.generatedPath, paths.formalPath);
+    try {
+      if (!await writeExclusive(paths.formalPath, `${text}\n`, "promotion")) {
+        throw new Error("promotion-refuses-existing-ai-md");
+      }
+    } catch (error) {
+      if (error?.code === "EEXIST") throw new Error("promotion-refuses-existing-ai-md");
+      throw error;
+    }
     const confirmed = {
       ...sidecar,
       status: "confirmed",
       confirmedAt: new Date().toISOString(),
       formalPath: paths.formalPath,
-      backupPath,
       auditPath,
       readbackSha256: sha256(normalizeAiReviewText(await readFile(paths.formalPath, "utf8")))
     };
     if (confirmed.readbackSha256 !== sidecar.outputSha256) throw new Error("promotion-readback-hash-mismatch");
-    await writeAtomic(paths.sidecarPath, `${JSON.stringify(confirmed, null, 2)}\n`, "confirmed");
-    const readback = JSON.parse(await readFile(paths.sidecarPath, "utf8"));
-    if (readback.status !== "confirmed" || readback.outputSha256 !== confirmed.readbackSha256) throw new Error("promotion-status-readback-failed");
-    if (rollbackPath) {
-      try { await unlink(rollbackPath); } catch {}
+    const readback = await persistConfirmedPromotion(paths, confirmed, { week, manualPrompt: options.manualPrompt });
+    if (readback.status === "confirmed") {
+      try { await unlink(paths.generatedPath); } catch {}
     }
-    return { ...confirmed, targetWeek: week };
+    return { ...readback, targetWeek: week };
   } catch (error) {
-    try { await rename(paths.formalPath, paths.generatedPath); } catch {}
-    if (rollbackPath) {
-      try { await rename(rollbackPath, paths.formalPath); } catch {}
-    } else if (backupPath) {
-      try { await rename(backupPath, paths.formalPath); } catch {}
-    }
     try { await unlink(auditPath); } catch {}
+    if (error?.message === "promotion-readback-hash-mismatch") {
+      const previous = await readJson(paths.sidecarPath) || sidecar;
+      const { confirmedAt, readbackSha256, promotionRecovered, ...unconfirmed } = previous;
+      const conflict = { ...unconfirmed, status: "needs_review", targetWeek: week,
+        reason: "formal-ai-md-changed-during-promotion", promotionStatus: "formal-file-changed-during-readback",
+        ...(previous.manualPrompt || options.manualPrompt ? { manualPrompt: previous.manualPrompt || options.manualPrompt } : {}),
+        manualPath: paths.formalPath };
+      await writeAtomic(paths.sidecarPath, `${JSON.stringify(conflict, null, 2)}\n`, "status");
+      return { ...conflict, targetWeek: week };
+    }
     throw error;
   }
 }

@@ -85,7 +85,10 @@ async function runOneShotWindowScenario(t, resolveAtMinute) {
         if (resolveAtMinute != null && elapsed >= resolveAtMinute * 60_000) {
           current.status = "confirmed";
           current.completedAt = new Date(nowMs).toISOString();
+          current.outputSha256 = sha256(VALID_AI_REVIEW);
+          current.readbackSha256 = current.outputSha256;
           current.reason = undefined;
+          await writeFile(path.join(weekRoot, "ai.md"), `${VALID_AI_REVIEW}\n`, "utf8");
           await writeFile(sidecar, JSON.stringify(current));
           return { status: "confirmed" };
         }
@@ -168,6 +171,10 @@ async function runFreshUncertainAiScenario(t, { maxDurationMs = 60 * 60_000, lat
       }
       const current = JSON.parse(await readFile(sidecar, "utf8"));
       if (context.resubmitUncertainAi) {
+        const retryState = JSON.parse(await readFile(path.join(weekRoot, "_weekly-retry-state.json"), "utf8"));
+        assert.equal(retryState.sources.ai.resubmissionParentRunId, originalRunId,
+          "the expected parent is durable before the replacement dispatch begins");
+        assert.ok(Date.parse(retryState.sources.ai.resubmissionReservedAt));
         current.status = replacementImmediateStatus || "needs_review";
         current.runId = replacementRunId;
         current.localAttemptId = replacementRunId;
@@ -358,8 +365,19 @@ test("automatic weekly AI recovery reopens at most once after twenty minutes wit
         return { status: "needs_review", error: "original-run-result-pending" };
       }
       assert.equal(context.resubmitUncertainAi, true);
+      const replacementRunId = "123e4567-e89b-42d3-a456-426614174338";
       current.status = "confirmed";
+      current.runId = replacementRunId;
+      current.localAttemptId = replacementRunId;
+      current.dispatchStartedAt = new Date(nowMs).toISOString();
       current.resubmissionCount = 1;
+      current.resubmissionOf = { runId, dispatchStartedAt, reason: "observer-window-ended" };
+      current.outputSha256 = sha256(VALID_AI_REVIEW);
+      current.readbackSha256 = current.outputSha256;
+      current.completedAt = new Date(nowMs).toISOString();
+      current.conversationUrl = `https://chatgpt.com/c/${replacementRunId}`;
+      current.actualConversationUrl = current.conversationUrl;
+      await writeFile(path.join(weekRoot, "ai.md"), `${VALID_AI_REVIEW}\n`, "utf8");
       await writeFile(sidecar, JSON.stringify(current));
       return { status: "confirmed" };
     }
@@ -668,6 +686,119 @@ test("a restarted supervisor reconciles a confirmed replacement by reading back 
   assert.equal(receipt.resubmissionCount, 1);
   assert.equal(calls.length, 0, "the confirmed receipt is reconciled locally without a Bridge call");
   assert.equal(sleeps.length, 0, "a confirmed delivery does not wait for its deadline");
+});
+
+test("a generated replacement with a missing parent run ID is rejected before promotion", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-ai-invalid-parent-receipt-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const weekRoot = path.join(root, "03_input/weekly", week);
+  await mkdir(weekRoot, { recursive: true });
+  const state = createWeeklyRetryState(week);
+  for (const source of WEEKLY_SOURCE_CONFIG) state.sources[source.id].status = source.collector ? "succeeded" : "recheck-only";
+  state.sources.ai.status = "succeeded";
+  state.sources.ai.attempts = 1;
+  await writeFile(path.join(weekRoot, "_weekly-retry-state.json"), `${JSON.stringify(state)}\n`);
+  const replacementRunId = "123e4567-e89b-42d3-a456-426614174339";
+  const dispatchStartedAt = "2026-10-05T07:00:00.000Z";
+  await writeFile(path.join(weekRoot, "ai.generated.md"), `${VALID_AI_REVIEW}\n`, "utf8");
+  await writeFile(path.join(weekRoot, "_ai-generated.json"), JSON.stringify({
+    status: "generated", targetWeek: week, runId: replacementRunId, localAttemptId: replacementRunId,
+    dispatchStartedAt, conversationUrl: `https://chatgpt.com/c/${replacementRunId}`,
+    resubmissionCount: 1, resubmissionOf: {}, outputSha256: sha256(VALID_AI_REVIEW),
+    manualPrompt: "Complete synthetic manual prompt"
+  }));
+
+  const result = await runWeeklyRetrySupervisor({
+    week, mode: "initial", repoRoot: root, maxDurationMs: 5_000,
+    runSource: async () => { throw new Error("invalid replacement receipt must never call Bridge"); }
+  });
+  const receipt = JSON.parse(await readFile(path.join(weekRoot, "_ai-generated.json"), "utf8"));
+  assert.equal(result.sources.ai.status, "needs_review");
+  assert.equal(result.manualFallback.prompt, "Complete synthetic manual prompt");
+  assert.equal(receipt.status, "generated", "the invalid receipt remains preserved for review");
+  assert.equal(await readFile(path.join(weekRoot, "ai.md"), "utf8").then(() => true, () => false), false,
+    "missing parent identity cannot promote untraceable output");
+});
+
+test("a restarted supervisor rejects a valid-format replacement linked to the wrong parent run", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-ai-wrong-parent-receipt-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const weekRoot = path.join(root, "03_input/weekly", week);
+  await mkdir(weekRoot, { recursive: true });
+  const state = createWeeklyRetryState(week);
+  for (const source of WEEKLY_SOURCE_CONFIG) state.sources[source.id].status = source.collector ? "succeeded" : "recheck-only";
+  Object.assign(state.sources.ai, {
+    status: "succeeded", attempts: 1,
+    resubmissionParentRunId: "123e4567-e89b-42d3-a456-426614174340",
+    resubmissionReservedAt: "2026-10-05T06:59:59.000Z"
+  });
+  await writeFile(path.join(weekRoot, "_weekly-retry-state.json"), `${JSON.stringify(state)}\n`);
+  const replacementRunId = "123e4567-e89b-42d3-a456-426614174341";
+  const wrongParentRunId = "123e4567-e89b-42d3-a456-426614174342";
+  await writeFile(path.join(weekRoot, "ai.generated.md"), `${VALID_AI_REVIEW}\n`, "utf8");
+  const sidecarPath = path.join(weekRoot, "_ai-generated.json");
+  const receipt = {
+    status: "generated", targetWeek: week, runId: replacementRunId, localAttemptId: replacementRunId,
+    dispatchStartedAt: "2026-10-05T07:00:00.000Z", conversationUrl: `https://chatgpt.com/c/${replacementRunId}`,
+    resubmissionCount: 1, resubmissionOf: { runId: wrongParentRunId }, outputSha256: sha256(VALID_AI_REVIEW),
+    manualPrompt: "Complete synthetic manual prompt"
+  };
+  await writeFile(sidecarPath, JSON.stringify(receipt));
+
+  const result = await runWeeklyRetrySupervisor({
+    week, mode: "initial", repoRoot: root, maxDurationMs: 5_000,
+    runSource: async () => { throw new Error("wrong-parent receipt must never call Bridge"); }
+  });
+  const finalReceipt = JSON.parse(await readFile(sidecarPath, "utf8"));
+  const finalState = JSON.parse(await readFile(path.join(weekRoot, "_weekly-retry-state.json"), "utf8"));
+  assert.equal(result.sources.ai.status, "needs_review");
+  assert.equal(result.sources.ai.lastErrorClass, "ai-submission-state-uncertain");
+  assert.equal(finalState.sources.ai.lastErrorSignal, "AI_REPLACEMENT_RECEIPT_INVALID");
+  assert.equal(result.manualFallback.prompt, "Complete synthetic manual prompt");
+  assert.deepEqual(finalReceipt, receipt, "the untrusted receipt is preserved for diagnosis");
+  assert.equal(finalState.sources.ai.resubmissionParentRunId, "123e4567-e89b-42d3-a456-426614174340");
+  assert.equal(await readFile(path.join(weekRoot, "ai.md"), "utf8").then(() => true, () => false), false,
+    "a valid-looking but wrong parent cannot promote generated output");
+});
+
+test("a persisted one-shot reservation without a replacement receipt cannot dispatch after restart", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-ai-reserved-without-receipt-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const weekRoot = path.join(root, "03_input/weekly", week);
+  await mkdir(weekRoot, { recursive: true });
+  const state = createWeeklyRetryState(week);
+  for (const source of WEEKLY_SOURCE_CONFIG) state.sources[source.id].status = source.collector ? "succeeded" : "recheck-only";
+  Object.assign(state.sources.ai, {
+    status: "needs_review", attempts: 1,
+    resubmissionParentRunId: "123e4567-e89b-42d3-a456-426614174343",
+    resubmissionReservedAt: "2026-10-05T07:20:00.000Z"
+  });
+  await writeFile(path.join(weekRoot, "_weekly-retry-state.json"), `${JSON.stringify(state)}\n`);
+  const originalRunId = "123e4567-e89b-42d3-a456-426614174343";
+  const dispatchStartedAt = "2026-10-05T07:00:00.000Z";
+  const sidecar = {
+    status: "needs_review", targetWeek: week, runId: originalRunId, localAttemptId: originalRunId,
+    dispatchStartedAt, conversationUrl: `https://chatgpt.com/c/${originalRunId}`,
+    reason: "observer-window-ended", manualPrompt: "Complete synthetic manual prompt"
+  };
+  const sidecarPath = path.join(weekRoot, "_ai-generated.json");
+  await writeFile(sidecarPath, JSON.stringify(sidecar));
+  let bridgeCalls = 0;
+
+  const result = await runWeeklyRetrySupervisor({
+    week, mode: "initial", repoRoot: root, maxDurationMs: 5_000,
+    runSource: async () => { bridgeCalls += 1; throw new Error("a reserved quota must not dispatch again"); }
+  });
+  const finalState = JSON.parse(await readFile(path.join(weekRoot, "_weekly-retry-state.json"), "utf8"));
+  assert.equal(result.sources.ai.status, "needs_review");
+  assert.equal(result.manualFallback.prompt, "Complete synthetic manual prompt");
+  assert.equal(bridgeCalls, 0);
+  assert.equal(finalState.sources.ai.lastErrorSignal, "AI_REPLACEMENT_RECEIPT_INVALID");
+  assert.deepEqual(JSON.parse(await readFile(sidecarPath, "utf8")), sidecar,
+    "reservation-only recovery leaves the original receipt unchanged");
 });
 
 test("the twenty-minute wait stops when human ai.md content appears before the boundary", async (t) => {

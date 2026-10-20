@@ -38,9 +38,15 @@ test("local Chat Pack uses complete Core cache, preserves the last result on fai
   };
   let cacheRevision = 1;
   let cacheReadMode = "normal";
+  let cacheRefreshMode = "normal";
+  let raceReadCount = 0;
   let cacheStatusMode = "normal";
+  let cacheRefreshState = "recovering";
   let cacheRefreshes = 0;
   let cacheReads = 0;
+  let cacheStatusRequests = 0;
+  let manualRefreshRequests = 0;
+  let cacheStatusPollCallback = null;
   let directCoreReads = 0;
   let usagePosts = 0;
   let clipboardShouldFail = false;
@@ -48,6 +54,8 @@ test("local Chat Pack uses complete Core cache, preserves the last result on fai
   let clipboardWriteStartedResolver;
   let cacheServiceUnavailable = false;
   let expireGenerationDeadline = false;
+  let expireCacheStatusDeadline = false;
+  let expireManualRefreshDeadline = false;
   let latestGenerationDeadline;
   let releaseClipboardWrite;
   let rejectClipboardWrite;
@@ -56,9 +64,23 @@ test("local Chat Pack uses complete Core cache, preserves the last result on fai
   const deferredReadStartedPromise = new Promise((resolve) => { deferredReadStarted = resolve; });
   const copiedTexts = [];
   const nativeWindowSetTimeout = dom.window.setTimeout.bind(dom.window);
+  const nativeWindowSetInterval = dom.window.setInterval.bind(dom.window);
   dom.window.setTimeout = (callback, milliseconds, ...args) => {
     if (milliseconds === 90_000) latestGenerationDeadline = callback;
+    if (milliseconds === 8_000 && expireCacheStatusDeadline) {
+      return nativeWindowSetTimeout(callback, 0, ...args);
+    }
+    if (milliseconds === 10_000 && expireManualRefreshDeadline) {
+      return nativeWindowSetTimeout(callback, 0, ...args);
+    }
     return nativeWindowSetTimeout(callback, expireGenerationDeadline && milliseconds === 90_000 ? 0 : milliseconds, ...args);
+  };
+  dom.window.setInterval = (callback, milliseconds, ...args) => {
+    if (milliseconds === 5_000) {
+      cacheStatusPollCallback = callback;
+      return 0;
+    }
+    return nativeWindowSetInterval(callback, milliseconds, ...args);
   };
   const coreAsset = (revision) => {
     const content = `# 道\n\nCACHED_CORE_BODY_${revision}`;
@@ -95,24 +117,56 @@ test("local Chat Pack uses complete Core cache, preserves the last result on fai
         if (cacheServiceUnavailable && target.includes("api/chatpack/cache/")) throw new TypeError("Failed to fetch");
         if (target.includes("prompts")) return { ok: true, json: async () => ({ subtypes: { "question.deep": "Question prompt" }, enhancers: {}, assets: {} }) };
         if (target.includes("api/chatpack/cache/status")) {
+          cacheStatusRequests += 1;
           if (cacheStatusMode === "hang") {
             if (options.signal?.aborted) throw new Error("request aborted");
             return new Promise((_resolve, reject) => options.signal?.addEventListener("abort", () => reject(new Error("request aborted")), { once: true }));
           }
+          if (cacheStatusMode === "json-hang") {
+            return { ok: true, json: async () => new Promise((_resolve, reject) => {
+              if (options.signal?.aborted) reject(new Error("request aborted"));
+              else options.signal?.addEventListener("abort", () => reject(new Error("request aborted")), { once: true });
+            }) };
+          }
+          const failedRequiredRead = ["failure", "required-failure-running"].includes(cacheReadMode);
+          const refreshedDuringRead = ["race", "race-stuck"].includes(cacheReadMode);
           return { ok: true, json: async () => ({
             summary: { total: 16, available: 16, unavailable: 0 },
-            resources: [{ key: "core:dao", kind: "core", id: "dao", cache_status: "available", revision: cacheRevision, fetched_at: "2026-10-20T00:00:00.000Z", age_ms: cacheRevision * 1_000 }],
-            refresh: { state: cacheReadMode === "failure" ? "failed" : "running", completed: 8, total: 16, failed: cacheReadMode === "failure" ? 1 : 0 }
+            resources: [{
+              key: "core:dao", kind: "core", id: "dao",
+              cache_status: failedRequiredRead ? "expired" : cacheReadMode === "missing" ? "not_fetched" : "available",
+              refresh_status: failedRequiredRead ? "failed" : refreshedDuringRead ? "succeeded" : "queued",
+              refresh_error: failedRequiredRead ? "permission denied" : "",
+              revision: cacheRevision, fetched_at: "2026-10-20T00:00:00.000Z", age_ms: cacheRevision * 1_000
+            }],
+            refresh: {
+              state: cacheReadMode === "failure" ? "failed" : refreshedDuringRead ? "succeeded" : cacheRefreshState,
+              completed: refreshedDuringRead ? 16 : 8, total: 16, failed: cacheReadMode === "failure" ? 1 : 0,
+              retry_at: cacheRefreshState === "recovering" ? new Date(Date.now() + 5_000).toISOString() : null
+            }
           }) };
         }
         if (target.includes("api/chatpack/cache/refresh")) {
+          if (options.method === "POST") manualRefreshRequests += 1;
           cacheRefreshes += 1;
           const request = JSON.parse(options.body || "{}");
-          assert.deepEqual(request.core_kinds, ["dao"]);
+          if (request.core_kinds) assert.deepEqual(request.core_kinds, ["dao"]);
+          else assert.equal(options.method, "POST", "only a manual refresh may request the full cache without priority resources");
+          if (cacheRefreshMode === "hang") {
+            if (options.signal?.aborted) throw new Error("request aborted");
+            return new Promise((_resolve, reject) => options.signal?.addEventListener("abort", () => reject(new Error("request aborted")), { once: true }));
+          }
+          if (cacheRefreshMode === "unavailable") return { ok: false, status: 503, json: async () => ({ error: "refresh lock unavailable" }) };
           return { ok: true, status: 202, json: async () => ({ accepted: true, state: "running" }) };
         }
         if (target.includes("api/chatpack/cache/read")) {
           cacheReads += 1;
+          if (cacheReadMode === "race-stuck") return { ok: false, status: 409, json: async () => ({
+            error: "必需缓存尚不可用", missing: [{ key: "core:dao", cache_status: "not_fetched", refresh_status: "queued", refresh_error: "" }]
+          }) };
+          if (cacheReadMode === "race" && raceReadCount++ === 0) return { ok: false, status: 409, json: async () => ({
+            error: "必需缓存尚不可用", missing: [{ key: "core:dao", cache_status: "not_fetched", refresh_status: "queued", refresh_error: "" }]
+          }) };
           if (cacheReadMode === "invalid-json") return { ok: true, status: 200, json: async () => { throw new SyntaxError("invalid JSON"); } };
           if (cacheReadMode === "missing") return { ok: false, status: 409, json: async () => ({
             error: "必需缓存尚不可用", missing: [{ key: "core:dao", cache_status: "not_fetched", refresh_status: "queued", refresh_error: "" }]
@@ -149,6 +203,7 @@ test("local Chat Pack uses complete Core cache, preserves the last result on fai
 
     await import("../public/app.js");
     await waitFor(() => document.querySelector("#learningStatus").textContent === "已加载 Chat Pack 类型体系。", "Chat Pack boot");
+    await waitFor(() => document.querySelector("#chatPackCacheRefreshStatus").textContent.includes("正在确认刷新锁"), "cache lock recovery state is distinct from active refresh");
     const generate = document.querySelector("#generateChatPackBtn");
 
     generate.click();
@@ -289,6 +344,7 @@ test("local Chat Pack uses complete Core cache, preserves the last result on fai
     cacheReadMode = "normal";
 
     cacheReadMode = "missing";
+    await new Promise((resolve) => setTimeout(resolve, 20));
     cacheStatusMode = "hang";
     expireGenerationDeadline = true;
     generate.click();
@@ -304,6 +360,70 @@ test("local Chat Pack uses complete Core cache, preserves the last result on fai
     await waitFor(() => !generate.disabled && document.querySelector("#chatPackOperationStatus").textContent.includes("Failed to fetch"), "cache service disconnect");
     await waitFor(() => document.querySelector("#chatPackCacheSummary").textContent.includes("缓存服务不可用"), "cache status endpoint disconnect");
     assert.equal(copiedTexts.length, 5, "disconnected cache service is never treated as an empty cache or copied");
+
+    cacheServiceUnavailable = false;
+    cacheReadMode = "race";
+    raceReadCount = 0;
+    const readsBeforeRefreshRace = cacheReads;
+    generate.click();
+    await waitFor(() => copiedTexts.length === 6, "generation retries cache read after the required resource becomes available");
+    assert.equal(cacheReads, readsBeforeRefreshRace + 2, "a fresh cache read follows a stale 409 after refresh completion");
+    assert.match(copiedTexts[5], /CACHED_CORE_BODY_2/);
+    assert.match(document.querySelector("#chatPackOperationStatus").textContent, /已复制/);
+
+    cacheReadMode = "race-stuck";
+    const readsBeforePersistentMismatch = cacheReads;
+    generate.click();
+    await waitFor(() => document.querySelector("#chatPackOperationStatus").textContent.includes("完整缓存读取仍缺失"), "inconsistent available status fails after one retry");
+    assert.equal(cacheReads, readsBeforePersistentMismatch + 2, "an inconsistent available status cannot cause an unbounded read loop");
+    assert.equal(copiedTexts.length, 6, "a persistent cache/status mismatch never copies a partial result");
+    assert.equal(generate.disabled, false, "a bounded cache/status mismatch restores the generate button");
+
+    cacheReadMode = "normal";
+    cacheRefreshMode = "unavailable";
+    cacheRefreshState = "failed";
+    const readsBeforeRefreshFailure = cacheReads;
+    generate.click();
+    await waitFor(() => copiedTexts.length === 7, "valid required cache still generates when background refresh returns 503");
+    assert.equal(cacheReads, readsBeforeRefreshFailure + 1, "the complete cache is checked after background refresh failure");
+    assert.match(document.querySelector("#chatPackOperationStatus").textContent, /已复制/);
+    assert.match(document.querySelector("#chatPackCacheRefreshStatus").textContent, /更新失败/);
+    assert.equal(generate.disabled, false, "background refresh failure does not leave the button busy");
+
+    cacheStatusMode = "hang";
+    expireCacheStatusDeadline = true;
+    const statusReadsBeforePolling = cacheStatusRequests;
+    cacheStatusPollCallback();
+    cacheStatusPollCallback();
+    await Promise.resolve();
+    assert.equal(cacheStatusRequests, statusReadsBeforePolling + 1, "cache status polling coalesces while a request is pending");
+    await waitFor(() => document.querySelector("#chatPackCacheSummary").textContent.includes("缓存服务不可用"), "idle cache status polling timeout");
+    assert.match(document.querySelector("#chatPackCacheSummary").textContent, /超过 8 秒/);
+    expireCacheStatusDeadline = false;
+    cacheStatusMode = "normal";
+
+    cacheStatusMode = "json-hang";
+    expireCacheStatusDeadline = true;
+    document.querySelector("#chatPackCacheSummary").textContent = "缓存状态待测试";
+    const statusReadsBeforeJsonHang = cacheStatusRequests;
+    cacheStatusPollCallback();
+    await Promise.resolve();
+    assert.equal(cacheStatusRequests, statusReadsBeforeJsonHang + 1, "a cache status response body is requested once");
+    await waitFor(() => document.querySelector("#chatPackCacheSummary").textContent.includes("缓存服务不可用"), "hung cache status JSON body timeout");
+    assert.match(document.querySelector("#chatPackCacheSummary").textContent, /超过 8 秒/);
+    expireCacheStatusDeadline = false;
+    cacheStatusMode = "normal";
+
+    cacheRefreshMode = "hang";
+    expireManualRefreshDeadline = true;
+    const manualRefreshButton = document.querySelector("#refreshChatPackCacheBtn");
+    const manualRefreshesBefore = manualRefreshRequests;
+    manualRefreshButton.click();
+    await waitFor(() => !manualRefreshButton.disabled, "manual refresh request timeout restores its button");
+    assert.equal(manualRefreshRequests, manualRefreshesBefore + 1, "manual refresh is requested once");
+    assert.match(document.querySelector("#chatPackCacheRefreshStatus").textContent, /手动刷新失败：.*超过 10 秒/);
+    expireManualRefreshDeadline = false;
+    cacheRefreshMode = "normal";
   } finally {
     dom.window.close();
     for (const [key, value] of Object.entries(previous)) {

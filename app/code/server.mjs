@@ -300,10 +300,14 @@ export async function handleChatPackCacheRefresh(req, res, { cache = chatPackCac
       throw new Error("prompt_ids/core_kinds must contain unique registered resource IDs");
     }
     await initialize();
-    const result = cache.requestRefresh({ priority: [
+    const result = await cache.requestRefresh({ priority: [
       ...promptIds.map((id) => `prompt:${id}`),
       ...coreKinds.map((id) => `core:${id}`)
     ] });
+    if (result.state === "failed") {
+      sendJson(res, 503, { accepted: false, ...result });
+      return;
+    }
     sendJson(res, 202, { accepted: true, ...result });
   } catch (error) {
     sendJson(res, 400, { error: error.message || "Unable to request Chat Pack cache refresh" });

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -654,7 +656,8 @@ test("rejects invalid output and returns the manual fallback prompt", async () =
     assert.equal(result.status, "needs_review");
     assert.equal(result.reason, "invalid-ai-review");
     assert.match(result.manualPrompt, /原有提示词开始/);
-    assert.equal(await readFile(path.join(root, "03_input/weekly/2026-W27/ai.md"), "utf8"), manualAiShell("2026-W27"));
+    assert.equal(await readFile(path.join(root, "03_input/weekly/2026-W27/ai.md"), "utf8").then(() => true, () => false), false,
+      "an observable invalid run keeps the formal path clear so a recovered valid draft can be promoted safely");
     assert.deepEqual(result.validation, ["placeholder", "too-few-sections", "missing-people-and-events", "missing-review-content"]);
     assert.equal(await readFile(path.join(root, "03_input/weekly/2026-W27/_ai-invalid.generated.md"), "utf8"), "不完整\n");
   } finally {
@@ -739,6 +742,297 @@ test("does not replace a human edit made after the generated draft was staged", 
   assert.equal(result.reason, "formal-ai-md-changed-after-promotion");
   assert.equal(await readFile(path.join(weekDir, "ai.md"), "utf8"), manual);
   assert.equal(submissions, 0);
+});
+
+test("keeps a human ai.md created after the existence check and leaves the generated result pending", async (t) => {
+  const root = await fixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W27";
+  const weekDir = path.join(root, "03_input/weekly", week);
+  await import("node:fs/promises").then(({ mkdir }) => mkdir(weekDir, { recursive: true }));
+  const generatedPath = path.join(weekDir, "ai.generated.md");
+  const formalPath = path.join(weekDir, "ai.md");
+  const sidecarPath = path.join(weekDir, "_ai-generated.json");
+  const manual = "# HUMAN_SENTINEL\n\n这段并发写入的人工正文必须保留。\n";
+  await writeFile(generatedPath, `${validReview}\n`, "utf8");
+  await writeFile(sidecarPath, JSON.stringify({
+    schemaVersion: 1, targetWeek: week, status: "generated", outputSha256: sha256(validReview), promptSha256: "a".repeat(64)
+  }));
+
+  const originalLink = fsPromises.link;
+  let injected = false;
+  fsPromises.link = async (source, destination) => {
+    if (!injected && path.resolve(destination) === path.resolve(formalPath)) {
+      injected = true;
+      await writeFile(formalPath, manual, "utf8");
+    }
+    return await originalLink(source, destination);
+  };
+  syncBuiltinESMExports();
+  try {
+    const result = await generateAiReview({
+      repoRoot: root,
+      week,
+      diagnosticWriter: async () => {}
+    });
+    assert.equal(injected, true, "the human file is inserted after promotion checked for an existing target");
+    assert.equal(result.status, "needs_review");
+    assert.equal(result.reason, "formal-ai-md-exists-during-promotion");
+    assert.equal(await readFile(formalPath, "utf8"), manual);
+    assert.equal(await readFile(generatedPath, "utf8"), `${validReview}\n`);
+    const sidecar = JSON.parse(await readFile(sidecarPath, "utf8"));
+    assert.equal(sidecar.status, "needs_review");
+    assert.equal(sidecar.reason, "formal-ai-md-exists-during-promotion");
+  } finally {
+    fsPromises.link = originalLink;
+    syncBuiltinESMExports();
+  }
+});
+
+test("keeps the generated draft intact when a human edits ai.md immediately after promotion", async (t) => {
+  const root = await fixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W27";
+  const weekDir = path.join(root, "03_input/weekly", week);
+  const formalPath = path.join(weekDir, "ai.md");
+  const generatedPath = path.join(weekDir, "ai.generated.md");
+  const sidecarPath = path.join(weekDir, "_ai-generated.json");
+  const manual = "# HUMAN_EDIT_AFTER_INSTALL\n\n人工编辑应只改正式文件，隐藏生成稿仍需完整保留。\n";
+  const originalLink = fsPromises.link;
+  let injected = false;
+  fsPromises.link = async (source, destination) => {
+    const result = await originalLink(source, destination);
+    if (!injected && path.resolve(destination) === path.resolve(formalPath)) {
+      injected = true;
+      await writeFile(formalPath, manual, "utf8");
+    }
+    return result;
+  };
+  syncBuiltinESMExports();
+  try {
+    const result = await generateAiReview({
+      repoRoot: root,
+      week,
+      diagnosticWriter: async () => {},
+      runBridge: async (_prompt, options) => successfulBridgeResult(validReview, { preallocatedRunId: options.preallocatedRunId })
+    });
+    assert.equal(injected, true);
+    assert.equal(result.status, "needs_review");
+    assert.equal(result.reason, "formal-ai-md-changed-during-promotion");
+    assert.equal(await readFile(formalPath, "utf8"), manual);
+    assert.equal(await readFile(generatedPath, "utf8"), `${validReview}\n`);
+    const sidecar = JSON.parse(await readFile(sidecarPath, "utf8"));
+    assert.equal(sidecar.status, "needs_review");
+    assert.equal(sidecar.reason, "formal-ai-md-changed-during-promotion");
+  } finally {
+    fsPromises.link = originalLink;
+    syncBuiltinESMExports();
+  }
+});
+
+test("does not confirm promotion when ai.md changes during confirmation sidecar persistence", async (t) => {
+  const root = await fixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W27";
+  const weekDir = path.join(root, "03_input/weekly", week);
+  const formalPath = path.join(weekDir, "ai.md");
+  const generatedPath = path.join(weekDir, "ai.generated.md");
+  const sidecarPath = path.join(weekDir, "_ai-generated.json");
+  const manual = "# HUMAN_EDIT_DURING_CONFIRMATION\n\n确认写入期间的人工正文必须保留。\n";
+  const originalRename = fsPromises.rename;
+  let injected = false;
+  fsPromises.rename = async (source, destination) => {
+    const result = await originalRename(source, destination);
+    if (!injected && path.resolve(destination) === path.resolve(sidecarPath)) {
+      const persisted = JSON.parse(await readFile(sidecarPath, "utf8"));
+      if (persisted.status === "confirmed") {
+        injected = true;
+        await writeFile(formalPath, manual, "utf8");
+      }
+    }
+    return result;
+  };
+  syncBuiltinESMExports();
+  try {
+    const result = await generateAiReview({
+      repoRoot: root,
+      week,
+      diagnosticWriter: async () => {},
+      runBridge: async (_prompt, options) => successfulBridgeResult(validReview, { preallocatedRunId: options.preallocatedRunId })
+    });
+    assert.equal(injected, true);
+    assert.equal(result.status, "needs_review");
+    assert.equal(result.reason, "formal-ai-md-changed-during-promotion");
+    assert.equal(await readFile(formalPath, "utf8"), manual);
+    assert.equal(await readFile(generatedPath, "utf8"), `${validReview}\n`);
+    const sidecar = JSON.parse(await readFile(sidecarPath, "utf8"));
+    assert.equal(sidecar.status, "needs_review");
+    assert.equal(sidecar.reason, "formal-ai-md-changed-during-promotion");
+  } finally {
+    fsPromises.rename = originalRename;
+    syncBuiltinESMExports();
+  }
+});
+
+test("direct promotion changes confirmed to needs_review when ai.md changes during confirmation", async (t) => {
+  const root = await fixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W27";
+  const weekDir = path.join(root, "03_input/weekly", week);
+  const formalPath = path.join(weekDir, "ai.md");
+  const generatedPath = path.join(weekDir, "ai.generated.md");
+  const sidecarPath = path.join(weekDir, "_ai-generated.json");
+  const manual = "# HUMAN_EDIT_DIRECT_PROMOTION\n\n直接晋升时保存的人工正文必须保留。\n";
+  await import("node:fs/promises").then(({ mkdir }) => mkdir(weekDir, { recursive: true }));
+  await writeFile(generatedPath, `${validReview}\n`, "utf8");
+  await writeFile(sidecarPath, JSON.stringify({
+    schemaVersion: 1, targetWeek: week, status: "generated", outputSha256: sha256(validReview), promptSha256: "a".repeat(64)
+  }));
+
+  const originalRename = fsPromises.rename;
+  let injected = false;
+  fsPromises.rename = async (source, destination) => {
+    const result = await originalRename(source, destination);
+    if (!injected && path.resolve(destination) === path.resolve(sidecarPath)) {
+      const persisted = JSON.parse(await readFile(sidecarPath, "utf8"));
+      if (persisted.status === "confirmed") {
+        injected = true;
+        await writeFile(formalPath, manual, "utf8");
+      }
+    }
+    return result;
+  };
+  syncBuiltinESMExports();
+  try {
+    const result = await promoteAiReview({ repoRoot: root, week, confirm: true, diagnosticWriter: async () => {} });
+    assert.equal(injected, true);
+    assert.equal(result.status, "needs_review");
+    assert.equal(result.reason, "formal-ai-md-changed-during-promotion");
+    assert.equal(await readFile(formalPath, "utf8"), manual);
+    assert.equal(await readFile(generatedPath, "utf8"), `${validReview}\n`);
+    const sidecar = JSON.parse(await readFile(sidecarPath, "utf8"));
+    assert.equal(sidecar.status, "needs_review");
+    assert.equal(sidecar.reason, "formal-ai-md-changed-during-promotion");
+  } finally {
+    fsPromises.rename = originalRename;
+    syncBuiltinESMExports();
+  }
+});
+
+test("crash recovery keeps generated draft when ai.md changes during confirmation", async (t) => {
+  const root = await fixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W27";
+  const weekDir = path.join(root, "03_input/weekly", week);
+  const formalPath = path.join(weekDir, "ai.md");
+  const generatedPath = path.join(weekDir, "ai.generated.md");
+  const sidecarPath = path.join(weekDir, "_ai-generated.json");
+  const manual = "# HUMAN_EDIT_RECOVERY\n\n恢复确认期间的人工正文必须保留。\n";
+  await import("node:fs/promises").then(({ mkdir }) => mkdir(weekDir, { recursive: true }));
+  await writeFile(formalPath, `${validReview}\n`, "utf8");
+  await writeFile(generatedPath, `${validReview}\n`, "utf8");
+  await writeFile(sidecarPath, JSON.stringify({
+    schemaVersion: 1, targetWeek: week, status: "generated", outputSha256: sha256(validReview), promptSha256: "a".repeat(64)
+  }));
+
+  const originalRename = fsPromises.rename;
+  let injected = false;
+  fsPromises.rename = async (source, destination) => {
+    const result = await originalRename(source, destination);
+    if (!injected && path.resolve(destination) === path.resolve(sidecarPath)) {
+      const persisted = JSON.parse(await readFile(sidecarPath, "utf8"));
+      if (persisted.status === "confirmed") {
+        injected = true;
+        await writeFile(formalPath, manual, "utf8");
+      }
+    }
+    return result;
+  };
+  syncBuiltinESMExports();
+  try {
+    const result = await generateAiReview({
+      repoRoot: root,
+      week,
+      diagnosticWriter: async () => {},
+      runBridge: async () => { throw new Error("recovery must not submit a new request"); }
+    });
+    assert.equal(injected, true);
+    assert.equal(result.status, "needs_review");
+    assert.equal(result.reason, "formal-ai-md-changed-during-promotion");
+    assert.equal(await readFile(formalPath, "utf8"), manual);
+    assert.equal(await readFile(generatedPath, "utf8"), `${validReview}\n`);
+    const sidecar = JSON.parse(await readFile(sidecarPath, "utf8"));
+    assert.equal(sidecar.status, "needs_review");
+    assert.equal(sidecar.reason, "formal-ai-md-changed-during-promotion");
+  } finally {
+    fsPromises.rename = originalRename;
+    syncBuiltinESMExports();
+  }
+});
+
+test("preserves a legacy manual shell and a valid generated draft as a review conflict", async (t) => {
+  const root = await fixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W27";
+  const weekDir = path.join(root, "03_input/weekly", week);
+  await import("node:fs/promises").then(({ mkdir }) => mkdir(weekDir, { recursive: true }));
+  const formalPath = path.join(weekDir, "ai.md");
+  const generatedPath = path.join(weekDir, "ai.generated.md");
+  const sidecarPath = path.join(weekDir, "_ai-generated.json");
+  const legacyShell = manualAiShell(week);
+  await writeFile(formalPath, legacyShell, "utf8");
+  await writeFile(generatedPath, `${validReview}\n`, "utf8");
+  await writeFile(sidecarPath, JSON.stringify({
+    schemaVersion: 1, targetWeek: week, status: "generated", outputSha256: sha256(validReview), promptSha256: "a".repeat(64)
+  }));
+
+  const result = await generateAiReview({ repoRoot: root, week, diagnosticWriter: async () => {} });
+  assert.equal(result.status, "needs_review");
+  assert.equal(result.reason, "formal-ai-md-exists-during-promotion");
+  assert.equal(await readFile(formalPath, "utf8"), legacyShell);
+  assert.equal(await readFile(generatedPath, "utf8"), `${validReview}\n`);
+});
+
+test("does not create the manual shell before a recoverable run can be observed", async (t) => {
+  const root = await fixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W27";
+  const weekDir = path.join(root, "03_input/weekly", week);
+  const formalPath = path.join(weekDir, "ai.md");
+  const first = await generateAiReview({
+    repoRoot: root,
+    week,
+    diagnosticWriter: async () => {},
+    runBridge: async (_prompt, options) => ({ result: {
+      status: "needs_review",
+      runId: options.preallocatedRunId,
+      reason: "observer-window-ended",
+      submissionConfirmed: true,
+      requestedConversationUrl: "https://chatgpt.com/",
+      actualConversationUrl: `https://chatgpt.com/c/${options.preallocatedRunId}`,
+      conversationUrl: `https://chatgpt.com/c/${options.preallocatedRunId}`
+    } })
+  });
+  assert.equal(first.status, "needs_review");
+  assert.equal(await readFile(formalPath, "utf8").then(() => true, () => false), false);
+
+  const recovered = await generateAiReview({
+    repoRoot: root,
+    week,
+    observeUncertain: true,
+    diagnosticWriter: async () => {},
+    observeBridge: async (previous) => ({ result: {
+      status: "succeeded",
+      runId: previous.runId,
+      text: validReview,
+      submissionConfirmed: true,
+      requestedConversationUrl: "https://chatgpt.com/",
+      actualConversationUrl: `https://chatgpt.com/c/${previous.runId}`,
+      conversationUrl: `https://chatgpt.com/c/${previous.runId}`
+    } })
+  });
+  assert.equal(recovered.status, "confirmed");
+  assert.equal(await readFile(formalPath, "utf8"), `${validReview}\n`);
 });
 
 test("refuses promotion after the generated draft is tampered with", async () => {

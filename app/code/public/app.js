@@ -32,6 +32,8 @@ const MUNGER_SOUL_PERIOD_QUESTIONS = {
 const GRAPH_DATA_URL = window.LEARN_X_GRAPH_URL || "data/graph.json";
 const CONTENT_DATA_URL = window.LEARN_X_CONTENT_URL || "data/content.json";
 const PROMPTS_DATA_URL = window.LEARN_X_PROMPTS_URL || "data/prompts.json";
+const CHATPACK_CACHE_STATUS_TIMEOUT_MS = 8_000;
+const CHATPACK_CACHE_MANUAL_REFRESH_TIMEOUT_MS = 10_000;
 let APP_CONFIG = {
   brand: { title: "Learn-X", subtitle: "AI native 的知行进化系统", mark: "LX" },
   promptDirectory: "01_meta-prompts",
@@ -117,6 +119,7 @@ let chatPackGenerationBusy = false;
 let chatPackGenerationMonitor = null;
 let chatPackCachePollTimer = null;
 let chatPackCacheStatusRequestId = 0;
+let chatPackCacheStatusRequest = null;
 let chatPackCacheSnapshot = null;
 let lastChatPackCacheUse = null;
 let chatPackCopyRetryText = "";
@@ -199,26 +202,88 @@ function initializeChatPackCacheUI() {
 
 async function refreshChatPackCacheStatus({ signal } = {}) {
   if (state.runtime?.target !== "local" || !els.chatPackCachePanel) return null;
+  if (chatPackCacheStatusRequest) return waitForSignal(chatPackCacheStatusRequest, signal);
   const requestId = ++chatPackCacheStatusRequestId;
-  try {
-    const response = await fetch("api/chatpack/cache/status", { cache: "no-store", ...(signal ? { signal } : {}) });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-    if (requestId !== chatPackCacheStatusRequestId) return null;
-    chatPackCacheSnapshot = payload;
-    renderChatPackCacheStatus();
-    return payload;
-  } catch (error) {
-    if (requestId !== chatPackCacheStatusRequestId) return null;
-    if (signal?.aborted) return null;
-    chatPackCacheSnapshot = null;
-    if (els.chatPackCacheSummary) els.chatPackCacheSummary.textContent = `缓存服务不可用：${error.message || "连接失败"}`;
-    if (els.chatPackCacheRefreshStatus) {
-      els.chatPackCacheRefreshStatus.dataset.state = "error";
-      els.chatPackCacheRefreshStatus.textContent = "缓存状态无法读取；请检查本地服务后重试。";
+  let request;
+  request = (async () => {
+    try {
+      const { response, payload } = await withRequestTimeout(async (requestSignal) => {
+        const response = await fetch("api/chatpack/cache/status", { cache: "no-store", signal: requestSignal });
+        return { response, payload: await response.json() };
+      }, CHATPACK_CACHE_STATUS_TIMEOUT_MS, "缓存状态查询超过 8 秒", signal);
+      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      if (requestId !== chatPackCacheStatusRequestId) return null;
+      chatPackCacheSnapshot = payload;
+      renderChatPackCacheStatus();
+      return payload;
+    } catch (error) {
+      if (requestId !== chatPackCacheStatusRequestId) return null;
+      if (signal?.aborted) return null;
+      chatPackCacheSnapshot = null;
+      if (els.chatPackCacheSummary) els.chatPackCacheSummary.textContent = `缓存服务不可用：${error.message || "连接失败"}`;
+      if (els.chatPackCacheRefreshStatus) {
+        els.chatPackCacheRefreshStatus.dataset.state = "error";
+        els.chatPackCacheRefreshStatus.textContent = "缓存状态无法读取；请检查本地服务后重试。";
+      }
+      if (els.chatPackCacheResourceList) els.chatPackCacheResourceList.replaceChildren();
+      return null;
+    } finally {
+      if (chatPackCacheStatusRequest === request) chatPackCacheStatusRequest = null;
     }
-    if (els.chatPackCacheResourceList) els.chatPackCacheResourceList.replaceChildren();
-    return null;
+  })();
+  chatPackCacheStatusRequest = request;
+  return request;
+}
+
+function waitForSignal(promise, signal) {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.resolve(null);
+  return new Promise((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const onAbort = () => {
+      cleanup();
+      resolve(null);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then((value) => {
+      cleanup();
+      resolve(value);
+    }, (error) => {
+      cleanup();
+      reject(error);
+    });
+  });
+}
+
+async function withRequestTimeout(request, timeoutMs, timeoutMessage, externalSignal = null) {
+  const controller = new AbortController();
+  if (externalSignal?.aborted) {
+    controller.abort();
+    throw new Error("request aborted");
+  }
+  let timeoutId;
+  let abortListener;
+  const timeout = new Promise((_resolve, reject) => {
+    timeoutId = window.setTimeout(() => {
+      reject(new Error(timeoutMessage));
+      controller.abort();
+    }, timeoutMs);
+  });
+  const promises = [Promise.resolve().then(() => request(controller.signal)), timeout];
+  if (externalSignal) {
+    promises.push(new Promise((_resolve, reject) => {
+      abortListener = () => {
+        controller.abort();
+        reject(new Error("request aborted"));
+      };
+      externalSignal.addEventListener("abort", abortListener, { once: true });
+    }));
+  }
+  try {
+    return await Promise.race(promises);
+  } finally {
+    window.clearTimeout(timeoutId);
+    if (abortListener) externalSignal.removeEventListener("abort", abortListener);
   }
 }
 
@@ -238,6 +303,7 @@ function renderChatPackCacheStatus() {
   const refresh = payload.refresh || {};
   const refreshLabels = {
     running: `正在更新 ${refresh.completed || 0}/${refresh.total || total}${refresh.current ? ` · ${cacheResourceLabel(refresh.current)}` : ""}`,
+    recovering: `正在确认刷新锁；如无活跃更新，将于 ${formatWait(refresh.retry_at)} 后自动恢复`,
     cooldown: `冷却等待 ${formatWait(refresh.next_allowed_at)}`,
     succeeded: `更新成功 ${refresh.succeeded || total}/${refresh.total || total}`,
     partial: `部分失败 ${refresh.failed || 0}/${refresh.total || total}`,
@@ -317,12 +383,19 @@ async function refreshChatPackCacheManually() {
   if (state.runtime?.target !== "local") return;
   els.refreshChatPackCache.disabled = true;
   try {
-    const response = await fetch("api/chatpack/cache/refresh", {
-      method: "POST", cache: "no-store", headers: { "content-type": "application/json" }, body: JSON.stringify({})
-    });
-    const payload = await response.json();
+    if (els.chatPackCacheRefreshStatus) {
+      els.chatPackCacheRefreshStatus.dataset.state = "busy";
+      els.chatPackCacheRefreshStatus.textContent = "手动刷新：正在提交请求…";
+    }
+    const { response, payload } = await withRequestTimeout(async (signal) => {
+      const response = await fetch("api/chatpack/cache/refresh", {
+        method: "POST", cache: "no-store", headers: { "content-type": "application/json" }, body: JSON.stringify({}), signal
+      });
+      return { response, payload: await response.json() };
+    }, CHATPACK_CACHE_MANUAL_REFRESH_TIMEOUT_MS, "缓存刷新请求超过 10 秒，结果未知");
     if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-    await refreshChatPackCacheStatus();
+    if (els.chatPackCacheRefreshStatus) els.chatPackCacheRefreshStatus.textContent = "手动刷新：请求已受理，正在更新状态…";
+    void refreshChatPackCacheStatus();
   } catch (error) {
     if (els.chatPackCacheRefreshStatus) {
       els.chatPackCacheRefreshStatus.dataset.state = "error";
@@ -1868,13 +1941,21 @@ async function generateChatPack() {
       const coreKinds = requiredChatPackCoreKinds();
       els.generateChatPack.textContent = "等待缓存资源…";
       setStage("准备中：请求后台全量更新，并检查本次所需资源…", "busy");
-      const refreshResponse = await fetch("api/chatpack/cache/refresh", {
-        method: "POST", cache: "no-store", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ prompt_ids: promptIds, core_kinds: coreKinds }), signal: controller.signal
-      });
-      const refreshPayload = await readJsonResponse(refreshResponse, "缓存刷新接口");
-      if (!refreshResponse.ok) throw new Error(refreshPayload.error || `缓存刷新接口失败（HTTP ${refreshResponse.status}）`);
-      void refreshChatPackCacheStatus();
+      let refreshError = "";
+      try {
+        const refreshResponse = await fetch("api/chatpack/cache/refresh", {
+          method: "POST", cache: "no-store", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ prompt_ids: promptIds, core_kinds: coreKinds }), signal: controller.signal
+        });
+        const refreshPayload = await readJsonResponse(refreshResponse, "缓存刷新接口");
+        if (!refreshResponse.ok) refreshError = refreshPayload.error || `缓存刷新接口失败（HTTP ${refreshResponse.status}）`;
+      } catch (error) {
+        if (controller.signal.aborted) throw error;
+        refreshError = error.message || "缓存刷新请求失败";
+      }
+      void refreshChatPackCacheStatus({ signal: controller.signal });
+      if (refreshError) setStage(`准备中：后台更新失败（${refreshError}），正在检查本次所需缓存…`, "busy");
+      ensureCurrent();
 
       cacheRead = await readRequiredChatPackCache({ promptIds, coreKinds, controller, ensureCurrent, timeoutReached: () => timeoutReached, onStage: setStage });
       ensureCurrent();
@@ -1980,7 +2061,7 @@ async function generateChatPack() {
       els.generateChatPack.disabled = clipboardWriteInProgress;
       els.generateChatPack.textContent = originalButtonText;
     }
-    void refreshChatPackCacheStatus();
+    if (!controller.signal.aborted) void refreshChatPackCacheStatus();
   }
 }
 
@@ -2033,6 +2114,7 @@ function requiredChatPackCoreKinds() {
 }
 
 async function readRequiredChatPackCache({ promptIds, coreKinds, controller, ensureCurrent, timeoutReached, onStage }) {
+  let retriedAfterAvailableStatus = false;
   while (true) {
     ensureCurrent();
     if (timeoutReached()) throw new Error("生成等待超过 90 秒");
@@ -2049,14 +2131,23 @@ async function readRequiredChatPackCache({ promptIds, coreKinds, controller, ens
     const status = await refreshChatPackCacheStatus({ signal: controller.signal });
     if (!status) throw new Error("缓存服务不可用，无法确认必需资源状态");
     const missing = payload.missing || [];
-    const missingLabels = missing.map((item) => cacheResourceLabel(item.key)).join("、");
-    onStage(`等待资源：${missingLabels || "必需缓存"}（${missing.map((item) => item.cache_status).join("、")}）。`, "busy");
-    const requiredFailure = missing.find((item) => item.refresh_status === "failed");
+    const currentMissing = missing
+      .map((item) => status.resources?.find((resource) => resource.key === item.key) || item)
+      .filter((item) => item.cache_status !== "available");
+    if (!currentMissing.length) {
+      if (retriedAfterAvailableStatus) throw new Error("缓存状态显示必需资源可用，但完整缓存读取仍缺失；请重试");
+      retriedAfterAvailableStatus = true;
+      continue;
+    }
+    retriedAfterAvailableStatus = false;
+    const missingLabels = currentMissing.map((item) => cacheResourceLabel(item.key)).join("、");
+    onStage(`等待资源：${missingLabels || "必需缓存"}（${currentMissing.map((item) => item.cache_status).join("、")}）。`, "busy");
+    const requiredFailure = currentMissing.find((item) => item.refresh_status === "failed");
     if (requiredFailure) {
       throw new Error(`${cacheResourceLabel(requiredFailure.key)}更新失败：${requiredFailure.refresh_error}`);
     }
     if (status?.refresh?.state === "partial" || status?.refresh?.state === "failed" || status?.refresh?.state === "succeeded") {
-      const stuck = missing[0];
+      const stuck = currentMissing[0];
       throw new Error(`${cacheResourceLabel(stuck?.key || "必需资源")}仍不可用：${stuck?.cache_status || "缓存刷新已结束"}${stuck?.refresh_error ? `；${stuck.refresh_error}` : ""}`);
     }
     await delayWithSignal(500, controller.signal);

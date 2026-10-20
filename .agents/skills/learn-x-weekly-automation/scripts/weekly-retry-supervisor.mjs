@@ -43,6 +43,7 @@ const AI_TERMINAL_OBSERVATION_REASONS = new Set([
   "original-run-identity-mismatch", "submission-unconfirmed", "new-user-message-not-found",
   "formal-ai-md-has-human-content", "formal-ai-md-changed-after-promotion", "confirmed-ai-md-changed", "confirmed-ai-md-missing",
 ]);
+const BRIDGE_RUN_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const RECOVERY_ACTIONS = Object.freeze({
   "verify-only": { layer: 2, note: "执行只读核验后重查", preconditions: ["status-readback-valid"] },
   "manual-repair": { layer: 2, note: "完成经核验的来源修复后重采", preconditions: ["user-confirmed-scope"] },
@@ -698,11 +699,36 @@ async function runEligibleAiResubmission(context) {
   if (!["needs_review", "succeeded"].includes(entry?.status)) return false;
   let isReservedReplacement = false;
   let priorAi;
+  let originalRunId;
   try {
     priorAi = JSON.parse(await readFile(path.join(context.repoRoot, "03_input/weekly", context.week, "_ai-generated.json"), "utf8"));
-    isReservedReplacement = priorAi?.resubmissionCount === 1 && Boolean(priorAi.resubmissionOf);
+    isReservedReplacement = isValidReservedAiReplacement(priorAi, context.week);
+    if (priorAi?.resubmissionCount === 1 && !isReservedReplacement) {
+      markInvalidAiReplacementReceipt(context);
+      context.event({ step: "ai-resubmission-observation", sourceId: "ai", outcome: "stopped-invalid-replacement-receipt",
+        reasonCode: "ai-replacement-receipt-invalid", evidence: "_ai-generated.json 缺少有效父run ID或自身派发身份；保留完整手动提示词" });
+      await context.save();
+      return true;
+    }
+    const reservedParentRunId = context.state.sources.ai?.resubmissionParentRunId;
+    if (isReservedReplacement && (!BRIDGE_RUN_ID_PATTERN.test(String(reservedParentRunId || ""))
+      || priorAi.resubmissionOf.runId !== reservedParentRunId)) {
+      markInvalidAiReplacementReceipt(context);
+      context.event({ step: "ai-resubmission-observation", sourceId: "ai", outcome: "stopped-unanchored-replacement-parent",
+        reasonCode: "ai-replacement-receipt-invalid", evidence: "replacement父run与派发前持久化的原run锚点缺失或不匹配；保留完整手动提示词" });
+      await context.save();
+      return true;
+    }
+    if (reservedParentRunId && !isReservedReplacement) {
+      markInvalidAiReplacementReceipt(context);
+      context.event({ step: "ai-resubmission-observation", sourceId: "ai", outcome: "stopped-reservation-without-replacement-receipt",
+        reasonCode: "ai-replacement-receipt-invalid", evidence: "重开额度已持久预留但sidecar没有对应replacement；不再次派发，保留完整手动提示词" });
+      await context.save();
+      return true;
+    }
     if (priorAi.targetWeek !== context.week
       || typeof priorAi.runId !== "string" || typeof priorAi.conversationUrl !== "string") return false;
+    originalRunId = priorAi.runId;
     if (entry.status === "needs_review" && priorAi.status !== "needs_review"
       && !(isReservedReplacement && ["generated", "confirmed"].includes(priorAi.status))) return false;
     if (entry.status === "succeeded" && !(isReservedReplacement && ["generated", "confirmed"].includes(priorAi.status))) return false;
@@ -732,7 +758,7 @@ async function runEligibleAiResubmission(context) {
     const observeSeconds = Math.max(1, Math.min(60, Math.floor(remainingMs / 1000) - 30));
     try { priorAi = JSON.parse(await readFile(path.join(context.repoRoot, "03_input/weekly", context.week, "_ai-generated.json"), "utf8")); }
     catch { return false; }
-    if (priorAi.resubmissionCount === 1 && priorAi.resubmissionOf) {
+    if (priorAi.resubmissionCount === 1) {
       return await observeReservedAiReplacement(context, lockedContext, source, weekDir, priorAi);
     }
     await context.runBatch([source], "observe-existing", { ...lockedContext, observeUncertainAi: true, observeWaitSeconds: observeSeconds });
@@ -765,7 +791,6 @@ async function runEligibleAiResubmission(context) {
           await context.save();
           return true;
         }
-        const originalRunId = priorAi.runId;
         context.event({ step: "ai-uncertain-resubmission", sourceId: "ai", outcome: "waiting-for-20m-deadline",
           waitMs, deadlineAt: new Date(resubmitAt).toISOString(), requiredBudgetMs,
           evidence: "身份、会话、prompt指纹及可重开原因均已通过；等待期间释放周记状态锁和Browser队列，保留周记AI锁" });
@@ -823,6 +848,19 @@ async function runEligibleAiResubmission(context) {
       return true;
     }
     context.event({ step: "ai-uncertain-resubmission", sourceId: "ai", outcome: "one-shot-resubmission-eligible", evidence: "原 run 已观察满20分钟、身份与 prompt 指纹匹配" });
+    const reservationState = context.state.sources.ai;
+    if (reservationState.resubmissionParentRunId) {
+      markInvalidAiReplacementReceipt(context);
+      context.event({ step: "ai-uncertain-resubmission", sourceId: "ai", outcome: "stopped-existing-resubmission-reservation",
+        reasonCode: "ai-replacement-receipt-invalid", evidence: "本周重开额度已有持久预留；不重复派发，保留完整手动提示词" });
+      await context.save();
+      return true;
+    }
+    reservationState.resubmissionParentRunId = originalRunId;
+    reservationState.resubmissionReservedAt = new Date(context.now()).toISOString();
+    context.event({ step: "ai-uncertain-resubmission", sourceId: "ai", outcome: "one-shot-reservation-persisted",
+      parentAttemptId: originalRunId, reservedAt: reservationState.resubmissionReservedAt,
+      evidence: "_weekly-retry-state.json 在Bridge派发前持久化原run父身份；崩溃不恢复重开额度" });
     await context.save();
     await context.runBatch([source], "uncertain-resubmission", { ...lockedContext, resubmitUncertainAi: true, automaticResubmitAi: true });
     let replacement;
@@ -835,11 +873,17 @@ async function runEligibleAiResubmission(context) {
     const replacementId = replacement.localAttemptId || replacement.runId;
     const replacementStartedAt = Date.parse(replacement.dispatchStartedAt || "");
     if (replacement.resubmissionCount !== 1 || !replacement.resubmissionOf || typeof replacementId !== "string"
-      || !Number.isFinite(replacementStartedAt)) {
-      context.event({ step: "ai-resubmission-observation", sourceId: "ai", outcome: "unknown-dispatch-receipt", evidence: "_ai-generated.json" });
+      || !Number.isFinite(replacementStartedAt) || !isValidReservedAiReplacement(replacement, context.week)
+      || replacement.resubmissionOf.runId !== originalRunId
+      || replacement.resubmissionOf.runId !== context.state.sources.ai?.resubmissionParentRunId) {
+      markInvalidAiReplacementReceipt(context);
+      context.event({ step: "ai-resubmission-observation", sourceId: "ai", outcome: "unknown-dispatch-receipt",
+        reasonCode: "ai-replacement-receipt-invalid", evidence: "_ai-generated.json" });
       await context.save();
       return true;
     }
+    context.state.sources.ai.resubmissionRunId = replacementId;
+    await context.save();
     context.event({ step: "ai-uncertain-resubmission", sourceId: "ai", outcome: "one-shot-reserved-dispatched",
       runId: replacementId, parentAttemptId: replacement.resubmissionOf.runId || null,
       reservedAt: replacement.resubmissionReservedAt || null, dispatchStartedAt: replacement.dispatchStartedAt,
@@ -855,11 +899,20 @@ async function runEligibleAiResubmission(context) {
 async function observeReservedAiReplacement(context, lockedContext, source, weekDir, receipt) {
   const replacementId = receipt.localAttemptId || receipt.runId;
   const replacementStartedAt = Date.parse(receipt.dispatchStartedAt || "");
-  if (receipt.targetWeek !== context.week || receipt.resubmissionCount !== 1 || !receipt.resubmissionOf
-    || typeof replacementId !== "string" || !Number.isFinite(replacementStartedAt)) {
-    context.event({ step: "ai-resubmission-observation", sourceId: "ai", outcome: "unknown-dispatch-receipt", evidence: "_ai-generated.json" });
+  if (!isValidReservedAiReplacement(receipt, context.week) || typeof replacementId !== "string"
+    || !Number.isFinite(replacementStartedAt)
+    || !BRIDGE_RUN_ID_PATTERN.test(String(context.state.sources.ai?.resubmissionParentRunId || ""))
+    || receipt.resubmissionOf.runId !== context.state.sources.ai.resubmissionParentRunId
+    || (context.state.sources.ai.resubmissionRunId && replacementId !== context.state.sources.ai.resubmissionRunId)) {
+    markInvalidAiReplacementReceipt(context);
+    context.event({ step: "ai-resubmission-observation", sourceId: "ai", outcome: "stopped-invalid-replacement-receipt",
+      reasonCode: "ai-replacement-receipt-invalid", evidence: "_ai-generated.json 身份收据与派发前持久化的原run锚点不完整或矛盾；保留完整手动提示词" });
     await context.save();
     return true;
+  }
+  if (!context.state.sources.ai.resubmissionRunId) {
+    context.state.sources.ai.resubmissionRunId = replacementId;
+    await context.save();
   }
   if (receipt.status === "generated") {
     let promotion;
@@ -890,13 +943,14 @@ async function observeReservedAiReplacement(context, lockedContext, source, week
       entry.status = "needs_review";
       entry.lastErrorClass = promotion.reason === "formal-ai-md-has-human-content"
         ? "manual-review-required" : "ai-submission-state-uncertain";
-      entry.lastErrorSignal = safeFailureSignal(promotion.reason || "generated-promotion-unconfirmed", entry.lastErrorClass);
+      entry.lastErrorSignal = safeFailureSignal({ error: promotion.reason || "generated-promotion-unconfirmed" }, entry.lastErrorClass);
       entry.nextRetryAt = null;
     }
     context.event({ step: "ai-resubmission-observation", sourceId: "ai",
       outcome: promotion.status === "confirmed" ? "replacement-generated-promoted" : "replacement-generated-promotion-needs-review",
       runId: replacementId, errorClass: context.state.sources.ai.lastErrorClass || null,
       errorSignal: context.state.sources.ai.lastErrorSignal || null,
+      ...(promotion.reason ? { reasonCode: /^[a-z][a-z0-9-]{0,63}$/.test(promotion.reason) ? promotion.reason : "generated-promotion-unconfirmed" } : {}),
       evidence: promotion.status === "confirmed" ? "generated正文、ai.md和confirmed侧车摘要读回一致；不等待或重复观察"
         : "generated结果保留；正式ai.md晋升需要人工核验" });
     await context.save();
@@ -964,10 +1018,12 @@ async function observeReservedAiReplacement(context, lockedContext, source, week
   }
   const current = await readFile(path.join(weekDir, "_ai-generated.json"), "utf8")
     .then((value) => JSON.parse(value)).catch(() => null);
-  if (!current || current.targetWeek !== context.week
+  if (!current || !isValidReservedAiReplacement(current, context.week)
     || (current.localAttemptId || current.runId) !== replacementId
-    || current.resubmissionCount !== 1 || current.resubmissionOf?.runId !== receipt.resubmissionOf.runId) {
+    || current.resubmissionOf.runId !== receipt.resubmissionOf.runId) {
+    markInvalidAiReplacementReceipt(context);
     context.event({ step: "ai-resubmission-observation", sourceId: "ai", outcome: "stopped-replacement-identity-changed",
+      reasonCode: "ai-replacement-receipt-invalid",
       evidence: "replacement收据、目标周或父run发生变化；保留完整手动提示词" });
     await context.save();
     return true;
@@ -1317,6 +1373,11 @@ export async function readCurrentSourceOutcome(source, week, repoRoot = defaultR
     try {
       const sidecar = JSON.parse(await readFile(path.join(weekRoot, "_ai-generated.json"), "utf8"));
       if (sidecar.targetWeek !== normalizeWeek(week)) return { status: "failed", error: "ai-target-week-mismatch" };
+      if (sidecar.resubmissionCount === 1 && !isValidReservedAiReplacement(sidecar, normalizeWeek(week))) {
+        return { status: "needs_review", error: "ai-replacement-receipt-invalid",
+          code: "AI_REPLACEMENT_RECEIPT_INVALID",
+          updatedAt: sidecar.observation?.observedAt || sidecar.confirmedAt || sidecar.completedAt || sidecar.startedAt };
+      }
       return {
         status: sidecar.status,
         error: sidecar.reason || sidecar.errorClass || "",
@@ -1531,6 +1592,28 @@ function safeFailureSignal(outcome, errorClass) {
       : `UNKNOWN-UNATTRIBUTED-${randomUUID().replaceAll("-", "").slice(0, 16).toUpperCase()}`;
   }
   return errorClass;
+}
+
+function isValidReservedAiReplacement(receipt, week) {
+  const replacementId = receipt?.localAttemptId;
+  const parentId = receipt?.resubmissionOf?.runId;
+  return receipt?.targetWeek === week
+    && receipt?.resubmissionCount === 1
+    && typeof replacementId === "string" && BRIDGE_RUN_ID_PATTERN.test(replacementId)
+    && receipt.runId === replacementId
+    && typeof parentId === "string" && BRIDGE_RUN_ID_PATTERN.test(parentId)
+    && parentId !== replacementId
+    && Number.isFinite(Date.parse(receipt.dispatchStartedAt || ""));
+}
+
+function markInvalidAiReplacementReceipt(context) {
+  const entry = context.state.sources.ai;
+  entry.status = "needs_review";
+  entry.lastErrorClass = "ai-submission-state-uncertain";
+  entry.lastErrorSignal = "AI_REPLACEMENT_RECEIPT_INVALID";
+  entry.lastFailureAt = new Date(context.now()).toISOString();
+  entry.nextRetryAt = null;
+  entry.problemRunId ||= `issue-${randomUUID()}`;
 }
 
 function isRetryableClass(errorClass) {

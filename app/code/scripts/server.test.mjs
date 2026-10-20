@@ -105,6 +105,15 @@ test("cache refresh accepts full-refresh priority and immediately returns its co
   assert.equal(response.payload.merged, true);
 });
 
+test("cache refresh failure is returned as unavailable instead of accepted", async () => {
+  const cache = { requestRefresh: async () => ({ state: "failed", merged: false, error: "refresh lock unavailable" }) };
+  const response = contextResponse();
+  await handleChatPackCacheRefresh(jsonRequest({}), response, { cache, initialize: async () => {} });
+  assert.equal(response.status, 503);
+  assert.equal(response.payload.accepted, false);
+  assert.match(response.payload.error, /refresh lock unavailable/);
+});
+
 test("cache read returns an explicit miss without leaking a partial resource set", async () => {
   const cache = { read: async () => ({ status: 409, body: { error: "必需缓存尚不可用", missing: [{ key: "core:dao", cache_status: "expired" }] } }) };
   const response = contextResponse();

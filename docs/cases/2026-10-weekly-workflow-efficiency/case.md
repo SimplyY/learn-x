@@ -1,7 +1,7 @@
 # CASE: 周记自动化效率优化
 
-- 状态：M0–M4 的本地实现与隔离回归已完成；整体验收为部分达成，真实来源采集、共享 Bridge 部署、Codex 原线程续跑和定时端到端行为仍未验证。
-- 最后核对日期：2026-10-12
+- 状态：M0–M3 的本地实现及 M4 安全接管能力和隔离回归已完成；整体验收为部分达成，生产 Runner 加载、真实来源采集、Codex 原线程续跑和定时端到端行为仍未验证。
+- 最后核对日期：2026-10-20
 - 上下游链接：../../requirements/2026-10-weekly-workflow-efficiency.md → execution-plan.md
 - Type: Major
 - Status: In Progress
@@ -57,7 +57,7 @@
 
 ## 当前验收报告
 
-最新独立验收结论、最短用法、Usage Truth、逐项判据与剩余边界见 [acceptance.md](acceptance.md)。本轮本地全量回归为 592/592；三项独立复测发现的问题已修复。外部运行与并发目录替换边界仍未验证。
+最新独立验收结论、最短用法、Usage Truth、逐项判据与剩余边界见 [acceptance.md](acceptance.md)。2026-10-20 最新 Learn-X 全量回归为 652/652，周记自动化 scripts + lib 为 161/161；本 Case 的外部运行边界仍未验证。
 
 ## 当前来源核验（2026-10-12）
 
@@ -149,4 +149,26 @@
 - 门限到达后重新观察原 run，再读侧车、`ai.md` 与可用结果；迟到原结果优先交付。仅在安全门槛仍成立时调用已有原子预留，最多派发一个 replacement，并记录等待、预算跳过、原 run 迟到成功和预留派发事件。正式人工内容出现时不覆盖、不重开。
 - replacement 派发后采用自己的 20 分钟单次定时等待，到期后只做一次边界观察；等待期间也释放共享状态锁与 Browser 队列锁，保留周记 AI 锁。重取门槛按 replacement 的收尾预算计算（不沿用首次等待时包含完整重开窗口的门槛），并加载最新并发状态；进程中断后从持久侧车恢复同一 replacement，不产生第三次提交。原 run 已满 20 分钟时，启动后的 `observe-existing` 即作为它的边界观察，不额外重复观察。
 - 隔离回归：weekly-automation scripts 与 lib **152/152**，周记、Flomo 与 Process 受影响回归 **47/47**；覆盖原 run 与 replacement 的20分钟边界、迟到结果、单次额度、人工正文、预算不足、两个窗口期间的并发状态更新、中断续接及完整手动提示词。`node --check`、Learn-X `git diff --check` 通过。模拟时钟和 fake Bridge 不代表真实周记运行通过。
-- 同一独立验收者已受托复核此回修及并发/中断边界，结果待回传。生产 Runner 未加载，真实 AI 提交和 20 分钟墙钟恢复仍未验证；M4 还缺可验证的精确回滚来源与恢复路径，因此本轮保持生产服务原状。
+- 同一独立验收者已复核并发/中断边界；随后发现 replacement 收据缺少父 run ID 仍可能晋升的 P2。本轮增加父子 UUID 与派发时间校验及缺失父 ID 反例测试，现有隔离回归通过；对该修复的独立复核再次请求中。生产 Runner 未加载，真实 AI 提交和 20 分钟墙钟恢复仍未验证；M4 还缺可验证的精确回滚来源与恢复路径，因此保持生产服务原状。
+
+### 2026-10-20 replacement 即时结果读回修复
+
+- 一次性 replacement 收据必须有匹配的 UUID 子 run、有效且不同的 UUID 父 run、派发时间和目标周；Supervisor 在 Bridge 派发前把原 run ID 和预留时间写入周记持久状态。重启时 replacement 父 ID 必须匹配这个独立锚点；锚点缺失/不匹配或额度已预留但没有 replacement 收据时转 `needs_review`，不观察、不晋升、不再次提交。replacement 即时返回 `confirmed` 时，supervisor 立即验证目标周 `ai.md` 的内容结构与摘要，并与确认侧车对账；确认后结束，不再进入 20 分钟等待。重启后发现同一 replacement 已确认时，走相同的本地读回路径，不调用 Bridge。
+- 即时返回 `generated` 时，复用已有 `promoteAiReview` 在持有周记 AI 锁期间验证生成稿、晋升正式文件并读回 `confirmed` 摘要；人工实质内容仍会阻止晋升并保留为 `needs_review`。晋升异常保持可见，不重新生成或提交。
+- 回归覆盖派发前锚点落盘、reservation-only 中断后禁止重派、replacement 父 ID 缺失或有效但错误时拒绝晋升、即时 `confirmed`、即时 `generated` 和重启后确认收据；`weekly-automation scripts + lib` **158/158**，周记 supervisor **66/66**，周记/Flomo/Process 受影响回归 **36/36**。Browser Runtime 对应跨仓库完整隔离命令 **225/225**。`node --check` 和相关仓库 `git diff --check` 通过。测试用合成时钟及临时文件，没有真实 AI 提交、生产日志写入或真实来源采集。
+- 父 run 锚点修复已独立复核通过，未发现新 P1/P2。复核构造了 child/parent UUID 均合法但 parent 错误的 generated 重启场景，确认收据保持原样、`ai.md` 不晋升、返回完整手动提示词；reservation-only 恢复也不重派。复核者定向测试 10/10、完整 supervisor 66/66，`node --check` 与 `git diff --check` 通过。
+- 生产 Runner 未加载。06:00 日诊断首轮、下一份真实周报和 Ego App/BGE 运行链证据仍未完成，整体保持 PARTIAL。
+
+### 2026-10-20 `ai.md` 晋升并发覆盖竞态修复
+
+- 独立测试构造了正式文件存在性检查之后、rename 晋升之前人工创建 `ai.md` 的窗口，确认旧实现会覆盖人工正文。现在 shell 创建与生成稿晋升都用原子 no-clobber `link`；目标已存在时保留人工文件、草稿与 sidecar，返回 `needs_review`。对带稳定 run ID 的可恢复失败不提前创建空白正式 shell，避免阻止观察原 Bridge run 和晋升有效结果。旧版空白 shell 与生成稿并存时安全停在人工复核。
+- 新增竞态注入、稳定 run observe 后晋升和 legacy shell 冲突用例；`generate-ai-review.test.mjs` 36/36，weekly automation scripts + lib 161/161，Learn-X `rtk proxy npm test` 652/652。首次并发执行测试时一项无关 Chat Pack cache 用例失败；该测试文件隔离回归 24/24，随后独立串行的全仓测试 652/652。原因未证实。相关语法检查和 `git diff --check` 通过。
+- 新鲜独立复核者复跑 AI 晋升定向测试 36/36，并审查所有正式 `ai.md` 写入和清理路径，没有发现覆盖或删除人工正文的路径。legacy shell 冲突保留双方并进入 `needs_review`。
+- 用户已澄清 BGE 即 Bridge，不存在独立 BGE 服务；真实 Bridge 生产加载、周记交付和自然周期仍未验证。没有执行真实周记 AI、Bridge 请求、Feishu 写入或生产 Runner 操作。整体跨仓验收仍为 PARTIAL，待生产安全加载、自然周期治理/周报和真实周记交付证据。
+
+### 2026-10-20 19:16 CST 晋升确认竞态闭环
+
+- **继续对抗复核发现：**直接把正式文件硬链接到生成草稿会令两者共享 inode；直接晋升与生成结果崩溃恢复还曾绕过统一的确认侧车读回。人工在正式文件安装后或确认侧车写入期间编辑，可能造成草稿被误删或状态仍显示 confirmed。
+- **修复：**晋升先复制到独立临时文件，再以 no-clobber link 安装正式 `ai.md`，避免正式文件和生成草稿共享 inode。`persistConfirmedPromotion()` 现在统一自动生成、直接晋升、现有产物对账及崩溃恢复：sidecar 写入后读回，并再次读取正式文件核对摘要；不匹配时将状态写为 `needs_review`，保留人工正文和生成稿。调用方只在最终确认仍有效时清理草稿。
+- **故障复现与回归：**分别注入人工在检查后创建 `ai.md`、正式文件安装后编辑、确认侧车落盘期间编辑、直接晋升旁路及恢复旁路。当前测试均确认人工正文不被覆盖，sidecar 不保留过期 confirmed，生成草稿不被删除。协调者运行 `generate-ai-review.test.mjs` 40/40 和 Learn-X `rtk proxy npm test` 656/656；独立复核者运行定向套件 40/40，并复跑恢复竞态夹具得到 `needs_review`、人工正文保留、生成草稿保留。
+- **边界：**本轮未执行真实周记 AI、Bridge 请求或外部写入，也未加载生产 Runner。M4 精确恢复来源与安全加载、M5 自然日/周自动化运行及真实交付仍未验证；总体验收为 **PARTIAL**。BGE 是 Bridge 的别名。
