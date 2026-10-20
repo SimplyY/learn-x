@@ -248,7 +248,7 @@ test('review reason is constrained to the declared card limit', async (t) => {
 
 test('cards use original opening text as titles and include Flomo links', () => {
   const poem = { noteKey: 'poem', createdAt: '2025-10-04T09:00:00+08:00', body: '风来东湖涌，\n\n桥卧山水间。\n\n#写诗', bodyHash: 'poem-hash', source: { path: 'flomo.md', line: 1, url: 'https://v.flomoapp.com/mine/?memo_id=poem' }, quality: { score: 3 } };
-  const regular = { noteKey: 'regular', createdAt: '2026-07-15T09:00:00+08:00', body: '鱼不存在，世俗的成就。\n1.对于复杂概率，人大概率计算错\n2.人天然对随机性无法合理预测。', bodyHash: 'regular-hash', source: { path: 'flomo.md', line: 2, url: 'https://v.flomoapp.com/mine/?memo_id=regular' }, quality: { score: 3 } };
+  const regular = { noteKey: 'regular', createdAt: '2026-07-15T09:00:00+08:00', body: '鱼不存在，世俗的成就。\n普通换行保留。\n1.对于复杂概率，人大概率计算错\n2.人天然对随机性无法合理预测。', bodyHash: 'regular-hash', source: { path: 'flomo.md', line: 2, url: 'https://v.flomoapp.com/mine/?memo_id=regular' }, quality: { score: 3 } };
   const longTitle = { noteKey: 'long-title', createdAt: '2026-07-15T09:00:00+08:00', body: '标题超过六个字的判断。', bodyHash: 'long-title-hash', source: { path: 'flomo.md', line: 3, url: 'https://v.flomoapp.com/mine/?memo_id=long-title' }, quality: { score: 3 } };
   const notes = [poem, regular, longTitle];
   const decision = { date, countDeviationReason: '测试渲染', items: notes.map(note => ({ noteKey: note.noteKey, bodyHash: note.bodyHash, relevance: 'strong', reason: '现实反馈需再检验' })) };
@@ -256,6 +256,7 @@ test('cards use original opening text as titles and include Flomo links', () => 
   const result = renderReview(decision, notes, snapshot);
   assert.match(JSON.stringify(result.card), /1\. 诗：风来东湖/);
 assert.match(JSON.stringify(result.card), /风来东湖涌，<br><br>桥卧山水间/);
+assert.match(JSON.stringify(result.card), /鱼不存在，世俗的成就。\\n普通换行保留。\\n\\n1\. 对于复杂概率/);
 assert.match(JSON.stringify(result.card), /1\. 对于复杂概率，人大概率计算错\\n2\. 人天然对随机性无法合理预测。/);
   assert.match(JSON.stringify(result.card), /2\. 鱼不存在，世/);
   assert.match(JSON.stringify(result.card), /3\. 标题超过六个/);

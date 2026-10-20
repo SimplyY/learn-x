@@ -304,7 +304,7 @@ function cardBody(note) {
       inList = true;
       pendingBreak = '\n\n';
     } else {
-      if (lines.length) lines.push(inList ? '\n\n' : pendingBreak);
+      if (lines.length) lines.push(inList ? '\n\n' : (pendingBreak || '\n'));
       lines.push(text);
       inList = false;
       pendingBreak = '';
