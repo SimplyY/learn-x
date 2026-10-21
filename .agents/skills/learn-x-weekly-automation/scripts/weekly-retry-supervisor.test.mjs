@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   canRetrySource, classifyOutcome, classifyWeeklyFailure, createWeeklyRetryState,
-  readCurrentSourceOutcome, recordWeeklyStage, runConfiguredSource, runWeeklyRetrySupervisor
+  parseArgs, readCurrentSourceOutcome, recordWeeklyStage, runConfiguredSource, runWeeklyRetrySupervisor
 } from "./weekly-retry-supervisor.mjs";
 import { WEEKLY_SOURCE_CONFIG } from "../../learn-x-input/scripts/lib/weekly-source-config.mjs";
 import { updateWeeklySourceStatus } from "../../learn-x-input/scripts/lib/source-status.mjs";
@@ -221,6 +221,9 @@ test("classifies recoverable network faults separately from login, schema, and u
   assert.deepEqual(classifyWeeklyFailure("ECONNRESET"), { errorClass: "network-transient", retryable: true, retryAfterMs: 20 * 60_000 });
   assert.deepEqual(classifyWeeklyFailure("ECONNRESET", { sourceId: "flomo" }), { errorClass: "network-transient", retryable: true, retryAfterMs: 10 * 60_000 });
   assert.equal(classifyWeeklyFailure("rate limit; retry-after=2400", { sourceId: "flomo" }).retryAfterMs, 40 * 60_000);
+  assert.equal(classifyWeeklyFailure("rate limit; Retry-After: Mon, 26 Oct 2026 00:50:00 GMT", {
+    sourceId: "flomo", now: Date.parse("2026-10-26T00:10:00.000Z")
+  }).retryAfterMs, 40 * 60_000);
   assert.equal(classifyWeeklyFailure("flomo-weekly-snapshot-gap", { sourceId: "flomo" }).retryable, false);
   assert.deepEqual(classifyWeeklyFailure("flomo-weekly-timestamp-density-review-required", { sourceId: "flomo" }), {
     errorClass: "manual-review-required", retryable: false, retryAfterMs: 0
@@ -844,6 +847,32 @@ test("returns the complete business manual prompt when weekly AI remains unresol
   assert.equal(result.manualFallback.path, `03_input/weekly/${week}/ai.md`);
 });
 
+test("rebuilds the complete manual prompt from the target-week template when the sidecar field is absent", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-ai-manual-prompt-rebuild-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const weekRoot = path.join(root, "03_input/weekly", week);
+  const templatePath = path.join(root, "03_input/weekly/00_template/ai.md");
+  const template = "# synthetic template for fallback reconstruction";
+  await mkdir(weekRoot, { recursive: true });
+  await mkdir(path.dirname(templatePath), { recursive: true });
+  await writeFile(templatePath, template, "utf8");
+  const state = createWeeklyRetryState(week);
+  for (const source of WEEKLY_SOURCE_CONFIG) state.sources[source.id].status = source.collector ? "succeeded" : "recheck-only";
+  state.sources.ai.status = "needs_review";
+  await writeFile(path.join(weekRoot, "_weekly-retry-state.json"), `${JSON.stringify(state)}\n`);
+  await writeFile(path.join(weekRoot, "_ai-generated.json"), JSON.stringify({
+    targetWeek: week, status: "needs_review", reason: "observer-window-ended"
+  }));
+
+  const result = await runWeeklyRetrySupervisor({
+    week, repoRoot: root, maxDurationMs: 0, now: () => Date.parse("2026-10-05T08:00:00Z"), readOutcome: async () => null
+  });
+
+  assert.equal(result.manualFallback.path, `03_input/weekly/${week}/ai.md`);
+  assert.equal(sha256(result.manualFallback.prompt), sha256(buildReviewPrompt(template, week)));
+});
+
 test("migrates only untouched Health-X recheck-only state into the managed report collector", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-health-state-migration-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -875,6 +904,37 @@ test("recovery status carries the installed WeRead version for version-scoped pl
     summary: "本周有阅读活动；Skill版本：2.4.1" });
   const outcome = await readCurrentSourceOutcome(WEEKLY_SOURCE_CONFIG.find((source) => source.id === "weread"), week, root);
   assert.equal(outcome.sourceVersion, "2.4.1");
+});
+
+test("confirmed weekly AI is a success only when ai.md still passes validation and hash readback", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-confirmed-ai-readback-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const weekRoot = path.join(root, "03_input/weekly", week);
+  await mkdir(weekRoot, { recursive: true });
+  const hash = sha256(VALID_AI_REVIEW);
+  const sidecar = { targetWeek: week, status: "confirmed", outputSha256: hash, readbackSha256: hash, confirmedAt: "2026-10-05T08:00:00Z" };
+  await writeFile(path.join(weekRoot, "_ai-generated.json"), `${JSON.stringify(sidecar)}\n`);
+  const source = WEEKLY_SOURCE_CONFIG.find((item) => item.id === "ai");
+
+  const missing = await readCurrentSourceOutcome(source, week, root);
+  assert.equal(missing.status, "needs_review");
+  assert.equal(missing.error, "confirmed-ai-md-missing");
+
+  await writeFile(path.join(weekRoot, "ai.md"), `${VALID_AI_REVIEW}\n`, "utf8");
+  const intact = await readCurrentSourceOutcome(source, week, root);
+  assert.equal(intact.status, "confirmed");
+
+  await writeFile(path.join(weekRoot, "ai.md"), `${VALID_AI_REVIEW.replace("真实判断", "另一判断")}\n`, "utf8");
+  const changed = await readCurrentSourceOutcome(source, week, root);
+  assert.equal(changed.status, "needs_review");
+  assert.equal(changed.error, "confirmed-ai-md-changed");
+
+  await writeFile(path.join(weekRoot, "ai.md"), `${VALID_AI_REVIEW}\n`, "utf8");
+  await writeFile(path.join(weekRoot, "_ai-generated.json"), `${JSON.stringify({ ...sidecar, readbackSha256: hash, outputSha256: sha256(VALID_AI_REVIEW.replace("真实判断", "另一判断")) })}\n`);
+  const conflictingHashes = await readCurrentSourceOutcome(source, week, root);
+  assert.equal(conflictingHashes.status, "needs_review");
+  assert.equal(conflictingHashes.error, "confirmed-ai-md-hash-conflict");
 });
 
 test("layer-two WeRead recovery runs an explicit upgrade action and verifies the installed version", async (t) => {
@@ -1268,6 +1328,351 @@ test("manual Flomo refresh uses the supervisor lock and attempt token without re
   assert.equal(state.sources.flomo.lastSnapshot.snapshotId, "snapshot-example");
   assert.equal(state.sources.daily.attempts, 0);
   assert.equal(guard.active, false);
+});
+
+test("Flomo automation exposes one-attempt flags and passes a fresh invocation UUID to its collector", async (t) => {
+  const parsed = parseArgs(["--week", "2026-W40", "--mode", "manual", "--source", "flomo", "--single-attempt",
+    "--automation-id", "learn-x-flomo-00-10", "--skip-prepare", "--skip-flomo-review-import", "--max-duration-ms", "1920000"]);
+  assert.equal(parsed.singleAttempt, true);
+  assert.equal(parsed.automationId, "learn-x-flomo-00-10");
+  assert.equal(parsed.skipPreparation, true);
+  assert.equal(parsed.skipFlomoReviewImport, true);
+  assert.equal(parsed.maxDurationMs, 1_920_000);
+
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-flomo-invocation-id-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let current = Date.parse("2026-10-05T00:10:00.000Z");
+  let prepared = 0;
+  const result = await runWeeklyRetrySupervisor({
+    ...parsed, repoRoot: root, now: () => current, maxDurationMs: parsed.maxDurationMs,
+    prepareInputs: async () => { prepared += 1; }, readOutcome: async () => null,
+    runSource: async (_source, context) => ({ status: "ready", count: 1, snapshotId: "snapshot-one-shot",
+      capturedAt: new Date(current).toISOString(), coverage: { expectedCount: 1, observedCount: 1, omittedCount: 0 } }),
+  });
+  const state = JSON.parse(await readFile(result.statePath, "utf8"));
+  const starts = state.diagnostics.filter((entry) => entry.step === "source-collection" && entry.sourceId === "flomo" && entry.outcome === "started");
+  assert.equal(starts.length, 1);
+  assert.match(starts[0].invocationId, /^[0-9a-f-]{36}$/i);
+  assert.equal(state.sources.flomo.lastInvocationId, starts[0].invocationId);
+  assert.equal(state.sources.flomo.lastAutomationId, "learn-x-flomo-00-10");
+  assert.equal(state.sources.flomo.lastSnapshot.snapshotId, "snapshot-one-shot");
+  assert.equal(prepared, 0, "the Flomo-only automation skips weekly preprocessing");
+});
+
+test("the Flomo adapter passes the supervisor invocation UUID and automation ID to the sync process", async () => {
+  const source = WEEKLY_SOURCE_CONFIG.find((item) => item.id === "flomo");
+  const invocationId = "123e4567-e89b-42d3-a456-426614174000";
+  let invocation;
+  const outcome = await runConfiguredSource(source, {
+    week: "2026-W40", repoRoot: "/tmp/learn-x-flomo-adapter", attemptToken: "fedcba98-7654-3210-fedc-ba9876543210",
+    invocationId, automationId: "learn-x-flomo-00-10", timeoutMs: 5_000,
+    executeCommand: async (command, args, options) => {
+      assert.equal(command, process.execPath);
+      assert.match(args[0], /sync-flomo-full-week\.mjs$/);
+      assert.deepEqual(args.slice(1), ["--week", "2026-W40", "--attempt-token", "fedcba98-7654-3210-fedc-ba9876543210",
+        "--invocation-id", invocationId]);
+      assert.equal(options.env.LEARN_X_AUTOMATION_ID, "learn-x-flomo-00-10");
+      invocation = { args, env: options.env };
+      return { stdout: JSON.stringify({ snapshotId: "snapshot-adapter", capturedAt: "2026-10-05T00:00:00.000Z" }) };
+    },
+    readOutcome: async () => ({ status: "ready", updatedAt: new Date().toISOString() }),
+  });
+  assert.ok(invocation);
+  assert.equal(outcome.snapshotId, "snapshot-adapter");
+});
+
+test("Flomo single-attempt runner enforces a twenty-minute minimum, honors persisted backoff, and stops after success", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-flomo-single-attempt-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const automationId = "learn-x-flomo-00-10";
+  let current = Date.parse("2026-10-26T00:10:00.000Z");
+  let calls = 0;
+  const options = {
+    week, mode: "manual", sourceId: "flomo", singleAttempt: true, skipPreparation: true,
+    automationId, repoRoot: root, maxDurationMs: 60_000, now: () => current, readOutcome: async () => null,
+    runSource: async () => {
+      calls += 1;
+      return calls === 1 ? { status: "failed", error: "ECONNRESET; Retry-After: Mon, 26 Oct 2026 00:50:00 GMT" }
+        : { status: "ready", count: 1, snapshotId: "snapshot-recovered", capturedAt: new Date(current).toISOString() };
+    },
+  };
+  const first = await runWeeklyRetrySupervisor(options);
+  assert.equal(first.sources.flomo.status, "failed");
+  assert.equal(Date.parse(first.sources.flomo.nextRetryAt), current + 40 * 60_000);
+
+  current += 39 * 60_000;
+  const tooEarly = await runWeeklyRetrySupervisor(options);
+  const tooEarlyState = JSON.parse(await readFile(tooEarly.statePath, "utf8"));
+  assert.equal(tooEarlyState.diagnostics.at(-1).outcome, "flomo-retry-cooldown");
+  assert.equal(calls, 1);
+
+  current += 60_000;
+  const recovered = await runWeeklyRetrySupervisor(options);
+  assert.equal(recovered.sources.flomo.status, "succeeded");
+  assert.equal(calls, 2);
+  const afterSuccess = await runWeeklyRetrySupervisor(options);
+  const afterSuccessState = JSON.parse(await readFile(afterSuccess.statePath, "utf8"));
+  assert.equal(afterSuccessState.diagnostics.at(-1).outcome, "flomo-already-succeeded");
+  assert.equal(calls, 2, "success ends the automation's retry sequence");
+});
+
+test("Flomo single-attempt runner waits twenty minutes from failure completion before retrying", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-flomo-minimum-gap-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let current = Date.parse("2026-10-05T00:10:00.000Z");
+  let calls = 0;
+  const options = {
+    week: "2026-W40", mode: "manual", sourceId: "flomo", singleAttempt: true, skipPreparation: true,
+    automationId: "learn-x-flomo-00-10", repoRoot: root, maxDurationMs: 60_000, now: () => current,
+    readOutcome: async () => null,
+    runSource: async () => {
+      calls += 1;
+      return calls === 1 ? { status: "failed", error: "ECONNRESET" }
+        : { status: "empty", count: 0, snapshotId: "snapshot-empty", capturedAt: new Date(current).toISOString() };
+    },
+  };
+  const first = await runWeeklyRetrySupervisor(options);
+  assert.equal(Date.parse(first.sources.flomo.nextRetryAt), current + 20 * 60_000);
+  current += 19 * 60_000;
+  const tooEarly = await runWeeklyRetrySupervisor(options);
+  const tooEarlyState = JSON.parse(await readFile(tooEarly.statePath, "utf8"));
+  assert.equal(tooEarly.sources.flomo.status, "failed");
+  assert.equal(tooEarlyState.diagnostics.at(-1).outcome, "flomo-retry-cooldown");
+  assert.equal(calls, 1);
+  current += 60_000;
+  const retry = await runWeeklyRetrySupervisor(options);
+  assert.equal(retry.sources.flomo.status, "succeeded");
+  assert.equal(calls, 2);
+});
+
+test("Flomo single-attempt runner does not retry failures classified as non-retryable", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-flomo-non-retryable-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let current = Date.parse("2026-10-05T00:10:00.000Z");
+  let calls = 0;
+  const options = {
+    week: "2026-W40", mode: "manual", sourceId: "flomo", singleAttempt: true, skipPreparation: true,
+    automationId: "learn-x-flomo-00-10", repoRoot: root, maxDurationMs: 60_000, now: () => current,
+    readOutcome: async () => null,
+    runSource: async () => { calls += 1; return { status: "failed", error: "flomo-scan-incomplete" }; },
+  };
+  const first = await runWeeklyRetrySupervisor(options);
+  assert.equal(first.sources.flomo.lastErrorClass, "source-integrity-failed");
+  current += 20 * 60_000;
+  const second = await runWeeklyRetrySupervisor(options);
+  const state = JSON.parse(await readFile(second.statePath, "utf8"));
+  assert.equal(state.diagnostics.at(-1).outcome, "flomo-failure-not-retryable");
+  assert.equal(calls, 1);
+  assert.equal(second.sources.flomo.attempts, 1);
+});
+
+test("Flomo single-attempt runner stops on login or user-control failures and caps the automation at three starts", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-flomo-single-attempt-stop-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const automationId = "learn-x-flomo-00-10";
+  let current = Date.parse("2026-10-05T00:10:00.000Z");
+  let calls = 0;
+  const options = {
+    week, mode: "manual", sourceId: "flomo", singleAttempt: true, skipPreparation: true,
+    automationId, repoRoot: root, maxDurationMs: 60_000, now: () => current, readOutcome: async () => null,
+    runSource: async () => { calls += 1; return { status: "failed", error: "ECONNRESET" }; },
+  };
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const result = await runWeeklyRetrySupervisor(options);
+    assert.equal(result.sources.flomo.attempts, attempt + 1);
+    current += 20 * 60_000;
+  }
+  const capped = await runWeeklyRetrySupervisor(options);
+  const cappedState = JSON.parse(await readFile(capped.statePath, "utf8"));
+  assert.equal(cappedState.diagnostics.at(-1).outcome, "flomo-automation-attempt-limit-reached");
+  assert.equal(calls, 3);
+
+  const blockedRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-flomo-human-stop-"));
+  t.after(() => rm(blockedRoot, { recursive: true, force: true }));
+  let blockedCalls = 0;
+  const blockedOptions = { ...options, repoRoot: blockedRoot,
+    runSource: async () => { blockedCalls += 1; return { status: "failed", error: "ego-user-control-required" }; } };
+  const blocked = await runWeeklyRetrySupervisor(blockedOptions);
+  const stopped = await runWeeklyRetrySupervisor(blockedOptions);
+  const stoppedState = JSON.parse(await readFile(stopped.statePath, "utf8"));
+  assert.equal(blocked.sources.flomo.status, "failed");
+  assert.equal(stoppedState.diagnostics.at(-1).outcome, "flomo-human-action-required");
+  assert.equal(blockedCalls, 1);
+});
+
+test("Flomo automation attempt budget survives diagnostic-log truncation before the attempt gate", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-flomo-attempt-budget-log-limit-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const automationId = "learn-x-flomo-00-10";
+  const current = Date.parse("2026-10-05T02:00:00.000Z");
+  const weekRoot = path.join(root, "03_input/weekly", week);
+  await mkdir(weekRoot, { recursive: true });
+  const state = createWeeklyRetryState(week);
+  Object.assign(state.sources.flomo, {
+    status: "failed", attempts: 3, lastErrorClass: "network-transient", lastErrorSignal: "ECONNRESET",
+    lastFailureAt: new Date(current - 60 * 60_000).toISOString(), nextRetryAt: new Date(current - 40 * 60_000).toISOString(),
+    lastAutomationId: automationId
+  });
+  delete state.sources.flomo.automationAttemptCounts;
+  state.diagnostics = [
+    ...Array.from({ length: 3 }, (_, index) => ({ at: new Date(current - (60 - index) * 60_000).toISOString(),
+      step: "source-collection", sourceId: "flomo", automationId, outcome: "started" })),
+    ...Array.from({ length: 497 }, (_, index) => ({ at: new Date(current - 1_000).toISOString(), step: "source-check", sourceId: `old-${index}` }))
+  ];
+  assert.equal(state.diagnostics.length, 500);
+  await writeFile(path.join(weekRoot, "_weekly-retry-state.json"), `${JSON.stringify(state)}\n`);
+
+  let calls = 0;
+  const result = await runWeeklyRetrySupervisor({
+    week, mode: "manual", sourceId: "flomo", singleAttempt: true, skipPreparation: true, automationId,
+    repoRoot: root, maxDurationMs: 60_000, now: () => current,
+    readOutcome: async (source) => source.id === "flomo" ? null : { status: "ready", updatedAt: new Date(current).toISOString() },
+    runSource: async () => { calls += 1; return { status: "failed", error: "ECONNRESET" }; }
+  });
+  const persisted = JSON.parse(await readFile(result.statePath, "utf8"));
+  assert.equal(calls, 0, "the collector must not start after the persisted three-attempt budget is exhausted");
+  assert.equal(persisted.sources.flomo.attempts, 3);
+  assert.equal(persisted.sources.flomo.automationAttemptCounts[automationId], 3);
+  assert.equal(persisted.diagnostics.at(-1).outcome, "flomo-automation-attempt-limit-reached");
+});
+
+test("Flomo legacy state with a full truncated log and no counter fails closed", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-flomo-legacy-truncated-budget-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const automationId = "learn-x-flomo-00-10";
+  const current = Date.parse("2026-10-05T02:00:00.000Z");
+  const weekRoot = path.join(root, "03_input/weekly", week);
+  await mkdir(weekRoot, { recursive: true });
+  const state = createWeeklyRetryState(week);
+  delete state.sources.flomo.automationAttemptCounts;
+  Object.assign(state.sources.flomo, { status: "failed", attempts: 3, lastErrorClass: "network-transient",
+    lastFailureAt: new Date(current - 60 * 60_000).toISOString(), nextRetryAt: new Date(current - 40 * 60_000).toISOString(),
+    lastAutomationId: null });
+  state.diagnostics = Array.from({ length: 500 }, (_, index) => ({ at: new Date(current - 1_000).toISOString(),
+    step: "source-check", sourceId: `old-${index}` }));
+  await writeFile(path.join(weekRoot, "_weekly-retry-state.json"), `${JSON.stringify(state)}\n`);
+
+  let calls = 0;
+  const result = await runWeeklyRetrySupervisor({
+    week, mode: "manual", sourceId: "flomo", singleAttempt: true, skipPreparation: true, automationId,
+    repoRoot: root, maxDurationMs: 60_000, now: () => current, readOutcome: async () => null,
+    runSource: async () => { calls += 1; return { status: "failed", error: "ECONNRESET" }; }
+  });
+  const persisted = JSON.parse(await readFile(result.statePath, "utf8"));
+  assert.equal(calls, 0, "an old full log with no durable counter may hide earlier starts");
+  assert.equal(persisted.sources.flomo.automationAttemptCounts[automationId], 3);
+  assert.equal(persisted.diagnostics.at(-1).outcome, "flomo-automation-attempt-limit-reached");
+});
+
+test("Flomo legacy state with another automation counter and no current key fails closed on a full log", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-flomo-missing-counter-key-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const automationId = "learn-x-flomo-00-10";
+  const current = Date.parse("2026-10-05T02:00:00.000Z");
+  const weekRoot = path.join(root, "03_input/weekly", week);
+  await mkdir(weekRoot, { recursive: true });
+  const state = createWeeklyRetryState(week);
+  Object.assign(state.sources.flomo, { status: "failed", attempts: 3, lastErrorClass: "network-transient",
+    lastFailureAt: new Date(current - 60 * 60_000).toISOString(), nextRetryAt: new Date(current - 40 * 60_000).toISOString(),
+    lastAutomationId: null, automationAttemptCounts: { "other-automation": 1 } });
+  state.diagnostics = Array.from({ length: 500 }, (_, index) => ({ at: new Date(current - 1_000).toISOString(),
+    step: "source-check", sourceId: `old-${index}` }));
+  await writeFile(path.join(weekRoot, "_weekly-retry-state.json"), `${JSON.stringify(state)}\n`);
+
+  let calls = 0;
+  const result = await runWeeklyRetrySupervisor({
+    week, mode: "manual", sourceId: "flomo", singleAttempt: true, skipPreparation: true, automationId,
+    repoRoot: root, maxDurationMs: 60_000, now: () => current, readOutcome: async () => null,
+    runSource: async () => { calls += 1; return { status: "failed", error: "ECONNRESET" }; }
+  });
+  const persisted = JSON.parse(await readFile(result.statePath, "utf8"));
+  assert.equal(calls, 0, "a missing counter key plus a full log cannot prove that no earlier starts were trimmed");
+  assert.equal(persisted.sources.flomo.automationAttemptCounts[automationId], 3);
+  assert.equal(persisted.diagnostics.at(-1).outcome, "flomo-automation-attempt-limit-reached");
+});
+
+test("Flomo automation trusts an existing counter when a full log still contains one retry slot", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-flomo-persisted-budget-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const automationId = "learn-x-flomo-00-10";
+  const current = Date.parse("2026-10-05T02:00:00.000Z");
+  const weekRoot = path.join(root, "03_input/weekly", week);
+  await mkdir(weekRoot, { recursive: true });
+  const state = createWeeklyRetryState(week);
+  Object.assign(state.sources.flomo, { status: "failed", attempts: 2, lastErrorClass: "network-transient",
+    lastFailureAt: new Date(current - 60 * 60_000).toISOString(), nextRetryAt: new Date(current - 40 * 60_000).toISOString(),
+    lastAutomationId: automationId, automationAttemptCounts: { [automationId]: 2 } });
+  state.diagnostics = [
+    ...Array.from({ length: 2 }, (_, index) => ({ at: new Date(current - (60 - index) * 60_000).toISOString(),
+      step: "source-collection", sourceId: "flomo", automationId, outcome: "started" })),
+    ...Array.from({ length: 498 }, (_, index) => ({ at: new Date(current - 1_000).toISOString(), step: "source-check", sourceId: `old-${index}` }))
+  ];
+  await writeFile(path.join(weekRoot, "_weekly-retry-state.json"), `${JSON.stringify(state)}\n`);
+
+  let calls = 0;
+  const result = await runWeeklyRetrySupervisor({
+    week, mode: "manual", sourceId: "flomo", singleAttempt: true, skipPreparation: true, automationId,
+    repoRoot: root, maxDurationMs: 60_000, now: () => current, readOutcome: async () => null,
+    runSource: async () => { calls += 1; return { status: "failed", error: "ECONNRESET" }; }
+  });
+  const persisted = JSON.parse(await readFile(result.statePath, "utf8"));
+  assert.equal(calls, 1, "the third allowed attempt remains available when the durable count says two");
+  assert.equal(persisted.sources.flomo.automationAttemptCounts[automationId], 3);
+  assert.equal(persisted.sources.flomo.attempts, 3);
+});
+
+test("the 05:00 initial run consumes a successful 00:10 Flomo result without rescanning, while 07:00 can rescue a failed one", async (t) => {
+  const seed = async (root, week) => {
+    const weekRoot = path.join(root, "03_input/weekly", week);
+    await mkdir(weekRoot, { recursive: true });
+    const state = createWeeklyRetryState(week);
+    for (const source of WEEKLY_SOURCE_CONFIG) {
+      state.sources[source.id].status = source.collector ? "succeeded" : "recheck-only";
+      state.sources[source.id].attempts = source.collector ? 1 : 0;
+    }
+    state.sources.flomo.status = "pending";
+    state.sources.flomo.attempts = 0;
+    await writeFile(path.join(weekRoot, "_weekly-retry-state.json"), `${JSON.stringify(state)}\n`);
+    return weekRoot;
+  };
+  const week = "2026-W40";
+  const automationId = "learn-x-flomo-00-10";
+
+  const successfulRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-pre-sync-dedupe-"));
+  t.after(() => rm(successfulRoot, { recursive: true, force: true }));
+  await seed(successfulRoot, week);
+  let successCalls = 0;
+  const singleOptions = { week, mode: "manual", sourceId: "flomo", singleAttempt: true, skipPreparation: true,
+    automationId, repoRoot: successfulRoot, maxDurationMs: 60_000, readOutcome: async () => null,
+    runSource: async () => { successCalls += 1; return { status: "ready", count: 2, snapshotId: "snapshot-00-10" }; } };
+  await runWeeklyRetrySupervisor(singleOptions);
+  const at0500 = await runWeeklyRetrySupervisor({ week, mode: "initial", repoRoot: successfulRoot, maxDurationMs: 60_000,
+    readOutcome: async () => null, runSource: async () => { successCalls += 1; return { status: "ready", count: 2 }; } });
+  assert.equal(at0500.sources.flomo.status, "succeeded");
+  assert.equal(successCalls, 1, "the successful pre-sync is not scanned again at 05:00");
+
+  const failedRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-pre-sync-rescue-"));
+  t.after(() => rm(failedRoot, { recursive: true, force: true }));
+  await seed(failedRoot, week);
+  let current = Date.parse("2026-10-05T00:10:00.000Z");
+  let rescueCalls = 0;
+  const failedOptions = { ...singleOptions, repoRoot: failedRoot, now: () => current,
+    runSource: async () => { rescueCalls += 1; return { status: "failed", error: "ECONNRESET" }; } };
+  const failed = await runWeeklyRetrySupervisor(failedOptions);
+  assert.equal(failed.sources.flomo.status, "failed");
+  current += 20 * 60_000;
+  const at0700 = await runWeeklyRetrySupervisor({ week, mode: "rescue", repoRoot: failedRoot, now: () => current,
+    maxDurationMs: 60_000, readOutcome: async () => null,
+    runSource: async (source) => { rescueCalls += 1; assert.equal(source.id, "flomo"); return { status: "ready", count: 2, snapshotId: "snapshot-07-00" }; } });
+  assert.equal(at0700.sources.flomo.status, "succeeded");
+  assert.equal(at0700.sources.flomo.rescueUsed, true);
+  assert.equal(rescueCalls, 2, "the 07:00 rescue performs one source recovery scan");
 });
 
 test("a busy review store lock makes Flomo guard begin retryable without starting the collector", async (t) => {

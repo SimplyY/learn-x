@@ -1,7 +1,7 @@
 # CASE: 周记自动化效率优化
 
-- 状态：M0–M3 的本地实现及 M4 安全接管能力和隔离回归已完成；整体验收为部分达成，生产 Runner 加载、真实来源采集、Codex 原线程续跑和定时端到端行为仍未验证。
-- 最后核对日期：2026-10-20
+- 状态：原 M0–M3 的本地实现及 M4 安全接管能力和隔离回归已完成；2026-10-21 Chat Pack 自动续跑的 Skill 与定向契约/模拟测试已完成。整体验收仍为部分达成，生产 Runner 加载、真实来源采集、Codex 原线程续跑和定时端到端行为仍未验证。
+- 最后核对日期：2026-10-21
 - 上下游链接：../../requirements/2026-10-weekly-workflow-efficiency.md → execution-plan.md
 - Type: Major
 - Status: In Progress
@@ -172,3 +172,47 @@
 - **修复：**晋升先复制到独立临时文件，再以 no-clobber link 安装正式 `ai.md`，避免正式文件和生成草稿共享 inode。`persistConfirmedPromotion()` 现在统一自动生成、直接晋升、现有产物对账及崩溃恢复：sidecar 写入后读回，并再次读取正式文件核对摘要；不匹配时将状态写为 `needs_review`，保留人工正文和生成稿。调用方只在最终确认仍有效时清理草稿。
 - **故障复现与回归：**分别注入人工在检查后创建 `ai.md`、正式文件安装后编辑、确认侧车落盘期间编辑、直接晋升旁路及恢复旁路。当前测试均确认人工正文不被覆盖，sidecar 不保留过期 confirmed，生成草稿不被删除。协调者运行 `generate-ai-review.test.mjs` 40/40 和 Learn-X `rtk proxy npm test` 656/656；独立复核者运行定向套件 40/40，并复跑恢复竞态夹具得到 `needs_review`、人工正文保留、生成草稿保留。
 - **边界：**本轮未执行真实周记 AI、Bridge 请求或外部写入，也未加载生产 Runner。M4 精确恢复来源与安全加载、M5 自然日/周自动化运行及真实交付仍未验证；总体验收为 **PARTIAL**。BGE 是 Bridge 的别名。
+
+## 2026-10-21 Chat Pack 自动续跑最终确认卡
+
+- **来源映射：**当前会话中的用户原始需求、自动续跑选择与实施授权已追加至 Requirement Truth「2026-10-21 Chat Pack 完成后自动交付最终确认卡」；完整方案、失败边界、验收矩阵和 Execution Handoff 已追加至 Execution Plan 同名章节。本次沿用既有 Requirement / Execution Plan / Case，不覆盖历史方案。
+- **用户裁决：**当前活动中的 Learn-X 周流程收到已人工审核、已定稿并读回有效的 Chat Pack Weekly Output 后，自动进入阶段 3 并在同一轮交付完整确认卡；不要求另外发送“已完成”或“继续”。最终卡仍是唯一写入授权点。
+- **M0 工作区基线：**检查时间 2026-10-21 Asia/Shanghai。修改前已有 `.agents/skills/learn-x-weekly-automation/SKILL.md`、`generate-ai-review.mjs`、`generate-ai-review.test.mjs`、`weekly-retry-supervisor.mjs`、`weekly-retry-supervisor.test.mjs`、`weekly-source-adapter.test.mjs` 六个修改路径和未跟踪目录 `draft_5b4b062a_folder/`。Skill 有用户既有 AI 恢复改动；本次仅在同一文件增量编辑阶段交接规则，其余既有改动保持不动。
+- **M0 读回：**Requirement R19 和原始请求位于需求文档新增章节；执行方案含自动续跑流程、失败边界、M0–M2 验收和测试交接；本 Case 已登记来源、决定和脏工作区基线。三份规划资产都保留此前内容。
+- **M1 实施：**周自动化 Skill 改为以当前流程收到并定稿的 Weekly Output 内容作为交接，保存/读回并验证目标周、必需章节、正文完整性和占位文本后，同一回复运行阶段 3；移除额外完成/继续状态消息。保留阶段 2 授权范围预览、Chat Pack 人工审核和最终卡唯一写入授权。独立会话与单纯 mtime 变化不触发。
+- **M2 定向验收：**`rtk proxy node --test .agents/skills/learn-x-weekly-automation/scripts/weekly-workflow-simulation.test.mjs .agents/skills/learn-x-process/scripts/generate-weekly-process-pack.test.mjs .agents/skills/learn-x-process/scripts/prepare-weekly-memory.test.mjs` **31/31**；覆盖有效内容保存/读回后候选准备、零长期候选仍可绑定完整卡、Weekly Output 改变后旧指纹失效、无确认时目标 Memory 不存在，以及 Skill 对错周/缺项/占位内容停止出卡、确认指纹校验先于写入的契约。`skill-creator` `quick_validate.py` 通过；`rtk git diff --check` 通过。
+- **尚未验证：**没有运行真实 Chat Pack、真实周流程、Memory/图片/备份/YW Next/Flomo 写入或外部读回；无效内容的 fail-closed 由 Skill 阶段契约测试覆盖，不代表线上交互实测。修改前已存在的其他 AI 恢复脚本、测试和未跟踪目录保持原样。
+
+### 2026-10-21 Goal 续接状态
+
+- 当前组合顺序依照用户授权为 ywdev → 第一轮 yw-testing → 一个独立新 subagent ywtest；同一个 Goal 保持 active，不创建阶段 Goal。
+- 本轮 ywdev 已完成当前已授权实现：Skill 交接边界、确认卡前置校验、完整方案原文落盘和对应工作流测试已更新。定向验证新鲜结果：相关测试 31/31、周自动化 Skill `quick_validate.py` 通过、`git diff --check` 通过。
+- 下一步为首轮 yw-testing：运行本仓库完整 Learn-X 套件和风险相关静态/构建检查；随后按 `dev-workflow.testing` 提示词的固定委派配方，新建一个独立只读 subagent，从更多角度审查用户路径、fail-closed、指纹与授权边界。发现授权范围内缺陷时由协调者修复并交同一测试者复测。真实周采集和外部写入继续排除在本次测试范围外。
+
+### 2026-10-21 Bridge 诊断续改回归
+
+- 周记 AI 普通 `--retry` 不能绕过已耗尽的一次性 replacement 额度；supervisor 在手动提示词 sidecar 缺失时从 Learn-X 业务结果重建兜底，并在报告成功前核对 `ai.md` 读回摘要与确认状态。原文、回复正文和生产文件内容没有进入系统诊断日志。
+- 最新 Learn-X `rtk proxy npm test` **660/660** 通过；独立测试者复跑同为 660/660。测试使用 fake Bridge 与临时文件，没有提交真实周记 AI 请求、读取正文或写外部服务。跨仓详细证据与 M4/M5 边界见 [Bridge Case](../../../../browser-runtime-governance/docs/cases/2026-10-chatgpt-bridge-diagnostics/case.md) 和 [验收报告](../../../../browser-runtime-governance/docs/cases/2026-10-chatgpt-bridge-diagnostics/acceptance.md)。
+
+### 2026-10-21 第一轮 yw-testing 协调者结果
+
+- 首次全量 `rtk proxy npm test` 为 **659/660**：`chatpack-cache.test.mjs` 的 mapping/hash 用例在 `t.after` 清理时报告 `ENOTEMPTY`。隔离复现后定位到测试夹具混用固定 2026-10-20 时钟与真实时钟；后两个缓存实例因此把每日刷新判为已到期，并在临时目录清理期间启动后台写入。
+- 最小修正：mapping/hash 用例里的 remapped 与 corrupted 缓存实例改用 `fixture.getNow`，与创建缓存的测试时钟一致。隔离用例 **1/1**；随后全量 `rtk proxy npm test` **660/660**，0 failed / 0 skipped。
+- 测试期间工作区还出现 `.agents/skills/learn-x-process/scripts/backup-weekly.mjs` 与 `docs/LEARN_X_BACKUP.md` 两个非本轮目标的脏路径；未读取、修改或重置其内容，保持原状。
+- 独立只读 subagent 复核发现两个 P2 fail-closed 缺口：候选/绑定脚本未强制校验错周、缺章节和占位内容；prepare→bind 期间 Weekly Output 改动仍可绑定为有效指纹。协调者已在现有候选准备/绑定入口增加内容门和候选一致性检查，待同一 reviewer 复测。没有运行真实周流程、真实 Chat Pack、Memory/图片/备份/YW Next/Flomo 写入或真实飞书端到端操作；本轮变更不触发真实飞书行为，线上自动交卡仍未验证。
+
+### 2026-10-21 对抗复核后的 fail-closed 补强
+
+- **复核反例：**独立 reviewer 在临时目录实测错周标题、缺必需章节、纯占位章节、实质正文夹“待补充”均可经候选准备、指纹绑定及校验；另实测先生成候选、再改 Weekly Output、最后绑定，旧候选与新正文仍得到 `verified: true`。此前阶段契约主要验证 Skill 文案，未实际覆盖此执行入口。
+- **最小修正：**`prepareWeeklyMemory` 与 `bindWeeklyMemoryApproval` 现在拒绝周标题不匹配、任一必需章节缺失/无实质内容及必需章节内独立占位行。绑定前按当前 Weekly Output 重新生成预期候选包，并与已保存候选逐字比对；来源内容变化时拒绝绑定，须重新准备候选和拟写卡。沿用既有接口、文件格式与指纹流程。
+- **协调者定向回归：**`rtk proxy node --test .agents/skills/learn-x-process/scripts/prepare-weekly-memory.test.mjs` **20/20**；Learn-X 周自动化模拟 + Process Pack 契约 + Memory 准备/指纹三组 `rtk proxy node --test ...` **42/42**。覆盖错周、缺项、纯/混合占位和五类说明式占位标记、候选生成后源变更均拒绝出卡；原有零长期候选、绑定后文件改动失效及未确认不写入路径通过。
+- **全量回归：**在 fail-closed 与占位标记修正后重新运行 `rtk proxy npm test`，**671/671**、0 failed / 0 skipped。Skill `quick_validate.py` 与 `rtk git diff --check` 通过。
+- **仍待完成：**同一独立只读 reviewer 正在复测两个原始反例和全部相关路径。真实周流程和外部写入仍未执行。
+
+### 2026-10-21 占位语义边界与最终复测
+
+- **对抗复测反例：**同一 reviewer 发现基于子串的占位拦截会误拒“我用 TODO 清单记录了已确认的负责人和截止日期”和“待补充的数据尚未到位，因此本周没有据此修改结论”，同时会放过字段值 `xx`、`xxx` 与 `[填写内容]`。
+- **修正：**仅识别完整占位行、带说明的明确占位标记、占位括号/HTML 注释及字段占位值。两个语义句现在通过验证并留在生成候选中；三个字段值占位和之前的注释/标记反例继续阻止准备和绑定。
+- **协调者最终回归：**Memory 定向测试 **27/27**；工作流模拟、Process Pack 契约、Memory 准备/指纹 **49/49**；全量 `rtk proxy npm test` **678/678**，0 failed / 0 skipped。weekly automation 与 learn-x-process `quick_validate.py`、`rtk git diff --check` 均通过。
+- **独立复测：**同一只读 reviewer 在临时目录验证三类自然语言 HTML 补全注释均阻止候选生成；此前列出的字段占位、普通 TODO/“待补充”语义句、错周/缺章节、prepare→bind 来源变化、mtime 未变但正文变化、零候选和确认前无正式 Memory 写入路径也复查通过。定向套件 **49/49**，无仓库改动或外部操作；未报告未解决的实现问题。
+- **外部边界：**仍未运行真实 Chat Pack、真实周流程、Memory/图片/备份/YW Next/Flomo 写入或真实飞书端到端操作。测试使用临时目录，确认卡之前不执行收尾写入，因此真实 LLM 同轮交卡及用户可见完整呈现仍未实测。

@@ -239,6 +239,28 @@ test("a reserved one-shot resubmission is never dispatched again by an ordinary 
   assert.equal(submissions, 0);
 });
 
+test("an explicit retry cannot spend a reserved one-shot resubmission twice", async (t) => {
+  const root = await fixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W27";
+  const weekDir = path.join(root, "03_input/weekly", week);
+  await import("node:fs/promises").then(({ mkdir }) => mkdir(weekDir, { recursive: true }));
+  const manualPrompt = "Synthetic fallback prompt";
+  await writeFile(path.join(weekDir, "_ai-generated.json"), JSON.stringify({
+    targetWeek: week, status: "needs_review", runId: "123e4567-e89b-42d3-a456-426614174000",
+    localAttemptId: "123e4567-e89b-42d3-a456-426614174001", resubmissionCount: 1,
+    resubmissionOf: { runId: "123e4567-e89b-42d3-a456-426614174000" },
+    reason: "observer-window-ended", manualPrompt
+  }));
+  let submissions = 0;
+  const result = await generateAiReview({ repoRoot: root, week, retry: true,
+    runBridge: async () => { submissions += 1; } });
+  assert.equal(result.status, "needs_review");
+  assert.equal(submissions, 0);
+  assert.equal(result.reason, "observer-window-ended");
+  assert.equal(result.manualPrompt, manualPrompt);
+});
+
 test("does not resend after an automatically confirmed draft", async () => {
   const root = await fixture();
   try {

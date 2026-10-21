@@ -115,6 +115,7 @@ export function validateCompleteScan(scan, week) {
 export async function collectFlomoFullSnapshot(options = {}) {
   const scan = await (options.scan || scanFlomoWithEgo)({
     mode: "full",
+    invocationId: options.invocationId,
     taskSpaceId: options.taskSpaceId,
     taskSpaceName: options.taskSpaceName,
     resumeTaskSpace: options.resumeTaskSpace === true,
@@ -185,6 +186,8 @@ export function renderFlomoWeekly({ week, scan, memos }) {
     `- 目标周记录：${memos.length}`,
     `- 扫描开始：${scan.scanStartedAt}`,
     `- 扫描完成：${scan.scanFinishedAt}`,
+    ...(scan.snapshotId ? [`- 活动快照 ID：${scan.snapshotId}`] : []),
+    ...(scan.capturedAt ? [`- 快照采集时间：${scan.capturedAt}`] : []),
     ""
   ];
   if (!memos.length) lines.push(coverage.omittedCount
@@ -254,7 +257,8 @@ export async function publishFlomoSnapshotWeek(snapshot, { week, repoRoot: root 
   await mkdir(weekRoot, { recursive: true });
   const scan = { range: { start: formatShanghaiDateTime(range.startEpoch), endExclusive: formatShanghaiDateTime(range.endEpoch) },
     scanned: snapshot.totalCount, pageCount: snapshot.pageCount,
-    scanStartedAt: snapshot.scanStartedAt, scanFinishedAt: snapshot.scanFinishedAt, coverage };
+    scanStartedAt: snapshot.scanStartedAt, scanFinishedAt: snapshot.scanFinishedAt, snapshotId: snapshot.snapshotId,
+    capturedAt: snapshot.capturedAt, coverage };
   if (included.length) {
     await assertReplaceableGeneratedInput(notesPath, targetWeek);
     await atomicWrite(notesPath, renderFlomoWeekly({ week: targetWeek, scan, memos: included }));
@@ -482,7 +486,7 @@ export function classifyFlomoError(error) {
   return "browser-scan-failed";
 }
 
-export async function scanFlomoWithEgo({ week, range, mode = "weekly", taskSpaceId, taskSpaceName, keepTaskSpace = false, resumeTaskSpace = false, timeout } = {}) {
+export async function scanFlomoWithEgo({ week, range, mode = "weekly", invocationId, taskSpaceId, taskSpaceName, keepTaskSpace = false, resumeTaskSpace = false, timeout } = {}) {
   if (mode === "full") {
     const hasTaskSpaceId = taskSpaceId !== undefined && taskSpaceId !== null;
     const hasTaskSpaceName = taskSpaceName !== undefined && taskSpaceName !== null;
@@ -493,9 +497,12 @@ export async function scanFlomoWithEgo({ week, range, mode = "weekly", taskSpace
       throw new Error("taskspace-resume-claim-requires-explicit-kept-space");
     }
   }
-  const invocation = randomUUID();
+  const invocation = invocationId || randomUUID();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(invocation))) {
+    throw new Error("flomo-invocation-id-invalid");
+  }
   const automationId = String(process.env.LEARN_X_AUTOMATION_ID || "learn-x-v2").replace(/[^a-zA-Z0-9_-]/g, "-");
-  const taskName = `${automationId}-flomo-${invocation}`;
+  const taskName = buildFlomoTaskSpaceName(invocation, automationId);
   const resultPath = path.join(os.tmpdir(), `learn-x-flomo-${invocation}.json`);
   const script = mode === "full"
     ? buildEgoFullScanScript({ taskName, taskSpaceId, taskSpaceName, resultPath, maxSteps: MAX_SCAN_STEPS, keepTaskSpace, resumeTaskSpace })
@@ -537,6 +544,14 @@ export async function scanFlomoWithEgo({ week, range, mode = "weekly", taskSpace
   } finally {
     await rm(resultPath, { force: true });
   }
+}
+
+export function buildFlomoTaskSpaceName(invocationId, automationId = process.env.LEARN_X_AUTOMATION_ID || "learn-x-v2") {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(invocationId || ""))) {
+    throw new Error("flomo-invocation-id-invalid");
+  }
+  const safeAutomationId = String(automationId || "learn-x-v2").replace(/[^a-zA-Z0-9_-]/g, "-");
+  return `${safeAutomationId}-flomo-${invocationId}`;
 }
 
 export function runEgoScript(script, { timeout = 30 * 60_000 } = {}) {

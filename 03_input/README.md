@@ -66,7 +66,7 @@ Weekly 输入由周目录决定，不依赖 weekly index 或文件修改时间�
 - `weekly.md`：回复“周记已确认”后由阶段 2 从飞书采回的周记、周复盘；草稿事实来自同周已落盘输入，不以线上周记反向补证。采回成功后，仅“新周计划”表格行会进入 `04_output/_dist/shared-context/current.json` 供下游只读消费，版本文件位于同目录的 `weekly/` 下。
 - 历史 `feishu-docs.md` 周报保留在原目录，但该输入源已暂时停用且不会进入 Process。
 - `ai.md`：默认由阶段 1 通过全局 ChatGPT Web Bridge 生成暂存稿 `ai.generated.md`，用户确认后转正；桥接失败时使用自动化报告中的 fallback prompt 手动生成。
-- `flomo.md`：目标周 Flomo 内容，由线上全量快照一次扫描后按目标周提取；稳定完整性校验通过且全库遗漏不超过 10 条时可标记 `ready`，文件头和侧车必须展示预期数、观察数、遗漏数及覆盖率。更多说明见 [`03_input/usage.md`](usage.md)。
+- `flomo.md`：目标周新建 Flomo 笔记，由周一 00:10 的线上全量快照按创建时间提取；旧笔记编辑只刷新活动快照。稳定完整性校验通过且全库遗漏不超过 10 条时可标记 `ready`，文件头和侧车必须展示快照 ID、采集时间、预期数、观察数、遗漏数及覆盖率。更多说明见 [`03_input/usage.md`](usage.md)。
 - `weread.md`：微信读书周度阅读活动、进度快照、个人划线和想法，由 `learn-x-input` 采集。
 - `jingdu.md`：微信读书周度精读产物。用户在飞书精读文档中对本周重要划线完成加工（原始划线及来源 + 本人理解/判断 + 可选行动）后，由 Code X 精读自动化读回写回；AI 未经用户参与或确认的总结不得写入。0 条（全部跳过）不生成文件并记录 empty。属信息输入。
 - `voice.md`：Voice-X 中按录制周筛选的完整结构化洞察 Markdown，保留核心总结、压缩原文、建议和芒格之魂洞察，不包含原始文字稿，由 `npm run input:voice` 采集；Voice 周文件 30,000 个 Unicode 字符是提示线，不是采集门槛，统一在 Process Pack 环节按来源压缩。

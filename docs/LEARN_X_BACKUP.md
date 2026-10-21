@@ -8,9 +8,10 @@
 01_core/
 03_input/
 04_output/
+05_library/
 ```
 
-仅排除 `.DS_Store` 和凭据类文件名（`.env`、密钥、证书、token、secret、password、cookie、session、wallet）。压缩包使用系统 `tar.gz`，不做客户端加密；压缩包内包含三个目录和 `manifest.json`，恢复时会校验文件数量、大小和 SHA-256。
+图像文件不进入备份（`apng`、`png`、`jpg`、`jpeg`、`gif`、`webp`、`bmp`、`tif`、`tiff`、`avif`、`heic`、`heif`、`ico`、`svg`）；同时排除 `.DS_Store` 和凭据类文件名（`.env`、密钥、证书、token、secret、password、cookie、session、wallet）。排除路径和原因写入 manifest。压缩包使用系统 `tar.gz`，不做客户端加密；压缩包内包含四个目录和 `manifest.json`，恢复时会校验文件数量、大小和 SHA-256。新快照恢复后也不包含排除的图像文件；旧快照仍按其原始文件清单验证。
 
 ## 飞书目标
 

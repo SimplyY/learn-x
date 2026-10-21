@@ -5,7 +5,15 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { buildEgoScanScript, collectFlomoFullSnapshot, collectFlomoWeekly, formatCliError, parseArgs, parseMemoTime, scanFlomoWithEgo, validateCompleteScan } from "./collect-flomo-weekly.mjs";
+import { buildEgoScanScript, buildFlomoTaskSpaceName, collectFlomoFullSnapshot, collectFlomoWeekly, formatCliError, parseArgs, parseMemoTime, scanFlomoWithEgo, validateCompleteScan } from "./collect-flomo-weekly.mjs";
+
+test("each Flomo invocation gets an automation-scoped TaskSpace name", () => {
+  const first = buildFlomoTaskSpaceName("123e4567-e89b-42d3-a456-426614174000", "learn-x-flomo-00-10");
+  const second = buildFlomoTaskSpaceName("123e4567-e89b-42d3-a456-426614174001", "learn-x-flomo-00-10");
+  assert.equal(first, "learn-x-flomo-00-10-flomo-123e4567-e89b-42d3-a456-426614174000");
+  assert.notEqual(first, second);
+  assert.throws(() => buildFlomoTaskSpaceName("invalid", "learn-x-flomo-00-10"), /invocation-id-invalid/);
+});
 
 test("parses explicit full-snapshot options and rejects invalid combinations", () => {
   assert.deepEqual(parseArgs(["--full-snapshot", "--verify-detail", "--keep-taskspace", "--task-space-id", "98", "--task-space-name", "learn-x-v2-flomo-run1", "--resume-taskspace", "--storage-root", "/private/tmp/flomo-private", "--timeout-ms", "1800000"]), {

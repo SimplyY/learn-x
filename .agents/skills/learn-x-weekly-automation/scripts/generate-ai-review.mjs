@@ -412,7 +412,7 @@ async function generateAiReviewUnlocked(options = {}) {
   if (await exists(paths.generatedPath)) {
     return await promoteGeneratedSafely(repoRoot, week, prompt);
   }
-  if (previous?.resubmissionCount === 1 && !options.observeUncertain && !options.retry && !options.resubmitUncertain) {
+  if (previous?.resubmissionCount === 1 && !options.observeUncertain) {
     const exhausted = { ...previous, status: "needs_review", targetWeek: week,
       reason: previous.status === "dispatching" ? "weekly-ai-resubmission-outcome-uncertain" : previous.reason || "weekly-ai-resubmission-exhausted",
       manualPrompt: previous.manualPrompt || prompt, manualPath: paths.formalPath };

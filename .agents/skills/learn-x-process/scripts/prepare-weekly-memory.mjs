@@ -14,6 +14,7 @@ export async function prepareWeeklyMemory(options = {}) {
   const quarter = quarterFromIsoWeek(week);
   const weeklyPath = path.join(root, "04_output/weekly", `${outputWeekFileId(week)}.md`);
   const content = await readFile(weeklyPath, "utf8");
+  validateWeeklyOutput(week, content);
   const candidates = extractMemoryCandidates(content);
   const candidatePack = renderCandidatePack(week, quarter, weeklyPath, candidates, root);
   const candidatesRoot = path.join(root, "04_output/_dist/weekly", distWeekId(week));
@@ -47,7 +48,29 @@ export async function bindWeeklyMemoryApproval({ week, repoRoot: root = repoRoot
     proposal: path.join(directory, "memory-proposed.md"),
     currentMemoryTarget: path.join(root, "01_core/memory", `${quarter}.memory.md`)
   };
-  const hashes = Object.fromEntries(await Promise.all(Object.entries(files).map(async ([key, file]) => [key, key === "currentMemoryTarget" ? await hashOptionalFile(file) : sha256(await readFile(file, "utf8"))])));
+  const weeklyOutputContent = await readFile(files.weeklyOutput, "utf8");
+  validateWeeklyOutput(normalizedWeek, weeklyOutputContent);
+  const candidatesContent = await readFile(files.candidates, "utf8");
+  const expectedCandidates = renderCandidatePack(
+    normalizedWeek,
+    quarter,
+    files.weeklyOutput,
+    extractMemoryCandidates(weeklyOutputContent),
+    root
+  );
+  if (candidatesContent !== expectedCandidates) {
+    throw new Error("memory-candidates-stale: regenerate candidates from the current Weekly Output");
+  }
+  const [proposalContent, currentMemoryTargetHash] = await Promise.all([
+    readFile(files.proposal, "utf8"),
+    hashOptionalFile(files.currentMemoryTarget)
+  ]);
+  const hashes = {
+    weeklyOutput: sha256(weeklyOutputContent),
+    candidates: sha256(candidatesContent),
+    proposal: sha256(proposalContent),
+    currentMemoryTarget: currentMemoryTargetHash
+  };
   const payload = {
     schemaVersion: 1,
     week: normalizedWeek,
@@ -257,6 +280,72 @@ export function extractRequiredSections(content) {
   result.coreSummary = uniqueCandidates(result.coreSummary);
   result.mungerInsights = uniqueCandidates(result.mungerInsights);
   return result;
+}
+
+function validateWeeklyOutput(week, content) {
+  const expectedTitles = new Set([
+    `# Learn-X Weekly Output｜${outputWeekFileId(week)}`,
+    `# Learn-X Weekly Output|${outputWeekFileId(week)}`
+  ]);
+  const firstContentLine = String(content).split(/\r?\n/).map((line) => line.replace(/^\uFEFF/, "").trim()).find(Boolean) || "";
+  if (!expectedTitles.has(firstContentLine)) {
+    throw new Error(`weekly-output-week-mismatch: expected ${outputWeekFileId(week)}`);
+  }
+
+  const sections = extractRawRequiredSections(content);
+  for (const [key, title] of [
+    ["coreSummary", "全文核心重点纪要"],
+    ["mungerInsights", "芒格之魂的洞察"]
+  ]) {
+    const bodies = sections[key];
+    if (!bodies.length || !bodies.some((body) => isSubstantiveSection(filterPlaceholderOnlyLines(body)))) {
+      throw new Error(`weekly-output-required-section-missing: ${title}`);
+    }
+    for (const body of bodies) {
+      const placeholder = body.split(/\r?\n/).find(isWeeklyOutputPlaceholderLine);
+      if (placeholder) throw new Error(`weekly-output-placeholder: ${title}`);
+    }
+  }
+}
+
+function extractRawRequiredSections(content) {
+  const lines = String(content).split(/\r?\n/);
+  const headings = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index].match(/^(#{1,6})\s+(.+?)\s*$/);
+    if (!match) continue;
+    headings.push({ index, level: match[1].length, title: normalizeHeading(match[2]) });
+  }
+
+  const result = { coreSummary: [], mungerInsights: [] };
+  for (let index = 0; index < headings.length; index += 1) {
+    const heading = headings[index];
+    const key = requiredSectionKey(heading.title);
+    if (!key) continue;
+    const next = headings.slice(index + 1).find((candidate) => candidate.level <= heading.level);
+    result[key].push(lines.slice(heading.index + 1, next?.index ?? lines.length).join("\n").trim());
+  }
+  return result;
+}
+
+function isWeeklyOutputPlaceholderLine(line) {
+  const content = String(line)
+    .trim()
+    .replace(/^>\s*/, "")
+    .replace(/^[-*+]\s+/, "")
+    .replace(/^\d+[.)、．]\s*/, "")
+    .replace(/^\[[ xX]\]\s*/, "")
+    .trim();
+  if (/(?:\[(?:填写内容|待补充|待填写|TODO|TBD|PLACEHOLDER|x+)\]|【(?:待补充|待填写|TODO|TBD|PLACEHOLDER|x+)】)/i.test(content)) return true;
+  if (/<!--|-->/.test(content)) return true;
+
+  const fieldValue = content.match(/^[^：:]{1,40}[：:]\s*(.*?)\s*$/)?.[1];
+  const values = fieldValue === undefined ? [content] : [content, fieldValue];
+  return values.some((value) => {
+    const normalized = value.trim();
+    if (/^(?:TODO|TBD|PLACEHOLDER|待补充|待填写|占位)\s*[：:]\s*\S/i.test(normalized)) return true;
+    return /^(?:todo|tbd|placeholder|待补充|待填写|暂无|无|x+|…+|\.{3,})[。.!！?？]?$/i.test(normalized);
+  });
 }
 
 function filterPlaceholderOnlyLines(body) {

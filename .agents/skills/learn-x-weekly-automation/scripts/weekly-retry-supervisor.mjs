@@ -9,7 +9,7 @@ import { isoWeeksInYear } from "../../learn-x-input/scripts/lib/iso-week.mjs";
 import { ensureWeeklyDirectory } from "../../learn-x-input/scripts/lib/weekly-path.mjs";
 import { readWeeklySourceStatus } from "../../learn-x-input/scripts/lib/source-status.mjs";
 import { validateAiReview } from "../../learn-x-process/scripts/monthly-process-input.mjs";
-import { canResubmitUncertainAi, normalizeAiReviewText, promoteAiReview, sha256 } from "./generate-ai-review.mjs";
+import { buildReviewPrompt, canResubmitUncertainAi, normalizeAiReviewText, promoteAiReview, sha256 } from "./generate-ai-review.mjs";
 import { tryAcquireWeeklyAiLock, validateWeeklyAiLockToken } from "./lib/weekly-ai-lock.mjs";
 import { hasVerifiedSmallPatch, prepareRecoveryIncident, queryRecoveryPlaybook, recordRecoveryIncident, recoveryLayerForAttempt } from "./recovery-memory.mjs";
 import { withLock } from "../../learn-x-flomo-review/scripts/review.mjs";
@@ -20,6 +20,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const defaultRepoRoot = path.resolve(__dirname, "../../../..");
 const DEFAULT_RETRY_GAP_MS = 20 * 60_000;
 const FLOMO_RETRY_GAP_MS = 10 * 60_000;
+const FLOMO_AUTOMATION_RETRY_GAP_MS = 20 * 60_000;
+const FLOMO_AUTOMATION_MAX_ATTEMPTS = 3;
 const AI_UNCERTAIN_RESUBMIT_AFTER_MS = 20 * 60_000;
 const AI_REPLACEMENT_PROCESS_BUDGET_MS = 5 * 60_000;
 const AI_REPLACEMENT_OBSERVATION_MS = 20 * 60_000;
@@ -44,6 +46,25 @@ const AI_TERMINAL_OBSERVATION_REASONS = new Set([
   "formal-ai-md-has-human-content", "formal-ai-md-changed-after-promotion", "confirmed-ai-md-changed", "confirmed-ai-md-missing",
 ]);
 const BRIDGE_RUN_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+async function weeklyAiManualFallback(repoRoot, weekRoot, week, sourceState, sidecar) {
+  const matchingSidecar = sidecar?.targetWeek === week ? sidecar : null;
+  let prompt = typeof matchingSidecar?.manualPrompt === "string" && matchingSidecar.manualPrompt.trim()
+    ? matchingSidecar.manualPrompt : null;
+  if (!prompt) {
+    try {
+      const template = await readFile(path.join(repoRoot, "03_input/weekly/00_template/ai.md"), "utf8");
+      if (!template.trim()) return null;
+      prompt = buildReviewPrompt(template, week);
+    } catch { return null; }
+  }
+  return {
+    status: matchingSidecar?.status || sourceState?.status || "needs_review",
+    reason: matchingSidecar?.reason || sourceState?.lastErrorClass || null,
+    path: `03_input/weekly/${week}/ai.md`,
+    prompt,
+  };
+}
 const RECOVERY_ACTIONS = Object.freeze({
   "verify-only": { layer: 2, note: "执行只读核验后重查", preconditions: ["status-readback-valid"] },
   "manual-repair": { layer: 2, note: "完成经核验的来源修复后重采", preconditions: ["user-confirmed-scope"] },
@@ -61,7 +82,8 @@ export function createWeeklyRetryState(week) {
       status: "pending", attempts: 0, retries: source.retries, rescueUsed: false,
       recoveryActions: [], problemRunId: null,
       nextRetryAt: null, lastAttemptAt: null, lastSuccessAt: null,
-      lastErrorClass: null, lastErrorSignal: null, sameErrorCount: 0
+      lastErrorClass: null, lastErrorSignal: null, sameErrorCount: 0,
+      lastInvocationId: null, lastAutomationId: null, automationAttemptCounts: {}
     }])),
     flomoReviewImport: null,
     pendingRecoveryEvents: [],
@@ -69,7 +91,7 @@ export function createWeeklyRetryState(week) {
   };
 }
 
-export function classifyWeeklyFailure(message, { sourceId = "", code = "" } = {}) {
+export function classifyWeeklyFailure(message, { sourceId = "", code = "", now = Date.now() } = {}) {
   const value = `${code} ${message}`.toLowerCase();
   if (/weread-skill-upgrade-required|weread-skill-version-unverifiable|skill.{0,20}(upgrade|version)|upgrade_info/.test(value)) {
     return { errorClass: "source-version-mismatch", retryable: false, retryAfterMs: 0 };
@@ -93,7 +115,13 @@ export function classifyWeeklyFailure(message, { sourceId = "", code = "" } = {}
     const cooldown = sourceId === "flomo" ? FLOMO_RETRY_GAP_MS : DEFAULT_RETRY_GAP_MS;
     return { errorClass: "review-store-lock-busy", retryable: true, retryAfterMs: cooldown };
   }
-  const retryAfter = Number(value.match(/retry-after\s*[:= ]\s*(\d+)/)?.[1] || 0) * 1000;
+  const retryAfterSeconds = value.match(/retry-after\s*[:= ]\s*(\d+)\b/i);
+  const retryAfterDate = value.match(/retry-after\s*[:= ]\s*((?:mon|tue|wed|thu|fri|sat|sun),\s+\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{4}\s+\d{2}:\d{2}:\d{2}\s+gmt)\b/i);
+  const maxRetryAfterMs = Math.max(0, 8.64e15 - now);
+  const retryAfterDateMs = retryAfterDate ? Date.parse(retryAfterDate[1]) - now : 0;
+  const retryAfter = retryAfterSeconds
+    ? Math.max(0, Math.min(Number(retryAfterSeconds[1]) * 1000, maxRetryAfterMs))
+    : Number.isFinite(retryAfterDateMs) ? Math.max(0, Math.min(retryAfterDateMs, maxRetryAfterMs)) : 0;
   if (/econnreset|econnrefused|eai_again|enotfound|network|dns|temporar|http.?5\d\d|rate.?limit|throttl|timeout|timed out|process-interrupted/.test(value)) {
     const cooldown = sourceId === "flomo" ? FLOMO_RETRY_GAP_MS : DEFAULT_RETRY_GAP_MS;
     return { errorClass: /rate.?limit|throttl/.test(value) ? "service-rate-limit" : /timeout|timed out/.test(value) ? "network-timeout" : "network-transient", retryable: true, retryAfterMs: Math.max(cooldown, retryAfter) };
@@ -114,7 +142,7 @@ export function canRetrySource(source, entry, mode, now = Date.now()) {
   return entry.attempts <= source.retries;
 }
 
-export function classifyOutcome(sourceId, outcome) {
+export function classifyOutcome(sourceId, outcome, { now = Date.now() } = {}) {
   if (outcome?.status === "unavailable") {
     return { status: "unavailable", errorClass: "source-unavailable", retryable: false, retryAfterMs: 0 };
   }
@@ -124,7 +152,7 @@ export function classifyOutcome(sourceId, outcome) {
   if (["needs_review", "submission-uncertain"].includes(outcome?.status)) {
     return { status: "needs_review", errorClass: sourceId === "ai" ? "ai-submission-state-uncertain" : "manual-review-required", retryable: false, retryAfterMs: 0 };
   }
-  const failure = classifyWeeklyFailure(`${outcome?.error || ""} ${outcome?.summary || ""}`, { sourceId, code: outcome?.code });
+  const failure = classifyWeeklyFailure(`${outcome?.error || ""} ${outcome?.summary || ""}`, { sourceId, code: outcome?.code, now });
   if (sourceId === "ai") {
     const phase = outcome?.diagnostics?.rateLimitPhase;
     const reason = `${outcome?.error || ""} ${outcome?.summary || ""}`;
@@ -147,6 +175,9 @@ export async function runWeeklyRetrySupervisor({
   expectedSourceVersion = "",
   confirmedRecovery = false,
   enableFlomoReviewImport = false,
+  singleAttempt = false,
+  skipPreparation = false,
+  automationId = "",
   importFlomoReviews = runFlomoReviewImport,
   repoRoot = defaultRepoRoot,
   now = () => Date.now(),
@@ -159,6 +190,10 @@ export async function runWeeklyRetrySupervisor({
 } = {}) {
   const normalizedWeek = normalizeWeek(week);
   if (!["initial", "rescue", "manual", "recovery"].includes(mode)) throw new Error("mode must be initial, rescue, manual, or recovery");
+  if (automationId && !/^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/.test(automationId)) throw new Error("automation-id-invalid");
+  if (singleAttempt && (mode !== "manual" || sourceId !== "flomo" || !automationId || !skipPreparation || enableFlomoReviewImport)) {
+    throw new Error("single-attempt-requires-manual-flomo-automation-and-skipped-side-effects");
+  }
   if (mode === "recovery" && !sourceId) throw new Error("recovery-mode-requires-source");
   const supportedManualSource = sourceId === "flomo" || (sourceId === "ai" && resubmitUncertainAi);
   const recoverySource = sourceId && WEEKLY_SOURCE_CONFIG.find((source) => source.id === sourceId);
@@ -299,7 +334,7 @@ export async function runWeeklyRetrySupervisor({
   };
   const event = (entry) => {
     const logged = entry.step === "source-collection" && entry.attemptKind
-      ? { ...entry, executionId, problemRunId: state.sources[entry.sourceId]?.problemRunId || executionId,
+      ? { ...entry, executionId, ...(automationId ? { automationId } : {}), problemRunId: state.sources[entry.sourceId]?.problemRunId || executionId,
         recoveryLayer: recoveryLayerForAttempt(entry.attemptKind) || 1 }
       : entry;
     state.diagnostics.push({ at: new Date(now()).toISOString(), ...logged });
@@ -336,7 +371,7 @@ export async function runWeeklyRetrySupervisor({
       }
     }
   };
-  const prepareAfterSuccess = prepareInputs ? (source) => {
+  const prepareAfterSuccess = prepareInputs && !skipPreparation ? (source) => {
     preparationQueue = preparationQueue.then(async () => {
       const began = now();
       try {
@@ -353,7 +388,7 @@ export async function runWeeklyRetrySupervisor({
     return preparationQueue;
   } : undefined;
   const sourceContext = () => {
-    const context = { state, now, sleep, runSource, readOutcome, save, event, mode, week: normalizedWeek, repoRoot,
+    const context = { state, now, sleep, runSource, readOutcome, save, event, mode, week: normalizedWeek, repoRoot, automationId, singleAttempt,
       enableFlomoReviewImport, importFlomoReviews, executionId,
       recoveryActionCode, expectedSourceVersion,
       maxDurationMs, prepareAfterSuccess, drainPreparation: () => preparationQueue, resubmitUncertainAi,
@@ -381,6 +416,20 @@ export async function runWeeklyRetrySupervisor({
     }
     state ||= createWeeklyRetryState(normalizedWeek);
     state.pendingRecoveryEvents = Array.isArray(state.pendingRecoveryEvents) ? state.pendingRecoveryEvents : [];
+    if (singleAttempt) {
+      const flomo = state.sources.flomo;
+      const hasPersistentCounts = flomo.automationAttemptCounts && typeof flomo.automationAttemptCounts === "object"
+        && !Array.isArray(flomo.automationAttemptCounts);
+      const counts = hasPersistentCounts ? flomo.automationAttemptCounts : {};
+      const persistedCount = counts[automationId];
+      const hasTrustedCount = Number.isSafeInteger(persistedCount) && persistedCount >= 0;
+      const recorded = state.diagnostics.filter((item) => item.step === "source-collection" && item.sourceId === "flomo"
+        && item.automationId === automationId && item.outcome === "started").length;
+      const truncatedHistoryMayHideAttempts = !hasTrustedCount && state.diagnostics.length >= LOG_LIMIT;
+      counts[automationId] = Math.max(hasTrustedCount ? persistedCount : 0, recorded,
+        truncatedHistoryMayHideAttempts ? FLOMO_AUTOMATION_MAX_ATTEMPTS : 0);
+      flomo.automationAttemptCounts = counts;
+    }
     for (const pending of [...state.pendingRecoveryEvents]) queueRecoveryWrite(pending);
     await reconcileInterruptedRuns(state, { now: now(), mode, event, readOutcome, weekRoot, repoRoot });
     if (mode !== "recovery") await absorbCurrentSuccesses(state, { readOutcome, now: now(), event });
@@ -481,7 +530,33 @@ export async function runWeeklyRetrySupervisor({
       await save();
     }
 
-    if (mode === "manual") {
+    if (mode === "manual" && singleAttempt) {
+      const source = selectedSources[0], entry = state.sources[source.id];
+      const completedAttempts = Number(entry.automationAttemptCounts?.[automationId]) || 0;
+      let skipped = null;
+      let retryAt = null;
+      if (entry.status === "succeeded") skipped = "flomo-already-succeeded";
+      else if (["needs_review", "unavailable"].includes(entry.status)
+        || ["permission-or-human-control", "local-execution-permission-denied", "manual-review-required"].includes(entry.lastErrorClass)) {
+        skipped = "flomo-human-action-required";
+      } else if (entry.status === "failed" && !isRetryableClass(entry.lastErrorClass)) {
+        skipped = "flomo-failure-not-retryable";
+      } else if (completedAttempts >= FLOMO_AUTOMATION_MAX_ATTEMPTS) skipped = "flomo-automation-attempt-limit-reached";
+      else if (entry.status === "failed") {
+        const minimumRetryAt = Date.parse(entry.lastFailureAt || "") + FLOMO_AUTOMATION_RETRY_GAP_MS;
+        const persistedRetryAt = Date.parse(entry.nextRetryAt || "");
+        retryAt = Math.max(Number.isFinite(minimumRetryAt) ? minimumRetryAt : 0,
+          Number.isFinite(persistedRetryAt) ? persistedRetryAt : 0);
+        if (retryAt > now()) skipped = "flomo-retry-cooldown";
+      }
+      if (skipped) {
+        event({ step: "flomo-single-attempt", sourceId: "flomo", automationId, outcome: skipped,
+          ...(retryAt ? { nextRetryAt: new Date(retryAt).toISOString() } : {}), evidence: STATE_FILE });
+        await save();
+      } else {
+        await runBatch([source], "manual", sourceContext());
+      }
+    } else if (mode === "manual") {
       const source = selectedSources[0], entry = state.sources[source.id];
       let blockedByCooldown = false;
       if (entry.status === "failed" && isRetryableClass(entry.lastErrorClass) && Date.parse(entry.nextRetryAt || "") > now()) {
@@ -581,11 +656,10 @@ export async function runWeeklyRetrySupervisor({
     if (["failed", "needs_review"].includes(state.sources.ai?.status)) {
       try {
         const sidecar = JSON.parse(await readFile(path.join(weekRoot, "_ai-generated.json"), "utf8"));
-        if (sidecar.targetWeek === normalizedWeek && typeof sidecar.manualPrompt === "string" && sidecar.manualPrompt.length > 0) {
-          manualFallback = { status: sidecar.status, reason: sidecar.reason || null,
-            path: `03_input/weekly/${normalizedWeek}/ai.md`, prompt: sidecar.manualPrompt };
-        }
-      } catch { /* Missing or invalid business sidecar remains an explicit unknown. */ }
+        manualFallback = await weeklyAiManualFallback(repoRoot, weekRoot, normalizedWeek, state.sources.ai, sidecar);
+      } catch {
+        manualFallback = await weeklyAiManualFallback(repoRoot, weekRoot, normalizedWeek, state.sources.ai, null);
+      }
     }
     const recoveryAdvice = {};
     const adviceLayer = recoveryActionCode === "small-patch" ? 3 : ["rescue", "recovery", "manual"].includes(mode) ? 2 : 1;
@@ -620,11 +694,10 @@ export async function runWeeklyRetrySupervisor({
     let manualFallback;
     try {
       const sidecar = JSON.parse(await readFile(path.join(weekRoot, "_ai-generated.json"), "utf8"));
-      if (sidecar.targetWeek === normalizedWeek && typeof sidecar.manualPrompt === "string" && sidecar.manualPrompt.length > 0) {
-        manualFallback = { status: sidecar.status, reason: sidecar.reason || null,
-          path: `03_input/weekly/${normalizedWeek}/ai.md`, prompt: sidecar.manualPrompt };
-      }
-    } catch { /* A missing business sidecar stays unknown; never write while unlocked. */ }
+      manualFallback = await weeklyAiManualFallback(repoRoot, weekRoot, normalizedWeek, latest?.sources.ai, sidecar);
+    } catch {
+      manualFallback = await weeklyAiManualFallback(repoRoot, weekRoot, normalizedWeek, latest?.sources.ai, null);
+    }
     return { week: normalizedWeek, mode, statePath, skipped: "supervisor-state-lock-reacquire-timeout",
       sources: latest ? Object.fromEntries(Object.entries(latest.sources).map(([id, item]) => [id, { status: item.status,
         attempts: item.attempts, retries: item.retries, rescueUsed: item.rescueUsed, recoveryActions: item.recoveryActions || [],
@@ -1097,16 +1170,28 @@ async function runOneSource(source, kind, context) {
   const attempt = entry.attempts + 1;
   const began = context.now();
   const attemptToken = source.id === "flomo" ? randomUUID() : null;
+  const invocationId = source.id === "flomo" ? randomUUID() : null;
   const previousActiveAttemptToken = entry.activeAttemptToken ?? null;
   entry.status = "running";
   entry.attempts = attempt;
   entry.lastAttemptAt = new Date(began).toISOString();
   entry.nextRetryAt = null;
+  if (invocationId) {
+    entry.lastInvocationId = invocationId;
+    entry.lastAutomationId = context.automationId || null;
+    if (context.automationId) {
+      if (!entry.automationAttemptCounts || typeof entry.automationAttemptCounts !== "object" || Array.isArray(entry.automationAttemptCounts)) {
+        entry.automationAttemptCounts = {};
+      }
+      entry.automationAttemptCounts[context.automationId] = (Number(entry.automationAttemptCounts[context.automationId]) || 0) + 1;
+    }
+  }
   if (attemptToken) {
     entry.activeAttemptToken = attemptToken;
   }
   if (kind === "rescue") entry.rescueUsed = true;
-  context.event({ step: "source-collection", sourceId: source.id, attempt, attemptKind: kind, outcome: "started", evidence: STATE_FILE });
+  context.event({ step: "source-collection", sourceId: source.id, attempt, attemptKind: kind, outcome: "started",
+    ...(invocationId ? { invocationId } : {}), evidence: STATE_FILE });
   try { await context.save(); }
   catch (error) { await weeklyAiLock?.release(); throw error; }
 
@@ -1124,6 +1209,8 @@ async function runOneSource(source, kind, context) {
       recoveryActionCode: context.recoveryActionCode,
       expectedSourceVersion: context.expectedSourceVersion,
       attemptToken,
+      invocationId,
+      automationId: context.automationId,
       resubmitUncertainAi: Boolean(context.resubmitUncertainAi && source.id === "ai"),
       automaticResubmit: Boolean(context.automaticResubmitAi && source.id === "ai"),
       weeklyAiLockToken: source.id === "ai" ? (context.weeklyAiLockToken || weeklyAiLock?.token) : undefined,
@@ -1198,7 +1285,7 @@ async function runOneSource(source, kind, context) {
   }
   let classified;
   try {
-  classified = classifyOutcome(source.id, outcome);
+  classified = classifyOutcome(source.id, outcome, { now: context.now() });
   const durationMs = Math.max(0, context.now() - began);
   const previousErrorClass = entry.lastErrorClass;
   const errorSignal = ["failed", "needs_review", "unavailable"].includes(classified.status)
@@ -1213,7 +1300,9 @@ async function runOneSource(source, kind, context) {
     entry.problemRunId = null;
   } else if (classified.retryable) {
     entry.lastFailureAt = new Date(context.now()).toISOString();
-    const retryGap = source.id === "flomo" ? FLOMO_RETRY_GAP_MS : DEFAULT_RETRY_GAP_MS;
+    const retryGap = source.id === "flomo"
+      ? (context.singleAttempt ? FLOMO_AUTOMATION_RETRY_GAP_MS : FLOMO_RETRY_GAP_MS)
+      : DEFAULT_RETRY_GAP_MS;
     entry.nextRetryAt = new Date(context.now() + Math.max(retryGap, classified.retryAfterMs)).toISOString();
   } else {
     entry.lastFailureAt = new Date(context.now()).toISOString();
@@ -1229,6 +1318,7 @@ async function runOneSource(source, kind, context) {
   }
   context.event({
     step: "source-collection", sourceId: source.id, attempt, attemptKind: kind,
+    ...(invocationId ? { invocationId } : {}),
     ...(context.recoveryActionCode ? { actionCode: context.recoveryActionCode, actionNote: RECOVERY_ACTIONS[context.recoveryActionCode]?.note || "",
       actionPreconditions: RECOVERY_ACTIONS[context.recoveryActionCode]?.preconditions || [] } : {}),
     durationMs, outcome: classified.status, errorClass: classified.errorClass,
@@ -1270,6 +1360,8 @@ async function runOneSource(source, kind, context) {
 }
 
 export async function runConfiguredSource(source, { week, repoRoot, onDependencyResult, attemptToken,
+  invocationId,
+  automationId = "",
   resubmitUncertainAi = false,
   automaticResubmit = false,
   weeklyAiLockToken,
@@ -1282,8 +1374,11 @@ export async function runConfiguredSource(source, { week, repoRoot, onDependency
   let script, args;
   if (source.id === "flomo") {
     if (!attemptToken) return { status: "failed", error: "flomo-attempt-token-required" };
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(invocationId || ""))) {
+      return { status: "failed", error: "flomo-invocation-id-required" };
+    }
     script = path.join(repoRoot, ".agents/skills/learn-x-input/scripts/sync-flomo-full-week.mjs");
-    args = ["--week", week, "--attempt-token", attemptToken];
+    args = ["--week", week, "--attempt-token", attemptToken, "--invocation-id", invocationId];
   } else {
     const packageJson = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
     const command = packageJson.scripts?.[source.collector];
@@ -1303,6 +1398,7 @@ export async function runConfiguredSource(source, { week, repoRoot, onDependency
       cwd: repoRoot,
       timeout: Math.max(1, Math.min(sourceTimeoutMs, Number.isFinite(timeoutMs) ? timeoutMs : sourceTimeoutMs)),
       maxBuffer: 2 * 1024 * 1024,
+      ...(automationId ? { env: { ...process.env, LEARN_X_AUTOMATION_ID: automationId } } : {}),
       windowsHide: true
     });
     const current = await readOutcome(source, week, repoRoot);
@@ -1377,6 +1473,32 @@ export async function readCurrentSourceOutcome(source, week, repoRoot = defaultR
         return { status: "needs_review", error: "ai-replacement-receipt-invalid",
           code: "AI_REPLACEMENT_RECEIPT_INVALID",
           updatedAt: sidecar.observation?.observedAt || sidecar.confirmedAt || sidecar.completedAt || sidecar.startedAt };
+      }
+      if (sidecar.status === "confirmed") {
+        const formalPath = path.join(weekRoot, "ai.md");
+        let rawFormal;
+        try { rawFormal = await readFile(formalPath, "utf8"); }
+        catch (error) {
+          if (error?.code === "ENOENT") return { status: "needs_review", error: "confirmed-ai-md-missing", updatedAt: sidecar.confirmedAt };
+          return { status: "needs_review", error: "confirmed-ai-md-read-failed", updatedAt: sidecar.confirmedAt };
+        }
+        const formal = normalizeAiReviewText(rawFormal);
+        if (!formal || !validateAiReview(formal).valid) {
+          return { status: "needs_review", error: "confirmed-ai-md-invalid", updatedAt: sidecar.confirmedAt };
+        }
+        const manualHash = sidecar.manualConfirmation?.sha256;
+        const expectedHashes = typeof manualHash === "string" ? [manualHash]
+          : [sidecar.readbackSha256, sidecar.outputSha256].filter((value) => value !== undefined && value !== null);
+        if (!expectedHashes.length || expectedHashes.some((value) => typeof value !== "string" || !/^[a-f0-9]{64}$/i.test(value))) {
+          return { status: "needs_review", error: "confirmed-ai-md-hash-missing", updatedAt: sidecar.confirmedAt };
+        }
+        if (new Set(expectedHashes).size !== 1) {
+          return { status: "needs_review", error: "confirmed-ai-md-hash-conflict", updatedAt: sidecar.confirmedAt };
+        }
+        const actualHash = typeof manualHash === "string" ? sha256(rawFormal) : sha256(formal);
+        if (expectedHashes.some((expectedHash) => actualHash !== expectedHash)) {
+          return { status: "needs_review", error: "confirmed-ai-md-changed", updatedAt: sidecar.confirmedAt };
+        }
       }
       return {
         status: sidecar.status,
@@ -1767,11 +1889,21 @@ export async function recordWeeklyStage({ week, stage, durationMs, outcome = "su
   } finally { await lock.release(); }
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const value = (flag, fallback = undefined) => { const index = argv.indexOf(flag); return index < 0 ? fallback : argv[index + 1]; };
   if (argv.includes("--record-stage")) return { recordStage: value("--record-stage"), durationMs: Number(value("--duration-ms", "0")), outcome: value("--outcome", "success"), week: value("--week") };
+  const maxDurationRaw = value("--max-duration-ms");
+  const maxDurationMs = maxDurationRaw === undefined ? undefined : Number(maxDurationRaw);
+  if (maxDurationRaw !== undefined && (!Number.isSafeInteger(maxDurationMs) || maxDurationMs < 1 || maxDurationMs > 160 * 60_000)) {
+    throw new Error("max-duration-ms-must-be-between-1-and-9600000");
+  }
   return {
     week: value("--week"), mode: value("--mode", "initial"), sourceId: value("--source") || null,
+    singleAttempt: argv.includes("--single-attempt"),
+    skipPreparation: argv.includes("--skip-prepare"),
+    skipFlomoReviewImport: argv.includes("--skip-flomo-review-import"),
+    automationId: value("--automation-id", ""),
+    ...(maxDurationMs !== undefined ? { maxDurationMs } : {}),
     resubmitUncertainAi: argv.includes("--resubmit-uncertain") && argv.includes("--confirm"),
     recoveryActionCode: value("--action-code", ""),
     problemId: value("--problem-id", ""),
@@ -1791,7 +1923,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const options = parseArgs(process.argv.slice(2));
   const operation = options.recordStage
     ? recordWeeklyStage(options)
-    : runWeeklyRetrySupervisor({ ...options, prepareInputs: prepareWeeklyInputs, enableFlomoReviewImport: true });
+    : runWeeklyRetrySupervisor({ ...options, prepareInputs: options.skipPreparation ? undefined : prepareWeeklyInputs,
+      enableFlomoReviewImport: !options.skipFlomoReviewImport });
   operation
     .then((result) => console.log(JSON.stringify(result)))
     .catch((error) => { console.error(error.message); process.exitCode = 1; });

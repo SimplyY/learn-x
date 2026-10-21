@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { collectFlomoFullSnapshot, classifyFlomoError, publishFlomoSnapshotWeek, validateFlomoSnapshotWeekTimestampDensity } from "./collect-flomo-weekly.mjs";
@@ -16,8 +17,11 @@ export async function readFlomoAttemptToken(weekRoot, expectedToken) {
   return true;
 }
 
-export async function syncFlomoFullWeek({ week, attemptToken, repoRoot = defaultRepoRoot, storageRoot = defaultFlomoPrivateDataRoot(),
+export async function syncFlomoFullWeek({ week, attemptToken, invocationId = randomUUID(), repoRoot = defaultRepoRoot, storageRoot = defaultFlomoPrivateDataRoot(),
   collect = collectFlomoFullSnapshot, activate = activateOnlineSnapshot, publish = publishFlomoSnapshotWeek } = {}) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(invocationId || ""))) {
+    throw new Error("flomo-invocation-id-required");
+  }
   const targetWeek = normalizeWeek(week);
   const weekRoot = path.join(repoRoot, "03_input/weekly", targetWeek);
   const notesPath = path.join(weekRoot, "flomo.md");
@@ -26,7 +30,7 @@ export async function syncFlomoFullWeek({ week, attemptToken, repoRoot = default
   await updateWeeklySourceStatus({ weekRoot, week: targetWeek, source: "flomo", status: "failed", file: "flomo.md", count: 0,
     summary: "Flomo 全量快照同步进行中；此状态不会被周输入门禁视为成功", preservedStaleFile: await fileExists(notesPath) });
   try {
-    const stagedResult = await collect({ repoRoot, storageRoot, timeout: 30 * 60_000 });
+    const stagedResult = await collect({ repoRoot, storageRoot, timeout: 30 * 60_000, invocationId });
     const { snapshot } = await readVerifiedStagedOnlineFlomoSnapshot(stagedResult.snapshotPath);
     await checkAttempt();
     validateFlomoSnapshotWeekTimestampDensity(snapshot, targetWeek);
@@ -55,19 +59,23 @@ export function parseSyncArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === "--week") options.week = argv[++index];
     else if (argv[index] === "--attempt-token") options.attemptToken = argv[++index];
+    else if (argv[index] === "--invocation-id") options.invocationId = argv[++index];
     else if (argv[index] === "--help" || argv[index] === "-h") options.help = true;
     else throw new Error(`unknown-argument:${argv[index]}`);
   }
   if (options.help) return options;
   options.week = normalizeWeek(options.week);
   if (!/^[0-9a-f-]{36}$/i.test(String(options.attemptToken || ""))) throw new Error("flomo-attempt-token-required");
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(options.invocationId || ""))) {
+    throw new Error("flomo-invocation-id-required");
+  }
   return options;
 }
 
 async function main(argv = process.argv.slice(2)) {
   const options = parseSyncArgs(argv);
   if (options.help) {
-    console.log("Usage: node sync-flomo-full-week.mjs --week YYYY-Www --attempt-token UUID (run through weekly:retry)");
+    console.log("Usage: node sync-flomo-full-week.mjs --week YYYY-Www --attempt-token UUID --invocation-id UUID (run through weekly:retry)");
     return { help: true };
   }
   const result = await syncFlomoFullWeek(options);

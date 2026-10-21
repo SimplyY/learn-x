@@ -54,10 +54,29 @@ test("full-week sync activates one validated snapshot and renders weekly input f
   assert.equal(result.coverage.status, "complete");
   const markdown = await readFile(path.join(weekRoot, "flomo.md"), "utf8");
   assert.match(markdown, /完整线上正文进入目标 ISO 周输入/);
+  assert.match(markdown, new RegExp(`活动快照 ID：${result.snapshotId}`));
+  assert.match(markdown, new RegExp(`快照采集时间：${result.capturedAt}`));
   assert.ok(markdown.includes(flomoMemoUrl("memo-week")));
   const status = await readWeeklySourceStatus(weekRoot, week);
   assert.equal(status.sources.flomo.status, "ready");
   assert.equal(status.sources.flomo.count, 1);
+});
+
+test("full snapshot refresh includes edits to older notes while the weekly file includes only target-week creations", async (t) => {
+  const { root, weekRoot, attemptToken } = await fixture(t);
+  const oldEdited = record("memo-edited-old", "旧笔记在本周被编辑后的内容。", "2026-09-20T03:00:00.000Z");
+  const newThisWeek = record("memo-new-this-week", "本周新建的笔记内容。", "2026-09-29T03:00:00.000Z");
+  const result = await syncFlomoFullWeek({ week, attemptToken, repoRoot: root,
+    collect: stagedCollector(root, fullScan([oldEdited, newThisWeek])) });
+
+  const weeklyInput = await readFile(path.join(weekRoot, "flomo.md"), "utf8");
+  assert.match(weeklyInput, /本周新建的笔记内容/);
+  assert.doesNotMatch(weeklyInput, /旧笔记在本周被编辑后的内容/);
+  const storage = await readJson(paths(root).storageModePath);
+  const activeSnapshot = await readJson(path.join(paths(root).privateRoot, storage.activeSnapshotPath));
+  assert.equal(activeSnapshot.snapshotId, result.snapshotId);
+  assert.equal(activeSnapshot.records.find((item) => item.memoId === oldEdited.memoId).body, oldEdited.bodyText);
+  assert.equal(activeSnapshot.records.find((item) => item.memoId === newThisWeek.memoId).body, newThisWeek.bodyText);
 });
 
 test("publishes weekly notes when the stable full scan has one user-accepted gap", async (t) => {
@@ -117,6 +136,23 @@ test("rejects more than ten missing records without replacing an old week file o
   assert.equal(status.sources.flomo.status, "failed");
 });
 
+test("an incomplete later scan preserves the last activated full snapshot", async (t) => {
+  const { root, weekRoot, attemptToken } = await fixture(t);
+  const first = await syncFlomoFullWeek({ week, attemptToken, repoRoot: root,
+    collect: stagedCollector(root, fullScan([record("memo-last-good", "最后一次成功的快照。")])) });
+  const activeBefore = await readJson(paths(root).catalog);
+  const nextAttemptToken = "fedcba98-7654-3210-fedc-ba9876543210";
+  await writeFile(path.join(weekRoot, "_flomo-attempt.json"), JSON.stringify({ token: nextAttemptToken, active: true }));
+
+  await assert.rejects(syncFlomoFullWeek({ week, attemptToken: nextAttemptToken, repoRoot: root,
+    collect: stagedCollector(root, fullScan([record("memo-incomplete", "不完整扫描不能激活。")], 12)) }), /flomo-full-scan-termination-unproven/);
+
+  const activeAfter = await readJson(paths(root).catalog);
+  assert.equal(activeAfter.snapshot.snapshotId, first.snapshotId);
+  assert.deepEqual(activeAfter, activeBefore);
+  assert.equal(paths(root).onlineStorageActive, true);
+});
+
 test("preserves a safe Flomo scan error code and stage in failed source status", async (t) => {
   const { root, weekRoot, attemptToken } = await fixture(t);
   const error = Object.assign(new Error("ego-detail-body-mismatch"), {
@@ -144,9 +180,11 @@ test("late attempt token is rejected before the active snapshot pointer changes"
 });
 
 test("sync command requires the weekly retry executor's attempt token", () => {
-  assert.deepEqual(parseSyncArgs(["--week", week, "--attempt-token", "01234567-89ab-cdef-0123-456789abcdef"]), {
-    week, attemptToken: "01234567-89ab-cdef-0123-456789abcdef",
+  assert.deepEqual(parseSyncArgs(["--week", week, "--attempt-token", "01234567-89ab-cdef-0123-456789abcdef",
+    "--invocation-id", "123e4567-e89b-42d3-a456-426614174000"]), {
+    week, attemptToken: "01234567-89ab-cdef-0123-456789abcdef", invocationId: "123e4567-e89b-42d3-a456-426614174000",
   });
   assert.throws(() => parseSyncArgs(["--week", week]), /attempt-token-required/);
+  assert.throws(() => parseSyncArgs(["--week", week, "--attempt-token", "01234567-89ab-cdef-0123-456789abcdef"]), /invocation-id-required/);
   assert.throws(() => parseSyncArgs(["--week", week, "--attempt-token", "bad"]), /attempt-token-required/);
 });

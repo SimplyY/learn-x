@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { bindWeeklyMemoryApproval, extractRequiredSections, quarterFromIsoWeek, verifyWeeklyMemoryApproval } from "./prepare-weekly-memory.mjs";
+import { bindWeeklyMemoryApproval, extractRequiredSections, prepareWeeklyMemory, quarterFromIsoWeek, verifyWeeklyMemoryApproval } from "./prepare-weekly-memory.mjs";
 
 test("assigns an ISO week to the quarter of its real Monday date", () => {
   assert.equal(quarterFromIsoWeek("2026-W01"), "2025-Q4");
@@ -16,8 +16,18 @@ test("binds one approval fingerprint to the source, exact proposed content, and 
   const proposalRoot = path.join(root, "04_output/_dist/weekly/2026-W40");
   await mkdir(proposalRoot, { recursive: true });
   await mkdir(path.join(root, "04_output/weekly"), { recursive: true });
-  await writeFile(path.join(root, "04_output/weekly/2026-40.md"), "# Confirmed Weekly Output\n\nA source-backed conclusion.\n");
-  await writeFile(path.join(proposalRoot, "memory-candidates.md"), "# Verified candidates\n\nCandidate A.\n");
+  const weeklyOutputPath = path.join(root, "04_output/weekly/2026-40.md");
+  await writeFile(weeklyOutputPath, [
+    "# Learn-X Weekly Output｜2026-40",
+    "",
+    "## 11. 全文核心重点纪要",
+    "A source-backed conclusion.",
+    "",
+    "## 12. 芒格之魂的洞察",
+    "A source-backed insight.",
+    ""
+  ].join("\n"));
+  await prepareWeeklyMemory({ week: "2026-W40", repoRoot: root });
   await writeFile(path.join(proposalRoot, "memory-proposed.md"), "## 2026-W40\n\nExact approved memory payload.\n");
   await mkdir(path.join(root, "01_core/memory"), { recursive: true });
   await writeFile(path.join(root, "01_core/memory/2026-Q3.memory.md"), "# Existing quarterly memory\n");
@@ -29,6 +39,15 @@ test("binds one approval fingerprint to the source, exact proposed content, and 
   assert.deepEqual(binding.scope.backupRoots, ["01_core", "03_input", "04_output", "05_library"]);
   assert.deepEqual(binding.scope.flomo, ["03_input/weekly/2026-W40/weekly.md", "01_core/memory/2026-Q3.memory.md"]);
   assert.equal((await verifyWeeklyMemoryApproval({ week: "2026-W40", fingerprint: binding.fingerprint, repoRoot: root })).verified, true);
+
+  const candidatesPath = path.join(proposalRoot, "memory-candidates.md");
+  const originalCandidates = await readFile(candidatesPath, "utf8");
+  await writeFile(candidatesPath, `${originalCandidates}\nChanged after approval.\n`);
+  await assert.rejects(
+    verifyWeeklyMemoryApproval({ week: "2026-W40", fingerprint: binding.fingerprint, repoRoot: root }),
+    /memory-approval-stale/
+  );
+  await writeFile(candidatesPath, originalCandidates);
 
   await writeFile(path.join(proposalRoot, "memory-proposed.md"), "## 2026-W40\n\nChanged after approval.\n");
   await assert.rejects(
@@ -42,6 +61,144 @@ test("binds one approval fingerprint to the source, exact proposed content, and 
   await assert.rejects(
     verifyWeeklyMemoryApproval({ week: "2026-W40", fingerprint: rebound.fingerprint, repoRoot: root }),
     /memory-approval-stale/
+  );
+});
+
+test("preparation and approval binding reject wrong-week or incomplete Weekly Output", async (t) => {
+  const cases = [
+    {
+      name: "wrong target week",
+      content: weeklyOutput("2026-39"),
+      error: /weekly-output-week-mismatch/
+    },
+    {
+      name: "missing required section",
+      content: "# Learn-X Weekly Output｜2026-40\n\n## 11. 全文核心重点纪要\nA concrete conclusion.\n",
+      error: /weekly-output-required-section-missing: 芒格之魂的洞察/
+    },
+    {
+      name: "placeholder-only required section",
+      content: weeklyOutput("2026-40", { core: "待补充", munger: "具体洞察" }),
+      error: /weekly-output-required-section-missing: 全文核心重点纪要/
+    },
+    {
+      name: "placeholder mixed with substantive text",
+      content: weeklyOutput("2026-40", { core: "具体判断\n待补充", munger: "具体洞察" }),
+      error: /weekly-output-placeholder: 全文核心重点纪要/
+    },
+    {
+      name: "TODO marker with instructions",
+      content: weeklyOutput("2026-40", { core: "具体判断\nTODO: replace after final review", munger: "具体洞察" }),
+      error: /weekly-output-placeholder: 全文核心重点纪要/
+    },
+    {
+      name: "annotated Chinese placeholder",
+      content: weeklyOutput("2026-40", { core: "具体判断\n待补充：补充事实", munger: "具体洞察" }),
+      error: /weekly-output-placeholder: 全文核心重点纪要/
+    },
+    {
+      name: "bracketed placeholder marker",
+      content: weeklyOutput("2026-40", { core: "具体判断\n【待补充】", munger: "具体洞察" }),
+      error: /weekly-output-placeholder: 全文核心重点纪要/
+    },
+    {
+      name: "placeholder embedded in a field",
+      content: weeklyOutput("2026-40", { core: "具体判断\n本周主线：待填写", munger: "具体洞察" }),
+      error: /weekly-output-placeholder: 全文核心重点纪要/
+    },
+    {
+      name: "short x placeholder in a field",
+      content: weeklyOutput("2026-40", { core: "具体判断\n本周主线：xx", munger: "具体洞察" }),
+      error: /weekly-output-placeholder: 全文核心重点纪要/
+    },
+    {
+      name: "long x placeholder in a field",
+      content: weeklyOutput("2026-40", { core: "具体判断\n本周主线：xxx", munger: "具体洞察" }),
+      error: /weekly-output-placeholder: 全文核心重点纪要/
+    },
+    {
+      name: "bracketed fill-in value in a field",
+      content: weeklyOutput("2026-40", { core: "具体判断\n本周主线：[填写内容]", munger: "具体洞察" }),
+      error: /weekly-output-placeholder: 全文核心重点纪要/
+    },
+    {
+      name: "HTML placeholder comment",
+      content: weeklyOutput("2026-40", { core: "具体判断\n<!-- TODO: replace -->", munger: "具体洞察" }),
+      error: /weekly-output-placeholder: 全文核心重点纪要/
+    },
+    {
+      name: "Chinese fill instruction in HTML comment",
+      content: weeklyOutput("2026-40", { core: "具体判断\n<!-- 请补充本周结论 -->", munger: "具体洞察" }),
+      error: /weekly-output-placeholder: 全文核心重点纪要/
+    },
+    {
+      name: "English fill instruction in HTML comment",
+      content: weeklyOutput("2026-40", { core: "具体判断\n<!-- fill in the conclusion after review -->", munger: "具体洞察" }),
+      error: /weekly-output-placeholder: 全文核心重点纪要/
+    },
+    {
+      name: "TODO inside an annotated HTML comment",
+      content: weeklyOutput("2026-40", { core: "具体判断\n<!-- 说明：TODO after review -->", munger: "具体洞察" }),
+      error: /weekly-output-placeholder: 全文核心重点纪要/
+    }
+  ];
+
+  for (const item of cases) {
+    await t.test(item.name, async (subtest) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-invalid-weekly-output-"));
+      subtest.after(() => rm(root, { recursive: true, force: true }));
+      await mkdir(path.join(root, "04_output/weekly"), { recursive: true });
+      await writeFile(path.join(root, "04_output/weekly/2026-40.md"), item.content);
+
+      await assert.rejects(prepareWeeklyMemory({ week: "2026-W40", repoRoot: root }), item.error);
+      await assert.rejects(bindWeeklyMemoryApproval({ week: "2026-W40", repoRoot: root }), item.error);
+      await assert.rejects(
+        readFile(path.join(root, "04_output/_dist/weekly/2026-W40/memory-candidates.md")),
+        { code: "ENOENT" }
+      );
+      await assert.rejects(
+        readFile(path.join(root, "04_output/_dist/weekly/2026-W40/_memory-approval.json")),
+        { code: "ENOENT" }
+      );
+    });
+  }
+});
+
+test("does not mistake ordinary discussion of TODO or pending data for placeholders", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-semantic-placeholder-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, "04_output/weekly"), { recursive: true });
+  const todoSentence = "我用 TODO 清单记录了已确认的负责人和截止日期。";
+  const pendingSentence = "待补充的数据尚未到位，因此本周没有据此修改结论。";
+  await writeFile(
+    path.join(root, "04_output/weekly/2026-40.md"),
+    weeklyOutput("2026-40", { core: `具体判断。\n${todoSentence}`, munger: `具体洞察。\n${pendingSentence}` })
+  );
+
+  const result = await prepareWeeklyMemory({ week: "2026-W40", repoRoot: root });
+  const candidates = await readFile(result.outputPath, "utf8");
+  assert.ok(candidates.includes(todoSentence));
+  assert.ok(candidates.includes(pendingSentence));
+});
+
+test("approval binding refuses candidates generated from an older Weekly Output", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-stale-weekly-candidates-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const outputPath = path.join(root, "04_output/weekly/2026-40.md");
+  const proposalRoot = path.join(root, "04_output/_dist/weekly/2026-W40");
+  await mkdir(path.dirname(outputPath), { recursive: true });
+  await writeFile(outputPath, weeklyOutput("2026-40", { core: "Original conclusion.", munger: "Original insight." }));
+  await prepareWeeklyMemory({ week: "2026-W40", repoRoot: root });
+  await writeFile(path.join(proposalRoot, "memory-proposed.md"), "## 2026-W40\n\nOriginal proposed memory.\n");
+
+  await writeFile(outputPath, weeklyOutput("2026-40", { core: "Updated conclusion.", munger: "Updated insight." }));
+  await assert.rejects(
+    bindWeeklyMemoryApproval({ week: "2026-W40", repoRoot: root }),
+    /memory-candidates-stale/
+  );
+  await assert.rejects(
+    readFile(path.join(proposalRoot, "_memory-approval.json")),
+    { code: "ENOENT" }
   );
 });
 
@@ -78,7 +235,7 @@ test("keeps Weekly Output questions and their background out of Memory candidate
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-memory-candidates-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(path.join(root, "04_output/weekly"), { recursive: true });
-  await writeFile(path.join(root, "04_output/weekly/2026-40.md"), `# Weekly
+  await writeFile(path.join(root, "04_output/weekly/2026-40.md"), `# Learn-X Weekly Output｜2026-40
 
 ## 11. 全文核心重点纪要
 
@@ -112,6 +269,19 @@ test("keeps Weekly Output questions and their background out of Memory candidate
   assert.match(candidates, /问题、背景和回答/);
   assert.doesNotMatch(candidates, /私密问题标记|私密背景标记|私密回答标记/);
 });
+
+function weeklyOutput(week, { core = "A concrete core conclusion.", munger = "A concrete Munger insight." } = {}) {
+  return [
+    `# Learn-X Weekly Output｜${week}`,
+    "",
+    "## 11. 全文核心重点纪要",
+    core,
+    "",
+    "## 12. 芒格之魂的洞察",
+    munger,
+    ""
+  ].join("\n");
+}
 
 test("preserves placeholder filtering for the two supported memory sections", () => {
   const result = extractRequiredSections(`# Weekly

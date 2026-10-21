@@ -239,7 +239,7 @@ test("mapping changes and body hash damage invalidate cache entries", async (t) 
   const remapped = new ChatPackCache({
     filePath: path.join(fixture.directory, "cache", "state.json"),
     promptDescriptors: async () => [{ ...promptDescriptor, document_id: "new-document" }],
-    coreDescriptors: async () => [], fetchPrompt: async () => {}, fetchCore: async () => {}
+    coreDescriptors: async () => [], fetchPrompt: async () => {}, fetchCore: async () => {}, now: fixture.getNow
   });
   await remapped.initialize({ refresh: false });
   assert.equal((await remapped.status()).resources[0].cache_status, "source_changed");
@@ -247,7 +247,7 @@ test("mapping changes and body hash damage invalidate cache entries", async (t) 
   const corrupted = new ChatPackCache({
     filePath: path.join(fixture.directory, "cache", "state.json"),
     promptDescriptors: async () => [promptDescriptor],
-    coreDescriptors: async () => [], fetchPrompt: async () => {}, fetchCore: async () => {}
+    coreDescriptors: async () => [], fetchPrompt: async () => {}, fetchCore: async () => {}, now: fixture.getNow
   });
   await corrupted.initialize({ refresh: false });
   const cachePath = path.join(fixture.directory, "cache", "state.json");

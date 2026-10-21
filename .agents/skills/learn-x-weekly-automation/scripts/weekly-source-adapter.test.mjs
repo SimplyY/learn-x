@@ -10,6 +10,7 @@ import { createWeeklyRetryState, runConfiguredSource, runWeeklyRetrySupervisor }
 const week = "2026-W40";
 const currentRepoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const fixtureCollector = `
+import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 const config = JSON.parse(await readFile("fixture.json", "utf8"));
@@ -24,6 +25,13 @@ if (config.writeStatus !== false) {
   if (config.id === "ai") {
     const status = { targetWeek: reportedWeek, status: config.status, reason: config.reason || "" };
     if (config.timestamp !== "missing") status.completedAt = timestamp;
+    if (config.status === "confirmed") {
+      const formal = "# Learn-X 周回顾\\n\\n## 具体的人和事（独立主线，优先保留）\\n\\n本周无合成来源记录。\\n\\n## 本周议题\\n\\n合成判断。\\n\\n## 精华议题摘要\\n\\n合成摘要。\\n\\n## 核心洞察与判断变化\\n\\n合成变化。";
+      const hash = createHash("sha256").update(formal).digest("hex");
+      status.outputSha256 = hash;
+      status.readbackSha256 = hash;
+      await writeFile(path.join(root, "ai.md"), formal + "\\n");
+    }
     await writeFile(path.join(root, "_ai-generated.json"), JSON.stringify(status));
   } else {
     const entry = { status: config.status, file: "daily.md", count: config.status === "empty" ? 0 : 1,
@@ -153,7 +161,8 @@ console.log(JSON.stringify({ status: "ready", count: 1, attemptToken: token, sna
   capturedAt: "2026-10-05T01:00:00.000Z", coverage: { expectedCount: 1, observedCount: 1, omittedCount: 0 },
   termination: { reason: "library-count-and-stable-ids", atBottom: true } }));
 `);
-  const result = await runConfiguredSource(weeklySourceForId("flomo"), { week, repoRoot, attemptToken });
+  const result = await runConfiguredSource(weeklySourceForId("flomo"), { week, repoRoot, attemptToken,
+    invocationId: "123e4567-e89b-42d3-a456-426614174000" });
   assert.equal(result.status, "ready");
   assert.equal(result.snapshotId, "snapshot-fixture");
   assert.equal(result.capturedAt, "2026-10-05T01:00:00.000Z");

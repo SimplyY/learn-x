@@ -18,6 +18,7 @@ export const EXCLUDED_FILE_REASONS = [
   { reason: "macOS metadata", test: (name) => name === ".DS_Store" },
   { reason: "credential-like filename", test: (name) => /(^|\.)env($|\.)|token|secret|credential|password|cookie|session|wallet/i.test(name) },
   { reason: "key or certificate filename", test: (name) => /\.(pem|p12|pfx|key|crt|cer)$/i.test(name) },
+  { reason: "image file (not backed up)", test: (name) => /\.(apng|png|jpe?g|gif|webp|bmp|tiff?|avif|heic|heif|ico|svg)$/i.test(name) },
 ];
 const REQUIRED_FIELDS = [
   "Snapshot ID", "Week", "Created At", "Archive Name", "Drive File Token",
@@ -61,8 +62,9 @@ export function formatFeishuDatetime(date = new Date()) {
   }).format(date).replace("T", " ");
 }
 
-function shouldExclude(name) {
-  return EXCLUDED_FILE_REASONS.find((entry) => entry.test(name));
+function shouldExclude(name, { excludeImages = true } = {}) {
+  return EXCLUDED_FILE_REASONS.find((entry) =>
+    (excludeImages || entry.reason !== "image file (not backed up)") && entry.test(name));
 }
 
 async function hashFile(file) {
@@ -75,17 +77,17 @@ function sha256Text(value) {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-async function walk(root, current = root, entries = [], excluded = []) {
+async function walk(root, current = root, entries = [], excluded = [], options = {}) {
   for (const child of await readdir(current, { withFileTypes: true })) {
     const absolute = path.join(current, child.name);
     const relative = path.relative(root, absolute).split(path.sep).join("/");
-    const exclusion = shouldExclude(child.name);
+    const exclusion = shouldExclude(child.name, options);
     if (exclusion) {
       excluded.push({ path: relative, reason: exclusion.reason });
       continue;
     }
     if (child.isDirectory()) {
-      await walk(root, absolute, entries, excluded);
+      await walk(root, absolute, entries, excluded, options);
       continue;
     }
     if (!child.isFile()) {
@@ -98,14 +100,14 @@ async function walk(root, current = root, entries = [], excluded = []) {
   return { entries, excluded };
 }
 
-export async function collectBackupFiles(rootDirectory = repoRoot, roots = BACKUP_ROOTS) {
+export async function collectBackupFiles(rootDirectory = repoRoot, roots = BACKUP_ROOTS, options = {}) {
   const files = [];
   const excluded = [];
   for (const rootName of roots) {
     const root = path.join(rootDirectory, rootName);
     const rootStat = await lstat(root).catch(() => null);
     if (!rootStat?.isDirectory()) throw new Error(`备份目录不存在：${rootName}`);
-    const result = await walk(root);
+    const result = await walk(root, root, [], [], options);
     files.push(...result.entries.map((entry) => ({ ...entry, path: `${rootName}/${entry.relative}` })));
     excluded.push(...result.excluded.map((entry) => ({ ...entry, path: `${rootName}/${entry.path}` })));
   }
@@ -525,7 +527,8 @@ export async function validateManifest(extractedRoot, expectedManifestSha256) {
   // 子集校验：manifest.roots 每一项都必须属于 BACKUP_ROOTS（新根是旧根的超集，旧式归档仍可恢复），仅拒绝未知根。
   if (!Array.isArray(manifest.roots) || manifest.roots.some((root) => !BACKUP_ROOTS.includes(root))) throw new Error("manifest 备份根目录不匹配。");
   if (manifestSha256 !== sha256Text(JSON.stringify(core)) || (expectedManifestSha256 && manifestSha256 !== expectedManifestSha256)) throw new Error("manifest SHA-256 校验失败。");
-  const files = await collectBackupFiles(extractedRoot, manifest.roots);
+  // 老快照可能包含图片；校验按快照实际清单进行，保持旧归档可恢复。
+  const files = await collectBackupFiles(extractedRoot, manifest.roots, { excludeImages: false });
   if (files.excluded.length) throw new Error(`恢复目录包含不允许的文件系统项：${files.excluded[0].path}`);
   if (files.files.length !== manifest.fileCount || files.files.reduce((sum, file) => sum + file.bytes, 0) !== manifest.totalBytes) throw new Error("恢复文件数量或总大小与 manifest 不一致。");
   const expected = new Map(manifest.files.map((file) => [file.path, file]));

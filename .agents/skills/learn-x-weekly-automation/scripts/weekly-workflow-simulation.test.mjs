@@ -136,9 +136,11 @@ test("simulates the weekly workflow in a temporary repo, from cooldown rescue th
   assert.doesNotMatch(packText, /本轮需关注：.*阻断：(Flomo|Voice-X)/);
   assert.equal(await readFile(path.join(weekDir, "weekly.md"), "utf8").then((text) => text.includes(section)), true);
 
-  // Represent the human Chat Pack result with fixture text, then prepare only a
-  // candidate card in the temp repo; no formal Memory or external action runs.
-  await writeFile(path.join(root, "04_output/weekly/2026-40.md"), [
+  // The finalized Chat Pack content itself hands control to Stage 3: save and
+  // read it back, then prepare only a candidate card without a status message.
+  // No formal Memory or external action runs in this simulation.
+  const weeklyOutputPath = path.join(root, "04_output/weekly/2026-40.md");
+  await writeFile(weeklyOutputPath, [
     "# Learn-X Weekly Output｜2026-40",
     "",
     "## 11. 全文核心重点纪要",
@@ -157,6 +159,12 @@ test("simulates the weekly workflow in a temporary repo, from cooldown rescue th
     "- [ ] 暂时不迁移的候选。",
     ""
   ].join("\n"));
+  const finalizedOutput = await readFile(weeklyOutputPath, "utf8");
+  assert.match(finalizedOutput, /# Learn-X Weekly Output｜2026-40/);
+  assert.ok(finalizedOutput.includes("## 11. 全文核心重点纪要\n本周用小实验"));
+  assert.ok(finalizedOutput.includes("## 12. 芒格之魂的洞察\n反向思考"));
+  assert.doesNotMatch(finalizedOutput, /待补充|占位|TODO/i);
+
   const candidates = await prepareWeeklyMemory({ week, repoRoot: root });
   const candidateText = await readFile(candidates.outputPath, "utf8");
   assert.equal(candidates.counts.coreSummary, 1);
@@ -172,7 +180,16 @@ test("simulates the weekly workflow in a temporary repo, from cooldown rescue th
   const proposalPath = path.join(root, "04_output/_dist/weekly", week, "memory-proposed.md");
   await writeFile(proposalPath, "## 2026-W40\n\nApproved weekly Memory payload.\n");
   const approval = await bindWeeklyMemoryApproval({ week, repoRoot: root });
-  assert.equal((await verifyWeeklyMemoryApproval({ week, fingerprint: approval.fingerprint, repoRoot: root })).verified, true);
+  await assert.rejects(readFile(path.join(root, "01_core/memory/2026-Q3.memory.md")), { code: "ENOENT" });
+  await writeFile(weeklyOutputPath, `${finalizedOutput}\nChanged after the card was prepared.\n`);
+  await assert.rejects(
+    verifyWeeklyMemoryApproval({ week, fingerprint: approval.fingerprint, repoRoot: root }),
+    /memory-approval-stale/
+  );
+  await writeFile(weeklyOutputPath, finalizedOutput);
+  const reboundApproval = await bindWeeklyMemoryApproval({ week, repoRoot: root });
+  assert.equal((await verifyWeeklyMemoryApproval({ week, fingerprint: reboundApproval.fingerprint, repoRoot: root })).verified, true);
+  await assert.rejects(readFile(path.join(root, "01_core/memory/2026-Q3.memory.md")), { code: "ENOENT" });
 
   const weeklyAutomationSkill = await readFile(new URL("../SKILL.md", import.meta.url), "utf8");
   assert.match(weeklyAutomationSkill, /日记状态 `ready`、至少一条有效记录且目标周匹配时，立即调用 `learn-x-weekly-journal`/);
@@ -192,6 +209,40 @@ test("simulates the weekly workflow in a temporary repo, from cooldown rescue th
   assert.match(weeklyAutomationSkill, /memory:weekly -- --week YYYY-Www --verify-approval/);
   assert.match(weeklyAutomationSkill, /确认词只需指向这张最终确认卡及其指纹/);
   assert.match(weeklyAutomationSkill, /问题、背景和回答只保留在 Weekly Output，不自动迁移/);
+  assert.match(weeklyAutomationSkill, /无需额外完成\/继续消息/);
+  assert.match(weeklyAutomationSkill, /文件存在或 mtime 变化不算人工审核证据/);
+  assert.match(weeklyAutomationSkill, /长期候选为 0 个仍展示完整确认卡/);
+  assert.match(weeklyAutomationSkill, /当前流程无法读取到最终内容、目标周不符、必需内容缺失或占位文本未清理时/);
+});
+
+test("zero checked Memory candidates still allow a fingerprinted final card", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-weekly-zero-candidates-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const weeklyOutputPath = path.join(root, "04_output/weekly/2026-40.md");
+  await mkdir(path.dirname(weeklyOutputPath), { recursive: true });
+  await writeFile(weeklyOutputPath, [
+    "# Learn-X Weekly Output｜2026-40",
+    "",
+    "## 11. 全文核心重点纪要",
+    "本周基于可复核证据调整了一项行动。",
+    "",
+    "## 12. 芒格之魂的洞察",
+    "先排除不可逆的失败路径。",
+    "",
+    "## 值得长期保留（长期记忆候选，勾选后纳入）",
+    "- [ ] 暂不迁移的候选。",
+    ""
+  ].join("\n"));
+
+  const candidates = await prepareWeeklyMemory({ week, repoRoot: root });
+  assert.equal(candidates.counts.checked, 0);
+  const proposalPath = path.join(root, "04_output/_dist/weekly", week, "memory-proposed.md");
+  await writeFile(proposalPath, "## 2026-W40\n\n- 本轮无额外长期候选。\n");
+  const card = await bindWeeklyMemoryApproval({ week, repoRoot: root });
+  assert.match(card.fingerprint, /^[a-f0-9]{64}$/);
+  assert.equal(card.week, "2026-40");
+  assert.deepEqual(card.scope.backupRoots, ["01_core", "03_input", "04_output", "05_library"]);
+  await assert.rejects(readFile(path.join(root, "01_core/memory/2026-Q3.memory.md")), { code: "ENOENT" });
 });
 
 async function writeReadyDaily(root) {

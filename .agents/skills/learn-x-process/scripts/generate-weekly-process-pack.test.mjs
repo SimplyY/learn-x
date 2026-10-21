@@ -489,6 +489,9 @@ test("Stage 2 delivers an execution-scope preview without exposing not-yet-gener
   assert.match(stage2, /不展示尚未生成的记忆内容/);
   assert.match(stage2, /不构成授权/);
   assert.match(stage2, /最终确认卡/);
+  assert.match(stage2, /Chat Pack 定稿内容保存并读回有效后，当前流程自动生成/);
+  assert.match(stage2, /无需额外完成\/继续消息/);
+  assert.doesNotMatch(stage2, /用一条消息说明已完成/);
   assert.doesNotMatch(stage2, /Action Feedback/);
   assert.doesNotMatch(stage2, /拟迁移条目：[^\n]+/);
 });
@@ -533,13 +536,19 @@ test("Stage 3 prepares candidates before one confirmation and generates the imag
   const stage3 = skill.slice(skill.indexOf("## 阶段 3："), skill.indexOf("## 边界"));
   const candidateIndex = stage3.indexOf("npm run memory:weekly -- --week YYYY-Www");
   const confirmationIndex = stage3.indexOf("最后确认卡");
+  const finalizedContentIndex = stage3.indexOf("当前流程收到 Chat Pack 定稿内容后，立即读回");
+  const failClosedIndex = stage3.indexOf("任一检查失败都报告具体缺项并停在阶段 2，不生成确认卡");
+  const fingerprintVerifyIndex = stage3.indexOf("npm run memory:weekly -- --week YYYY-Www --verify-approval");
   const memoryIndex = stage3.indexOf("将获准条目写入正确的季度 Memory 目标");
   const imageIndex = stage3.indexOf("npm run image:weekly -- --week YYYY-Www");
 
   assert.match(stage2, /图片不再是阶段 3 的人工前置步骤/);
   assert.doesNotMatch(stage2, /使用.*核心内容生成一张.*图片/);
+  assert.ok(finalizedContentIndex >= 0 && finalizedContentIndex < candidateIndex);
+  assert.ok(failClosedIndex >= finalizedContentIndex && failClosedIndex < candidateIndex);
   assert.ok(candidateIndex >= 0 && candidateIndex < confirmationIndex);
   assert.ok(confirmationIndex >= 0 && confirmationIndex < memoryIndex);
+  assert.ok(fingerprintVerifyIndex >= 0 && fingerprintVerifyIndex < memoryIndex);
   assert.ok(memoryIndex >= 0 && memoryIndex < imageIndex);
   assert.match(skill, /图片只生成到确认卡列出的本地目标路径/);
   assert.match(stage3, /ChatGPT Bridge 的 image 模式/);
@@ -551,10 +560,16 @@ test("Stage 3 prepares candidates before one confirmation and generates the imag
   assert.match(stage3, /already-success/);
   assert.match(stage3, /版本化文件名/);
   assert.match(stage3, /needs_review.*不得自动重发/);
+  assert.match(stage3, /验证文件目标周与本轮一致.*空壳\/模板.*必需章节完整且实质正文有效.*无占位文本/);
+  assert.match(stage3, /任一检查失败都报告具体缺项并停在阶段 2，不生成确认卡/);
+  assert.match(stage3, /长期候选为 0 个仍展示完整确认卡/);
+  assert.match(stage3, /旧指纹立即失效/);
+  assert.match(stage3, /无需用户另发 `Chat Pack 已完成`、`继续` 或 `给我完整确认卡`/);
+  assert.doesNotMatch(stage3, /说明 Chat Pack 已完成的单条消息/);
   assert.doesNotMatch(skill, /ljg-card/);
   assert.doesNotMatch(skill, /~\/Downloads\/Learn-X-周报/);
   assert.match(stage2, /确认卡缺少图片路径、备份目的地或 Flomo 目的地时，不得请求确认或执行任何写入/);
-  assert.match(stage2, /备份载荷（`01_core\/`、`03_input\/`、`04_output\/`、`05_library\/`）/);
+  assert.match(stage2, /备份载荷（`01_core\/`、`03_input\/`、`04_output\/`、`05_library\/`(?:，不含图像文件)?）/);
 });
 
 test("complete Weekly Output prompt defines facts, memory candidates, comparison and machine contracts", async () => {
