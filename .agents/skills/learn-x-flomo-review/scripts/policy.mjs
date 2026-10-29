@@ -3,7 +3,7 @@ const OCCUPIED = new Set(['reserved', 'sending', 'delivered', 'needs_review']);
 export const MIN_REVIEW_ITEMS = 5;
 export const TARGET_MIN_REVIEW_ITEMS = 7;
 export const MAX_REVIEW_ITEMS = 10;
-export const MAX_REVIEW_REASON_CHARS = 15;
+export const MAX_REVIEW_REASON_CHARS = 10;
 export const MAX_PAIR_OVERLAP = 5;
 export const MAX_WINDOW_REPEATS = 10;
 
@@ -88,13 +88,12 @@ function exposure({ date, ledger = { batches: {} }, index }) {
     if (batch.date !== key) fail('ledger-date-mismatch');
     const batchGeneration = batch.dedupeGeneration || 'legacy';
     if (typeof batchGeneration !== 'string' || !batchGeneration) fail('invalid-batch-dedupe-generation');
-    // A source migration starts a new recommendation budget. Keep old sends in
-    // the ledger for audit and same-day occupancy, but do not carry their
-    // exposure into the new generation.
-    if (batchGeneration !== generation) continue;
     const week = isoWeek(key);
     if (!byWeek.has(week)) continue;
     if (key > date) fail('future-ledger-batch');
+    // A source cutover starts a fresh exposure budget. The old ledger rows are
+    // retained for audit, and today's occupancy was checked above.
+    if (batchGeneration !== generation) continue;
     if (!Array.isArray(batch.items) || !batch.items.length) fail('incomplete-ledger-batch');
     for (const item of batch.items) {
       if (!item || typeof item !== 'object') fail('invalid-history-item');

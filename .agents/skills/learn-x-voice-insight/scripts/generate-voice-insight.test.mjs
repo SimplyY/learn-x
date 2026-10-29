@@ -3,7 +3,12 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { parseBatchOutput, runVoiceInsight } from "./generate-voice-insight.mjs";
+import { parseBatchOutput, runVoiceInsight as runVoiceInsightImpl } from "./generate-voice-insight.mjs";
+
+const runVoiceInsight = (options = {}) => runVoiceInsightImpl({
+  ...options,
+  recordBusinessOutcome: options.recordBusinessOutcome || (async () => ({ status: "recorded" })),
+});
 
 const mungerSection = (heading, id) => `### ${heading}\n\n这是围绕记录 ${id} 的独立分析，先说明底层机制，再说明它如何影响判断与行动。这里保留足够上下文，避免把洞察压缩成口号。\n\n这一层还会把观察放回具体场景，说明证据、限制与可验证的下一步，帮助读者形成可复用的判断。`;
 const structured = (id = "rec1", withTitle = true) => `${withTitle ? "# Voice-X AI 洞察\\n\\n" : ""}## 核心总结\n\n### 会谈概览\n\n记录 ${id} 的核心讨论围绕事实、选择与行动展开。\n\n### （00:00–01:00）主题\n\n**先抓住一个可验证的结论。**\n\n这段说明把处理后原文中的关键事实串起来，并指出它对后续判断的直接影响。\n\n> 【金句】「处理后原文 ${id}」\n> 【金句】「处理后原文 ${id}」\n> 【重要】「处理后原文 ${id}」\n\n因此，结论应回到事实与行动，而不是停留在抽象描述。\n\n### 最终收束\n\n把本次讨论收束为一个可执行、可复盘的判断。\n\n## 芒格之魂洞察\n\n${["底层本质", "领域同构", "反转假设", "观察尺度", "简化支点", "整合跃迁"].map((heading) => mungerSection(heading, id)).join("\\n\\n")}\n\n## 核心建议\n\n1. 先验证记录 ${id} 中最关键的事实。\n2. 把判断拆成可以观察的变量。\n3. 为主要假设设置反证条件。\n4. 选择最小可行的下一步行动。\n5. 在复盘时记录结果并修正模型。`;
@@ -50,12 +55,21 @@ test("submits one batch, validates every block, archives, and refreshes voice in
   t.after(() => rm(outputRoot, { recursive: true, force: true }));
   const records = [makeRecord("rec1", "placeholder:rec1"), makeRecord("rec2", "placeholder:rec2")];
   let bridgeCalls = 0;
+  let bridgeOptions; const outcomes = [];
   const archived = [];
   const statusTrail = [];
   let refreshed = 0;
-  const result = await runVoiceInsight({ outputRoot, week: "2026-W24", send: true, confirm: true, transport: new FakeTransport(records), runBridge: async () => { bridgeCalls += 1; return { result: { status: "succeeded", runId: "run1", conversationUrl: "https://chat.invalid/1", text: batch(records) } }; }, archive: async (record) => { statusTrail.push(JSON.parse(await readFile(path.join(outputRoot, "_voice-insight-status.json"))).status); archived.push(record.id); return { insightUrl: `insight:${record.id}` }; }, refreshVoice: async () => { refreshed += 1; } });
+  const result = await runVoiceInsight({ outputRoot, week: "2026-W24", send: true, confirm: true, transport: new FakeTransport(records),
+    runBridge: async (_prompt, options) => { bridgeCalls += 1; bridgeOptions = options; return { result: { status: "succeeded", runId: "run1", conversationUrl: "https://chat.invalid/1", text: batch(records) } }; },
+    recordBusinessOutcome: async (event) => { outcomes.push(event); return { status: "recorded" }; },
+    archive: async (record) => { statusTrail.push(JSON.parse(await readFile(path.join(outputRoot, "_voice-insight-status.json"))).status); archived.push(record.id); return { insightUrl: `insight:${record.id}` }; }, refreshVoice: async () => { refreshed += 1; } });
   assert.equal(result.status, "completed");
   assert.equal(bridgeCalls, 1);
+  assert.equal(bridgeOptions.callerLabel, "learn-x:voice-insight");
+  assert.equal(bridgeOptions.preallocatedRunId, result.attemptId);
+  assert.equal(outcomes.length, 1); assert.equal(outcomes[0].caller, "learn-x:voice-insight");
+  assert.equal(outcomes[0].attemptId, result.attemptId); assert.equal(outcomes[0].deliveryStatus, "succeeded");
+  assert.equal("prompt" in outcomes[0], false); assert.equal("reply" in outcomes[0], false); assert.equal("conversationUrl" in outcomes[0], false);
   assert.deepEqual(archived, ["rec1", "rec2"]);
   assert.equal(refreshed, 1);
   assert.deepEqual(statusTrail, ["archive_pending", "archive_pending"]);
@@ -67,13 +81,16 @@ test("needs_review is not automatically resent", async (t) => {
   t.after(() => rm(outputRoot, { recursive: true, force: true }));
   const transport = new FakeTransport([makeRecord("rec1", "placeholder:rec1")]);
   let calls = 0;
-  const first = await runVoiceInsight({ outputRoot, week: "2026-W24", send: true, confirm: true, transport, refreshVoice: false, runBridge: async () => { calls += 1; return { result: { status: "needs_review", runId: "run-review", reason: "login-required", conversationUrl: "https://chat.invalid/review" } }; } });
-  const second = await runVoiceInsight({ outputRoot, week: "2026-W24", transport, refreshVoice: false, runBridge: async () => { calls += 1; throw new Error("must not resend"); } });
+  const outcomes = [];
+  const first = await runVoiceInsight({ outputRoot, week: "2026-W24", send: true, confirm: true, transport, refreshVoice: false, runBridge: async () => { calls += 1; return { result: { status: "needs_review", runId: "run-review", reason: "synthetic-private-reply-as-hyphenated-text", conversationUrl: "https://chat.invalid/review" } }; }, recordBusinessOutcome: async (event) => { outcomes.push(event); return { status: "recorded" }; } });
+  const second = await runVoiceInsight({ outputRoot, week: "2026-W24", transport, refreshVoice: false, runBridge: async () => { calls += 1; throw new Error("must not resend"); }, recordBusinessOutcome: async (event) => { outcomes.push(event); return { status: "recorded" }; } });
   assert.equal(first.status, "needs_review");
   assert.equal(second.status, "needs_review");
   assert.equal(calls, 1);
-  assert.equal(second.reason, "login-required");
+  assert.equal(second.reason, "synthetic-private-reply-as-hyphenated-text");
   assert.equal(second.runId, "run-review");
+  assert.ok(outcomes.length >= 1);
+  assert.ok(outcomes.every((event) => event.reason === "unknown"));
 });
 
 test("partial archive resumes from generated output without another bridge call", async (t) => {

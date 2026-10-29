@@ -39,6 +39,8 @@
 
 proposal 需要外部推理时，只通过 `chatgpt-web-bridge` 的 `runBridge()`（或等价的完整进程调用）取得。长进程首段输出可能只有 `session_id`，正文尚未产生；必须持续跟进直至进程有明确退出码，再解析最终完整 stdout。浏览器打开成功、进程结束或冷却状态都不是正文交付。
 
+共享 [ChatGPT Bridge](/Users/yuwei/code/browser-runtime-governance/skills/chatgpt-web-bridge/SKILL.md) 默认在提交前为每个实际请求导出相同输入的私有 TXT，无需单独导出或另建手动 Prompt。调用提供稳定 `callerLabel`，按当前应用与认证本人私聊核验结果绑定 `contextPackDelivery`。用户通过 `result.contextPack.path` 或已确认的私聊附件取得包；附件交付默认预算 30 秒，失败或待核实不改变 proposal 校验和写入门禁。`exactInput` 正文原样，未知发送只读核验、不自动重发。
+
 只有同时满足以下条件才视为成功，缺一即失败关闭并转入人工复核：
 
 - 进程以明确退出码结束，stdout 完整；

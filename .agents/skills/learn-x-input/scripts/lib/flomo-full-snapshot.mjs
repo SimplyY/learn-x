@@ -1,9 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, open, readFile, rename, unlink } from "node:fs/promises";
+import { lstatSync, readlinkSync } from "node:fs";
+import { lstat, mkdir, open, readFile, readlink, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const MAX_RECORDS = 20_000;
+const DEFAULT_REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../../");
 export const MAX_ACCEPTED_MISSING_RECORDS = 10;
 export const CURRENT_COVERAGE_POLICY = "up-to-ten-unresolved-records-v1";
 
@@ -13,8 +16,113 @@ export function maxMissingRecordsForCoveragePolicy(policy) {
   return null;
 }
 
-export function defaultFlomoPrivateDataRoot() {
-  return path.join(homedir(), "Library", "Application Support", "Learn-X", "flomo-review");
+export function defaultFlomoPrivateDataRoot(repoRoot = DEFAULT_REPO_ROOT) {
+  return path.join(path.resolve(repoRoot), "04_output/_dist/flomo-review/online-full");
+}
+
+export function assertFlomoStorageRootAllowed(storageRoot) {
+  if (typeof storageRoot !== "string" || !storageRoot.trim()) throw new Error("flomo-storage-root-invalid");
+  const resolved = path.resolve(storageRoot);
+  const forbiddenRoot = path.resolve(homedir(), "Library").toLowerCase();
+  const relative = path.relative(forbiddenRoot, resolved.toLowerCase());
+  if (relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))) {
+    throw new Error("flomo-storage-root-library-forbidden");
+  }
+  return resolved;
+}
+
+async function resolvePathWithoutLibrarySymlinks(candidate, seen = new Set(), depth = 0) {
+  if (depth > 32) throw new Error("flomo-storage-path-symlink-depth-exceeded");
+  const resolved = assertFlomoStorageRootAllowed(candidate);
+  const { root } = path.parse(resolved);
+  const parts = resolved.slice(root.length).split(path.sep).filter(Boolean);
+  let current = root;
+  for (let index = 0; index < parts.length; index += 1) {
+    const next = path.join(current, parts[index]);
+    let metadata;
+    try { metadata = await lstat(next); }
+    catch (error) {
+      if (error.code === "ENOENT") return assertFlomoStorageRootAllowed(path.resolve(next, ...parts.slice(index + 1)));
+      throw error;
+    }
+    if (metadata.isSymbolicLink()) {
+      if (seen.has(next)) throw new Error("flomo-storage-path-symlink-loop");
+      const target = await readlink(next);
+      const targetWithRemainder = path.resolve(path.dirname(next), target, ...parts.slice(index + 1));
+      assertFlomoStorageRootAllowed(targetWithRemainder);
+      const nextSeen = new Set(seen);
+      nextSeen.add(next);
+      return resolvePathWithoutLibrarySymlinks(targetWithRemainder, nextSeen, depth + 1);
+    }
+    current = next;
+  }
+  return assertFlomoStorageRootAllowed(current);
+}
+
+function resolvePathWithoutLibrarySymlinksSync(candidate, seen = new Set(), depth = 0) {
+  if (depth > 32) throw new Error("flomo-storage-path-symlink-depth-exceeded");
+  const resolved = assertFlomoStorageRootAllowed(candidate);
+  const { root } = path.parse(resolved);
+  const parts = resolved.slice(root.length).split(path.sep).filter(Boolean);
+  let current = root;
+  for (let index = 0; index < parts.length; index += 1) {
+    const next = path.join(current, parts[index]);
+    let metadata;
+    try { metadata = lstatSync(next); }
+    catch (error) {
+      if (error.code === "ENOENT") return assertFlomoStorageRootAllowed(path.resolve(next, ...parts.slice(index + 1)));
+      throw error;
+    }
+    if (metadata.isSymbolicLink()) {
+      if (seen.has(next)) throw new Error("flomo-storage-path-symlink-loop");
+      const target = readlinkSync(next);
+      const targetWithRemainder = path.resolve(path.dirname(next), target, ...parts.slice(index + 1));
+      assertFlomoStorageRootAllowed(targetWithRemainder);
+      const nextSeen = new Set(seen);
+      nextSeen.add(next);
+      return resolvePathWithoutLibrarySymlinksSync(targetWithRemainder, nextSeen, depth + 1);
+    }
+    current = next;
+  }
+  return assertFlomoStorageRootAllowed(current);
+}
+
+export async function resolveFlomoPathAllowed(candidate) {
+  return resolvePathWithoutLibrarySymlinks(candidate);
+}
+
+export function resolveFlomoPathAllowedSync(candidate) {
+  return resolvePathWithoutLibrarySymlinksSync(candidate);
+}
+
+export async function ensurePrivateFlomoDirectory(directory) {
+  const safeDirectory = await resolveFlomoPathAllowed(directory);
+  await mkdir(safeDirectory, { recursive: true, mode: 0o700 });
+  const metadata = await lstat(safeDirectory);
+  if (!metadata.isDirectory() || metadata.isSymbolicLink() || (metadata.mode & 0o077) !== 0) {
+    throw new Error("flomo-full-snapshot-storage-directory-not-private");
+  }
+  return safeDirectory;
+}
+
+export function assertFlomoPathWithinRoot(root, candidate) {
+  const base = path.resolve(root).toLowerCase();
+  const target = path.resolve(candidate).toLowerCase();
+  const relative = path.relative(base, target);
+  if (relative === "" || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error("flomo-artifact-path-outside-storage-root");
+  }
+  return path.resolve(candidate);
+}
+
+export async function resolveFlomoPrivateDataRoot(repoRoot, storageRoot) {
+  const projectRoot = await resolveFlomoPathAllowed(path.resolve(repoRoot));
+  const runtimeRoot = await resolveFlomoPathAllowed(storageRoot || defaultFlomoPrivateDataRoot(projectRoot));
+  try {
+    return assertFlomoPathWithinRoot(projectRoot, runtimeRoot);
+  } catch {
+    throw new Error("flomo-storage-root-outside-project");
+  }
 }
 
 export function normalizeFlomoBody(text) {
@@ -192,22 +300,26 @@ export async function writeStagedOnlineFlomoSnapshot(repoRoot, scan, {
   previewPath,
 } = {}) {
   const snapshot = createOnlineFlomoSnapshot(scan);
-  const runtime = storageRoot || path.join(repoRoot, "04_output/_dist/flomo-review");
-  const stagePath = snapshotPath || path.join(runtime, "staged", `online-snapshot-${snapshot.snapshotId}.json`);
-  const previewRecord = getDetailVerifiedRecord(snapshot);
-  const card = renderOnlineFlomoCard(snapshot, previewRecord);
-  const renderedPreview = renderOnlineFlomoPreview(snapshot, card, previewRecord);
-  const renderedCard = `${JSON.stringify(card, null, 2)}\n`;
-  const previewFile = previewPath || path.join(runtime, "staged", `online-snapshot-${snapshot.snapshotId}-preview.md`);
-  const cardFile = `${previewFile}.card.json`;
+  const runtime = await resolveFlomoPrivateDataRoot(repoRoot, storageRoot);
+  const stagePath = await resolveFlomoPathAllowed(snapshotPath || path.join(runtime, "staged", `online-snapshot-${snapshot.snapshotId}.json`));
+  const previewFile = await resolveFlomoPathAllowed(previewPath || path.join(runtime, "staged", `online-snapshot-${snapshot.snapshotId}-preview.md`));
+  const cardFile = await resolveFlomoPathAllowed(`${previewFile}.card.json`);
+  const bundlePath = await resolveFlomoPathAllowed(`${stagePath}.bundle.json`);
+  assertFlomoPathWithinRoot(runtime, stagePath);
+  assertFlomoPathWithinRoot(runtime, previewFile);
+  assertFlomoPathWithinRoot(runtime, cardFile);
+  assertFlomoPathWithinRoot(runtime, bundlePath);
   const stageDirectory = path.resolve(path.dirname(stagePath));
   if ([stagePath, previewFile, cardFile].some((file) => path.dirname(path.resolve(file)) !== stageDirectory)) {
     throw new Error("flomo-full-snapshot-bundle-paths-must-share-directory");
   }
-  await ensurePrivateDirectory(runtime);
-  if (stageDirectory !== path.resolve(runtime)) await ensurePrivateDirectory(stageDirectory);
+  const previewRecord = getDetailVerifiedRecord(snapshot);
+  const card = renderOnlineFlomoCard(snapshot, previewRecord);
+  const renderedPreview = renderOnlineFlomoPreview(snapshot, card, previewRecord);
+  const renderedCard = `${JSON.stringify(card, null, 2)}\n`;
+  await ensurePrivateFlomoDirectory(runtime);
+  if (stageDirectory !== path.resolve(runtime)) await ensurePrivateFlomoDirectory(stageDirectory);
   const renderedSnapshot = `${JSON.stringify(snapshot, null, 2)}\n`;
-  const bundlePath = `${stagePath}.bundle.json`;
   await atomicWrite(stagePath, renderedSnapshot);
   await atomicWrite(previewFile, renderedPreview);
   await atomicWrite(cardFile, renderedCard);
@@ -226,10 +338,16 @@ export async function writeStagedOnlineFlomoSnapshot(repoRoot, scan, {
   return { snapshot, snapshotPath: stagePath, previewPath: previewFile, cardPath: cardFile, bundlePath };
 }
 
-export async function readVerifiedStagedOnlineFlomoSnapshot(snapshotPath) {
-  const resolvedSnapshotPath = path.resolve(snapshotPath);
+export async function readVerifiedStagedOnlineFlomoSnapshot(snapshotPath, { storageRoot } = {}) {
+  const resolvedSnapshotPath = await resolveFlomoPathAllowed(snapshotPath);
+  if (storageRoot) {
+    const allowedRoot = await resolveFlomoPathAllowed(storageRoot);
+    try { assertFlomoPathWithinRoot(allowedRoot, resolvedSnapshotPath); }
+    catch { throw new Error("online-snapshot-path-outside-storage-root"); }
+  }
   const stageDirectory = path.dirname(resolvedSnapshotPath);
-  const bundlePath = `${resolvedSnapshotPath}.bundle.json`;
+  const bundlePath = await resolveFlomoPathAllowed(`${resolvedSnapshotPath}.bundle.json`);
+  assertFlomoPathWithinRoot(stageDirectory, bundlePath);
   let snapshot;
   let bundle;
   let snapshotContent;
@@ -257,7 +375,13 @@ export async function readVerifiedStagedOnlineFlomoSnapshot(snapshotPath) {
       throw new Error("online-snapshot-bundle-invalid");
     }
     let content = knownContent;
-    try { content ??= await readFile(path.join(stageDirectory, name), "utf8"); }
+    try {
+      if (content == null) {
+        const artifactPath = await resolveFlomoPathAllowed(path.join(stageDirectory, name));
+        assertFlomoPathWithinRoot(stageDirectory, artifactPath);
+        content = await readFile(artifactPath, "utf8");
+      }
+    }
     catch { throw new Error("online-snapshot-bundle-invalid"); }
     if (sha256(content) !== entry.sha256) throw new Error("online-snapshot-bundle-invalid");
   }
@@ -280,12 +404,4 @@ async function atomicWrite(filePath, content) {
   try { await fd.writeFile(content, "utf8"); await fd.sync(); } finally { await fd.close(); }
   try { await rename(temp, filePath); }
   finally { await unlink(temp).catch((error) => { if (error.code !== "ENOENT") throw error; }); }
-}
-
-async function ensurePrivateDirectory(directory) {
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  const metadata = await lstat(directory);
-  if (!metadata.isDirectory() || metadata.isSymbolicLink() || (metadata.mode & 0o077) !== 0) {
-    throw new Error("flomo-full-snapshot-storage-directory-not-private");
-  }
 }

@@ -41,6 +41,46 @@ function cleanSummary(summary) {
   return value.length > 240 ? `${value.slice(0, 237)}...` : value;
 }
 
+// Optional per-source commit journal (two-phase commits, e.g. jingdu.md).
+// Write side is strict: callers get errors for malformed entries. Read side is
+// tolerant: a corrupted journal never makes an otherwise valid sidecar unreadable.
+export const COMMIT_ACTIONS = new Set(["pending", "commit", "rollback"]);
+
+function normalizeCommitJournal(value, { strict = false } = {}) {
+  if (value == null) return null;
+  if (!Array.isArray(value)) {
+    if (strict) throw new Error(`非法提交日志：必须是数组`);
+    return null;
+  }
+  const entries = [];
+  const malformed = (item) => {
+    if (!strict) return;
+    let preview;
+    try { preview = JSON.stringify(item); } catch { preview = String(item); }
+    throw new Error(`非法提交日志条目：${(preview ?? "undefined").slice(0, 120)}`);
+  };
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) { malformed(item); continue; }
+    if (!COMMIT_ACTIONS.has(item.action)) { malformed(item); continue; }
+    if (typeof item.at !== "string" || !Number.isFinite(Date.parse(item.at))) { malformed(item); continue; }
+    const entry = { action: item.action, at: item.at };
+    let ok = true;
+    for (const field of ["sha256", "expectSha256"]) {
+      if (item[field] == null) continue;
+      if (typeof item[field] !== "string" || !item[field].trim()) { ok = false; break; }
+      entry[field] = item[field].trim();
+    }
+    if (!ok) { malformed(item); continue; }
+    if (item.note != null) {
+      if (typeof item.note !== "string") { malformed(item); continue; }
+      const note = cleanSummary(item.note);
+      if (note) entry.note = note;
+    }
+    entries.push(entry);
+  }
+  return entries;
+}
+
 function validateEntry(source, entry) {
   assertSource(source);
   if (!entry || typeof entry !== "object") throw new Error(`来源状态非法：${source}`);
@@ -54,7 +94,7 @@ function validateEntry(source, entry) {
     throw new Error(`来源更新时间非法：${source}`);
   }
   if (typeof entry.preservedStaleFile !== "boolean") throw new Error(`来源旧文件标记非法：${source}`);
-  return {
+  const normalized = {
     status: entry.status,
     file: entry.file,
     count: entry.count,
@@ -62,6 +102,14 @@ function validateEntry(source, entry) {
     updatedAt: entry.updatedAt,
     preservedStaleFile: entry.preservedStaleFile
   };
+  // Optional two-phase-commit extensions. Absent fields stay absent; unknown
+  // fields are ignored so older/newer writers never break this reader.
+  if (typeof entry.contentSha256 === "string" && entry.contentSha256.trim()) {
+    normalized.contentSha256 = entry.contentSha256.trim();
+  }
+  const commitJournal = normalizeCommitJournal(entry.commitJournal);
+  if (commitJournal?.length) normalized.commitJournal = commitJournal;
+  return normalized;
 }
 
 export function validateSourceStatusDocument(document, week) {
@@ -108,16 +156,25 @@ export async function readWeeklySourceStatus(weekRoot, week) {
   }
 }
 
-export async function updateWeeklySourceStatus({ weekRoot, week, source, status, file, count = 0, summary = "", preservedStaleFile = false }) {
+export async function updateWeeklySourceStatus({
+  weekRoot, week, source, status, file, count = 0, summary = "", preservedStaleFile = false,
+  contentSha256 = null, commitJournal = null, appendJournal = null
+}) {
   assertWeek(week);
+  if (contentSha256 != null && (typeof contentSha256 !== "string" || !contentSha256.trim())) {
+    throw new Error(`非法来源内容哈希：${source}`);
+  }
   const entry = validateEntry(source, {
     status,
     file,
     count,
     summary: cleanSummary(summary),
     updatedAt: new Date().toISOString(),
-    preservedStaleFile
+    preservedStaleFile,
+    ...(contentSha256 != null ? { contentSha256: contentSha256.trim() } : {}),
+    ...(commitJournal != null ? { commitJournal: normalizeCommitJournal(commitJournal, { strict: true }) } : {})
   });
+  const appendedJournal = appendJournal == null ? null : normalizeCommitJournal(appendJournal, { strict: true });
   if (entry.status === "ready" && !(await fileExists(path.join(weekRoot, entry.file)))) {
     throw new Error(`ready 来源文件不存在：${entry.file}`);
   }
@@ -129,15 +186,26 @@ export async function updateWeeklySourceStatus({ weekRoot, week, source, status,
     // the latest sidecar rather than overwriting one another's source entries.
     const current = await readWeeklySourceStatus(weekRoot, week);
     const now = new Date().toISOString();
+    const merged = { ...entry, updatedAt: now };
+    // Commit journals survive unrelated updates: inherit the existing journal
+    // unless the caller replaces it (commitJournal) or appends (appendJournal).
+    const currentJournal = Array.isArray(current.sources[source]?.commitJournal) ? current.sources[source].commitJournal : [];
+    if (appendedJournal?.length) {
+      merged.commitJournal = [...currentJournal, ...appendedJournal];
+    } else if (entry.commitJournal) {
+      merged.commitJournal = entry.commitJournal;
+    } else if (currentJournal.length) {
+      merged.commitJournal = currentJournal;
+    }
     const document = {
       version: 1,
       week,
       updatedAt: now,
-      sources: { ...current.sources, [source]: { ...entry, updatedAt: now } }
+      sources: { ...current.sources, [source]: merged }
     };
     const temp = `${target}.${process.pid}-${randomUUID()}.tmp`;
     try {
-      await writeFile(temp, `${JSON.stringify(document, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+      await writeFile(temp, `${JSON.stringify(document, null, 2)}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
       await rename(temp, target);
     } finally {
       await unlink(temp).catch((error) => { if (error.code !== "ENOENT") throw error; });

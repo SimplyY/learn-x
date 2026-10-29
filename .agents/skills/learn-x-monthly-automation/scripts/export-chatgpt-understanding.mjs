@@ -9,7 +9,7 @@ const defaultRepoRoot = path.resolve(__dirname, "../../../..");
 const maxChars = { self: 2250, memory: 4500 };
 // 两次月度请求间隔对齐 Bridge 默认成功冷却（60 秒）；失败重试等待仍以 Bridge 返回的 retryAfterSeconds 为准。
 export const DEFAULT_BRIDGE_GAP_MS = 60_000;
-const defaultBridgeTimeoutMs = 240_000;
+const defaultBridgeTimeoutMs = 270_000;
 const safeRetryReasons = new Set([
   "ego-bootstrap-permission",
   "ego-browser-unavailable",
@@ -275,7 +275,8 @@ export async function exportChatgptUnderstanding(options = {}) {
     try {
       return await runner(prompt, {
         ...options,
-        timeoutMs: options.bridgeTimeoutMs || defaultBridgeTimeoutMs,
+        timeoutMs: options.bridgeTimeoutMs ?? options.timeoutMs ?? defaultBridgeTimeoutMs,
+        callerLabel: "learn-x:monthly-understanding",
         understandingPart: part
       });
     }
@@ -287,7 +288,7 @@ export async function exportChatgptUnderstanding(options = {}) {
     const failure = {
       schemaVersion: 1, month, status: selfResult?.status === "needs_review" ? "needs_review" : "failed",
       reason: bridgeFailureReason(selfBridge),
-      runs: { self: { runId: selfResult?.runId, conversationUrl: selfResult?.conversationUrl } },
+      runs: { self: { runId: selfResult?.runId, conversationUrl: selfResult?.conversationUrl, ...(selfResult?.contextPack ? { contextPack: selfResult.contextPack } : {}) } },
       bridgeExit: { self: bridgeExitSummary(selfBridge) },
       retryAfterSeconds: selfResult?.retryAfterSeconds,
       retryNotBefore: selfResult?.retryAfterSeconds ? Date.now() + selfResult.retryAfterSeconds * 1000 : undefined,
@@ -308,8 +309,8 @@ export async function exportChatgptUnderstanding(options = {}) {
       schemaVersion: 1, month, status: memoryResult?.status === "needs_review" ? "needs_review" : "failed",
       reason: bridgeFailureReason(memoryBridge),
       runs: {
-        self: { runId: selfResult.runId, conversationUrl: selfResult.conversationUrl },
-        memory: { runId: memoryResult?.runId, conversationUrl: memoryResult?.conversationUrl }
+        self: { runId: selfResult.runId, conversationUrl: selfResult.conversationUrl, ...(selfResult.contextPack ? { contextPack: selfResult.contextPack } : {}) },
+        memory: { runId: memoryResult?.runId, conversationUrl: memoryResult?.conversationUrl, ...(memoryResult?.contextPack ? { contextPack: memoryResult.contextPack } : {}) }
       },
       bridgeExit: { self: bridgeExitSummary(selfBridge), memory: bridgeExitSummary(memoryBridge) },
       retryAfterSeconds: memoryResult?.retryAfterSeconds,
@@ -330,8 +331,8 @@ export async function exportChatgptUnderstanding(options = {}) {
       schemaVersion: 1, month, status: "needs_review", reason: "invalid-output", validation: validation.reasons,
       observedChars: { self: outputs.self.length, memory: outputs.memory.length },
       runs: {
-        self: { runId: selfResult.runId, conversationUrl: selfResult.conversationUrl },
-        memory: { runId: memoryResult.runId, conversationUrl: memoryResult.conversationUrl }
+        self: { runId: selfResult.runId, conversationUrl: selfResult.conversationUrl, ...(selfResult.contextPack ? { contextPack: selfResult.contextPack } : {}) },
+        memory: { runId: memoryResult.runId, conversationUrl: memoryResult.conversationUrl, ...(memoryResult.contextPack ? { contextPack: memoryResult.contextPack } : {}) }
       },
       completedAt: new Date().toISOString()
     };
@@ -346,8 +347,8 @@ export async function exportChatgptUnderstanding(options = {}) {
     promptSha256: { self: sha256(prompts.self), memory: sha256(prompts.memory) },
     outputSha256: hashes,
     runs: {
-      self: { runId: selfResult.runId, conversationUrl: selfResult.conversationUrl },
-      memory: { runId: memoryResult.runId, conversationUrl: memoryResult.conversationUrl }
+      self: { runId: selfResult.runId, conversationUrl: selfResult.conversationUrl, ...(selfResult.contextPack ? { contextPack: selfResult.contextPack } : {}) },
+      memory: { runId: memoryResult.runId, conversationUrl: memoryResult.conversationUrl, ...(memoryResult.contextPack ? { contextPack: memoryResult.contextPack } : {}) }
     },
     completedAt: new Date().toISOString()
   });
@@ -357,8 +358,8 @@ export async function exportChatgptUnderstanding(options = {}) {
     await writeJsonAtomic(statePath, {
       schemaVersion: 1, month, status: "needs_review", reason: "validated-output-not-committed",
       outputSha256: hashes, runs: {
-        self: { runId: selfResult.runId, conversationUrl: selfResult.conversationUrl },
-        memory: { runId: memoryResult.runId, conversationUrl: memoryResult.conversationUrl }
+        self: { runId: selfResult.runId, conversationUrl: selfResult.conversationUrl, ...(selfResult.contextPack ? { contextPack: selfResult.contextPack } : {}) },
+        memory: { runId: memoryResult.runId, conversationUrl: memoryResult.conversationUrl, ...(memoryResult.contextPack ? { contextPack: memoryResult.contextPack } : {}) }
       }, completedAt: new Date().toISOString()
     });
     return { status: "needs_review", reason: "validated-output-not-committed", month, files: current.files };
@@ -370,8 +371,8 @@ export async function exportChatgptUnderstanding(options = {}) {
     const failure = {
       schemaVersion: 1, month, status: "needs_review", reason: "diff-not-committed",
       outputSha256: hashes, runs: {
-        self: { runId: selfResult.runId, conversationUrl: selfResult.conversationUrl },
-        memory: { runId: memoryResult.runId, conversationUrl: memoryResult.conversationUrl }
+        self: { runId: selfResult.runId, conversationUrl: selfResult.conversationUrl, ...(selfResult.contextPack ? { contextPack: selfResult.contextPack } : {}) },
+        memory: { runId: memoryResult.runId, conversationUrl: memoryResult.conversationUrl, ...(memoryResult.contextPack ? { contextPack: memoryResult.contextPack } : {}) }
       }, completedAt: new Date().toISOString()
     };
     await writeJsonAtomic(statePath, failure);
@@ -383,8 +384,8 @@ export async function exportChatgptUnderstanding(options = {}) {
     promptSha256: { self: sha256(prompts.self), memory: sha256(prompts.memory) },
     outputSha256: hashes,
     runs: {
-      self: { runId: selfResult.runId, conversationUrl: selfResult.conversationUrl },
-      memory: { runId: memoryResult.runId, conversationUrl: memoryResult.conversationUrl }
+      self: { runId: selfResult.runId, conversationUrl: selfResult.conversationUrl, ...(selfResult.contextPack ? { contextPack: selfResult.contextPack } : {}) },
+      memory: { runId: memoryResult.runId, conversationUrl: memoryResult.conversationUrl, ...(memoryResult.contextPack ? { contextPack: memoryResult.contextPack } : {}) }
     },
     completedAt: new Date().toISOString()
   });
@@ -392,6 +393,7 @@ export async function exportChatgptUnderstanding(options = {}) {
     status: "succeeded", month, files,
     outputSha256: hashes,
     runIds: { self: selfResult.runId, memory: memoryResult.runId },
+    contextPacks: { self: selfResult.contextPack, memory: memoryResult.contextPack },
     conversationUrls: { self: selfResult.conversationUrl, memory: memoryResult.conversationUrl }
   };
 }

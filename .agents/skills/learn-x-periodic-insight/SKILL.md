@@ -7,6 +7,8 @@ description: Learn-X 周期洞察 v2。按目标周期与历史范围装配 Cont
 
 这是独立于既有周度自动化的周期洞察主链。Chat Pack 与自动任务共用 `00_config/periodic-insights.json` 和 `periodic-insight-core.mjs`，不修改既有周/月 Output 门禁。
 
+实际调用沿用共享 [ChatGPT Bridge](/Users/yuwei/code/browser-runtime-governance/skills/chatgpt-web-bridge/SKILL.md)，默认在提交前按请求导出一份相同输入的私有 TXT，不另建手动 Prompt 或导出器；预览仍不触发 Bridge。保留稳定 `callerLabel`，按当前应用与认证本人私聊核验结果绑定 `contextPackDelivery`，向用户提供 `result.contextPack.path` 或已确认的私聊附件。附件交付默认预算 30 秒，失败或待核实不改变原生成、校验及归档门禁；`exactInput` 原样，未知发送不自动重发。
+
 默认只预览：
 
 ```bash

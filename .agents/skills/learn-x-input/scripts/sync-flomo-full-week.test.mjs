@@ -3,9 +3,9 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { flomoBodyHash, flomoMemoUrl, writeStagedOnlineFlomoSnapshot } from "./lib/flomo-full-snapshot.mjs";
-import { readWeeklySourceStatus } from "./lib/source-status.mjs";
-import { paths, readJson } from "../../learn-x-flomo-review/scripts/review.mjs";
+import { defaultFlomoPrivateDataRoot, flomoBodyHash, flomoMemoUrl, resolveFlomoPathAllowed, writeStagedOnlineFlomoSnapshot } from "./lib/flomo-full-snapshot.mjs";
+import { fileExists, readWeeklySourceStatus } from "./lib/source-status.mjs";
+import { activateOnlineSnapshot, paths, readJson } from "../../learn-x-flomo-review/scripts/review.mjs";
 import { parseSyncArgs, syncFlomoFullWeek } from "./sync-flomo-full-week.mjs";
 
 const week = "2026-W40";
@@ -15,12 +15,15 @@ function record(id, body, createdAt = "2026-09-29T03:00:00.000Z", isPinned = fal
     bodyText: body, bodyComplete: true, isPinned };
 }
 
-function fullScan(records, libraryCount = records.length) {
+function fullScan(records, libraryCount = records.length, {
+  scanStartedAt = "2026-10-11T00:00:00.000Z",
+  scanFinishedAt = "2026-10-11T01:00:00.000Z",
+} = {}) {
   const longest = [...records].sort((a, b) => b.bodyText.length - a.bodyText.length)[0];
   const missingCount = libraryCount - records.length;
   return {
     mode: "full", complete: true, libraryCount, scanned: records.length, pageCount: 4,
-    scanStartedAt: "2026-10-11T00:00:00.000Z", scanFinishedAt: "2026-10-11T01:00:00.000Z",
+    scanStartedAt, scanFinishedAt,
     termination: { reason: missingCount ? "stable-bottom-with-accepted-count-gap" : "library-count-and-stable-ids",
       enumerationComplete: true, expectedCount: libraryCount, observedUniqueIds: records.length, missingCount,
       stableScrollPasses: 2, atBottom: true, hasMore: false, loading: false },
@@ -41,7 +44,7 @@ async function fixture(t) {
 }
 
 function stagedCollector(root, scan) {
-  return async () => writeStagedOnlineFlomoSnapshot(root, scan, { storageRoot: path.join(root, "staging") });
+  return async () => writeStagedOnlineFlomoSnapshot(root, scan, { storageRoot: defaultFlomoPrivateDataRoot(root) });
 }
 
 test("full-week sync activates one validated snapshot and renders weekly input from that same scan", async (t) => {
@@ -60,6 +63,142 @@ test("full-week sync activates one validated snapshot and renders weekly input f
   const status = await readWeeklySourceStatus(weekRoot, week);
   assert.equal(status.sources.flomo.status, "ready");
   assert.equal(status.sources.flomo.count, 1);
+});
+
+test("a handwritten weekly file blocks snapshot activation before it can diverge from the active snapshot", async (t) => {
+  const { root, weekRoot, attemptToken } = await fixture(t);
+  const first = await syncFlomoFullWeek({ week, attemptToken, repoRoot: root,
+    collect: stagedCollector(root, fullScan([record("memo-last-good", "最后一次成功的扫描。")])) });
+  const activeBefore = await readJson(paths(root).catalog);
+  const file = path.join(weekRoot, "flomo.md");
+  const handwritten = "# 人工维护的周输入\n\n不得被覆盖。\n";
+  await writeFile(file, handwritten);
+  const nextAttemptToken = "fedcba98-7654-3210-fedc-ba9876543210";
+  await writeFile(path.join(weekRoot, "_flomo-attempt.json"), JSON.stringify({ token: nextAttemptToken, active: true }));
+
+  await assert.rejects(syncFlomoFullWeek({ week, attemptToken: nextAttemptToken, repoRoot: root,
+    collect: stagedCollector(root, fullScan([record("memo-next", "不应激活的新扫描。")], 1,
+      { scanStartedAt: "2026-10-12T00:00:00.000Z", scanFinishedAt: "2026-10-12T01:00:00.000Z" })) }), /flomo-existing-file-not-generated/);
+
+  assert.equal(await readFile(file, "utf8"), handwritten);
+  assert.deepEqual(await readJson(paths(root).catalog), activeBefore);
+  assert.equal((await readJson(paths(root).catalog)).snapshot.snapshotId, first.snapshotId);
+  assert.equal(paths(root).onlineStorageActive, true);
+});
+
+test("the activation commit hook catches a handwritten-file race before switching the active snapshot", async (t) => {
+  const { root, weekRoot, attemptToken } = await fixture(t);
+  const first = await syncFlomoFullWeek({ week, attemptToken, repoRoot: root,
+    collect: stagedCollector(root, fullScan([record("memo-last-good", "最后一次成功的扫描。")])) });
+  const activeBefore = await readJson(paths(root).catalog);
+  const file = path.join(weekRoot, "flomo.md");
+  const handwritten = "# 在预检后写入的人工内容\n";
+  const nextAttemptToken = "fedcba98-7654-3210-fedc-ba9876543210";
+  await writeFile(path.join(weekRoot, "_flomo-attempt.json"), JSON.stringify({ token: nextAttemptToken, active: true }));
+
+  await assert.rejects(syncFlomoFullWeek({ week, attemptToken: nextAttemptToken, repoRoot: root,
+    collect: stagedCollector(root, fullScan([record("memo-next", "不应激活的新扫描。")], 1,
+      { scanStartedAt: "2026-10-12T00:00:00.000Z", scanFinishedAt: "2026-10-12T01:00:00.000Z" })),
+    activate: async (projectRoot, snapshotPath, options) => {
+      await writeFile(file, handwritten);
+      return activateOnlineSnapshot(projectRoot, snapshotPath, options);
+    } }), /flomo-existing-file-not-generated/);
+
+  assert.equal(await readFile(file, "utf8"), handwritten);
+  assert.deepEqual(await readJson(paths(root).catalog), activeBefore);
+  assert.equal((await readJson(paths(root).catalog)).snapshot.snapshotId, first.snapshotId);
+});
+
+test("a weekly publish failure inside the activation hook preserves the last active snapshot", async (t) => {
+  const { root, weekRoot, attemptToken } = await fixture(t);
+  const first = await syncFlomoFullWeek({ week, attemptToken, repoRoot: root,
+    collect: stagedCollector(root, fullScan([record("memo-last-good", "最后一次成功的扫描。")])) });
+  const activeBefore = await readJson(paths(root).catalog);
+  const file = path.join(weekRoot, "flomo.md");
+  const previousWeekFile = await readFile(file, "utf8");
+  const nextAttemptToken = "fedcba98-7654-3210-fedc-ba9876543210";
+  await writeFile(path.join(weekRoot, "_flomo-attempt.json"), JSON.stringify({ token: nextAttemptToken, active: true }));
+
+  await assert.rejects(syncFlomoFullWeek({ week, attemptToken: nextAttemptToken, repoRoot: root,
+    collect: stagedCollector(root, fullScan([record("memo-next", "本次发布将失败。")], 1,
+      { scanStartedAt: "2026-10-12T00:00:00.000Z", scanFinishedAt: "2026-10-12T01:00:00.000Z" })),
+    publish: async () => { throw new Error("weekly-file-publish-failed"); } }), /weekly-file-publish-failed/);
+
+  assert.equal(await readFile(file, "utf8"), previousWeekFile);
+  assert.deepEqual(await readJson(paths(root).catalog), activeBefore);
+  assert.equal((await readJson(paths(root).catalog)).snapshot.snapshotId, first.snapshotId);
+});
+
+test("an activation commit failure rolls the weekly file back to the last active snapshot", async (t) => {
+  const { root, weekRoot, attemptToken } = await fixture(t);
+  const first = await syncFlomoFullWeek({ week, attemptToken, repoRoot: root,
+    collect: stagedCollector(root, fullScan([record("memo-last-good", "最后一次成功的扫描。")])) });
+  const activeBefore = await readJson(paths(root).storageModePath);
+  const file = path.join(weekRoot, "flomo.md");
+  const previousWeekFile = await readFile(file, "utf8");
+  const nextAttemptToken = "fedcba98-7654-3210-fedc-ba9876543210";
+  await writeFile(path.join(weekRoot, "_flomo-attempt.json"), JSON.stringify({ token: nextAttemptToken, active: true }));
+
+  await assert.rejects(syncFlomoFullWeek({ week, attemptToken: nextAttemptToken, repoRoot: root,
+    collect: stagedCollector(root, fullScan([record("memo-next", "新周文件必须随失败回滚。")], 1,
+      { scanStartedAt: "2026-10-12T00:00:00.000Z", scanFinishedAt: "2026-10-12T01:00:00.000Z" })),
+    activate: async (projectRoot, snapshotPath, options) => activateOnlineSnapshot(projectRoot, snapshotPath, {
+      beforeCommit: async () => {
+        await options.beforeCommit();
+        throw new Error("snapshot-pointer-commit-failed");
+      },
+    }) }), /snapshot-pointer-commit-failed/);
+
+  assert.equal(await readFile(file, "utf8"), previousWeekFile);
+  assert.deepEqual(await readJson(paths(root).storageModePath), activeBefore);
+  assert.equal((await readWeeklySourceStatus(weekRoot, week)).sources.flomo.status, "failed");
+  assert.equal((await readJson(paths(root).catalog)).snapshot.snapshotId, first.snapshotId);
+});
+
+test("an activation failure removes a first weekly file when there was no previous one", async (t) => {
+  const { root, weekRoot, attemptToken } = await fixture(t);
+  await assert.rejects(syncFlomoFullWeek({ week, attemptToken, repoRoot: root,
+    collect: stagedCollector(root, fullScan([record("memo-first", "首次发布失败后不得留下未激活输入。")])),
+    activate: async (projectRoot, snapshotPath, options) => activateOnlineSnapshot(projectRoot, snapshotPath, {
+      beforeCommit: async () => {
+        await options.beforeCommit();
+        throw new Error("snapshot-pointer-commit-failed");
+      },
+    }) }), /snapshot-pointer-commit-failed/);
+
+  assert.equal(await fileExists(path.join(weekRoot, "flomo.md")), false);
+  assert.equal(paths(root).onlineStorageActive, false);
+  assert.equal((await readWeeklySourceStatus(weekRoot, week)).sources.flomo.status, "failed");
+});
+
+test("full-week sync passes the repository-local private root to its collector by default", async (t) => {
+  const { root, attemptToken } = await fixture(t);
+  let seenStorageRoot;
+  const note = record("memo-local-root", "项目内私有目录路由测试。");
+  const result = await syncFlomoFullWeek({
+    week,
+    attemptToken,
+    repoRoot: root,
+    collect: async (options) => {
+      seenStorageRoot = options.storageRoot;
+      return writeStagedOnlineFlomoSnapshot(root, fullScan([note]), { storageRoot: seenStorageRoot });
+    },
+  });
+  assert.equal(seenStorageRoot, await resolveFlomoPathAllowed(defaultFlomoPrivateDataRoot(root)));
+  assert.equal(result.status, "ready");
+});
+
+test("full-week sync rejects a Library storage override before invoking the collector", async (t) => {
+  const { root, attemptToken } = await fixture(t);
+  let collectStarted = false;
+  await assert.rejects(syncFlomoFullWeek({
+    week,
+    attemptToken,
+    repoRoot: root,
+    storageRoot: path.join(os.homedir(), "Library", "Application Support", "Learn-X", "flomo-review"),
+    collect: async () => { collectStarted = true; throw new Error("collector-should-not-run"); },
+  }), /flomo-storage-root-library-forbidden/);
+  assert.equal(collectStarted, false);
 });
 
 test("full snapshot refresh includes edits to older notes while the weekly file includes only target-week creations", async (t) => {
@@ -113,11 +252,15 @@ test("holds a full scan with more than five non-generated notes in one Shanghai 
 
 test("filters generated Learn-X records before hourly density validation", async (t) => {
   const { root, weekRoot, attemptToken } = await fixture(t);
+  const file = path.join(weekRoot, "flomo.md");
+  const handwritten = "# 人工维护的旧周输入\n\n空结果应保留它。\n";
+  await writeFile(file, handwritten);
   const records = Array.from({ length: 6 }, (_, index) => record(`memo-generated-${index}`, "Learn-X 周记\n自动生成的内容"));
   const result = await syncFlomoFullWeek({ week, attemptToken, repoRoot: root,
     collect: stagedCollector(root, fullScan(records)) });
   assert.equal(result.status, "empty");
   assert.equal(result.count, 0);
+  assert.equal(await readFile(file, "utf8"), handwritten);
   assert.equal(paths(root).onlineStorageActive, true);
   const status = await readWeeklySourceStatus(weekRoot, week);
   assert.equal(status.sources.flomo.status, "empty");
@@ -171,7 +314,7 @@ test("preserves a safe Flomo scan error code and stage in failed source status",
 test("late attempt token is rejected before the active snapshot pointer changes", async (t) => {
   const { root, weekRoot, attemptToken } = await fixture(t);
   const collect = async () => {
-    const staged = await writeStagedOnlineFlomoSnapshot(root, fullScan([record("memo-late", "迟到尝试不应提交。")]), { storageRoot: path.join(root, "staging") });
+    const staged = await writeStagedOnlineFlomoSnapshot(root, fullScan([record("memo-late", "迟到尝试不应提交。")]), { storageRoot: defaultFlomoPrivateDataRoot(root) });
     await writeFile(path.join(weekRoot, "_flomo-attempt.json"), JSON.stringify({ token: "fedcba98-7654-3210-fedc-ba9876543210", active: true }));
     return staged;
   };

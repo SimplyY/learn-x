@@ -1,20 +1,26 @@
 import assert from "node:assert/strict";
-import { chmod, lstat, mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { JSDOM } from "jsdom";
 import { buildEgoFullScanScript, collectFlomoFullSnapshot } from "./collect-flomo-weekly.mjs";
 import {
+  assertFlomoStorageRootAllowed,
   createOnlineFlomoSnapshot,
+  defaultFlomoPrivateDataRoot,
   flomoBodyHash,
   normalizeFlomoBody,
   readVerifiedStagedOnlineFlomoSnapshot,
   renderOnlineFlomoCard,
   renderOnlineFlomoPreview,
+  resolveFlomoPathAllowed,
   validateFullFlomoScan,
   writeStagedOnlineFlomoSnapshot,
 } from "./lib/flomo-full-snapshot.mjs";
+
+const EXPECTED_REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 
 const sourceRecord = (memoId, bodyText, overrides = {}) => ({
   memoId,
@@ -58,6 +64,43 @@ function fullScan(records, overrides = {}) {
     ...overrides,
   };
 }
+
+test("default Flomo snapshot storage is a project-local ignored directory", () => {
+  const expected = path.join(EXPECTED_REPO_ROOT, "04_output/_dist/flomo-review/online-full");
+  assert.equal(defaultFlomoPrivateDataRoot(), expected);
+  assert.equal(defaultFlomoPrivateDataRoot("/tmp/learn-x-fixture"),
+    path.join("/tmp/learn-x-fixture", "04_output/_dist/flomo-review/online-full"));
+  assert.doesNotMatch(defaultFlomoPrivateDataRoot(), /(?:^|[/\\])Library(?:[/\\]|$)/);
+});
+
+test("rejects a Library storage path before scanning or writing staged data", async (t) => {
+  const forbiddenRoot = path.join(os.homedir(), "Library", "Application Support", "Learn-X", "flomo-review");
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-forbidden-root-"));
+  t.after(() => rm(repoRoot, { recursive: true, force: true }));
+  let scanStarted = false;
+  assert.throws(() => assertFlomoStorageRootAllowed(forbiddenRoot), /flomo-storage-root-library-forbidden/);
+  await assert.rejects(collectFlomoFullSnapshot({
+    repoRoot,
+    storageRoot: forbiddenRoot,
+    scan: async () => { scanStarted = true; return fullScan([]); },
+  }), /flomo-storage-root-library-forbidden/);
+  const safeStorageRoot = path.join(repoRoot, "safe-storage");
+  await assert.rejects(collectFlomoFullSnapshot({
+    repoRoot,
+    storageRoot: safeStorageRoot,
+    snapshotPath: forbiddenRoot,
+    scan: async () => { scanStarted = true; return fullScan([]); },
+  }), /flomo-storage-root-library-forbidden/);
+  await assert.rejects(writeStagedOnlineFlomoSnapshot(repoRoot, fullScan([]), {
+    storageRoot: safeStorageRoot, previewPath: forbiddenRoot,
+  }), /flomo-storage-root-library-forbidden/);
+  await assert.rejects(readVerifiedStagedOnlineFlomoSnapshot(path.join(forbiddenRoot, "snapshot.json")),
+    /flomo-storage-root-library-forbidden/);
+  const libraryAlias = path.join(repoRoot, "library-alias");
+  await symlink(forbiddenRoot, libraryAlias);
+  await assert.rejects(resolveFlomoPathAllowed(libraryAlias), /flomo-storage-root-library-forbidden/);
+  assert.equal(scanStarted, false);
+});
 
 test("validates full-scan termination, identities, body text, and detail evidence", () => {
   const duplicateText = fullScan([
@@ -148,7 +191,12 @@ test("creates a private staged snapshot and a Card 2.0 preview bound to the same
   } });
   const result = await writeStagedOnlineFlomoSnapshot(repoRoot, scan);
   const stageDirectory = path.dirname(result.snapshotPath);
+  const expectedStageRoot = await resolveFlomoPathAllowed(path.join(defaultFlomoPrivateDataRoot(repoRoot), "staged"));
+  assert.ok(result.snapshotPath.startsWith(expectedStageRoot + path.sep));
   assert.equal((await lstat(stageDirectory)).mode & 0o777, 0o700);
+  for (const privateFile of [result.snapshotPath, result.previewPath, result.cardPath, result.bundlePath]) {
+    assert.equal((await lstat(privateFile)).mode & 0o777, 0o600, `private artifact mode: ${path.basename(privateFile)}`);
+  }
   const snapshot = JSON.parse(await readFile(result.snapshotPath, "utf8"));
   const card = JSON.parse(await readFile(result.cardPath, "utf8"));
   const preview = await readFile(result.previewPath, "utf8");
@@ -175,10 +223,10 @@ test("creates a private staged snapshot and a Card 2.0 preview bound to the same
 });
 
 test("the full-snapshot entry point validates once and stages its browser result", async (t) => {
-  const storageRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-full-entry-"));
-  t.after(() => rm(storageRoot, { recursive: true, force: true }));
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-full-entry-"));
+  t.after(() => rm(repoRoot, { recursive: true, force: true }));
   const record = sourceRecord("memo-entry", "经过浏览器采集的完整正文。");
-  const result = await collectFlomoFullSnapshot({ storageRoot, scan: async () => fullScan([record]) });
+  const result = await collectFlomoFullSnapshot({ repoRoot, scan: async () => fullScan([record]) });
   const staged = await readVerifiedStagedOnlineFlomoSnapshot(result.snapshotPath);
   assert.equal(result.totalCount, 1);
   assert.equal(staged.snapshot.records[0].memoId, record.memoId);
@@ -186,12 +234,33 @@ test("the full-snapshot entry point validates once and stages its browser result
   assert.equal(staged.snapshot.detailVerification.bodyHash, flomoBodyHash(record.bodyText));
 });
 
+test("rejects full-snapshot storage outside the project before scanning or staging", async (t) => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-storage-project-"));
+  const outsideRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-storage-outside-"));
+  t.after(async () => {
+    await rm(repoRoot, { recursive: true, force: true });
+    await rm(outsideRoot, { recursive: true, force: true });
+  });
+  let scanStarted = false;
+  await assert.rejects(collectFlomoFullSnapshot({
+    repoRoot,
+    storageRoot: outsideRoot,
+    scan: async () => { scanStarted = true; return fullScan([sourceRecord("memo-outside", "synthetic test body")]); },
+  }), /flomo-storage-root-outside-project/);
+  await assert.rejects(writeStagedOnlineFlomoSnapshot(repoRoot, fullScan([sourceRecord("memo-outside", "synthetic test body")]), {
+    storageRoot: outsideRoot,
+  }), /flomo-storage-root-outside-project/);
+  assert.equal(scanStarted, false);
+});
+
 test("refuses to stage memo bodies in a group- or world-readable directory", async (t) => {
-  const storageRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-full-insecure-"));
-  t.after(() => rm(storageRoot, { recursive: true, force: true }));
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-full-insecure-"));
+  const storageRoot = path.join(repoRoot, "private");
+  t.after(() => rm(repoRoot, { recursive: true, force: true }));
+  await mkdir(storageRoot, { recursive: true, mode: 0o755 });
   await chmod(storageRoot, 0o755);
   await assert.rejects(
-    writeStagedOnlineFlomoSnapshot(storageRoot, fullScan([sourceRecord("memo-a", "私人正文")]), { storageRoot }),
+    writeStagedOnlineFlomoSnapshot(repoRoot, fullScan([sourceRecord("memo-a", "私人正文")]), { storageRoot }),
     /storage-directory-not-private/,
   );
 });

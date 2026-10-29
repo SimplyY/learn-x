@@ -1,5 +1,5 @@
 import { execFile as execFileCallback } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { mkdir, open as openFile, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { buildInsightContext, buildInsightPrompt, buildPromptAssets, findTask, isSubstantive, readPeriodicConfig } from "./periodic-insight-core.mjs";
 import { runBridgeCli } from "../../learn-x-weekly-automation/scripts/generate-ai-review.mjs";
+import { safeBusinessOutcomeReason, writeBridgeBusinessOutcome } from "../../../lib/bridge-business-outcome.mjs";
 import { dcPublishXml } from "../../../lib/inquiry-wiki.mjs";
 
 const execFile = promisify(execFileCallback);
@@ -48,7 +49,9 @@ export async function runPeriodicInsight(options = {}) {
       let reason = !generatedText ? "generated-output-missing" : previous.runKey !== runKey || previous.target?.id !== context.target.id || previous.target?.kind !== context.target.kind ? "generated-run-key-mismatch" : previous.outputSha256 !== sha256(generatedText) ? "generated-output-integrity-mismatch" : null;
       if (!reason) { try { validateGeneratedOutput(generatedText, task, context.target); } catch { reason = "generated-output-invalid"; } }
       if (reason) { const pending = { ...previous, status: "archive_pending", reason, updatedAt: new Date().toISOString() }; await writeJson(paths.state, pending); return { ...pending, paths }; }
-      return archiveIfRequested({ ...options, repoRoot, task, context, paths, state: previous });
+      const finalResult = await archiveIfRequested({ ...options, repoRoot, task, context, paths, state: previous });
+      await recordPeriodicBusinessOutcome(finalResult, options);
+      return finalResult;
     }
     await writeFile(paths.context, context.content, "utf8"); await writeJson(paths.manifest, context.manifest);
     let promptAssets;
@@ -87,19 +90,55 @@ export async function runPeriodicInsight(options = {}) {
     }
     if (!task.prompt.productionReady || !options.send) { const preview = { schemaVersion: 1, taskId, runKey, target: context.target, status: "preview", contextSha256: context.sha256, promptSha256: sha256(prompt), prompt_assets, updatedAt: new Date().toISOString(), ...(task.prompt.productionReady ? {} : { reason: "production-not-ready" }) }; await writeJson(paths.state, preview); return { ...preview, paths }; }
     if (!options.confirm) throw new Error("send-requires-confirm");
-    const submitted = { schemaVersion: 1, taskId, runKey, target: context.target, status: "submitted", contextSha256: context.sha256, promptSha256: sha256(prompt), prompt_assets, submittedAt: new Date().toISOString() }; await writeJson(paths.state, submitted);
+    const attemptId = randomUUID();
+    const submitted = { schemaVersion: 1, taskId, runKey, target: context.target, status: "submitted", attemptId, contextSha256: context.sha256, promptSha256: sha256(prompt), prompt_assets, submittedAt: new Date().toISOString() }; await writeJson(paths.state, submitted);
     let bridge;
-    try { bridge = await (options.runBridge || runBridgeCli)(prompt, { ...options, bridgePath: options.bridgePath || defaultBridge }); } catch (error) { const review = { ...submitted, status: "needs_review", reason: String(error?.message || error), updatedAt: new Date().toISOString() }; await writeJson(paths.state, review); return { ...review, paths }; }
+    try { bridge = await (options.runBridge || runBridgeCli)(prompt, { ...options, bridgePath: options.bridgePath || defaultBridge, callerLabel: "learn-x:periodic-insight", preallocatedRunId: attemptId }); } catch (error) { const review = { ...submitted, status: "needs_review", reason: String(error?.message || error), updatedAt: new Date().toISOString() }; await writeJson(paths.state, review); await recordPeriodicBusinessOutcome(review, options); return { ...review, paths }; }
     const result = bridge?.result || bridge;
+    const contextPack = result?.contextPack ? { contextPack: result.contextPack } : {};
     const bridgeExitFailure = bridge?.exit && (bridge.exit.timedOut || bridge.exit.error || bridge.exit.code !== 0);
     const bridgeReason = result?.reason || (bridgeExitFailure ? (bridge.exit.timedOut ? "bridge-timeout" : bridge.exit.error ? "bridge-process-error" : "bridge-exit-nonzero") : bridge?.exit?.error || (!result?.conversationUrl ? "missing-conversation-url" : "bridge-result-invalid"));
     const outputHashMatches = result?.outputSha256 === sha256(result?.text || "");
-    if (bridgeExitFailure || result?.status !== "succeeded" || !result.runId || !String(result.text || "").trim() || result.format !== "markdown" || !result.conversationUrl || result.verification !== "live-dom+snapshot" || !outputHashMatches) { const review = { ...submitted, status: "needs_review", runId: result?.runId, conversationUrl: result?.conversationUrl, reason: bridgeReason, updatedAt: new Date().toISOString() }; await writeJson(paths.state, review); return { ...review, paths }; }
-    try { validateGeneratedOutput(result.text, task, context.target); } catch (error) { await writeFile(paths.unvalidated, result.text, "utf8"); const review = { ...submitted, status: "needs_review", runId: result.runId, conversationUrl: result.conversationUrl, outputSha256: sha256(result.text), unvalidatedPath: paths.unvalidated, reason: `invalid-output:${error.message}`, updatedAt: new Date().toISOString() }; await writeJson(paths.state, review); return { ...review, paths }; }
+    if (bridgeExitFailure || result?.status !== "succeeded" || !result.runId || !String(result.text || "").trim() || result.format !== "markdown" || !result.conversationUrl || result.verification !== "live-dom+snapshot" || !outputHashMatches) { const review = { ...submitted, ...contextPack, status: "needs_review", runId: result?.runId, conversationUrl: result?.conversationUrl, reason: bridgeReason, updatedAt: new Date().toISOString() }; await writeJson(paths.state, review); await recordPeriodicBusinessOutcome(review, options); return { ...review, paths }; }
+    try { validateGeneratedOutput(result.text, task, context.target); } catch (error) { await writeFile(paths.unvalidated, result.text, "utf8"); const review = { ...submitted, ...contextPack, status: "needs_review", runId: result.runId, conversationUrl: result.conversationUrl, outputSha256: sha256(result.text), unvalidatedPath: paths.unvalidated, reason: `invalid-output:${error.message}`, updatedAt: new Date().toISOString() }; await writeJson(paths.state, review); await recordPeriodicBusinessOutcome(review, options); return { ...review, paths }; }
     const generatedText = renderGenerated(result.text, task, context.target, result.conversationUrl); await writeFile(paths.generated, generatedText, "utf8");
-    const generated = { ...submitted, status: "generated", runId: result.runId, conversationUrl: result.conversationUrl, outputSha256: sha256(generatedText), generatedAt: new Date().toISOString() }; await writeJson(paths.state, generated);
-    return archiveIfRequested({ ...options, repoRoot, task, context, paths, state: generated });
+    const generated = { ...submitted, ...contextPack, status: "generated", runId: result.runId, conversationUrl: result.conversationUrl, outputSha256: sha256(generatedText), generatedAt: new Date().toISOString() }; await writeJson(paths.state, generated);
+    const finalResult = await archiveIfRequested({ ...options, repoRoot, task, context, paths, state: generated });
+    await recordPeriodicBusinessOutcome(finalResult, options);
+    return finalResult;
   } finally { await releaseLock(); }
+}
+
+async function recordPeriodicBusinessOutcome(state, options = {}) {
+  if (!state?.attemptId) return;
+  const status = state.status === "completed" ? "succeeded"
+    : state.status === "failed" ? "failed"
+      : state.status === "generated" || state.status === "submitted" ? "pending" : "needs_review";
+  const stage = state.status === "archive_pending" ? "delivery"
+    : state.status === "needs_review" && String(state.reason || "").startsWith("invalid-output:") ? "validation"
+      : state.status === "needs_review" ? "submit" : undefined;
+  const event = {
+    source: "learn-x", caller: "learn-x:periodic-insight", attemptId: state.attemptId,
+    clientRequestId: state.attemptId,
+    ...(typeof state.runId === "string" ? { runId: state.runId } : {}),
+    status, deliveryStatus: status,
+    businessValidationStatus: state.status === "completed" || state.status === "generated" ? "succeeded"
+      : state.status === "submitted" ? "pending" : "needs_review",
+    promotionStatus: state.status === "completed" ? "succeeded"
+      : state.status === "generated" || state.status === "submitted" ? "pending" : "needs_review",
+    readbackStatus: state.status === "completed" ? "succeeded"
+      : state.status === "generated" || state.status === "submitted" ? "pending" : "needs_review",
+    completionSource: state.status === "completed" || state.status === "generated" ? "ai-generated" : "unknown",
+    ...(stage ? { failureStage: stage } : {}),
+    ...(status === "succeeded" ? {} : { reason: await safeBusinessOutcomeReason(state, { bridgePath: options.bridgePath || defaultBridge }) }),
+  };
+  try {
+    const writer = options.recordBusinessOutcome || writeBridgeBusinessOutcome;
+    const result = await writer(event, { bridgePath: options.bridgePath || defaultBridge });
+    if (result?.status !== "recorded") throw new Error("outcome-write-unavailable");
+  } catch {
+    process.stderr.write(`${JSON.stringify({ event: "learn-x-business-outcome-write-failed", caller: event.caller, attemptId: event.attemptId, failureStage: "persistence" })}\n`);
+  }
 }
 
 async function archiveIfRequested({ repoRoot, task, context, paths, state, archive, runLark, publishDoc }) {

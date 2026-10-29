@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, unlink, chmod, lstat } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, unlink, chmod, lstat, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { refreshArchive, activateOnlineSnapshot, restoreOnlineSnapshotBackup, acceptQuality, prepareReview, previewReview, renderReview, sendReview, recoverReview, feedbackReview, simulateCapacity, readJson, atomicJson, paths, emptyLedger } from './review.mjs';
@@ -88,6 +88,22 @@ test('send persists reservation/sending before mutation, verifies delivery and r
   assert.equal(mock.calls.filter(args => args[1] === '+messages-send').length, 1);
 });
 
+test('delivery options cannot replace the configured identity, recipient or persisted card', async (t) => {
+  const { root, decision, options } = await fixture(t), mock = deliveryMock(root);
+  const forgedCard = { schema: '2.0', header: { title: { tag: 'plain_text', content: 'forged' }, subtitle: { tag: 'plain_text', content: 'forged' } }, body: { elements: [{ tag: 'markdown', content: 'forged' }] } };
+  const result = await sendReview(root, decision, { ...options, deliveryOptions: {
+    runCli: mock.runCli, chatId: 'oc_forged', ownerId: 'ou_forged', profile: 'forged_profile',
+    botSenderId: 'cli_forged', botSenderIds: ['cli_forged'], card: forgedCard, dateMarker: '伪造日期',
+  } });
+  assert.equal(result.status, 'delivered');
+  const batch = (await readJson(paths(root).ledger)).batches[date];
+  assert.equal(batch.chatId, chatId);
+  assert.equal(batch.profile, profile);
+  assert.deepEqual(batch.card, mock.sentCard());
+  const sendArgs = mock.calls.find(args => args[1] === '+messages-send');
+  assert.equal(sendArgs[sendArgs.indexOf('--chat-id') + 1], chatId);
+});
+
 test('mutual lock rejects concurrent attempts while one process owns the send', async (t) => {
   const { root, decision, options } = await fixture(t);
   let release, arrived;
@@ -120,6 +136,26 @@ test('timeout retains occupied needs_review and recovery only reads the exact sa
   assert.equal(calls.length, 2);
   assert.equal(ledger.batches[date].cardContentSha256, cardContentSha256(ledger.batches[date].card));
   assert.equal(mock.calls.filter(args => args[1] === '+messages-send').length, 1);
+});
+
+test('recovery options cannot replace the persisted card or its canonical hash', async (t) => {
+  const { root, decision, options } = await fixture(t), mock = deliveryMock(root, { timeout: true });
+  await assert.rejects(sendReview(root, decision, { ...options, deliveryOptions: { runCli: mock.runCli } }), error => error.uncertain === true);
+  const original = mock.sentCard();
+  const forged = structuredClone(original);
+  forged.body.elements[0].content += ' 改写内容';
+  const forgedMessage = await downloadedMessage(root, forged, 'om_forged');
+  const runCli = async args => {
+    if (args[1] === '+chat-messages-list') return envelope({ messages: [forgedMessage], has_more: false });
+    if (args[1] === '+messages-mget') return envelope({ messages: [forgedMessage] });
+    throw Error('recovery must stay read-only');
+  };
+  await assert.rejects(recoverReview(root, date, {
+    runCli,
+    expectedCard: forged,
+    cardContentSha256: cardContentSha256(forged),
+  }), { code: 'message-content-hash-mismatch', uncertain: true });
+  assert.equal((await readJson(paths(root).ledger)).batches[date].status, 'needs_review');
 });
 
 test('failed send retains occupancy as needs_review', async (t) => {
@@ -254,11 +290,13 @@ test('cards use original opening text as titles and include Flomo links', () => 
   const decision = { date, countDeviationReason: '测试渲染', items: notes.map(note => ({ noteKey: note.noteKey, bodyHash: note.bodyHash, relevance: 'strong', reason: '现实反馈需再检验' })) };
   const snapshot = { sourceMode: 'flomo-online-full', capturedAt: '2026-10-11T14:05:56.141Z', coverage: { observedCount: 950, expectedCount: 951 } };
   const result = renderReview(decision, notes, snapshot);
+  assert.equal(result.cardReadbackBreaks.length, 1);
+  assert.equal(result.cardReadbackBreaks[0].offsets.length, 4);
   assert.match(JSON.stringify(result.card), /1\. 诗：风来东湖/);
 assert.match(JSON.stringify(result.card), /风来东湖涌，<br><br>桥卧山水间/);
-assert.match(JSON.stringify(result.card), /鱼不存在，世俗的成就。\\n普通换行保留。\\n\\n1\. 对于复杂概率/);
+assert.match(JSON.stringify(result.card), /鱼不存在，世俗的成就。\\n普通换行保留。\\n1\. 对于复杂概率/);
 assert.match(JSON.stringify(result.card), /1\. 对于复杂概率，人大概率计算错\\n2\. 人天然对随机性无法合理预测。/);
-  assert.match(JSON.stringify(result.card), /2\. 鱼不存在，世/);
+  assert.match(JSON.stringify(result.card), /2\. 鱼不存在/);
   assert.match(JSON.stringify(result.card), /3\. 标题超过六个/);
   assert.ok(!JSON.stringify(result.card).match(/[ ](?=")/));
   for (const rendered of [result.markdown, JSON.stringify(result.card)]) {
@@ -269,6 +307,42 @@ assert.match(JSON.stringify(result.card), /1\. 对于复杂概率，人大概率
     assert.match(rendered, /笔记快照：2026-10-11 22:05 · 覆盖 950\/951/);
   }
   assert.ok(!JSON.stringify(result.card).includes('原文见随附Markdown'));
+});
+
+test('card titles occupy their own line and blank lines separate paragraphs', () => {
+  const note = { noteKey: 'layout', createdAt: '2026-10-15T09:00:00+08:00',
+    body: '第一段。\n\n第二段。', bodyHash: 'layout-hash',
+    source: { path: 'flomo.md', line: 1, url: 'https://v.flomoapp.com/mine/?memo_id=layout' }, quality: { score: 3 } };
+  const decision = { date, countDeviationReason: '布局测试', items: [{ noteKey: note.noteKey, bodyHash: note.bodyHash, relevance: 'strong', reason: '检查布局' }] };
+  const result = renderReview(decision, [note]);
+  const content = result.card.body.elements.find(element => element.tag === 'markdown' && element.content.includes('1. 第一段')).content;
+  assert.match(content, /^\*\*1\. 第一段\*\*\n2026-10-15 · \[Flomo原文\]\(https:\/\/v\.flomoapp\.com\/mine\/\?memo_id=layout\)<br><br>/);
+  assert.match(content, /第一段。<br><br>第二段。/);
+});
+
+test('card body preserves literal break tags without renderer-added breaks', () => {
+  const note = { noteKey: 'literal-break', createdAt: '2026-07-15T09:00:00+08:00',
+    body: '正文保留字面 <br> 标签。\n\n新段落。', bodyHash: 'literal-break-hash',
+    source: { path: 'flomo.md', line: 1, url: 'https://v.flomoapp.com/mine/?memo_id=literal-break' }, quality: { score: 3 } };
+  const decision = { date, countDeviationReason: '单条渲染测试', items: [{ noteKey: note.noteKey, bodyHash: note.bodyHash, relevance: 'strong', reason: '检查原文换行' }] };
+  const result = renderReview(decision, [note]);
+  assert.equal(result.cardReadbackBreaks.length, 1);
+  assert.equal(result.cardReadbackBreaks[0].offsets.length, 2);
+  const content = result.card.body.elements.find(element => element.tag === 'markdown' && element.content.includes('正文保留字面')).content;
+  assert.equal([...content.matchAll(/<br><br>/g)].length, 2);
+  assert.equal([...content.matchAll(/正文保留字面 <br> 标签/g)].length, 1);
+});
+
+test('card body keeps complete flomo text and resumes plain paragraphs after lists', () => {
+  const note = { noteKey: 'zhuangzi', createdAt: '2026-08-31T11:48:00+08:00',
+    body: '#记录/读书笔记\n\n庄子逍遥游\n\n什么是逍遥游？\n\n1.定义一\n2.定义二\n\n如何逍遥游？\n\n1.无尺子\n2.无期望', bodyHash: 'zhuangzi-hash',
+    source: { path: 'flomo.md', line: 1, url: 'https://v.flomoapp.com/mine/?memo_id=zhuangzi' }, quality: { score: 4 } };
+  const decision = { date, countDeviationReason: '单条渲染测试', items: [{ noteKey: note.noteKey, bodyHash: note.bodyHash, relevance: 'strong', reason: '检查完整原文' }] };
+  const result = renderReview(decision, [note]);
+  const content = result.card.body.elements.find(element => element.tag === 'markdown' && element.content.includes('庄子逍遥游')).content;
+  assert.match(content, /定义一\n2\. 定义二<br><br>如何逍遥游\？/);
+  assert.match(content, /无尺子\n2\. 无期望/);
+  assert.match(content, /#记录\/读书笔记<br><br>庄子逍遥游<br><br>什么是逍遥游\？/);
 });
 
 test('capacity report supports seven and twenty-eight days without exposing note identities', async (t) => {
@@ -343,7 +417,7 @@ function stagedOnlineScan(id = 'memo-online', body = '线上笔记的完整真�
 test('first online activation backs up legacy state, preserves ledger occupancy, and is idempotent', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'flomo-online-activation-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const staging = { storageRoot: path.join(root, 'online-staging') };
+  const staging = { storageRoot: paths(root).privateRoot };
   const before = paths(root);
   const legacyBody = '旧 catalog 的质量和正文用于验证可恢复备份。';
   const legacyCatalog = { schemaVersion: 1, sourceMode: 'legacy-archive', dedupeGeneration: 'legacy',
@@ -426,6 +500,25 @@ test('first online activation backs up legacy state, preserves ledger occupancy,
   assert.ok(await readFile(path.join(restored.safetyBackupPath, 'online-ledger.json'), 'utf8'));
 });
 
+test('online archive refresh reads only the active snapshot and never scans local Flomo markdown', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flomo-online-refresh-source-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const p = paths(root);
+  const snapshotBody = '#记录/播客 1. 第一句2. 第二句';
+  const staged = await writeStagedOnlineFlomoSnapshot(root, stagedOnlineScan('REMOTE-ID', snapshotBody), { storageRoot: p.privateRoot });
+  await activateOnlineSnapshot(root, staged.snapshotPath);
+  const localArchive = path.join(root, '03_input/monthly/2026-10/flomo.md');
+  await mkdir(path.dirname(localArchive), { recursive: true });
+  await symlink(path.join(root, 'unread-historical-flomo.md'), localArchive);
+
+  await refreshArchive(root);
+
+  const catalog = await readJson(paths(root).catalog);
+  assert.equal(catalog.sourceMode, 'flomo-online-full');
+  assert.equal(catalog.notes[0].body, snapshotBody);
+  assert.equal(catalog.notes[0].bodyHash, sha256(snapshotBody));
+});
+
 test('quality review accepts the exact complete body when a note is shorter than four characters', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'flomo-short-quality-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -448,14 +541,77 @@ test('quality review accepts the exact complete body when a note is shorter than
     score: 0, reason: '短正文必须完整引用。', quote: '不在正文中的短引文' }] }), /quality-decision-untraceable/);
 });
 
+test('online activation rejects a verified staged snapshot outside the private root', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flomo-online-activation-project-'));
+  const outsideRoot = await mkdtemp(path.join(os.tmpdir(), 'flomo-online-activation-outside-'));
+  t.after(async () => {
+    await rm(root, { recursive: true, force: true });
+    await rm(outsideRoot, { recursive: true, force: true });
+  });
+  const staged = await writeStagedOnlineFlomoSnapshot(outsideRoot, stagedOnlineScan());
+  await assert.rejects(activateOnlineSnapshot(root, staged.snapshotPath), /online-snapshot-path-outside-storage-root/);
+  assert.equal(paths(root).onlineStorageActive, false, 'outside artifacts cannot change the project active pointer');
+});
+
 test('online activation refuses an insecure private root before writing or switching storage', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'flomo-online-insecure-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const p = paths(root);
-  await mkdir(p.privateRoot, { mode: 0o755 });
+  const staged = await writeStagedOnlineFlomoSnapshot(root, stagedOnlineScan(), { storageRoot: p.privateRoot });
   await chmod(p.privateRoot, 0o755);
-  const staged = await writeStagedOnlineFlomoSnapshot(root, stagedOnlineScan(), { storageRoot: path.join(root, 'online-staging') });
   await assert.rejects(activateOnlineSnapshot(root, staged.snapshotPath), /review-private-directory-insecure/);
   assert.equal(paths(root).onlineStorageActive, false);
   assert.equal((await lstat(p.privateRoot)).mode & 0o777, 0o755, 'activation does not silently change an existing directory');
+});
+
+test('review paths reject Library symlinks before probing or reading storage state', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flomo-review-library-link-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const forbidden = path.join(os.homedir(), 'Library', 'Application Support', 'Learn-X', 'flomo-review');
+  const privateRoot = paths(root).privateRoot;
+  await mkdir(path.dirname(privateRoot), { recursive: true, mode: 0o700 });
+  await symlink(forbidden, privateRoot);
+  assert.throws(() => paths(root), /flomo-storage-root-library-forbidden/);
+  await assert.rejects(refreshArchive(root), /flomo-storage-root-library-forbidden/);
+
+  const stateRoot = await mkdtemp(path.join(os.tmpdir(), 'flomo-review-library-state-link-'));
+  t.after(() => rm(stateRoot, { recursive: true, force: true }));
+  const statePaths = paths(stateRoot);
+  await mkdir(statePaths.privateRoot, { recursive: true, mode: 0o700 });
+  await symlink(path.join(forbidden, 'storage-mode.json'), statePaths.storageModePath);
+  assert.throws(() => paths(stateRoot), /flomo-storage-root-library-forbidden/);
+});
+
+test('review paths reject an active snapshot pointer that escapes or symlinks into Library', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flomo-review-library-snapshot-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const initial = paths(root);
+  await mkdir(path.join(initial.privateRoot, 'snapshots'), { recursive: true, mode: 0o700 });
+  await mkdir(initial.backupsRoot, { recursive: true, mode: 0o700 });
+  const state = { schemaVersion: 1, sourceMode: 'flomo-online-full', activeSnapshotPath: 'snapshots/active.json',
+    activeCatalogPath: 'snapshots/active.catalog.json', activeLedgerPath: 'snapshots/active.ledger.json',
+    backupPath: path.join(initial.backupsRoot, 'legacy') };
+  const storageMode = initial.storageModePath;
+  await writeFile(storageMode, JSON.stringify({ ...state, activeSnapshotPath: 'snapshots/../../Library/escape.json' }));
+  assert.throws(() => paths(root), /online-storage-state-invalid/);
+
+  await writeFile(storageMode, JSON.stringify(state));
+  const forbidden = path.join(os.homedir(), 'Library', 'Application Support', 'Learn-X', 'flomo-review', 'snapshot.json');
+  await symlink(forbidden, path.join(initial.privateRoot, state.activeSnapshotPath));
+  assert.throws(() => paths(root), /flomo-storage-root-library-forbidden/);
+});
+
+test('review JSON helpers reject Library paths before filesystem reads or writes', async () => {
+  const forbidden = path.join(os.homedir(), 'Library', 'Application Support', 'Learn-X', 'flomo-review', 'probe.json');
+  await assert.rejects(readJson(forbidden), /flomo-storage-root-library-forbidden/);
+  await assert.rejects(atomicJson(forbidden, { shouldNotWrite: true }), /flomo-storage-root-library-forbidden/);
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flomo-review-library-file-link-'));
+  try {
+    const alias = path.join(root, 'probe.json');
+    await symlink(forbidden, alias);
+    await assert.rejects(readJson(alias), /flomo-storage-root-library-forbidden/);
+    await assert.rejects(atomicJson(alias, { shouldNotWrite: true }), /flomo-storage-root-library-forbidden/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

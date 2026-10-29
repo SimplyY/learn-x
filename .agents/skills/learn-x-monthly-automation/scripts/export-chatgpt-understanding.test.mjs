@@ -31,6 +31,24 @@ test("builds two independent bridge prompts", () => {
   assert.doesNotMatch(memoryPrompt, /旧版|上月|本月|月度/);
 });
 
+test("monthly caller keeps private context-pack receipts and does not expand an explicit timeout", async () => {
+  const root = await fixture();
+  const seen = [];
+  const pack = { status: "ready", path: "/private/monthly-request.txt" };
+  try {
+    const output = await exportChatgptUnderstanding({ repoRoot: root, month: "2026-08", bridgeTimeoutMs: 1234, bridgeGapMs: 0,
+      runBridge: async (prompt, options) => {
+        seen.push({ prompt, options });
+        return { result: { status: "needs_review", reason: "ego-host-unavailable", runId: "fixture-run", contextPack: pack } };
+      } });
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].options.callerLabel, "learn-x:monthly-understanding");
+    assert.equal(seen[0].options.timeoutMs, 1234);
+    assert.equal(seen[0].prompt, buildPrompt("自我提示词", "self"));
+    assert.deepEqual(output.runs.self.contextPack, pack);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("uses a one-minute gap between independent bridge prompts", async () => {
   const root = await fixture();
   const waits = [];

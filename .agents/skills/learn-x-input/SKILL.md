@@ -9,6 +9,10 @@ Collect external evidence into the requested `03_input/weekly/YYYY-Www/` directo
 
 ## Flomo Weekly Input
 
+Store the online full snapshot, active pointer, and staging artifacts under the Git-ignored project path `04_output/_dist/flomo-review/online-full/`. Keep its directory private (0700) and files private (0600); do not place this project data under `~/Library/Application Support`. Reject explicit storage or artifact paths in that Library tree, paths that resolve there through symlinks, and staged artifacts outside the private project root.
+
+Before browser work, run `ego-browser skill` and follow the installed guide. Reuse the user's existing Ego Lite instance and its normal `ego-browser` service; do not create a separate profile, named service, or launchd job for Flomo. If the existing instance requires user login or takeover, stop and report that condition without changing its profile or identity.
+
 Weekly timestamps come from the time shown on each Flomo list entry and are converted to Asia/Shanghai; the ID backfill may attach an ID only by exact timestamp plus normalized body hash and must never rewrite `flomo.md` or its timestamp. Filter Learn-X-generated entries before checking density. More than 5 distinct notes in one Shanghai hour makes the source `failed`; preserve the existing `flomo.md` and, for full-snapshot sync, reject before activating the staged snapshot so the timestamp can be reviewed.
 
 ## Health-X Weekly Report

@@ -1,12 +1,11 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fileExists, updateWeeklySourceStatus } from "./lib/source-status.mjs";
 import { learnXGeneratedReason } from "./lib/flomo-filter.mjs";
-import { defaultFlomoPrivateDataRoot, MAX_ACCEPTED_MISSING_RECORDS, writeStagedOnlineFlomoSnapshot } from "./lib/flomo-full-snapshot.mjs";
+import { assertFlomoPathWithinRoot, ensurePrivateFlomoDirectory, MAX_ACCEPTED_MISSING_RECORDS, resolveFlomoPathAllowed, resolveFlomoPrivateDataRoot, writeStagedOnlineFlomoSnapshot } from "./lib/flomo-full-snapshot.mjs";
 import { isoWeekRangeShanghai, normalizeWeek, defaultWeeklyReviewWeek } from "./collect-weread-weekly.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -21,7 +20,8 @@ export async function collectFlomoWeekly(options = {}) {
   const notesPath = path.join(outputRoot, "flomo.md");
   const mirrorPath = options.mirrorPath || path.join(repoRoot, "03_input/_mirrors/flomo-top.md");
   try {
-    const scan = await (options.scan || scanFlomoWithEgo)({ week, range: isoWeekRangeShanghai(week) });
+    const storageRoot = await resolveFlomoPrivateDataRoot(repoRoot, options.storageRoot);
+    const scan = await (options.scan || scanFlomoWithEgo)({ week, range: isoWeekRangeShanghai(week), storageRoot });
     const validated = validateCompleteScan(scan, week);
     const generatedExcluded = validated.memos.filter((memo) => isLearnXGenerated(memo.bodyText)).length;
     const filtered = validated.memos.filter((memo) => !isLearnXGenerated(memo.bodyText));
@@ -113,8 +113,16 @@ export function validateCompleteScan(scan, week) {
 }
 
 export async function collectFlomoFullSnapshot(options = {}) {
+  const resolvedRepoRoot = options.repoRoot || repoRoot;
+  const storageRoot = await resolveFlomoPrivateDataRoot(resolvedRepoRoot, options.storageRoot);
+  const snapshotPath = options.snapshotPath ? await resolveFlomoPathAllowed(options.snapshotPath) : undefined;
+  const previewPath = options.previewPath ? await resolveFlomoPathAllowed(options.previewPath) : undefined;
+  if (snapshotPath) assertFlomoPathWithinRoot(storageRoot, snapshotPath);
+  if (previewPath) assertFlomoPathWithinRoot(storageRoot, previewPath);
   const scan = await (options.scan || scanFlomoWithEgo)({
     mode: "full",
+    repoRoot: resolvedRepoRoot,
+    storageRoot,
     invocationId: options.invocationId,
     taskSpaceId: options.taskSpaceId,
     taskSpaceName: options.taskSpaceName,
@@ -122,10 +130,10 @@ export async function collectFlomoFullSnapshot(options = {}) {
     keepTaskSpace: options.keepTaskSpace === true,
     timeout: options.timeout,
   });
-  const staged = await writeStagedOnlineFlomoSnapshot(options.repoRoot || repoRoot, scan, {
-    storageRoot: options.storageRoot || defaultFlomoPrivateDataRoot(),
-    snapshotPath: options.snapshotPath,
-    previewPath: options.previewPath,
+  const staged = await writeStagedOnlineFlomoSnapshot(resolvedRepoRoot, scan, {
+    storageRoot,
+    snapshotPath,
+    previewPath,
   });
   return {
     snapshotId: staged.snapshot.snapshotId,
@@ -215,7 +223,29 @@ export function renderPinnedMirror({ pin, week, syncedAt }) {
   ].join("\n");
 }
 
-export async function publishFlomoSnapshotWeek(snapshot, { week, repoRoot: root = repoRoot, outputRoot, mirrorPath } = {}) {
+function selectSnapshotWeekMemos(snapshot, targetWeek) {
+  const range = isoWeekRangeShanghai(targetWeek);
+  const startMs = range.startEpoch * 1000, endMs = range.endEpoch * 1000;
+  const observed = (snapshot?.records || [])
+    .filter((record) => !record.isPinned && Date.parse(record.createdAt) >= startMs && Date.parse(record.createdAt) < endMs)
+    .map((record) => ({ ...record, timeMs: Date.parse(record.createdAt), bodyText: normalizeMemoText(record.bodyText ?? record.body) }));
+  const generatedExcluded = observed.filter((memo) => isLearnXGenerated(memo.bodyText)).length;
+  const filtered = observed.filter((memo) => !isLearnXGenerated(memo.bodyText));
+  assertFlomoTimestampDensity(filtered);
+  return { range, generatedExcluded, filtered, included: dedupeWeeklyMemos(filtered) };
+}
+
+export async function preflightFlomoSnapshotWeekPublication(snapshot, { week, repoRoot: root = repoRoot, outputRoot } = {}) {
+  const targetWeek = normalizeWeek(week);
+  const { included } = selectSnapshotWeekMemos(snapshot, targetWeek);
+  if (included.length) {
+    const weekRoot = outputRoot || path.join(root, "03_input/weekly", targetWeek);
+    await assertReplaceableGeneratedInput(path.join(weekRoot, "flomo.md"), targetWeek);
+  }
+  return included.length;
+}
+
+export async function publishFlomoSnapshotWeek(snapshot, { week, repoRoot: root = repoRoot, outputRoot, mirrorPath, deferStatusUpdate = false } = {}) {
   const targetWeek = normalizeWeek(week);
   if (!snapshot || snapshot.sourceMode !== "flomo-online-full" || !Array.isArray(snapshot.records) ||
       !Number.isFinite(Date.parse(snapshot.scanStartedAt)) || !Number.isFinite(Date.parse(snapshot.scanFinishedAt)) ||
@@ -237,16 +267,7 @@ export async function publishFlomoSnapshotWeek(snapshot, { week, repoRoot: root 
     termination?.hasMore === false && termination?.loading === false &&
     termination?.reason === (omittedCount === 0 ? "library-count-and-stable-ids" : "stable-bottom-with-accepted-count-gap");
   if (!coverageValid) throw new Error("flomo-week-snapshot-coverage-invalid");
-  const range = isoWeekRangeShanghai(targetWeek);
-  const startMs = range.startEpoch * 1000, endMs = range.endEpoch * 1000;
-  validateFlomoSnapshotWeekTimestampDensity(snapshot, targetWeek);
-  const observed = snapshot.records
-    .filter((record) => !record.isPinned && Date.parse(record.createdAt) >= startMs && Date.parse(record.createdAt) < endMs)
-    .map((record) => ({ ...record, timeMs: Date.parse(record.createdAt), bodyText: normalizeMemoText(record.body) }));
-  const generatedExcluded = observed.filter((memo) => isLearnXGenerated(memo.bodyText)).length;
-  const filtered = observed.filter((memo) => !isLearnXGenerated(memo.bodyText));
-  assertFlomoTimestampDensity(filtered);
-  const included = dedupeWeeklyMemos(filtered);
+  const { range, generatedExcluded, filtered, included } = selectSnapshotWeekMemos(snapshot, targetWeek);
   const weekRoot = outputRoot || path.join(root, "03_input/weekly", targetWeek);
   const notesPath = path.join(weekRoot, "flomo.md");
   const gapSummary = omittedCount
@@ -264,8 +285,10 @@ export async function publishFlomoSnapshotWeek(snapshot, { week, repoRoot: root 
     await atomicWrite(notesPath, renderFlomoWeekly({ week: targetWeek, scan, memos: included }));
   }
   const status = included.length ? "ready" : "empty";
-  await updateWeeklySourceStatus({ weekRoot, week: targetWeek, source: "flomo", status, file: "flomo.md",
-    count: included.length, summary, preservedStaleFile: !included.length && await fileExists(notesPath) });
+  if (!deferStatusUpdate) {
+    await updateWeeklySourceStatus({ weekRoot, week: targetWeek, source: "flomo", status, file: "flomo.md",
+      count: included.length, summary, preservedStaleFile: !included.length && await fileExists(notesPath) });
+  }
 
   const pins = snapshot.records.filter((record) => record.isPinned).map((record) => ({ ...record, bodyText: record.body, bodyComplete: true }));
   const pin = validatePinnedMemo(pins);
@@ -282,13 +305,7 @@ export async function publishFlomoSnapshotWeek(snapshot, { week, repoRoot: root 
 }
 
 export function validateFlomoSnapshotWeekTimestampDensity(snapshot, week) {
-  const range = isoWeekRangeShanghai(normalizeWeek(week));
-  const startMs = range.startEpoch * 1000, endMs = range.endEpoch * 1000;
-  const records = (snapshot?.records || [])
-    .filter((record) => !record.isPinned && Date.parse(record.createdAt) >= startMs && Date.parse(record.createdAt) < endMs)
-    .map((record) => ({ timeMs: Date.parse(record.createdAt), bodyText: normalizeMemoText(record.bodyText ?? record.body) }))
-    .filter((record) => !isLearnXGenerated(record.bodyText));
-  assertFlomoTimestampDensity(records);
+  selectSnapshotWeekMemos(snapshot, normalizeWeek(week));
   return true;
 }
 
@@ -406,8 +423,11 @@ export async function runCli(argv = []) {
 
 export function formatCliError(error) {
   if (!error || typeof error.message !== "string") return "browser-scan-failed";
-  if (!error.stage && !error.pageDiagnostics && !Number.isSafeInteger(error.taskSpaceId) && typeof error.taskSpaceName !== "string") return error.message;
+  const retryAfterMs = Number.isSafeInteger(error.retryAfterMs) && error.retryAfterMs >= 0 && error.retryAfterMs <= 8.64e15 - Date.now()
+    ? error.retryAfterMs : null;
+  if (!error.stage && !error.pageDiagnostics && !Number.isSafeInteger(error.taskSpaceId) && typeof error.taskSpaceName !== "string" && retryAfterMs === null) return error.message;
   const details = {};
+  if (retryAfterMs !== null) details.retryAfterMs = retryAfterMs;
   if (typeof error.stage === "string" && /^[a-z0-9-]+$/.test(error.stage)) details.stage = error.stage;
   if (Number.isSafeInteger(error.taskSpaceId) && error.taskSpaceId > 0) details.taskSpaceId = error.taskSpaceId;
   if (typeof error.taskSpaceName === "string" && /^[a-zA-Z0-9_-]{1,160}$/.test(error.taskSpaceName)) details.taskSpaceName = error.taskSpaceName;
@@ -486,7 +506,7 @@ export function classifyFlomoError(error) {
   return "browser-scan-failed";
 }
 
-export async function scanFlomoWithEgo({ week, range, mode = "weekly", invocationId, taskSpaceId, taskSpaceName, keepTaskSpace = false, resumeTaskSpace = false, timeout } = {}) {
+export async function scanFlomoWithEgo({ week, range, mode = "weekly", invocationId, taskSpaceId, taskSpaceName, keepTaskSpace = false, resumeTaskSpace = false, timeout, repoRoot: projectRoot = repoRoot, storageRoot } = {}) {
   if (mode === "full") {
     const hasTaskSpaceId = taskSpaceId !== undefined && taskSpaceId !== null;
     const hasTaskSpaceName = taskSpaceName !== undefined && taskSpaceName !== null;
@@ -503,10 +523,17 @@ export async function scanFlomoWithEgo({ week, range, mode = "weekly", invocatio
   }
   const automationId = String(process.env.LEARN_X_AUTOMATION_ID || "learn-x-v2").replace(/[^a-zA-Z0-9_-]/g, "-");
   const taskName = buildFlomoTaskSpaceName(invocation, automationId);
-  const resultPath = path.join(os.tmpdir(), `learn-x-flomo-${invocation}.json`);
+  const runtimeRoot = await resolveFlomoPrivateDataRoot(projectRoot, storageRoot);
+  const stagingDirectory = await resolveFlomoPathAllowed(path.join(runtimeRoot, "staged"));
+  assertFlomoPathWithinRoot(runtimeRoot, stagingDirectory);
+  await ensurePrivateFlomoDirectory(runtimeRoot);
+  await ensurePrivateFlomoDirectory(stagingDirectory);
+  const resultPath = await resolveFlomoPathAllowed(path.join(stagingDirectory, `scan-result-${invocation}.json`));
+  assertFlomoPathWithinRoot(runtimeRoot, resultPath);
   const script = mode === "full"
     ? buildEgoFullScanScript({ taskName, taskSpaceId, taskSpaceName, resultPath, maxSteps: MAX_SCAN_STEPS, keepTaskSpace, resumeTaskSpace })
     : buildEgoScanScript({ week, range, taskName, resultPath, maxSteps: MAX_SCAN_STEPS });
+  await writeFile(resultPath, "", { encoding: "utf8", flag: "wx", mode: 0o600 });
   try {
     await runEgoScript(script, { timeout: timeout || (mode === "full" ? 30 * 60_000 : 30 * 60_000) });
     const result = JSON.parse(await readFile(resultPath, "utf8"));
@@ -515,6 +542,7 @@ export async function scanFlomoWithEgo({ week, range, mode = "weekly", invocatio
       const error = new Error(result.error === "user-control" ? "ego-user-control" : knownErrors.has(result.error) || mode === "full" ? `ego-${result.error}` : "ego-browser-scan-failed");
       if (mode === "full") {
         if (result.error !== "user-control" && result.executionFinished !== true && result.cleanup !== "finished") error.message = "ego-task-exit-unconfirmed";
+        if (Number.isSafeInteger(result.retryAfterMs) && result.retryAfterMs >= 0 && result.retryAfterMs <= 8.64e15 - Date.now()) error.retryAfterMs = result.retryAfterMs;
         if (Number.isSafeInteger(result.taskSpaceId) && result.taskSpaceId > 0) error.taskSpaceId = result.taskSpaceId;
         if (typeof result.taskSpaceName === "string" && /^[a-zA-Z0-9_-]{1,160}$/.test(result.taskSpaceName)) error.taskSpaceName = result.taskSpaceName;
         if (result.taskOwnership === "agent") error.taskOwnership = "agent";
@@ -768,6 +796,7 @@ const verifyDetail = true;
 const maxSteps = ${Number.isSafeInteger(maxSteps) ? maxSteps : MAX_SCAN_STEPS};
 const maxAcceptedMissingRecords = ${MAX_ACCEPTED_MISSING_RECORDS};
 const seen = new Map();
+let retryAfterMs = null;
 let stage = 'taskspace-acquire';
 let initialCount = null;
 let scanStep = -1;
@@ -781,6 +810,26 @@ let stableScrollPasses = 0;
 let previousStableIds = null;
 let finalPageState = null;
 const normalize = (value) => String(value || '').replace(/\\r\\n?/g, '\\n').replace(/[ \\t]+\\n/g, '\\n').replace(/\\n{3,}/g, '\\n\\n').trim();
+const parseRetryAfterMs = (value) => {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  const max = 8.64e15 - Date.now();
+  if (/^\\d+$/.test(text)) {
+    const milliseconds = Number(text) * 1000;
+    return Number.isFinite(milliseconds) ? Math.max(0, Math.min(milliseconds, max)) : max;
+  }
+  const target = Date.parse(text);
+  return Number.isFinite(target) ? Math.max(0, Math.min(target - Date.now(), max)) : null;
+};
+const captureRetryAfter = (response) => {
+  try {
+    const status = response.status();
+    if (status !== 429 && status < 500) return;
+    const headers = response.headers();
+    const value = parseRetryAfterMs(headers?.['retry-after'] ?? headers?.['Retry-After']);
+    if (value !== null) retryAfterMs = value;
+  } catch {}
+};
 const summarizeTextDiff = (expected, editor) => {
   const left = [...expected];
   const right = [...editor];
@@ -957,6 +1006,18 @@ const state = async () => {
       const body = card.querySelector('.richText, .content.copy-allowed, .content');
       const isPinned = /^置顶[・·]/.test(link.timeText);
       const bodyCopy = body?.cloneNode(true);
+      const flattenLists = (node) => {
+        for (const list of [...node.querySelectorAll('ol,ul')]) {
+          const items = [...list.children].filter((item) => item.tagName === 'LI');
+          const start = list.tagName === 'OL' ? Number(list.getAttribute('start') || 1) : null;
+          const lines = items.map((item, index) => {
+            const marker = list.tagName === 'OL' ? String(start + index) + '. ' : '- ';
+            return marker + item.innerText.trim().replaceAll(String.fromCharCode(10), ' ');
+          });
+          list.replaceWith(document.createTextNode(lines.join(String.fromCharCode(10))));
+        }
+      };
+      if (bodyCopy) flattenLists(bodyCopy);
       for (const inlineLink of bodyCopy?.querySelectorAll('a[href]') || []) {
         const href = inlineLink.href;
         if (href) inlineLink.replaceWith(document.createTextNode(href));
@@ -1060,6 +1121,7 @@ try {
   }
   assertTaskSpaceControl();
   page = task.page('p1');
+  page.on?.('response', captureRetryAfter);
   stage = 'navigate-library';
   await page.goto('https://v.flomoapp.com/mine');
   stage = 'wait-library-dom';
@@ -1457,7 +1519,7 @@ try {
   }
   if (taskLeaseHeartbeat) clearInterval(taskLeaseHeartbeat);
   stage = 'write-scan-result';
-  await fs.writeFile(resultPath, JSON.stringify(result), { mode: '600' });
+  await fs.writeFile(resultPath, JSON.stringify(result), { mode: 0o600 });
   cliLog(JSON.stringify({ ok: true, complete: true, scanned: result.scanned, expectedCount: result.libraryCount,
     omittedCount: missingCount, pageCount: result.pageCount,
     pinnedCount: browserRecords.filter((record) => record.isPinned).length, detailVerified: detailVerification?.verified === true }));
@@ -1475,6 +1537,8 @@ try {
       : /timeout|timed out|etimedout|err_timed_out/.test(value) ? 'network-timeout'
         : /econnreset|econnrefused|eai_again|enotfound|err_name_not_resolved|err_connection_reset|err_connection_refused|network|dns|temporar|http.?5[0-9][0-9]/.test(value) ? 'network-transient'
           : 'scan-failed';
+  const retryAfterInError = String(error?.message || '').match(/retry[- ]after\\s*[:=]\\s*(\\d+|[a-z]{3},\\s+\\d{1,2}\\s+[a-z]{3}\\s+\\d{4}\\s+\\d{2}:\\d{2}:\\d{2}\\s+gmt)/i)?.[1];
+  if (retryAfterMs === null) retryAfterMs = parseRetryAfterMs(retryAfterInError);
   let pageDiagnostics = null;
   if (page && taskSpaceBound && task?.ownership === 'agent') {
     try {
@@ -1530,8 +1594,9 @@ try {
   const result = { ok: false, error: safeError, cleanup: taskSpaceId ? 'retained-after-error' : 'not-needed',
     executionFinished: true, taskSpaceId, taskSpaceName, taskOwnership, stage: failureStage,
     expectedCount: initialCount, observedUniqueIds: seen.size, step: scanStep, pageDiagnostics,
+    ...(Number.isSafeInteger(retryAfterMs) && retryAfterMs >= 0 ? { retryAfterMs } : {}),
     ...(detailMismatch ? { detailMismatch } : {}) };
-  await fs.writeFile(resultPath, JSON.stringify(result), { mode: '600' });
+  await fs.writeFile(resultPath, JSON.stringify(result), { mode: 0o600 });
   cliLog(JSON.stringify(result));
 }
 `;

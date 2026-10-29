@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { completedPeriods, buildReviewContext, validateEvidence, sha256, substantive } from './context.mjs';
@@ -44,4 +44,59 @@ test('realistic H4-H6 Output is read in full; live Dao failure has no stale fall
   assert.equal(partial.manifest.missing.filter(m => m.role === 'monthly').length, 2);
   await rm(path.join(root, '04_output/weekly/2026-40.md'));
   await assert.rejects(() => buildReviewContext(root, { date: '2026-10-06', readDao }), /weekly-and-monthly-context-missing/);
+});
+
+test('weekly context symlinks into Library are rejected before reading the target', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flomo-context-library-link-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const weekly = path.join(root, '04_output/weekly/2026-40.md');
+  await mkdir(path.dirname(weekly), { recursive: true });
+  const forbidden = path.join(os.homedir(), 'Library', 'Application Support', 'Learn-X', 'flomo-review', 'weekly.md');
+  await symlink(forbidden, weekly);
+
+  await assert.rejects(
+    buildReviewContext(root, { date: '2026-10-06', readDao: async () => { throw Error('must-not-reach-dao'); } }),
+    /flomo-storage-root-library-forbidden/,
+  );
+});
+
+test('memory directory symlinks into Library are rejected before enumeration', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flomo-context-memory-link-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const write = async (relative, text) => {
+    const target = path.join(root, relative);
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, text);
+  };
+  const output = '本周真实事情与现实反馈。'.repeat(20);
+  await write('04_output/weekly/2026-40.md', output);
+  await write('04_output/monthly/2026-09.md', output);
+  await mkdir(path.join(root, '01_core'), { recursive: true });
+  const forbidden = path.join(os.homedir(), 'Library', 'Application Support', 'Learn-X', 'flomo-review', 'memory');
+  await symlink(forbidden, path.join(root, '01_core/memory'));
+  const dao = '# 道\n守火，见光，成河。';
+  const readDao = async () => ({ kind: 'dao', content: dao, revision: 7, sha256: sha256(dao) });
+
+  await assert.rejects(
+    buildReviewContext(root, { date: '2026-10-06', readDao }),
+    /flomo-storage-root-library-forbidden/,
+  );
+});
+
+test('weekly context symlinks outside the repository are rejected without reading them', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flomo-context-external-link-'));
+  const external = await mkdtemp(path.join(os.tmpdir(), 'flomo-context-external-target-'));
+  t.after(async () => {
+    await rm(root, { recursive: true, force: true });
+    await rm(external, { recursive: true, force: true });
+  });
+  const weekly = path.join(root, '04_output/weekly/2026-40.md');
+  await mkdir(path.dirname(weekly), { recursive: true });
+  await writeFile(path.join(external, '2026-40.md'), '本周真实事情与现实反馈。'.repeat(20));
+  await symlink(path.join(external, '2026-40.md'), weekly);
+
+  await assert.rejects(
+    buildReviewContext(root, { date: '2026-10-06', readDao: async () => { throw Error('must-not-reach-dao'); } }),
+    /flomo-artifact-path-outside-storage-root/,
+  );
 });

@@ -1,7 +1,7 @@
 # CASE: 周记自动化效率优化
 
 - 状态：原 M0–M3 的本地实现及 M4 安全接管能力和隔离回归已完成；2026-10-21 Chat Pack 自动续跑的 Skill 与定向契约/模拟测试已完成。整体验收仍为部分达成，生产 Runner 加载、真实来源采集、Codex 原线程续跑和定时端到端行为仍未验证。
-- 最后核对日期：2026-10-21
+- 最后核对日期：2026-10-23
 - 上下游链接：../../requirements/2026-10-weekly-workflow-efficiency.md → execution-plan.md
 - Type: Major
 - Status: In Progress
@@ -216,3 +216,88 @@
 - **协调者最终回归：**Memory 定向测试 **27/27**；工作流模拟、Process Pack 契约、Memory 准备/指纹 **49/49**；全量 `rtk proxy npm test` **678/678**，0 failed / 0 skipped。weekly automation 与 learn-x-process `quick_validate.py`、`rtk git diff --check` 均通过。
 - **独立复测：**同一只读 reviewer 在临时目录验证三类自然语言 HTML 补全注释均阻止候选生成；此前列出的字段占位、普通 TODO/“待补充”语义句、错周/缺章节、prepare→bind 来源变化、mtime 未变但正文变化、零候选和确认前无正式 Memory 写入路径也复查通过。定向套件 **49/49**，无仓库改动或外部操作；未报告未解决的实现问题。
 - **外部边界：**仍未运行真实 Chat Pack、真实周流程、Memory/图片/备份/YW Next/Flomo 写入或真实飞书端到端操作。测试使用临时目录，确认卡之前不执行收尾写入，因此真实 LLM 同轮交卡及用户可见完整呈现仍未实测。
+
+### 2026-10-22 Bridge 诊断原因码续验
+
+- Bridge recovery heartbeat 的固定原因码 `recovery-lease-heartbeat-failed` 曾被 Learn-X 周记事件白名单折叠为 `unknown`；现将该固定码加入允许集合，测试先复现丢码再验证原因保留。没有记录提示词、回复正文、页面内容或会话 URL。
+- Learn-X 全仓 `rtk proxy npm test` **692/692**；新鲜独立只读审查复核此原因码路径并通过。修改范围为既有 weekly AI outcome 序列化器及其测试。
+- 当前 Bridge journal 与周记侧车的历史关联缺口、以及 M4/M5 未完成边界，统一见 [Bridge Case](../../../../browser-runtime-governance/docs/cases/2026-10-chatgpt-bridge-diagnostics/case.md) 和 [验收报告](../../../../browser-runtime-governance/docs/cases/2026-10-chatgpt-bridge-diagnostics/acceptance.md)。本轮没有派发真实周记 AI 请求或执行外部写入。
+
+### 2026-10-22 09:30 CST 周记阶段诊断与兜底校验续改
+
+- Learn-X weekly outcome 现在按稳定原因码分类为 local gate、submit、observer、validation、recovery、persistence、promotion/ delivery 等阶段；原始允许原因码和安全系统错误码继续保留。人工确认结果记录 `completionSource=user-manual`、`humanConfirmed`，自动结果与人工补全可分别统计。
+- `dispatchStartedAt` 从派发意图时间中拆出；诊断写入完成后才落实际 runner 调用边界时间。延迟诊断写入的隔离测试证明 20 分钟门槛不会把前置诊断等待算进业务等待。
+- supervisor 的手动提示词优先验证侧车 `promptSha256`；当前模板重建内容与摘要相符时可恢复完整提示词，否则明确返回 `integrity-mismatch`/`unavailable`，不会悄悄给空值。缺少旧摘要的历史收据标为 `legacy-unverified`，并保留 Learn-X 业务侧原文供用户手动处理；诊断日志不写提示词正文。
+- 隔离测试覆盖 Observer/submit/persistence 阶段、人工确认来源、延迟派发诊断、有效或损坏提示词摘要，以及不可重建时明确阻塞。当前 weekly AI 与 supervisor 定向回归 124/124 通过。没有运行真实周记，也没有写入外部服务。
+- 本地实现已测试，独立复核待完成；完整 yw-testing、全仓回归及新独立 ywtest 尚未开始。真实自然周记、生产加载和用户可见交付待后续验证。
+
+### 2026-10-22 11:10 CST Bridge failure reason 消费校验与超时夹具收口
+
+- **独立发现：**测试者用合成 Bridge 子进程 JSON 的 `reason` 填入错误正文哨兵，经 `runBridgeCli` 真实 JSON 解析链运行后，Learn-X 终态对象及 `_ai-generated.json` 保留了该字符串；诊断事件已归一为 `unknown`。
+- **修复：**失败结果消费时仅保留 `safeWeeklyAiReasons` 中的固定原因码，其他字符串写为 `unknown`；本地兜底码 `bridge-result-missing` 加入集合并有正向保留断言。端到端合成子进程测试检查返回状态及侧车原因，并确认哨兵未持久化。超时 close 测试夹具同步注册 SIGTERM 处理器并使用 2 秒启动余量，减少并行负载误报。
+- **验证：**`generate-ai-review.test.mjs` **48/48**，Learn-X 全仓串行 `rtk proxy npm test -- --test-concurrency=1` **707/707**；同一独立测试者复跑定向集 48/48，并复核 Browser Runtime journal/Ops 定向集 89/89。语法检查和两仓 `git diff --check` 通过。
+- **运行边界：**此前夹具余量调整前一次全仓测试为 706/707，独立复跑通过；扩大余量后目标集与全仓串行回归通过。未派发真实 AI/Bridge 请求，未读提示词、回复正文或生产日志，未触碰在途任务。
+- **状态：**相关代码**已测试、独立复核、待加载**。Browser Runtime 的详细诊断链和 M4/M5 停止条件见 [Bridge Case](../../../../browser-runtime-governance/docs/cases/2026-10-chatgpt-bridge-diagnostics/case.md) 与 [验收报告](../../../../browser-runtime-governance/docs/cases/2026-10-chatgpt-bridge-diagnostics/acceptance.md)。
+
+### 2026-10-22 11:20 CST 手动提示词缺失时的原因分类修正
+
+- **反例：**业务侧车有合法 `promptSha256`，但既没有 `manualPrompt`，当前周模板也无法读取。旧 fallback 把这种“没有任何可重建来源”归成 `integrity-mismatch`，将证据缺失与内容摘要不符混成一类。
+- **修复：**只有实际存在的侧车提示词与记录摘要不一致时才返回 `integrity-mismatch / prompt-integrity-mismatch`。没有侧车提示词且模板不可用时返回 `unavailable / manual-prompt-unavailable`；提示词依然为空，不从系统日志重建。
+- **验证：**新增合成临时目录反例，修复前 `weekly-retry-supervisor.test.mjs` 出现 1 项预期失败；修复后该文件 **84/84**，语法检查和 `git diff --check` 通过。独立测试者复跑同一套件 **84/84**，确认缺少来源与摘要不匹配分类分离。
+- **状态：**此局部改动**已测试、独立复核、待加载**。未执行周记、读取业务提示词/回复或触碰生产文件；Bridge Case 与 M4/M5 生效边界见 [核心诊断 Case](../../../../browser-runtime-governance/docs/cases/2026-10-chatgpt-bridge-diagnostics/case.md)。
+
+### 2026-10-22 16:49 CST 周记诊断 outbox 与计划触发遥测
+
+- **关联方案：**本轮增量属于 [Ego Lite / ChatGPT Bridge 核心诊断 Case](../../../../browser-runtime-governance/docs/cases/2026-10-chatgpt-bridge-diagnostics/case.md)，此处只记 Learn-X 代码与验收，不复制方案。
+- **诊断留证：**共享 journal 写失败时，weekly AI 现在将固定字段追加到 `03_input/weekly/.diagnostic-outbox`，复用共享 journal 的隐私白名单与 30 天裁剪；`ai:weekly -- --diagnostic-status --week YYYY-Www` 可只读查询降级事件。失败源状态/阶段和业务交付字段保留为结构化元数据，提示词、回复正文、URL、异常消息和路径不入 outbox。
+- **调度遥测：**supervisor 新增可选 `--scheduled-at <ISO timestamp>`；周状态记录计划时间、实际入口时间、开始延迟及实测 supervisor-lock 等待。现有 05:00/07:00 调用方是否传递此字段仍未知；没有改动触发时刻，也不把等待原因推断为业务故障。
+- **复现与验证：**模拟诊断 writer 返回 `ENOTDIR` 时，修复前 fallback 查询断言失败；修复后 outbox 可读回原 `weekly-ai-outcome` 事件的成功状态、阶段和晋升状态，且内容哨兵未出现。Learn-X weekly AI/supervisor 合并定向测试 **134/134**；Browser journal/lib **28/28**。语法检查与 Learn-X `git diff --check` 通过。真实 journal 故障、真实周记派发和自然调度尚未验证。
+- **当前边界：**修改待第一轮 yw-testing；生产 Runner/watchdog 加载和自然周记交付继续以 Bridge Case 的 M4/M5 停止条件为准。本地测试不证明线上有效。
+
+### 2026-10-22 17:19 CST 周记诊断与一次重开门禁续验
+
+- **核心修复：**重开额度现在只接受 `resubmissionCount` 缺省或严格为 0；损坏、非整数、字符串、null 或已用额度都 fail-closed。诊断 outbox 裁剪失败会持久记录 retention=`failed` 与安全系统码，状态 CLI 汇总可读回该状态。
+- **验证：**周记 AI/supervisor 定向 135/135，Learn-X 全仓 `rtk proxy npm test` 741/741；新独立测试者复跑定向 135/135。语法检查及两仓 `git diff --check` 通过。每日诊断自动化已读回 ACTIVE/06:00，包含只读诊断 CLI 与 retention 检查；自然运行仍待观察。05:00/07:00 时刻未修改，现有调用方是否传 `--scheduled-at` 尚未证实。
+- **用户路径实走：无法完成真实周记端到端。**W43 只读诊断返回 `unknown`、无 fallback 事件、retention unknown；本地周记输入/输出目录只有模板与说明文件，未启动生成或 Bridge 请求。当前 Runner 有 4 个 orphaned lease，且 gate 开放；因此不触发真实 AI。
+- **关联验收：**本地改动状态为**已测试、独立复核、待加载**；生产加载、安全 drain 和真实交付的边界见 [Ego Lite / ChatGPT Bridge 核心诊断 Case](../../../../browser-runtime-governance/docs/cases/2026-10-chatgpt-bridge-diagnostics/case.md) 与 [验收报告](../../../../browser-runtime-governance/docs/cases/2026-10-chatgpt-bridge-diagnostics/acceptance.md)。
+
+### 2026-10-22 22:27 CST Bridge 与周记只读续核
+
+- W43 `--diagnostic-status` 再次返回 `unknown / no-fallback-events-in-window`，覆盖仅限 Learn-X 本地诊断 outbox，count=0、retention unknown。W43 输入与输出没有可运行产物；本轮未派发周记 AI/Bridge，也未读取业务正文或提示词。
+- Bridge admission 当前 gate open、active=0、orphaned=14、unknown=0；watchdog collection=`partial`、连续失败 216 次，`legacy-orphan-upsert-failed` 根因未知。无安全 drain 与已加载修复证据，真实周记路径保持无法实走。
+- `--scheduled-at` 实现已有隔离测试，但现有 05:00/07:00 自动化调用方是否传入该字段仍未核实；周记安排和周报时间未调整。完整 M4/M5 停止条件见 [Bridge Case](../../../../browser-runtime-governance/docs/cases/2026-10-chatgpt-bridge-diagnostics/case.md) 与 [Bridge 验收](../../../../browser-runtime-governance/docs/cases/2026-10-chatgpt-bridge-diagnostics/acceptance.md)。
+
+### 2026-10-22 22:43 CST Voice-X 恢复缺账保护
+
+- Voice-X 普通 `--resume` 在分析状态与 run ledger 同时缺失时，现在明确停止为 `needs_review / missing-analysis-state-and-run-ledger`，避免把无法确认的历史运行当成可隐式启动的新执行。隔离端到端反例修复前失败、修复后通过；Voice-X unit 190/190、integration 2/2，Browser Runtime Ops 43/43。
+- 本改动只强化恢复证据缺失时的 fail-closed 分类，不表示周记真实运行已验证，也不改变 Learn-X 05:00/07:00 安排。独立复测待回报，生产加载仍受 Bridge Case M4 的持续 drain 与版本读回门槛限制。
+
+### 2026-10-22 22:48 CST 独立复核状态
+
+- 独立复核确认 Voice-X 缺账恢复保护与 Browser request-ID 诊断查询的隔离测试通过，审查范围内未发现 P0/P1/P2。Voice-X unit 190/190、integration 2/2；Browser Runtime Ops 43/43。此结果只验证本地实现，真实周记与生产加载仍未验证。
+- 05:00/07:00 安排不变；当前 M4/M5 停止条件继续按 [Bridge Case](../../../../browser-runtime-governance/docs/cases/2026-10-chatgpt-bridge-diagnostics/case.md) 执行。
+
+### 2026-10-23 08:45 CST 周记回归新鲜度与 Bridge 交付缺口
+
+- 当前树重新运行周记 AI/supervisor 定向测试 **136/136**，覆盖一次性重开额度、提交不确定时不重发、超时子进程等待、最终手动提示词入口、诊断写失败与保留失败。Learn-X `git diff --check` 通过。此前 741/741 全仓结果早于 `weekly-retry-supervisor.mjs` 的最后修改时间，不能代表当前源码；本轮没有重复全仓扫描。
+- W43 只读诊断仍为 `unknown / no-fallback-events-in-window`、count=0、retention unknown；输入目录、AI 正式/生成结果、结果侧车及归档均不存在。没有读取提示词或回复，也没有派发周记/Bridge 请求。
+- 30 天共享 Bridge journal 有 3,543 条事件，但没有任何事件包含最终业务交付字段；此为共享观测覆盖缺口，不是周记未交付的证明。普通 Bridge 调用与周记均需分别通过真实最终交付验收，详见 [Bridge 持续可靠性 Case](../../../../browser-runtime-governance/docs/cases/2026-10-chatgpt-bridge-diagnostics/case.md)。
+- 周记 05:00、07:00 安排未改。M4 仍因 gate open、14 条 orphan lease 和缺少持续 drain 证据未加载；M5 的真实周记交付与自然周报仍待验证。
+
+### 2026-10-23 09:14 CST W43 只读状态续核
+
+- 依每日诊断约束只运行 `generate-ai-review.mjs --diagnostic-status --week 2026-W43`，读取 status、reason、coverage、lookbackDays、week、count 与 retentionStatus。结果仍为 `unknown / no-fallback-events-in-window`，coverage=`local-diagnostic-outbox-only`、lookbackDays=30、count=0、retentionStatus=`unknown`。没有读取 events、提示词、回复或周记正文。
+- 按用户指定等待合格输入，本轮未派发周记 AI，也没有创建或晋升 `ai.md`。05:00/07:00 安排保持原样。
+- 用户授权的一次普通合成 Bridge 调用已在 Bridge Case 记录，结果为 `needs_review / response-text-unstable`；它不是周记 AI 执行，也不构成 Learn-X 周记业务结果证据。M4/M5 限制及 Bridge 调用的完整诊断见 [Bridge Case](../../../../browser-runtime-governance/docs/cases/2026-10-chatgpt-bridge-diagnostics/case.md) 与 [Bridge 验收](../../../../browser-runtime-governance/docs/cases/2026-10-chatgpt-bridge-diagnostics/acceptance.md)。
+
+### 2026-10-23 11:49 CST Bridge 调用方终态关联续改
+
+- Learn-X 周记范围外的 periodic insight 与 voice insight 现分配稳定 attempt/run ID，并将 caller、请求关联、校验/生成/归档终态写入共享 Bridge business outcome。归档失败不会被记为交付成功；共享 journal 写失败时只保留固定、安全的 fallback 元数据。
+- 相关定向测试 **30/30**，Learn-X 当前全仓 `npm test` **745/745**。Browser Runtime journal/Bridge 定向 **123/123**，全仓 **158/158**；Poem-X 定向 **22/22**。测试、`git diff --check` 和隔离 E2E 均不能替代生产加载或业务结果读回。
+- 该代码状态为**已测试、独立审查中、待加载**。W43 仍无合格输入，按用户指示等待；不执行周记生成，不改变 05:00/07:00 调度。跨调用方生产交付与恢复统计继续以 Bridge 主 Case 为准。
+
+### 2026-10-23 12:27 CST Bridge 诊断续验
+
+- Learn-X 业务原因现通过 Bridge 导出的安全原因码校验；自由文本 sentinel 被过滤为 `unknown`。定向 Bridge outcome/periodic/voice 测试 **31/31**，串行全仓 **745/745**；独立复核通过，`git diff --check` 通过。
+- W43 `--diagnostic-status` 仍为 `unknown / no-fallback-events-in-window`、coverage=`local-diagnostic-outbox-only`、count=0、retention unknown。未读取 events、提示词或正文；依用户指示等待合格输入，未派发周记 AI。
+- 每日 12:18 CST 运行态续核中 watchdog 仍 `partial`、连续失败 156 次且根因未知；Runner gate open、active=0、orphaned=14，resident Bridge 摘要不匹配工作树。生产加载与真实周记交付继续受 Bridge 主 Case M4/M5 门槛约束；05:00/07:00 时间不变。

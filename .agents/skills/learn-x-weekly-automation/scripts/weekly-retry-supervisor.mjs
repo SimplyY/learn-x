@@ -21,6 +21,7 @@ const defaultRepoRoot = path.resolve(__dirname, "../../../..");
 const DEFAULT_RETRY_GAP_MS = 20 * 60_000;
 const FLOMO_RETRY_GAP_MS = 10 * 60_000;
 const FLOMO_AUTOMATION_RETRY_GAP_MS = 20 * 60_000;
+const MAX_AUTOMATIC_RETRY_AFTER_MS = 30 * 24 * 60 * 60_000;
 const FLOMO_AUTOMATION_MAX_ATTEMPTS = 3;
 const AI_UNCERTAIN_RESUBMIT_AFTER_MS = 20 * 60_000;
 const AI_REPLACEMENT_PROCESS_BUDGET_MS = 5 * 60_000;
@@ -43,26 +44,71 @@ const AI_TERMINAL_OBSERVATION_REASONS = new Set([
   "chatgpt-rate-limited", "login-required", "captcha-or-blocked", "ego-bootstrap-permission",
   "conversation-session-mismatch", "conversation-session-not-bound", "observer-identity-mismatch",
   "original-run-identity-mismatch", "submission-unconfirmed", "new-user-message-not-found",
-  "formal-ai-md-has-human-content", "formal-ai-md-changed-after-promotion", "confirmed-ai-md-changed", "confirmed-ai-md-missing",
+  "formal-ai-md-has-human-content", "formal-ai-md-changed-after-promotion", "formal-ai-md-changed-during-promotion",
+  "confirmed-ai-md-changed", "confirmed-ai-md-missing",
 ]);
 const BRIDGE_RUN_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 async function weeklyAiManualFallback(repoRoot, weekRoot, week, sourceState, sidecar) {
   const matchingSidecar = sidecar?.targetWeek === week ? sidecar : null;
-  let prompt = typeof matchingSidecar?.manualPrompt === "string" && matchingSidecar.manualPrompt.trim()
+  const sidecarPrompt = typeof matchingSidecar?.manualPrompt === "string" && matchingSidecar.manualPrompt.trim()
     ? matchingSidecar.manualPrompt : null;
-  if (!prompt) {
+  const promptHashPresent = matchingSidecar && Object.hasOwn(matchingSidecar, "promptSha256");
+  const expectedHash = typeof matchingSidecar?.promptSha256 === "string" && /^[a-f0-9]{64}$/.test(matchingSidecar.promptSha256)
+    ? matchingSidecar.promptSha256 : null;
+  let prompt = sidecarPrompt;
+  let manualFallbackStatus = sidecarPrompt ? "legacy-unverified" : "unavailable";
+  let manualFallbackReasonCode = sidecarPrompt ? "prompt-integrity-hash-missing" : "manual-prompt-unavailable";
+
+  if (promptHashPresent && !expectedHash) {
+    prompt = null;
+    manualFallbackStatus = "integrity-mismatch";
+    manualFallbackReasonCode = "prompt-integrity-mismatch";
+  } else if (sidecarPrompt && expectedHash && sha256(sidecarPrompt) === expectedHash) {
+    manualFallbackStatus = "verified-sidecar";
+    manualFallbackReasonCode = null;
+  } else {
     try {
       const template = await readFile(path.join(repoRoot, "03_input/weekly/00_template/ai.md"), "utf8");
-      if (!template.trim()) return null;
-      prompt = buildReviewPrompt(template, week);
-    } catch { return null; }
+      if (!template.trim()) throw new Error("empty-template");
+      const rebuiltPrompt = buildReviewPrompt(template, week);
+      if (expectedHash && sha256(rebuiltPrompt) === expectedHash) {
+        prompt = rebuiltPrompt;
+        manualFallbackStatus = "rebuilt-matching-recorded-hash";
+        manualFallbackReasonCode = null;
+      } else if (!expectedHash && !sidecarPrompt) {
+        prompt = rebuiltPrompt;
+        manualFallbackStatus = "rebuilt-from-current-template-unverified";
+        manualFallbackReasonCode = "prompt-integrity-hash-missing";
+      } else if (sidecarPrompt && !expectedHash) {
+        prompt = sidecarPrompt;
+        manualFallbackStatus = "legacy-unverified";
+        manualFallbackReasonCode = "prompt-integrity-hash-missing";
+      } else {
+        prompt = null;
+        manualFallbackStatus = "integrity-mismatch";
+        manualFallbackReasonCode = "prompt-integrity-mismatch";
+      }
+    } catch {
+      if (sidecarPrompt && !expectedHash) {
+        prompt = sidecarPrompt;
+        manualFallbackStatus = "legacy-unverified";
+        manualFallbackReasonCode = "prompt-integrity-hash-missing";
+      } else {
+        prompt = null;
+        const sidecarHashMismatch = Boolean(sidecarPrompt && expectedHash && sha256(sidecarPrompt) !== expectedHash);
+        manualFallbackStatus = sidecarHashMismatch ? "integrity-mismatch" : "unavailable";
+        manualFallbackReasonCode = sidecarHashMismatch ? "prompt-integrity-mismatch" : "manual-prompt-unavailable";
+      }
+    }
   }
   return {
     status: matchingSidecar?.status || sourceState?.status || "needs_review",
     reason: matchingSidecar?.reason || sourceState?.lastErrorClass || null,
     path: `03_input/weekly/${week}/ai.md`,
     prompt,
+    manualFallbackStatus,
+    ...(manualFallbackReasonCode ? { manualFallbackReasonCode } : {}),
   };
 }
 const RECOVERY_ACTIONS = Object.freeze({
@@ -91,7 +137,7 @@ export function createWeeklyRetryState(week) {
   };
 }
 
-export function classifyWeeklyFailure(message, { sourceId = "", code = "", now = Date.now() } = {}) {
+export function classifyWeeklyFailure(message, { sourceId = "", code = "", now = Date.now(), retryAfterMs: suppliedRetryAfterMs = null } = {}) {
   const value = `${code} ${message}`.toLowerCase();
   if (/weread-skill-upgrade-required|weread-skill-version-unverifiable|skill.{0,20}(upgrade|version)|upgrade_info/.test(value)) {
     return { errorClass: "source-version-mismatch", retryable: false, retryAfterMs: 0 };
@@ -122,9 +168,14 @@ export function classifyWeeklyFailure(message, { sourceId = "", code = "", now =
   const retryAfter = retryAfterSeconds
     ? Math.max(0, Math.min(Number(retryAfterSeconds[1]) * 1000, maxRetryAfterMs))
     : Number.isFinite(retryAfterDateMs) ? Math.max(0, Math.min(retryAfterDateMs, maxRetryAfterMs)) : 0;
+  const metadataRetryAfter = Number.isSafeInteger(suppliedRetryAfterMs)
+    ? Math.max(0, Math.min(suppliedRetryAfterMs, maxRetryAfterMs)) : 0;
   if (/econnreset|econnrefused|eai_again|enotfound|network|dns|temporar|http.?5\d\d|rate.?limit|throttl|timeout|timed out|process-interrupted/.test(value)) {
+    if (Math.max(retryAfter, metadataRetryAfter) > MAX_AUTOMATIC_RETRY_AFTER_MS) {
+      return { errorClass: "retry-after-exceeds-automatic-window", retryable: false, retryAfterMs: 0 };
+    }
     const cooldown = sourceId === "flomo" ? FLOMO_RETRY_GAP_MS : DEFAULT_RETRY_GAP_MS;
-    return { errorClass: /rate.?limit|throttl/.test(value) ? "service-rate-limit" : /timeout|timed out/.test(value) ? "network-timeout" : "network-transient", retryable: true, retryAfterMs: Math.max(cooldown, retryAfter) };
+    return { errorClass: /rate.?limit|throttl/.test(value) ? "service-rate-limit" : /timeout|timed out/.test(value) ? "network-timeout" : "network-transient", retryable: true, retryAfterMs: Math.max(cooldown, retryAfter, metadataRetryAfter) };
   }
   return { errorClass: "unknown-failure", retryable: false, retryAfterMs: 0 };
 }
@@ -152,7 +203,9 @@ export function classifyOutcome(sourceId, outcome, { now = Date.now() } = {}) {
   if (["needs_review", "submission-uncertain"].includes(outcome?.status)) {
     return { status: "needs_review", errorClass: sourceId === "ai" ? "ai-submission-state-uncertain" : "manual-review-required", retryable: false, retryAfterMs: 0 };
   }
-  const failure = classifyWeeklyFailure(`${outcome?.error || ""} ${outcome?.summary || ""}`, { sourceId, code: outcome?.code, now });
+  const failure = classifyWeeklyFailure(`${outcome?.error || ""} ${outcome?.summary || ""}`, {
+    sourceId, code: outcome?.code, now, retryAfterMs: outcome?.retryAfterMs,
+  });
   if (sourceId === "ai") {
     const phase = outcome?.diagnostics?.rateLimitPhase;
     const reason = `${outcome?.error || ""} ${outcome?.summary || ""}`;
@@ -178,6 +231,7 @@ export async function runWeeklyRetrySupervisor({
   singleAttempt = false,
   skipPreparation = false,
   automationId = "",
+  scheduledAt = undefined,
   importFlomoReviews = runFlomoReviewImport,
   repoRoot = defaultRepoRoot,
   now = () => Date.now(),
@@ -191,6 +245,10 @@ export async function runWeeklyRetrySupervisor({
   const normalizedWeek = normalizeWeek(week);
   if (!["initial", "rescue", "manual", "recovery"].includes(mode)) throw new Error("mode must be initial, rescue, manual, or recovery");
   if (automationId && !/^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/.test(automationId)) throw new Error("automation-id-invalid");
+  if (scheduledAt !== undefined && scheduledAt !== null
+    && (typeof scheduledAt !== "string" || !/(?:Z|[+-]\d{2}:\d{2})$/i.test(scheduledAt) || !Number.isFinite(Date.parse(scheduledAt)))) {
+    throw new Error("scheduled-at-must-be-an-ISO-timestamp-with-timezone");
+  }
   if (singleAttempt && (mode !== "manual" || sourceId !== "flomo" || !automationId || !skipPreparation || enableFlomoReviewImport)) {
     throw new Error("single-attempt-requires-manual-flomo-automation-and-skipped-side-effects");
   }
@@ -220,6 +278,9 @@ export async function runWeeklyRetrySupervisor({
   const weekRoot = safePaths.weekRoot;
   const statePath = path.join(weekRoot, STATE_FILE);
   const startedAt = now();
+  const actualStartedAt = new Date(startedAt).toISOString();
+  const normalizedScheduledAt = scheduledAt ? new Date(Date.parse(scheduledAt)).toISOString() : undefined;
+  const triggerDelayMs = normalizedScheduledAt ? startedAt - Date.parse(normalizedScheduledAt) : undefined;
   const executionId = randomUUID();
   const lockPath = path.join(weekRoot, LOCK_FILE);
   let lock = await tryAcquireRunLock(lockPath);
@@ -231,7 +292,12 @@ export async function runWeeklyRetrySupervisor({
     lockWaitMs += waitMs;
     lock = await tryAcquireRunLock(lockPath);
   }
-  if (!lock) return { week: normalizedWeek, mode, skipped: "supervisor-already-running", waitedMs: lockWaitMs };
+  if (!lock) return {
+    week: normalizedWeek, mode, skipped: "supervisor-already-running", waitedMs: lockWaitMs,
+    actualStartedAt,
+    ...(normalizedScheduledAt ? { scheduledAt: normalizedScheduledAt, triggerDelayMs } : {}),
+    waitAttribution: "supervisor-lock-unavailable",
+  };
   let state;
   let stateLockLost = false;
   let stateLockDiagnostic = null;
@@ -416,6 +482,16 @@ export async function runWeeklyRetrySupervisor({
     }
     state ||= createWeeklyRetryState(normalizedWeek);
     state.pendingRecoveryEvents = Array.isArray(state.pendingRecoveryEvents) ? state.pendingRecoveryEvents : [];
+    event({
+      step: "supervisor-invocation",
+      executionId,
+      mode,
+      ...(automationId ? { automationId } : {}),
+      actualStartedAt,
+      ...(normalizedScheduledAt ? { scheduledAt: normalizedScheduledAt, triggerDelayMs } : {}),
+      waitAttribution: lockWaitMs > 0 ? "supervisor-lock" : "none-observed",
+      queuedMs: lockWaitMs,
+    });
     if (singleAttempt) {
       const flomo = state.sources.flomo;
       const hasPersistentCounts = flomo.automationAttemptCounts && typeof flomo.automationAttemptCounts === "object"
@@ -433,7 +509,8 @@ export async function runWeeklyRetrySupervisor({
     for (const pending of [...state.pendingRecoveryEvents]) queueRecoveryWrite(pending);
     await reconcileInterruptedRuns(state, { now: now(), mode, event, readOutcome, weekRoot, repoRoot });
     if (mode !== "recovery") await absorbCurrentSuccesses(state, { readOutcome, now: now(), event });
-    if (lockWaitMs) event({ step: "retry-rescue-wait", outcome: "waited-for-active-run", durationMs: lockWaitMs, evidence: STATE_FILE });
+    if (lockWaitMs) event({ step: "retry-rescue-wait", outcome: "waited-for-active-run", durationMs: lockWaitMs,
+      queuedMs: lockWaitMs, waitAttribution: "supervisor-lock", evidence: STATE_FILE });
     await save();
 
     if (mode === "initial") {
@@ -535,7 +612,9 @@ export async function runWeeklyRetrySupervisor({
       const completedAttempts = Number(entry.automationAttemptCounts?.[automationId]) || 0;
       let skipped = null;
       let retryAt = null;
-      if (entry.status === "succeeded") skipped = "flomo-already-succeeded";
+      const succeededByThisAutomation = entry.status === "succeeded"
+        && completedAttempts > 0 && entry.lastAutomationId === automationId;
+      if (succeededByThisAutomation) skipped = "flomo-already-succeeded";
       else if (["needs_review", "unavailable"].includes(entry.status)
         || ["permission-or-human-control", "local-execution-permission-denied", "manual-review-required"].includes(entry.lastErrorClass)) {
         skipped = "flomo-human-action-required";
@@ -842,7 +921,7 @@ async function runEligibleAiResubmission(context) {
     try { eligible = await canResubmitUncertainAi({ repoRoot: context.repoRoot, week: context.week, nowMs: context.now() }); }
     catch { return false; }
     if (!eligible) {
-      const dispatchStartedAt = Date.parse(priorAi.dispatchStartedAt || priorAi.startedAt || "");
+      const dispatchStartedAt = Date.parse(priorAi.dispatchStartedAt || "");
       const resubmitAt = Number.isFinite(dispatchStartedAt) ? dispatchStartedAt + AI_UNCERTAIN_RESUBMIT_AFTER_MS : NaN;
       const waitMs = resubmitAt - context.now();
       if (Number.isFinite(resubmitAt) && waitMs > 0) {
@@ -1359,6 +1438,20 @@ async function runOneSource(source, kind, context) {
   if (classified.status === "succeeded") context.prepareAfterSuccess?.(source);
 }
 
+function readFlomoRetryAfterMs(stderr) {
+  const lines = String(stderr || "").trim().split(/\r?\n/).reverse();
+  for (const line of lines) {
+    const match = line.match(/^[a-z0-9-]+\s+(\{.*\})$/i);
+    if (!match) continue;
+    try {
+      const details = JSON.parse(match[1]);
+      const value = details?.retryAfterMs;
+      if (Number.isSafeInteger(value) && value >= 0 && value <= 8.64e15 - Date.now()) return value;
+    } catch {}
+  }
+  return null;
+}
+
 export async function runConfiguredSource(source, { week, repoRoot, onDependencyResult, attemptToken,
   invocationId,
   automationId = "",
@@ -1393,7 +1486,7 @@ export async function runConfiguredSource(source, { week, repoRoot, onDependency
       ...(source.id === "ai" && typeof weeklyAiLockToken === "string" ? ["--weekly-ai-lock-token", weeklyAiLockToken] : [])];
   }
   try {
-    const sourceTimeoutMs = source.id === "ai" && observeUncertainAi ? (observeWaitSeconds + 90) * 1000 : source.id === "ai" ? 5 * 60_000 : source.id === "flomo" ? 32 * 60_000 : 12 * 60_000;
+    const sourceTimeoutMs = source.id === "ai" && observeUncertainAi ? (observeWaitSeconds + 90) * 1000 : source.id === "ai" ? 5 * 60_000 + 30_000 : source.id === "flomo" ? 32 * 60_000 : 12 * 60_000;
     const result = await executeCommand(process.execPath, [script, ...args], {
       cwd: repoRoot,
       timeout: Math.max(1, Math.min(sourceTimeoutMs, Number.isFinite(timeoutMs) ? timeoutMs : sourceTimeoutMs)),
@@ -1435,9 +1528,12 @@ export async function runConfiguredSource(source, { week, repoRoot, onDependency
   } catch (error) {
     const current = await readOutcome(source, week, repoRoot).catch(() => null);
     if (source.id === "ai" && freshOutcome(current, startedAt) && ["generated", "confirmed", "needs_review"].includes(current.status)) return current;
+    const stderr = error?.stderr;
+    const retryAfterMs = source.id === "flomo" ? readFlomoRetryAfterMs(stderr) : null;
     return {
       status: "failed",
       error: error?.killed ? "collector-timeout" : String(error?.stderr || error?.message || "collector-failed").slice(-1200),
+      ...(retryAfterMs !== null ? { retryAfterMs } : {}),
       ...(current?.sourceVersion ? { sourceVersion: current.sourceVersion } : {}),
       code: error?.code,
       timedOut: Boolean(error?.killed || error?.signal === "SIGTERM")
@@ -1894,6 +1990,11 @@ export function parseArgs(argv) {
   if (argv.includes("--record-stage")) return { recordStage: value("--record-stage"), durationMs: Number(value("--duration-ms", "0")), outcome: value("--outcome", "success"), week: value("--week") };
   const maxDurationRaw = value("--max-duration-ms");
   const maxDurationMs = maxDurationRaw === undefined ? undefined : Number(maxDurationRaw);
+  const scheduledAt = value("--scheduled-at");
+  if (scheduledAt !== undefined
+    && (typeof scheduledAt !== "string" || !/(?:Z|[+-]\d{2}:\d{2})$/i.test(scheduledAt) || !Number.isFinite(Date.parse(scheduledAt)))) {
+    throw new Error("scheduled-at-must-be-an-ISO-timestamp-with-timezone");
+  }
   if (maxDurationRaw !== undefined && (!Number.isSafeInteger(maxDurationMs) || maxDurationMs < 1 || maxDurationMs > 160 * 60_000)) {
     throw new Error("max-duration-ms-must-be-between-1-and-9600000");
   }
@@ -1903,6 +2004,7 @@ export function parseArgs(argv) {
     skipPreparation: argv.includes("--skip-prepare"),
     skipFlomoReviewImport: argv.includes("--skip-flomo-review-import"),
     automationId: value("--automation-id", ""),
+    ...(scheduledAt ? { scheduledAt: new Date(Date.parse(scheduledAt)).toISOString() } : {}),
     ...(maxDurationMs !== undefined ? { maxDurationMs } : {}),
     resubmitUncertainAi: argv.includes("--resubmit-uncertain") && argv.includes("--confirm"),
     recoveryActionCode: value("--action-code", ""),

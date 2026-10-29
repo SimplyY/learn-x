@@ -3,13 +3,19 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { validateSourceStatusDocument } from "../../learn-x-input/scripts/lib/source-status.mjs";
 import { flomoTags, learnXGeneratedReason } from "../../learn-x-input/scripts/lib/flomo-filter.mjs";
-import { maxMissingRecordsForCoveragePolicy, validateFullFlomoScan } from "../../learn-x-input/scripts/lib/flomo-full-snapshot.mjs";
+import { assertFlomoPathWithinRoot, maxMissingRecordsForCoveragePolicy, resolveFlomoPathAllowed,
+  validateFullFlomoScan } from "../../learn-x-input/scripts/lib/flomo-full-snapshot.mjs";
 
 const ROOTS = ["03_input/weekly", "03_input/weekly-history", "03_input/monthly", "03_input/yearly"];
 const IDENTITY_BACKFILL_FILE = "03_input/_archives/flomo/identity-backfill.json";
 const SOURCE_LINE = /^[-*]?\s*(?:来源|Source|链接|URL)\s*[：:]\s*(.+)$/i;
 const DATE_HEADING = /^(#{2,3})\s+(\d{4}-\d{1,2}-\d{1,2})(?:\s+(\d{1,2}:\d{2}(?::\d{2})?)(?:\s*(Z|[+-]\d{2}:?\d{2}))?)?\s*$/;
 const TIME_HEADING = /^###\s+(\d{1,2}:\d{2}(?::\d{2})?)(?:\s*(Z|[+-]\d{2}:?\d{2}))?\s*$/;
+
+async function safeRepoPath(repoRoot, candidate) {
+  const safeRoot = await resolveFlomoPathAllowed(repoRoot);
+  return assertFlomoPathWithinRoot(safeRoot, await resolveFlomoPathAllowed(candidate));
+}
 
 function flomoSourceMemoId(value) {
   const source = String(value || "").trim();
@@ -116,10 +122,11 @@ function parseArchive(markdown, filePath) {
 }
 
 async function archiveFiles(repoRoot) {
+  const safeRoot = await resolveFlomoPathAllowed(repoRoot);
   const found = [];
   async function walk(relative, optional = false) {
     let entries;
-    try { entries = await readdir(path.join(repoRoot, relative), { withFileTypes: true }); }
+    try { entries = await readdir(await safeRepoPath(safeRoot, path.join(safeRoot, relative)), { withFileTypes: true }); }
     catch (error) { if (optional && error.code === "ENOENT") return; throw new Error(`archive-directory-read-failed:${relative}`, { cause: error }); }
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name, "en"))) {
       if (entry.name.startsWith(".") || entry.name.startsWith("00_") || entry.name.startsWith("_")) continue;
@@ -135,7 +142,7 @@ async function archiveFiles(repoRoot) {
 
 async function statusFor(repoRoot, relative) {
   let raw;
-  try { raw = await readFile(path.join(repoRoot, path.dirname(relative), "_source-status.json"), "utf8"); }
+  try { raw = await readFile(await safeRepoPath(repoRoot, path.join(repoRoot, path.dirname(relative), "_source-status.json")), "utf8"); }
   catch (error) { if (error.code === "ENOENT") return null; throw new Error(`source-status-read-failed:${relative}`, { cause: error }); }
   let document;
   try {
@@ -177,7 +184,7 @@ function identitySignature(timeMs, bodyHash) { return `${timeMs}:${bodyHash}`; }
 
 async function identityBackfill(repoRoot) {
   let raw;
-  try { raw = JSON.parse(await readFile(path.join(repoRoot, IDENTITY_BACKFILL_FILE), "utf8")); }
+  try { raw = JSON.parse(await readFile(await safeRepoPath(repoRoot, path.join(repoRoot, IDENTITY_BACKFILL_FILE)), "utf8")); }
   catch (error) { if (error.code === "ENOENT") return null; throw error; }
   if (raw?.schemaVersion !== 1 || raw.complete !== true || raw.lowerBoundCovered !== true || !Array.isArray(raw.identities)) throw new Error("identity-backfill-invalid");
   const map = new Map();
@@ -215,31 +222,9 @@ function previousQuality(previous, memo) {
 
 function whitespacelessBody(body) { return String(body).replace(/\s+/gu, ""); }
 
-function displayableLegacyBody(body) {
-  const attachment = body.lastIndexOf("\n**附件**");
-  return attachment === -1 ? body : normalizeBody(body.slice(0, attachment));
-}
-
-function uniqueLegacyBodies(legacyCatalog) {
-  if (!legacyCatalog) return null;
-  if (legacyCatalog.schemaVersion !== 1 || !Array.isArray(legacyCatalog.notes) || !Array.isArray(legacyCatalog.excluded)) {
-    throw new Error("legacy-body-catalog-invalid");
-  }
-  const candidates = [...legacyCatalog.notes, ...legacyCatalog.excluded.map((entry) => entry.previousNote).filter(Boolean)];
-  const grouped = new Map();
-  for (const note of candidates) {
-    if (!note || typeof note.body !== "string" || !Number.isFinite(Date.parse(note.createdAt))) {
-      throw new Error("legacy-body-catalog-invalid");
-    }
-    const body = displayableLegacyBody(note.body);
-    const key = `${Math.floor(Date.parse(note.createdAt) / 60000)}:${whitespacelessBody(body)}`;
-    grouped.set(key, [...(grouped.get(key) || []), note]);
-  }
-  return new Map([...grouped].filter(([, notes]) => notes.length === 1).map(([key, [note]]) => [key, displayableLegacyBody(note.body)]));
-}
-
 /** Reads archive files only; callers own persistence and semantic quality assessment. */
 export async function scanArchive(repoRoot, { previous } = {}) {
+  const safeRoot = await resolveFlomoPathAllowed(repoRoot);
   if (previous && (previous.schemaVersion !== 1 || !Array.isArray(previous.notes))) throw new Error("previous-catalog-invalid");
   const activeOldKeys = new Set((previous?.notes || []).map((note) => note.noteKey));
   const quarantinedOldKeys = new Set((previous?.excluded || []).map((entry) => entry.previousNote?.noteKey).filter((key) => key && !activeOldKeys.has(key)));
@@ -248,16 +233,16 @@ export async function scanArchive(repoRoot, { previous } = {}) {
   const sources = [];
   const excluded = [];
   const records = [];
-  const backfill = await identityBackfill(repoRoot);
-  for (const file of await archiveFiles(repoRoot)) {
-    const status = await statusFor(repoRoot, file);
+  const backfill = await identityBackfill(safeRoot);
+  for (const file of await archiveFiles(safeRoot)) {
+    const status = await statusFor(safeRoot, file);
     if (status && status.status !== "ready") {
       sources.push({ path: file, status: status.status, records: status.count, included: 0, completeEvidence: false });
       excluded.push({ source: { path: file, line: 1, url: null }, reason: `source-${status.status}`, count: status.count });
       continue; // A known stale source is never opened.
     }
     let markdown;
-    try { markdown = await readFile(path.join(repoRoot, file), "utf8"); }
+    try { markdown = await readFile(await safeRepoPath(safeRoot, path.join(safeRoot, file)), "utf8"); }
     catch (error) { throw new Error(`archive-file-read-failed:${file}`, { cause: error }); }
     const parsed = parseArchive(markdown, file);
     const complete = status ? completeEvidence(markdown, status, parsed) : false;
@@ -342,7 +327,7 @@ export async function scanArchive(repoRoot, { previous } = {}) {
 }
 
 /** Builds the daily catalog only from a validated Flomo online snapshot. */
-export function scanOnlineSnapshot(snapshot, { previous, sourcePath, legacyCatalog } = {}) {
+export function scanOnlineSnapshot(snapshot, { previous, sourcePath } = {}) {
   if (!snapshot || snapshot.schemaVersion !== 1 || snapshot.sourceMode !== "flomo-online-full" ||
       typeof snapshot.snapshotId !== "string" || !snapshot.snapshotId || !Array.isArray(snapshot.records)) {
     throw new Error("online-snapshot-invalid");
@@ -355,7 +340,6 @@ export function scanOnlineSnapshot(snapshot, { previous, sourcePath, legacyCatal
     termination: snapshot.termination, detailVerification: snapshot.detailVerification,
     records: snapshot.records.map((record) => ({ ...record, bodyText: record.body, bodyComplete: true })),
   });
-  const legacyBodies = uniqueLegacyBodies(legacyCatalog);
   const storedCoverage = snapshot.coverage;
   const storedPolicyLimit = maxMissingRecordsForCoveragePolicy(storedCoverage?.policy);
   if (!storedCoverage || storedPolicyLimit === null || storedCoverage.omittedCount > storedPolicyLimit ||
@@ -396,8 +380,7 @@ export function scanOnlineSnapshot(snapshot, { previous, sourcePath, legacyCatal
     if (previousById.length > 1) throw new Error("previous-online-identity-conflict");
     const prior = previousById[0] || null;
     if (prior) usedOld.add(prior);
-    const legacyBody = legacyBodies?.get(`${Math.floor(Date.parse(memo.createdAt) / 60000)}:${whitespacelessBody(memo.bodyText)}`) ?? null;
-    const body = legacyBody ?? memo.bodyText;
+    const body = memo.bodyText;
     const current = { ...memo, bodyText: body, body, bodyHash: bodyHash(body), source: memoSource, reason: exclusionReason(body, memo.tags) };
     const noteKey = prior?.noteKey || realKey(current);
     const aliases = [...new Set([noteKey, `flomo:${memo.memoId}`, ...(prior?.aliases || [])])].sort();

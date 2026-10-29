@@ -15,9 +15,9 @@ const maxInputChars = 15_000;
 const defaultBridgeConversationUrl = "https://chatgpt.com/";
 const uncertainAiResubmitAfterMs = 20 * 60_000;
 // Bridge 默认预算为 120 秒观察 + 90 秒传输/清理余量；适配器必须覆盖完整协议预算。
-export const DEFAULT_BRIDGE_TIMEOUT_MS = 240_000;
+export const DEFAULT_BRIDGE_TIMEOUT_MS = 270_000;
 // Bridge image 模式（生图）观察预算为 600 秒（对齐 Voice-X / Read-X），适配器覆盖完整预算。
-export const IMAGE_BRIDGE_TIMEOUT_MS = 750_000;
+export const IMAGE_BRIDGE_TIMEOUT_MS = 780_000;
 
 export function normalizeWeek(value) {
   const match = String(value || "").match(/^(\d{4})-W?(\d{1,2})$/);
@@ -35,6 +35,7 @@ const safeWeeklyAiReasons = new Set([
   "snapshot-mismatch", "observer-window-ended", "observer-timeout", "assistant-selector-missing",
   "chatgpt-rate-limited", "login-required", "captcha-or-blocked", "ego-bootstrap-permission",
   "bridge-observation-identity-mismatch", "empty-ai-review", "ai-review-too-large", "invalid-ai-review",
+  "bridge-observe-result-missing", "bridge-result-missing", "bridge-timeout", "bridge-process-error",
   "promotion-readback-hash-mismatch", "promotion-status-readback-failed", "promotion-refuses-substantive-ai-md",
   "manual-ai-review-invalid", "manual-ai-review-changed-after-confirmation", "weekly-ai-run-in-progress",
   "formal-ai-md-has-human-content", "confirmed-ai-md-changed", "confirmed-ai-md-missing",
@@ -51,7 +52,7 @@ const safeWeeklyAiReasons = new Set([
   "image-output-not-ready", "output-markers-missing", "response-body-not-ready", "response-text-unstable",
   "observer-state-unavailable", "original-run-result-pending", "original-run-not-observable",
   "recoverable-result-unavailable", "ego-runtime-evaluate-timeout", "ego-script-process-timeout",
-  "ego-script-outcome-unknown", "ego-operation-failed", "ego-host-error", "task-space-cleanup-failed",
+  "ego-script-outcome-unknown", "ego-operation-failed", "ego-host-error", "recovery-lease-heartbeat-failed", "task-space-cleanup-failed",
   "cleanup-failed", "image-fetch-failed", "image-read-failed", "image-extract-failed", "image-src-missing",
   "output-boundary-invalid", "history-verification-failed", "local-state-unavailable", "bridge-internal-error",
   "submit-timeout", "submit-observer-unavailable", "composer-missing", "composer-not-empty",
@@ -73,20 +74,96 @@ const safeSystemErrorCodes = new Set([
   "EACCES", "EAGAIN", "EBUSY", "EEXIST", "EIO", "EINVAL", "EISDIR", "EMFILE", "ENFILE", "ENOENT",
   "ENOSPC", "ENOTDIR", "EPERM", "EPIPE", "ETIMEDOUT", "EWOULDBLOCK",
 ]);
+const safeChildErrorCode = (error) => {
+  const code = String(error?.code || "").toUpperCase();
+  return safeSystemErrorCodes.has(code) ? code : "other";
+};
+const weeklyAiObserverReasons = new Set([
+  "snapshot-mismatch", "observer-window-ended", "observer-timeout", "assistant-selector-missing",
+  "chatgpt-rate-limited", "bridge-observation-identity-mismatch", "bridge-observe-result-missing",
+  "bridge-observe-unavailable", "bridge-observe-interface-unavailable", "output-boundary-invalid", "history-verification-failed",
+  "conversation-session-mismatch",
+  "conversation-session-not-bound", "observer-identity-mismatch", "submission-unconfirmed",
+  "new-user-message-not-found", "new-assistant-message-not-found", "assistant-order-invalid",
+  "generation-in-progress", "image-output-not-ready", "output-markers-missing", "response-body-not-ready",
+  "response-text-unstable", "observer-state-unavailable", "original-run-result-pending", "original-run-not-observable",
+  "recoverable-result-unavailable", "ego-runtime-evaluate-timeout", "ego-script-process-timeout",
+  "ego-script-outcome-unknown", "image-extract-failed", "image-src-missing",
+]);
+const weeklyAiSubmitReasons = new Set([
+  "login-required", "captcha-or-blocked", "ego-bootstrap-permission", "ego-browser-unavailable",
+  "ego-host-unavailable", "ego-host-connect-failed", "ego-host-disconnected", "ego-host-timeout",
+  "ego-host-protocol-error", "submit-timeout", "submit-observer-unavailable", "composer-missing",
+  "composer-not-empty", "prompt-fill-not-confirmed", "send-button-missing", "chat-mode-switch-failed",
+  "conversation-history-not-ready", "conversation-navigation-not-confirmed", "runner-request-timeout",
+]);
+const weeklyAiFailureStages = new Set(["local-gate", "submit", "observer", "cleanup", "runtime", "delivery", "recovery", "persistence", "validation", "unknown"]);
+const weeklyAiPhases = new Set(["local-gate", "submit", "observe", "cleanup", "runtime", "delivery", "recovery", "persistence", "validation", "promotion", "manual-confirmation", "unknown"]);
 
-function weeklyAiOutcomeEvent(result = {}) {
+function weeklyAiFailureClassification(result, reason, succeeded) {
+  const code = typeof reason === "string" ? reason : "";
+  if (succeeded) return {
+    failureStage: "delivery",
+    phase: result.completionSource === "user-manual" ? "manual-confirmation" : "delivery",
+  };
+  const declaredPhase = result.phase || result.diagnostics?.phase;
+  const declaredStage = result.failureStage || result.diagnostics?.failureStage;
+  let inferredStage = "unknown";
+  let inferredPhase = "unknown";
+  if (["bridge-busy", "local-rate-limit-cooldown", "weekly-ai-run-in-progress"].includes(code)) {
+    inferredStage = "local-gate"; inferredPhase = "local-gate";
+  } else if (["task-space-cleanup-failed", "cleanup-failed"].includes(code)) {
+    inferredStage = "cleanup"; inferredPhase = "cleanup";
+  } else if (weeklyAiObserverReasons.has(code)) {
+    inferredStage = "observer"; inferredPhase = "observe";
+  } else if (weeklyAiSubmitReasons.has(code)) {
+    inferredStage = "submit"; inferredPhase = "submit";
+  } else if (["empty-ai-review", "ai-review-too-large", "invalid-ai-review", "manual-ai-review-invalid", "manual-ai-review-changed-after-confirmation"].includes(code)) {
+    inferredStage = "validation"; inferredPhase = "validation";
+  } else if (["receipt-write-failed", "append-failed", "diagnostic-write-failed"].includes(code)) {
+    inferredStage = "persistence"; inferredPhase = "persistence";
+  } else if (code.startsWith("promotion-") || code.startsWith("formal-ai-md-") || code.startsWith("confirmed-ai-md-")) {
+    inferredStage = "delivery"; inferredPhase = "promotion";
+  } else if (["bridge-internal-error", "local-state-unavailable", "ego-operation-failed"].includes(code)) {
+    inferredStage = "runtime"; inferredPhase = "runtime";
+  } else if (["bridge-timeout", "bridge-process-error"].includes(code)) {
+    inferredStage = "runtime"; inferredPhase = "runtime";
+  } else if (["original-run-identity-mismatch", "original-run-receipt-invalid", "original-run-receipt-unavailable", "recovery-lease-unavailable", "recovery-lease-heartbeat-failed"].includes(code)) {
+    inferredStage = "recovery"; inferredPhase = "recovery";
+  }
+  return {
+    failureStage: weeklyAiFailureStages.has(declaredStage) ? declaredStage : inferredStage,
+    phase: weeklyAiPhases.has(declaredPhase) ? declaredPhase : inferredPhase,
+  };
+}
+
+export function weeklyAiOutcomeEvent(result = {}) {
   const attemptId = result.localAttemptId || result.runId;
   if (typeof attemptId !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/.test(attemptId)) return null;
   const succeeded = result.status === "confirmed";
   const failed = result.status === "failed";
   const generated = result.status === "generated";
-  const startAt = Date.parse(result.resubmissionOf?.dispatchStartedAt || result.dispatchStartedAt || result.startedAt || "");
+  const startAt = Date.parse(result.resubmissionOf?.dispatchStartedAt || result.dispatchStartedAt || "");
   const endAt = Date.parse(result.confirmedAt || result.completedAt || "");
   const durationMs = Number.isFinite(startAt) && Number.isFinite(endAt) && endAt >= startAt ? endAt - startAt : undefined;
   const parentAttemptId = result.resubmissionOf?.runId;
-  const currentReason = result.observation?.reason || result.reason;
+  const observationReason = result.observation?.reason;
+  const observationAt = Date.parse(result.observation?.observedAt || "");
+  const resultAt = Date.parse(result.confirmedAt || result.completedAt || result.updatedAt || "");
+  const hasExplicitStage = weeklyAiFailureStages.has(result.failureStage || result.diagnostics?.failureStage)
+    || weeklyAiPhases.has(result.phase || result.diagnostics?.phase);
+  const rootReasonIsCurrent = typeof result.reason === "string" && result.reason !== observationReason
+    && (result.status === "failed" || hasExplicitStage
+      || (Number.isFinite(resultAt) && Number.isFinite(observationAt) && resultAt > observationAt));
+  const currentReason = rootReasonIsCurrent ? result.reason : observationReason || result.reason;
   const originalReason = result.originalReason || result.resubmissionOf?.reason
-    || (result.observation?.reason && result.reason !== result.observation.reason ? result.reason : undefined);
+    || (observationReason && observationReason !== currentReason ? observationReason : undefined)
+    || (currentReason === observationReason && result.reason && result.reason !== observationReason ? result.reason : undefined);
+  const failure = weeklyAiFailureClassification(result, currentReason, succeeded);
+  const systemErrorCode = result.systemErrorCode || result.diagnostics?.systemErrorCode;
+  const completionSource = result.completionSource === "user-manual" ? "user-manual"
+    : result.completionSource === "ai-generated" || generated ? "ai-generated" : "unknown";
+  const recoveryStatus = succeeded ? "succeeded" : generated ? "pending" : failed ? "failed" : "needs_review";
   return {
     type: "weekly-ai-outcome",
     ...(result.targetWeek ? { week: result.targetWeek } : {}),
@@ -96,16 +173,23 @@ function weeklyAiOutcomeEvent(result = {}) {
     ...(typeof parentAttemptId === "string" ? { parentAttemptId } : {}),
     caller: "learn-x:weekly-ai",
     status: succeeded ? "succeeded" : generated ? "submitted" : failed ? "failed" : "needs_review",
-    phase: "delivery",
-    failureStage: succeeded ? "delivery" : "unknown",
+    phase: failure.phase,
+    failureStage: failure.failureStage,
     ...(typeof currentReason === "string" ? { reason: safeWeeklyAiReasons.has(currentReason) ? currentReason : "unknown" } : {}),
     ...(typeof originalReason === "string" ? { originalReason: safeWeeklyAiReasons.has(originalReason) ? originalReason : "unknown" } : {}),
+    ...(typeof systemErrorCode === "string" ? { systemErrorCode: safeSystemErrorCodes.has(systemErrorCode) ? systemErrorCode : "unknown" } : {}),
+    ...(typeof result.remoteOutcomeUnknown === "boolean" || result.reason === "bridge-timeout"
+      ? { remoteOutcomeUnknown: result.remoteOutcomeUnknown === true || result.reason === "bridge-timeout" } : {}),
+    ...(typeof result.localProcessExitConfirmed === "boolean" ? { localProcessExitConfirmed: result.localProcessExitConfirmed } : {}),
     ...(durationMs !== undefined ? { durationMs } : {}),
     ...(Number.isSafeInteger(result.resubmissionCount) ? { attempts: result.resubmissionCount + 1 } : {}),
     deliveryStatus: succeeded ? "succeeded" : generated ? "pending" : failed ? "failed" : "needs_review",
+    ...(typeof parentAttemptId === "string" ? { recoveryAction: "one-shot-resubmit", recoveryStatus } : {}),
     businessValidationStatus: succeeded || generated ? "succeeded" : "unknown",
     promotionStatus: succeeded ? "succeeded" : generated ? "pending" : "unknown",
     readbackStatus: succeeded ? "succeeded" : generated ? "pending" : "unknown",
+    completionSource,
+    humanConfirmed: result.humanConfirmed === true || (completionSource === "user-manual" && Boolean(result.manualConfirmation?.confirmedAt)),
     ...(typeof result.outputSha256 === "string" && /^[a-f0-9]{64}$/.test(result.outputSha256) ? { sourceFingerprint: result.outputSha256 } : {}),
   };
 }
@@ -116,7 +200,7 @@ async function appendWeeklyAiDiagnostic(event, options = {}) {
     try { await options.diagnosticWriter(event); }
     catch (error) {
       const code = safeSystemErrorCodes.has(String(error?.code || "").toUpperCase()) ? String(error.code).toUpperCase() : "unknown";
-      process.stderr.write(`${JSON.stringify({ event: "learn-x-weekly-ai-diagnostic-write-failed", errorCode: "diagnostic-write-failed", systemErrorCode: code })}\n`);
+      await reportWeeklyAiDiagnosticWriteFailure(event, code, options);
     }
     return;
   }
@@ -129,8 +213,131 @@ async function appendWeeklyAiDiagnostic(event, options = {}) {
     await append(process.env.EGO_RUNTIME_DIR || DEFAULT_RUNTIME_DIR, "learn-x-weekly-ai", event);
   } catch (error) {
     const code = safeSystemErrorCodes.has(String(error?.code || "").toUpperCase()) ? String(error.code).toUpperCase() : "unknown";
-    process.stderr.write(`${JSON.stringify({ event: "learn-x-weekly-ai-diagnostic-write-failed", errorCode: "diagnostic-write-failed", systemErrorCode: code })}\n`);
+    await reportWeeklyAiDiagnosticWriteFailure(event, code, options);
   }
+}
+
+async function reportWeeklyAiDiagnosticWriteFailure(event, systemErrorCode, options = {}) {
+  let fallbackStatus = "failed";
+  let fallbackSystemErrorCode = "unknown";
+  let retentionStatus = "unknown";
+  try {
+    const modulePath = path.resolve(defaultRepoRoot, "../browser-runtime-governance/runtime/lib/journal.mjs");
+    const { append, prune } = await import(pathToFileURL(modulePath).href);
+    const outboxDir = options.diagnosticOutboxRoot
+      || path.join(options.repoRoot || defaultRepoRoot, "03_input/weekly/.diagnostic-outbox");
+    const stableId = (value) => typeof value === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(value) ? value : undefined;
+    const week = typeof event.week === "string" ? normalizeWeek(event.week) : undefined;
+    const pruneOutbox = options.diagnosticOutboxPruner || prune;
+    try {
+      await pruneOutbox(outboxDir, 30);
+      retentionStatus = "ok";
+    } catch (error) {
+      retentionStatus = "failed";
+      const code = String(error?.code || "").toUpperCase();
+      fallbackSystemErrorCode = safeSystemErrorCodes.has(code) ? code : "unknown";
+    }
+    const fallbackEvent = {
+      type: "diagnostic-write-failed",
+      ...(typeof event.type === "string" ? { originalEventType: event.type } : {}),
+      ...(week ? { week } : {}),
+      ...(stableId(event.runId) ? { runId: stableId(event.runId), taskRunId: stableId(event.taskRunId) || stableId(event.runId) } : {}),
+      ...(stableId(event.clientRequestId) ? { clientRequestId: stableId(event.clientRequestId) } : {}),
+      ...(stableId(event.attemptId) ? { attemptId: stableId(event.attemptId) } : {}),
+      ...(stableId(event.parentAttemptId) ? { parentAttemptId: stableId(event.parentAttemptId) } : {}),
+      caller: "learn-x:weekly-ai",
+      status: "failed",
+      ...(typeof event.status === "string" ? { originalStatus: event.status } : {}),
+      reason: "diagnostic-write-failed",
+      ...(safeWeeklyAiReasons.has(event.reason) ? { originalReason: event.reason } : {}),
+      errorCode: "diagnostic-write-failed",
+      systemErrorCode,
+      phase: "persistence",
+      failureStage: "persistence",
+      ...(typeof event.phase === "string" ? { originalPhase: event.phase } : {}),
+      ...(typeof event.failureStage === "string" ? { originalFailureStage: event.failureStage } : {}),
+      ...(typeof event.deliveryStatus === "string" ? { deliveryStatus: event.deliveryStatus } : {}),
+      ...(typeof event.businessValidationStatus === "string" ? { businessValidationStatus: event.businessValidationStatus } : {}),
+      ...(typeof event.promotionStatus === "string" ? { promotionStatus: event.promotionStatus } : {}),
+      ...(typeof event.readbackStatus === "string" ? { readbackStatus: event.readbackStatus } : {}),
+      ...(typeof event.completionSource === "string" ? { completionSource: event.completionSource } : {}),
+      ...(typeof event.humanConfirmed === "boolean" ? { humanConfirmed: event.humanConfirmed } : {}),
+      ...(typeof event.recoveryStatus === "string" ? { recoveryStatus: event.recoveryStatus } : {}),
+      ...(Number.isSafeInteger(event.durationMs) ? { durationMs: event.durationMs } : {}),
+      ...(Number.isSafeInteger(event.attempts) ? { attempts: event.attempts } : {}),
+      fallbackRetentionStatus: retentionStatus,
+      ...(retentionStatus === "failed" ? { fallbackSystemErrorCode } : {}),
+      diagnosticWriteFailed: true,
+    };
+    await append(outboxDir, "learn-x-weekly-ai", fallbackEvent);
+    fallbackStatus = "persisted";
+  } catch (error) {
+    const code = String(error?.code || "").toUpperCase();
+    fallbackSystemErrorCode = safeSystemErrorCodes.has(code) ? code : "unknown";
+  }
+  process.stderr.write(`${JSON.stringify({
+    event: "learn-x-weekly-ai-diagnostic-write-failed",
+    errorCode: "diagnostic-write-failed",
+    systemErrorCode,
+    fallbackStatus,
+    ...(fallbackStatus === "failed" || retentionStatus === "failed" ? { fallbackSystemErrorCode } : {}),
+    ...(fallbackStatus === "persisted" ? { fallbackRetentionStatus: retentionStatus } : {}),
+  })}\n`);
+}
+
+export async function readWeeklyAiDiagnosticOutbox(options = {}) {
+  const repoRoot = options.repoRoot || defaultRepoRoot;
+  const week = options.week ? normalizeWeek(options.week) : undefined;
+  const outboxDir = options.diagnosticOutboxRoot || path.join(repoRoot, "03_input/weekly/.diagnostic-outbox");
+  const modulePath = path.resolve(defaultRepoRoot, "../browser-runtime-governance/runtime/lib/journal.mjs");
+  const { readRange } = await import(pathToFileURL(modulePath).href);
+  const events = await readRange(outboxDir, 30);
+  return events
+    .filter((event) => event.source === "learn-x-weekly-ai" && event.type === "diagnostic-write-failed")
+    .filter((event) => !week || event.week === week)
+    .map((event) => ({
+      t: event.t,
+      week: event.week || "unknown",
+      runId: event.runId,
+      taskRunId: event.taskRunId,
+      clientRequestId: event.clientRequestId,
+      attemptId: event.attemptId,
+      parentAttemptId: event.parentAttemptId,
+      reason: event.reason,
+      originalReason: event.originalReason,
+      originalEventType: event.originalEventType,
+      originalStatus: event.originalStatus,
+      systemErrorCode: event.systemErrorCode || "unknown",
+      fallbackRetentionStatus: event.fallbackRetentionStatus || "unknown",
+      ...(event.fallbackSystemErrorCode ? { fallbackSystemErrorCode: event.fallbackSystemErrorCode } : {}),
+      phase: event.phase || "unknown",
+      failureStage: event.failureStage || "unknown",
+      originalPhase: event.originalPhase,
+      originalFailureStage: event.originalFailureStage,
+      deliveryStatus: event.deliveryStatus,
+      businessValidationStatus: event.businessValidationStatus,
+      promotionStatus: event.promotionStatus,
+      readbackStatus: event.readbackStatus,
+      completionSource: event.completionSource,
+      humanConfirmed: event.humanConfirmed,
+    }));
+}
+
+export async function readWeeklyAiDiagnosticStatus(options = {}) {
+  const events = await readWeeklyAiDiagnosticOutbox(options);
+  const retentionStatus = events.length === 0 ? "unknown"
+    : events.some((event) => event.fallbackRetentionStatus === "failed") ? "failed"
+      : events.every((event) => event.fallbackRetentionStatus === "ok") ? "ok" : "unknown";
+  return {
+    status: events.length ? "degraded" : "unknown",
+    reason: events.length ? undefined : "no-fallback-events-in-window",
+    coverage: "local-diagnostic-outbox-only",
+    lookbackDays: 30,
+    ...(options.week ? { week: normalizeWeek(options.week) } : {}),
+    count: events.length,
+    retentionStatus,
+    events,
+  };
 }
 
 function conversationOriginMatches(requestedUrl, observedUrl) {
@@ -209,15 +416,31 @@ export function parseJsonLines(text) {
   });
 }
 
+export function extractBridgePersistenceDiagnostics(stderr) {
+  return parseJsonLines(stderr).flatMap((event) => {
+    if (event.event === "bridge-primary-journal-write-failed") {
+      return [{ reason: "diagnostic-write-failed", originalReason: "append-failed", failureStage: "persistence", phase: "persistence" }];
+    }
+    if (event.event === "bridge-client-journal-write-failed") {
+      return [{ reason: "diagnostic-write-failed", failureStage: "persistence", phase: "persistence" }];
+    }
+    if (event.event === "bridge-client-journal-prune-failed") {
+      return [{ reason: "diagnostic-write-failed", failureStage: "persistence", phase: "persistence" }];
+    }
+    return [];
+  });
+}
+
 export async function runBridgeCli(prompt, options = {}) {
   const bridgePath = options.bridgePath || process.env.LEARN_X_CHATGPT_BRIDGE || defaultBridgePath;
   const image = Boolean(options.image);
-  const timeoutMs = options.timeoutMs || (image ? IMAGE_BRIDGE_TIMEOUT_MS : DEFAULT_BRIDGE_TIMEOUT_MS);
+  const timeoutMs = options.timeoutMs ?? (image ? IMAGE_BRIDGE_TIMEOUT_MS : DEFAULT_BRIDGE_TIMEOUT_MS);
   const args = [bridgePath];
   if (image) args.push("--image");
   if (options.preallocatedRunId) args.push("--run-id", options.preallocatedRunId);
   if (options.conversationUrl) args.push("--conversation-url", options.conversationUrl);
   if (options.callerLabel || options.sourceId === "ai") args.push("--caller-label", options.callerLabel || "learn-x:weekly-ai");
+  if (options.contextPackDelivery !== undefined) args.push("--context-pack-delivery-json", JSON.stringify(options.contextPackDelivery));
   const child = spawn(process.execPath, args, { stdio: ["pipe", "pipe", "pipe"] });
   let stdout = "";
   let stderr = "";
@@ -225,22 +448,56 @@ export async function runBridgeCli(prompt, options = {}) {
   child.stderr.setEncoding("utf8");
   child.stdout.on("data", (chunk) => { stdout += chunk; });
   child.stderr.on("data", (chunk) => { stderr += chunk; });
-  child.stdin.end(prompt);
+  let processErrorCode;
+  child.once("error", (error) => {
+    processErrorCode = safeChildErrorCode(error);
+  });
+  child.stdin.on("error", (error) => {
+    processErrorCode ||= safeChildErrorCode(error);
+  });
+  try { child.stdin.end(prompt); }
+  catch (error) {
+    processErrorCode = safeChildErrorCode(error);
+  }
 
   const exit = await new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      resolve({ code: null, timedOut: true });
+    const termGraceMs = Number.isSafeInteger(options.termGraceMs) ? Math.max(0, Math.min(options.termGraceMs, 30_000)) : 1_000;
+    const killGraceMs = Number.isSafeInteger(options.killGraceMs) ? Math.max(0, Math.min(options.killGraceMs, 30_000)) : 5_000;
+    let timedOut = false;
+    let settled = false;
+    let timeoutTimer;
+    let termTimer;
+    let killTimer;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutTimer);
+      clearTimeout(termTimer);
+      clearTimeout(killTimer);
+      resolve({ ...value, ...(processErrorCode ? { errorCode: processErrorCode } : {}) });
+    };
+    timeoutTimer = setTimeout(() => {
+      timedOut = true;
+      try { child.kill("SIGTERM"); } catch {}
+      termTimer = setTimeout(() => {
+        if (settled) return;
+        try { child.kill("SIGKILL"); } catch {}
+        killTimer = setTimeout(() => finish({
+          code: null, signal: null, timedOut: true, localProcessExitConfirmed: false, remoteOutcomeUnknown: true,
+        }), killGraceMs);
+      }, termGraceMs);
     }, timeoutMs);
-    child.once("error", (error) => resolve({ code: null, timedOut: false, error: String(error?.message || error) }));
     child.once("close", (code, signal) => {
-      clearTimeout(timer);
-      resolve({ code, signal, timedOut: false });
+      finish({
+        code, signal, timedOut,
+        localProcessExitConfirmed: true,
+        ...(timedOut ? { remoteOutcomeUnknown: true } : {}),
+      });
     });
   });
 
   const result = [...parseJsonLines(`${stdout}\n${stderr}`)].reverse().find((value) => typeof value.status === "string");
-  return { result, exit };
+  return { result, exit, persistenceDiagnostics: extractBridgePersistenceDiagnostics(stderr) };
 }
 
 export async function observeBridgeCli(previous, options = {}) {
@@ -397,7 +654,7 @@ async function generateAiReviewUnlocked(options = {}) {
     const formalText = normalizeAiReviewText(await readFile(paths.formalPath, "utf8"));
     if (sha256(formalText) === previous.outputSha256 && validateAiReview(formalText).valid) {
       const reconciled = { ...previous, status: "confirmed", confirmedAt: new Date().toISOString(), formalPath: paths.formalPath,
-        promotionRecovered: true, readbackSha256: sha256(formalText) };
+        promotionRecovered: true, completionSource: "ai-generated", readbackSha256: sha256(formalText) };
       const readback = await persistConfirmedPromotion(paths, reconciled, { week, manualPrompt: prompt });
       if (readback.status === "confirmed" && await exists(paths.generatedPath)) await unlink(paths.generatedPath);
       return { ...readback, targetWeek: week };
@@ -530,7 +787,7 @@ async function generateAiReviewUnlocked(options = {}) {
       runId: previous.runId,
       reason: previous.reason,
       completedAt: previous.completedAt,
-      dispatchStartedAt: previous.dispatchStartedAt || previous.startedAt,
+      dispatchStartedAt: previous.dispatchStartedAt,
       promptSha256: previous.promptSha256,
       authorizedBy: options.automaticResubmit ? "weekly-ai-20m-policy" : "user-explicit-resubmission",
       startedAt
@@ -540,7 +797,7 @@ async function generateAiReviewUnlocked(options = {}) {
       status: "needs_review",
       runId: previous.runId,
       localAttemptId: previous.localAttemptId,
-      dispatchStartedAt: previous.dispatchStartedAt || previous.startedAt,
+      dispatchStartedAt: previous.dispatchStartedAt,
       submissionConfirmed: previous.submissionConfirmed === true,
       requestedConversationUrl: previous.requestedConversationUrl || conversationUrl,
       actualConversationUrl: previous.actualConversationUrl || previous.conversationUrl,
@@ -562,14 +819,14 @@ async function generateAiReviewUnlocked(options = {}) {
 
   if (!bridge) {
     const runner = options.runBridge || runBridgeCli;
-    dispatchedStartedAt = new Date().toISOString();
+    const dispatchIntentAt = new Date().toISOString();
     const dispatchIntent = {
       ...resultBase(week, prompt, startedAt),
       status: "dispatching",
       dispatchState: "started",
       conversationUrl,
       requestedConversationUrl: conversationUrl,
-      dispatchStartedAt: dispatchedStartedAt,
+      dispatchIntentAt,
       localAttemptId: randomUUID(),
       ...(resubmissionOf ? { reason: "uncertain-resubmission-in-progress" } : {}),
       callerLabel: options.callerLabel || "learn-x:weekly-ai",
@@ -581,6 +838,50 @@ async function generateAiReviewUnlocked(options = {}) {
     dispatchedRunId = dispatchIntent.runId;
     await writeAtomic(paths.sidecarPath, `${JSON.stringify(dispatchIntent, null, 2)}\n`, "dispatch");
     await appendWeeklyAiDiagnostic({
+      type: "weekly-ai-dispatch-intent",
+      week,
+      runId: dispatchIntent.runId,
+      taskRunId: dispatchIntent.runId,
+      clientRequestId: dispatchIntent.runId,
+      attemptId: dispatchIntent.runId,
+      ...(typeof resubmissionOf?.runId === "string" ? { parentAttemptId: resubmissionOf.runId } : {}),
+      caller: "learn-x:weekly-ai",
+      status: "pending",
+      phase: "submit",
+      deliveryStatus: "pending",
+      recoveryAction: resubmissionOf ? "one-shot-resubmit" : "none",
+      ...(resubmissionOf ? { recoveryStatus: "pending" } : {}),
+    }, options);
+    dispatchedStartedAt = new Date().toISOString();
+    let bridgePromise;
+    try {
+      bridgePromise = Promise.resolve(runner(prompt, { ...options, conversationUrl, preallocatedRunId: dispatchIntent.runId, dispatchStartedAt: dispatchedStartedAt, sourceId: "ai", callerLabel: options.callerLabel || "learn-x:weekly-ai" }))
+        .catch((error) => ({ result: null, exit: { errorCode: safeChildErrorCode(error) } }));
+    } catch (error) {
+      bridgePromise = Promise.resolve({ result: null, exit: { errorCode: safeChildErrorCode(error) } });
+    }
+    dispatchIntent.dispatchStartedAt = dispatchedStartedAt;
+    try {
+      await writeAtomic(paths.sidecarPath, `${JSON.stringify(dispatchIntent, null, 2)}\n`, "dispatch-started");
+    } catch (error) {
+      await appendWeeklyAiDiagnostic({
+        type: "weekly-ai-persistence-diagnostic",
+        week,
+        runId: dispatchIntent.runId,
+        taskRunId: dispatchIntent.runId,
+        clientRequestId: dispatchIntent.runId,
+        attemptId: dispatchIntent.runId,
+        caller: "learn-x:weekly-ai",
+        status: "failed",
+        deliveryStatus: "unknown",
+        reason: "diagnostic-write-failed",
+        errorCode: "diagnostic-write-failed",
+        systemErrorCode: safeSystemErrorCodes.has(String(error?.code || "").toUpperCase()) ? String(error.code).toUpperCase() : "unknown",
+        failureStage: "persistence",
+        phase: "persistence",
+      }, options);
+    }
+    await appendWeeklyAiDiagnostic({
       type: "weekly-ai-dispatch",
       week,
       runId: dispatchIntent.runId,
@@ -591,19 +892,33 @@ async function generateAiReviewUnlocked(options = {}) {
       caller: "learn-x:weekly-ai",
       status: "submitted",
       phase: "submit",
+      dispatchStartedAt: dispatchedStartedAt,
       deliveryStatus: "pending",
       recoveryAction: resubmissionOf ? "one-shot-resubmit" : "none",
       ...(resubmissionOf ? { recoveryStatus: "pending" } : {}),
     }, options);
-    try {
-      bridge = await runner(prompt, { ...options, conversationUrl, preallocatedRunId: dispatchIntent.runId, sourceId: "ai", callerLabel: options.callerLabel || "learn-x:weekly-ai" });
-    } catch (error) {
-      bridge = { result: null, exit: { error: String(error?.message || error) } };
+    bridge = await bridgePromise;
+    for (const diagnostic of bridge?.persistenceDiagnostics || []) {
+      await appendWeeklyAiDiagnostic({
+        type: "weekly-ai-persistence-diagnostic",
+        week,
+        runId: dispatchIntent.runId,
+        taskRunId: dispatchIntent.runId,
+        clientRequestId: dispatchIntent.runId,
+        attemptId: dispatchIntent.runId,
+        caller: "learn-x:weekly-ai",
+        status: "failed",
+        deliveryStatus: "unknown",
+        ...diagnostic,
+      }, options);
     }
   }
 
   const bridgeResult = bridge?.result;
-  const base = { ...resultBase(week, prompt, startedAt), ...(resubmissionOf ? {
+  const base = { ...resultBase(week, prompt, startedAt),
+    ...(bridgeResult?.contextPack ? { contextPack: bridgeResult.contextPack }
+      : options.observeUncertain && previous?.contextPack ? { contextPack: previous.contextPack } : {}),
+    ...(resubmissionOf ? {
     resubmissionOf, resubmissionCount: 1, resubmissionReservedAt: startedAt,
     automaticResubmit: options.automaticResubmit === true
   } : {}) };
@@ -626,13 +941,16 @@ async function generateAiReviewUnlocked(options = {}) {
   }
   if (bridgeResult?.status !== "succeeded") {
     const status = bridgeResult?.status === "failed" ? "failed" : "needs_review";
+    const bridgeReason = typeof bridgeResult?.reason === "string"
+      ? (safeWeeklyAiReasons.has(bridgeResult.reason) ? bridgeResult.reason : "unknown")
+      : undefined;
     const failure = {
       ...base,
       status,
       dispatchState: "returned",
       ...(status === "needs_review" && !bridgeResult?.runId ? { submissionStateUncertain: true } : {}),
       runId: bridgeResult?.runId || (status === "needs_review" ? dispatchedRunId || previous?.runId : undefined),
-      reason: bridgeResult?.reason || bridge?.exit?.error || (bridge?.exit?.timedOut ? "bridge-timeout" : "bridge-result-missing"),
+      reason: bridgeReason || (bridge?.exit?.timedOut ? "bridge-timeout" : bridge?.exit?.errorCode ? "bridge-process-error" : "bridge-result-missing"),
       conversationUrl: bridgeResult?.conversationUrl || previous?.conversationUrl || conversationUrl,
       requestedConversationUrl: bridgeResult?.requestedConversationUrl || previous?.requestedConversationUrl || conversationUrl,
       actualConversationUrl: bridgeResult?.actualConversationUrl || bridgeResult?.conversationUrl || previous?.actualConversationUrl,
@@ -643,6 +961,9 @@ async function generateAiReviewUnlocked(options = {}) {
       ...(options.observeUncertain ? { observation: { status: "succeeded", runId: bridgeResult.runId, observedAt: new Date().toISOString(), outputSha256: bridgeResult.text ? sha256(bridgeResult.text) : undefined } } : {}),
       retryAfterSeconds: bridgeResult?.retryAfterSeconds,
       diagnostics: bridgeResult?.diagnostics,
+      ...(bridge?.exit?.timedOut === true ? { remoteOutcomeUnknown: true } : {}),
+      ...(typeof bridge?.exit?.localProcessExitConfirmed === "boolean" ? { localProcessExitConfirmed: bridge.exit.localProcessExitConfirmed } : {}),
+      ...(typeof bridge?.exit?.errorCode === "string" && safeSystemErrorCodes.has(bridge.exit.errorCode) ? { systemErrorCode: bridge.exit.errorCode } : {}),
       completedAt: new Date().toISOString(),
       manualPrompt: prompt
     };
@@ -747,7 +1068,7 @@ function isEligibleUncertainResubmission(previous, week, promptSha256, nowMs = D
     "response-body-not-ready", "response-text-unstable", "generation-in-progress", "output-markers-missing",
     "observer-state-unavailable", "original-run-result-pending",
   ]);
-  const startedAt = Date.parse(previous?.dispatchStartedAt || previous?.startedAt || "");
+  const startedAt = Date.parse(previous?.dispatchStartedAt || "");
   const sameBoundRun = typeof runId === "string" && runId === previous?.localAttemptId
     && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(runId)
     && previous?.submissionConfirmed === true
@@ -774,7 +1095,7 @@ function isEligibleUncertainResubmission(previous, week, promptSha256, nowMs = D
     && previous?.targetWeek === week
     && previous?.promptSha256 === promptSha256
     && !previous?.resubmissionOf
-    && previous?.resubmissionCount !== 1
+    && (previous?.resubmissionCount === undefined || previous.resubmissionCount === 0)
     && sameBoundRun
     && safelyUnresolved
     && Number.isFinite(startedAt)
@@ -835,7 +1156,7 @@ async function promoteAiReviewUnlocked(options = {}) {
       const currentText = normalizeAiReviewText(current);
       if (sha256(currentText) === sidecar.outputSha256 && validateAiReview(currentText).valid) {
         const reconciled = { ...sidecar, status: "confirmed", confirmedAt: sidecar.confirmedAt || new Date().toISOString(),
-          formalPath: paths.formalPath, promotionRecovered: true, readbackSha256: sha256(currentText) };
+          formalPath: paths.formalPath, promotionRecovered: true, completionSource: "ai-generated", readbackSha256: sha256(currentText) };
         const readback = await persistConfirmedPromotion(paths, reconciled, { week, manualPrompt: options.manualPrompt });
         if (readback.status === "confirmed" && await exists(paths.generatedPath)) await unlink(paths.generatedPath);
         return { ...readback, targetWeek: week };
@@ -856,6 +1177,7 @@ async function promoteAiReviewUnlocked(options = {}) {
     const confirmed = {
       ...sidecar,
       status: "confirmed",
+      completionSource: "ai-generated",
       confirmedAt: new Date().toISOString(),
       formalPath: paths.formalPath,
       auditPath,
@@ -965,6 +1287,7 @@ export function parseGenerateAiReviewArgs(argv) {
   const options = { confirm: false };
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === "--week") options.week = argv[++index];
+    else if (argv[index] === "--diagnostic-status") options.diagnosticStatus = true;
     else if (argv[index] === "--promote") options.promote = true;
     else if (argv[index] === "--confirm-manual") options.confirmManual = true;
     else if (argv[index] === "--confirm") options.confirm = true;
@@ -980,7 +1303,9 @@ export function parseGenerateAiReviewArgs(argv) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const options = parseGenerateAiReviewArgs(process.argv.slice(2));
-  const result = options.confirmManual
+  const result = options.diagnosticStatus
+    ? await readWeeklyAiDiagnosticStatus(options)
+    : options.confirmManual
     ? await confirmManualAiReview(options)
     : options.promote
       ? await promoteAiReview(options)

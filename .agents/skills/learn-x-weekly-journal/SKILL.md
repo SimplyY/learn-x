@@ -18,6 +18,10 @@ node /Users/yuwei/code/skills/prompt-governance/scripts/fetch-prompt.mjs learn-x
 
 以下规则是周记 Skill 的来源和质量补充要求，与本次读取的受治理 Prompt 一并执行。若两者对同一行为有直接冲突，停止受影响的字段并报告冲突，不静默舍弃任一规则。
 
+### 同周 Core 入口（受控试点）
+
+在周自动化明确启动 M1 试点时，接收其已读回核验的同周 Core 文档链接；仅在新复制模板的安全空位中使用 bot 写入可点击链接并回读核验。按周自动化「同周 Core 文档试点入口」处理失败、已有草稿及人工内容；不为补链覆盖原文。非试点运行不改变现有写入流程。
+
 ### 目标段落链接
 
 - 写入并回读确认目标段落后，使用同一次 `lark-cli docs +fetch --detail with-ids` 返回的底层 `document_id` 作为导航链接路径：`https://ywhome.feishu.cn/docx/<document_id>#<target-block-id>`。目标 fragment 必须来自本次回读确认的目标周标题；若 CLI 提供该标题实际 `#share-...` fragment，可替换 block ID fragment。

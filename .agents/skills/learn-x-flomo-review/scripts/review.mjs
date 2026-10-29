@@ -4,19 +4,54 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { scanArchive, scanOnlineSnapshot, hashBody } from './catalog.mjs';
-import { readVerifiedStagedOnlineFlomoSnapshot } from '../../learn-x-input/scripts/lib/flomo-full-snapshot.mjs';
-import { defaultFlomoPrivateDataRoot } from '../../learn-x-input/scripts/lib/flomo-full-snapshot.mjs';
+import { assertFlomoPathWithinRoot, defaultFlomoPrivateDataRoot, readVerifiedStagedOnlineFlomoSnapshot,
+  resolveFlomoPathAllowed, resolveFlomoPathAllowedSync } from '../../learn-x-input/scripts/lib/flomo-full-snapshot.mjs';
 import { flomoTags } from '../../learn-x-input/scripts/lib/flomo-filter.mjs';
 import { validateSelection, eligibleNotes, simulateSupply, isoWeek, activeWeeks, MIN_REVIEW_ITEMS, TARGET_MIN_REVIEW_ITEMS, MAX_REVIEW_ITEMS, MAX_REVIEW_REASON_CHARS } from './policy.mjs';
-import { preflightDelivery, sendRecommendation, recoverRecommendation, collectFeedback, cardContentSha256 } from './delivery.mjs';
+import { preflightDelivery, auditRecentReviewHistory, sendRecommendation, recoverRecommendation, collectFeedback, cardContentSha256 } from './delivery.mjs';
 import { buildReviewContext, validateEvidence, sha256, shanghaiDate, validDate } from './context.mjs';
 
 export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
+function safeProjectPath(projectRoot, candidate) {
+  return assertFlomoPathWithinRoot(projectRoot, resolveFlomoPathAllowedSync(candidate));
+}
+function safePrivatePath(p, candidate) {
+  return safeProjectPath(p.privateRoot, candidate);
+}
+function safeBackupPath(p, candidate) {
+  if (typeof candidate !== 'string' || !path.isAbsolute(candidate)) throw Error('online-storage-backup-invalid');
+  const safe = safePrivatePath(p, candidate);
+  const relative = path.relative(p.backupsRoot, safe);
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw Error('online-storage-backup-invalid');
+  }
+  return safe;
+}
+async function resolveProjectPath(projectRoot, candidate) {
+  const safeRoot = await resolveFlomoPathAllowed(projectRoot);
+  return assertFlomoPathWithinRoot(safeRoot, await resolveFlomoPathAllowed(candidate));
+}
+async function writeProjectFile(projectRoot, file, content, options) {
+  await writeFile(await resolveProjectPath(projectRoot, file), content, options);
+}
+async function makeProjectDirectory(projectRoot, directory) {
+  const safeDirectory = await resolveProjectPath(projectRoot, directory);
+  await mkdir(safeDirectory, { recursive: true });
+  return safeDirectory;
+}
+async function copyProjectFile(projectRoot, source, destination) {
+  await copyFile(await resolveProjectPath(projectRoot, source), await resolveProjectPath(projectRoot, destination));
+}
+async function unlinkProjectFile(projectRoot, file) {
+  await unlink(await resolveProjectPath(projectRoot, file));
+}
 export function paths(root = repoRoot) {
-  const legacyRuntime = path.join(root, '04_output/_dist/flomo-review');
-  const legacyCatalog = path.join(root, '03_input/_archives/flomo/catalog.json');
-  const privateRoot = root === repoRoot ? defaultFlomoPrivateDataRoot() : path.join(root, '.flomo-private');
-  const storageModePath = path.join(privateRoot, 'storage-mode.json');
+  const projectRoot = resolveFlomoPathAllowedSync(root);
+  const insideProject = (candidate) => assertFlomoPathWithinRoot(projectRoot, resolveFlomoPathAllowedSync(candidate));
+  const legacyRuntime = insideProject(path.join(projectRoot, '04_output/_dist/flomo-review'));
+  const legacyCatalog = insideProject(path.join(projectRoot, '03_input/_archives/flomo/catalog.json'));
+  const privateRoot = insideProject(defaultFlomoPrivateDataRoot(projectRoot));
+  const storageModePath = insideProject(path.join(privateRoot, 'storage-mode.json'));
   const onlineStorageActive = existsSync(storageModePath);
   let storageState = null;
   if (onlineStorageActive) {
@@ -26,38 +61,60 @@ export function paths(root = repoRoot) {
   const runtime = onlineStorageActive ? privateRoot : legacyRuntime;
   const versionedPath = (field, fallback, suffix) => {
     const value = storageState?.[field];
-    if (value == null) return path.join(privateRoot, fallback);
+    if (value == null) return insideProject(path.join(privateRoot, fallback));
     if (typeof value !== 'string' || !new RegExp(`^snapshots/[A-Za-z0-9_-]+\\.${suffix}\\.json$`).test(value)) throw Error('online-storage-state-invalid');
-    return path.join(privateRoot, value);
+    return insideProject(path.join(privateRoot, value));
   };
+  let activeSnapshotRelativePath = null;
+  let activeSnapshotPath = null;
+  let backupPath = null;
+  const backupsRoot = insideProject(path.join(privateRoot, 'backups'));
+  if (onlineStorageActive) {
+    activeSnapshotRelativePath = storageState?.activeSnapshotPath;
+    if (typeof activeSnapshotRelativePath !== 'string' || !/^snapshots\/[A-Za-z0-9_-]+\.json$/.test(activeSnapshotRelativePath)) {
+      throw Error('online-storage-state-invalid');
+    }
+    activeSnapshotPath = insideProject(path.join(privateRoot, activeSnapshotRelativePath));
+    if (typeof storageState?.backupPath !== 'string' || !path.isAbsolute(storageState.backupPath)) throw Error('online-storage-state-invalid');
+    backupPath = insideProject(storageState.backupPath);
+    const backupRelative = path.relative(backupsRoot, backupPath);
+    if (!backupRelative || backupRelative === '..' || backupRelative.startsWith(`..${path.sep}`) || path.isAbsolute(backupRelative)) {
+      throw Error('online-storage-state-invalid');
+    }
+  }
   const catalog = onlineStorageActive ? versionedPath('activeCatalogPath', 'catalog.json', 'catalog') : legacyCatalog;
-  const ledger = onlineStorageActive ? versionedPath('activeLedgerPath', 'ledger.json', 'ledger') : path.join(runtime, 'ledger.json');
-  return { runtime, catalog, ledger, config: path.join(root, '00_config/flomo-review.json'),
-    privateRoot, lockPath: path.join(privateRoot, 'write.lock'), storageModePath, onlineStorageActive, legacyRuntime, legacyCatalog };
+  const ledger = onlineStorageActive ? versionedPath('activeLedgerPath', 'ledger.json', 'ledger') : insideProject(path.join(runtime, 'ledger.json'));
+  return { root: projectRoot, runtime, catalog, ledger, config: insideProject(path.join(projectRoot, '00_config/flomo-review.json')),
+    privateRoot, lockPath: insideProject(path.join(privateRoot, 'write.lock')), storageModePath,
+    onlineStorageActive, legacyRuntime, legacyCatalog, activeSnapshotRelativePath, activeSnapshotPath, backupsRoot, backupPath };
 }
 export async function readJson(file, fallback) {
-  try { return JSON.parse(await readFile(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT' && fallback !== undefined) return structuredClone(fallback); throw e; }
+  const safeFile = await resolveFlomoPathAllowed(file);
+  try { return JSON.parse(await readFile(safeFile, 'utf8')); } catch (e) { if (e.code === 'ENOENT' && fallback !== undefined) return structuredClone(fallback); throw e; }
 }
-export async function atomicJson(file, value) {
-  await mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${randomUUID()}.tmp`, fd = await open(tmp, 'wx', 0o600);
+export async function atomicJson(file, value, projectRoot) {
+  const safeFile = projectRoot ? await resolveProjectPath(projectRoot, file) : await resolveFlomoPathAllowed(file);
+  await mkdir(path.dirname(safeFile), { recursive: true });
+  const tmp = `${safeFile}.${randomUUID()}.tmp`, fd = await open(tmp, 'wx', 0o600);
   try { await fd.writeFile(`${JSON.stringify(value, null, 2)}\n`); await fd.sync(); } finally { await fd.close(); }
-  try { await rename(tmp, file); } finally { await unlink(tmp).catch(e => { if (e.code !== 'ENOENT') throw e; }); }
+  try { await rename(tmp, safeFile); } finally { await unlink(tmp).catch(e => { if (e.code !== 'ENOENT') throw e; }); }
 }
-async function checkPrivateDirectory(directory, { create = false } = {}) {
-  if (create) await mkdir(directory, { recursive: true, mode: 0o700 });
+async function checkPrivateDirectory(directory, { create = false, projectRoot } = {}) {
+  const safeDirectory = projectRoot ? await resolveProjectPath(projectRoot, directory) : await resolveFlomoPathAllowed(directory);
+  if (create) await mkdir(safeDirectory, { recursive: true, mode: 0o700 });
   const metadata = await lstat(directory);
   if (!metadata.isDirectory() || metadata.isSymbolicLink() || (metadata.mode & 0o077) !== 0) {
     throw Error('review-private-directory-insecure');
   }
 }
-async function ensurePrivateDirectory(directory) {
-  await checkPrivateDirectory(directory, { create: true });
+async function ensurePrivateDirectory(directory, projectRoot) {
+  await checkPrivateDirectory(directory, { create: true, projectRoot });
 }
 export async function withLock(root, action) {
-  const { privateRoot, lockPath } = paths(root);
-  await ensurePrivateDirectory(privateRoot);
-  const lock = lockPath; let fd;
+  const p = paths(root), { privateRoot, lockPath } = p;
+  await ensurePrivateDirectory(privateRoot, p.root);
+  const safeRoot = await resolveFlomoPathAllowed(privateRoot);
+  const lock = assertFlomoPathWithinRoot(safeRoot, await resolveFlomoPathAllowed(lockPath)); let fd;
   try { fd = await open(lock, 'wx', 0o600); } catch (e) { if (e.code === 'EEXIST') throw Error('review-locked-inspect-owner-before-recovery'); throw e; }
   try { await fd.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })); return await action(); }
   finally { await fd.close(); await unlink(lock); }
@@ -82,16 +139,16 @@ export async function refreshArchive(root = repoRoot) {
     if (p.onlineStorageActive) {
       const state = await readJson(p.storageModePath);
       if (state.schemaVersion !== 1 || state.sourceMode !== 'flomo-online-full' ||
-          typeof state.activeSnapshotPath !== 'string' || !/^snapshots\/[A-Za-z0-9_-]+\.json$/.test(state.activeSnapshotPath)) {
+          typeof state.activeSnapshotPath !== 'string' || !/^snapshots\/[A-Za-z0-9_-]+\.json$/.test(state.activeSnapshotPath) ||
+          state.activeSnapshotPath !== p.activeSnapshotRelativePath) {
         throw Error('online-storage-state-invalid');
       }
-      const snapshotPath = path.join(p.privateRoot, state.activeSnapshotPath);
+      const snapshotPath = safePrivatePath(p, path.join(p.privateRoot, state.activeSnapshotPath));
       const snapshot = await readJson(snapshotPath);
-      const legacyCatalog = await scanArchive(root);
-      catalog = scanOnlineSnapshot(snapshot, { previous, sourcePath: snapshotPath, legacyCatalog });
+      catalog = scanOnlineSnapshot(snapshot, { previous, sourcePath: snapshotPath });
     } else catalog = await scanArchive(root, { previous });
     catalog.updatedAt = new Date().toISOString(); catalog.catalogHash = catalogHash(catalog);
-    await atomicJson(p.catalog, catalog);
+    await atomicJson(p.catalog, catalog, p.root);
     return { notes: catalog.notes.length, eligibleQuality: catalog.notes.filter(n => n.quality?.score >= 3 && n.quality.bodyHash === n.bodyHash).length, excluded: catalog.excluded.length, coverage: catalog.coverage };
   });
 }
@@ -99,7 +156,7 @@ export async function refreshArchive(root = repoRoot) {
 export async function activateOnlineSnapshot(root = repoRoot, stagedSnapshotPath, { beforeCommit } = {}) {
   if (typeof stagedSnapshotPath !== 'string' || !stagedSnapshotPath) throw Error('online-snapshot-path-required');
   const before = paths(root);
-  const { snapshot: staged } = await readVerifiedStagedOnlineFlomoSnapshot(path.resolve(stagedSnapshotPath));
+  const { snapshot: staged } = await readVerifiedStagedOnlineFlomoSnapshot(path.resolve(stagedSnapshotPath), { storageRoot: before.privateRoot });
   if (staged.sourceMode !== 'flomo-online-full' || typeof staged.snapshotId !== 'string' || !staged.snapshotId) throw Error('online-snapshot-invalid');
   if (before.onlineStorageActive) {
     const state = await readJson(before.storageModePath);
@@ -114,7 +171,8 @@ export async function activateOnlineSnapshot(root = repoRoot, stagedSnapshotPath
     if (activeState && (activeState.schemaVersion !== 1 || activeState.sourceMode !== 'flomo-online-full' ||
         !activeState.dedupeGeneration || !activeState.activeSnapshotPath || !activeState.backupPath)) throw Error('online-storage-state-invalid');
     if (activeState) {
-      const activeSnapshot = await readJson(path.join(p.privateRoot, activeState.activeSnapshotPath));
+      if (activeState.activeSnapshotPath !== p.activeSnapshotRelativePath) throw Error('online-storage-state-invalid');
+      const activeSnapshot = await readJson(safePrivatePath(p, path.join(p.privateRoot, activeState.activeSnapshotPath)));
       const activeCapturedAt = Date.parse(activeSnapshot.capturedAt || activeSnapshot.scanFinishedAt || '');
       const stagedCapturedAt = Date.parse(staged.capturedAt || staged.scanFinishedAt || '');
       if (!Number.isFinite(activeCapturedAt) || !Number.isFinite(stagedCapturedAt)) throw Error('online-snapshot-timestamp-invalid');
@@ -131,25 +189,21 @@ export async function activateOnlineSnapshot(root = repoRoot, stagedSnapshotPath
     const snapshotAbsolutePath = path.join(p.privateRoot, snapshotRelativePath);
     const snapshotsRoot = path.join(p.privateRoot, 'snapshots');
     const backupsRoot = path.join(p.privateRoot, 'backups');
-    await ensurePrivateDirectory(snapshotsRoot);
-    await ensurePrivateDirectory(backupsRoot);
-    let backupPath = activeState?.backupPath;
+    await ensurePrivateDirectory(snapshotsRoot, p.root);
+    await ensurePrivateDirectory(backupsRoot, p.root);
+    let backupPath = activeState ? safeBackupPath(p, activeState.backupPath) : null;
     if (!activeState) {
       backupPath = path.join(backupsRoot, `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}`);
-      await ensurePrivateDirectory(backupPath);
+      await ensurePrivateDirectory(backupPath, p.root);
       for (const [source, name] of [[p.legacyCatalog, 'legacy-catalog.json'], [path.join(p.legacyRuntime, 'ledger.json'), 'legacy-ledger.json']]) {
-        try { await copyFile(source, path.join(backupPath, name)); }
+        try { await copyProjectFile(p.root, source, path.join(backupPath, name)); }
         catch (error) { if (error.code !== 'ENOENT') throw error; }
       }
     } else {
-      const backupRelative = path.relative(path.resolve(backupsRoot), path.resolve(activeState.backupPath));
-      if (!backupRelative || backupRelative === '..' || backupRelative.startsWith(`..${path.sep}`) || path.isAbsolute(backupRelative)) {
-        throw Error('online-storage-state-invalid');
-      }
-      await checkPrivateDirectory(backupsRoot);
-      await checkPrivateDirectory(path.resolve(activeState.backupPath));
+      await checkPrivateDirectory(backupsRoot, { projectRoot: p.root });
+      await checkPrivateDirectory(backupPath, { projectRoot: p.root });
     }
-    await atomicJson(snapshotAbsolutePath, staged);
+    await atomicJson(snapshotAbsolutePath, staged, p.root);
     const catalog = scanOnlineSnapshot(staged, { previous: previousCatalog, sourcePath: snapshotAbsolutePath });
     catalog.dedupeGeneration = generation;
     catalog.updatedAt = new Date().toISOString();
@@ -158,8 +212,8 @@ export async function activateOnlineSnapshot(root = repoRoot, stagedSnapshotPath
     ledger.dedupeGeneration = generation;
     if (!activeState) ledger.dedupeGenerationCreatedAt = new Date().toISOString();
     for (const batch of Object.values(ledger.batches)) if (!batch.dedupeGeneration) batch.dedupeGeneration = 'legacy';
-    await atomicJson(path.join(p.privateRoot, catalogRelativePath), catalog);
-    await atomicJson(path.join(p.privateRoot, ledgerRelativePath), ledger);
+    await atomicJson(path.join(p.privateRoot, catalogRelativePath), catalog, p.root);
+    await atomicJson(path.join(p.privateRoot, ledgerRelativePath), ledger, p.root);
     const storageState = {
       schemaVersion: 1, sourceMode: 'flomo-online-full', dedupeGeneration: generation,
       activeSnapshotId: staged.snapshotId, activeSnapshotPath: snapshotRelativePath,
@@ -168,7 +222,7 @@ export async function activateOnlineSnapshot(root = repoRoot, stagedSnapshotPath
       backupPath,
     };
     await beforeCommit?.();
-    await atomicJson(p.storageModePath, storageState);
+    await atomicJson(p.storageModePath, storageState, p.root);
     return { status: activeState ? 'updated' : 'activated', snapshotId: staged.snapshotId, dedupeGeneration: generation,
       notes: catalog.notes.length, eligibleQuality: 0, excluded: catalog.excluded.length,
       coverage: catalog.coverage, backupPath, ledgerBatchesPreserved: Object.keys(ledger.batches).length };
@@ -182,13 +236,11 @@ export async function restoreOnlineSnapshotBackup(root = repoRoot) {
     const p = paths(root);
     if (!p.onlineStorageActive) throw Error('online-storage-not-active');
     const state = await readJson(p.storageModePath);
-    const backupPath = path.resolve(String(state.backupPath || ''));
-    const backupsRoot = path.resolve(p.privateRoot, 'backups');
-    const relative = path.relative(backupsRoot, backupPath);
-    if (state.schemaVersion !== 1 || state.sourceMode !== 'flomo-online-full' || !relative || relative === '..' ||
-        relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw Error('online-storage-backup-invalid');
-    await checkPrivateDirectory(backupsRoot);
-    await checkPrivateDirectory(backupPath);
+    const backupPath = safeBackupPath(p, state.backupPath);
+    const backupsRoot = p.backupsRoot;
+    if (state.schemaVersion !== 1 || state.sourceMode !== 'flomo-online-full') throw Error('online-storage-backup-invalid');
+    await checkPrivateDirectory(backupsRoot, { projectRoot: p.root });
+    await checkPrivateDirectory(backupPath, { projectRoot: p.root });
     const restoredCatalog = await readJson(path.join(backupPath, 'legacy-catalog.json'));
     assertLedger(await readJson(path.join(backupPath, 'legacy-ledger.json')));
     if (restoredCatalog.schemaVersion !== 1 || !Array.isArray(restoredCatalog.notes)) throw Error('online-storage-backup-invalid');
@@ -205,13 +257,13 @@ export async function restoreOnlineSnapshotBackup(root = repoRoot) {
     ledger.dedupeGenerationCreatedAt = new Date().toISOString();
     for (const batch of Object.values(ledger.batches)) if (!batch.dedupeGeneration) batch.dedupeGeneration = 'legacy';
     const safetyPath = path.join(backupsRoot, `rollback-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}`);
-    await ensurePrivateDirectory(safetyPath);
+    await ensurePrivateDirectory(safetyPath, p.root);
     for (const [source, name] of [[p.catalog, 'online-catalog.json'], [p.ledger, 'online-ledger.json']]) {
-      await copyFile(source, path.join(safetyPath, name));
+      await copyProjectFile(p.root, source, path.join(safetyPath, name));
     }
-    await atomicJson(p.legacyCatalog, restoredCatalog);
-    await atomicJson(path.join(p.legacyRuntime, 'ledger.json'), ledger);
-    await unlink(p.storageModePath);
+    await atomicJson(p.legacyCatalog, restoredCatalog, p.root);
+    await atomicJson(path.join(p.legacyRuntime, 'ledger.json'), ledger, p.root);
+    await unlinkProjectFile(p.root, p.storageModePath);
     return { status: 'restored', sourceMode: restoredCatalog.sourceMode, dedupeGeneration: generation,
       notes: restoredCatalog.notes.length, ledgerBatchesPreserved: Object.keys(ledger.batches).length,
       originalBackupPath: backupPath, safetyBackupPath: safetyPath };
@@ -255,7 +307,7 @@ export async function acceptQuality(root, decisions) {
       note.quality = { ...d, policyVersion: '1', assessedAt };
       updated += 1;
     }
-    if (updated) { catalog.catalogHash = catalogHash(catalog); await atomicJson(p.catalog, catalog); }
+    if (updated) { catalog.catalogHash = catalogHash(catalog); await atomicJson(p.catalog, catalog, p.root); }
     return { assessed: decisions.items.length, updated, unchanged, qualified: catalog.notes.filter(n => n.quality?.score >= 3 && n.quality.bodyHash === n.bodyHash).length, total: catalog.notes.length };
   });
 }
@@ -270,7 +322,7 @@ export async function prepareReview(root = repoRoot, date = shanghaiDate(), opti
     notes: eligible.map(({ noteKey, groupKey, createdAt, bodyHash, quality, source }) => ({ noteKey, groupKey, createdAt, bodyHash, quality, source })),
     feedback: Object.values(ledger.feedback).filter(e => !e.superseded && eligible.some(n => n.noteKey === e.noteKey)),
     instruction: `完整读取上下文；单次推荐${MIN_REVIEW_ITEMS}–${MAX_REVIEW_ITEMS}条，常规数量与整体平均目标均为7–8条。先选与近期周/月Output强匹配的高质量笔记；前三条可使用高质量长期背景关联并说明关联，第4–${MAX_REVIEW_ITEMS}条必须强匹配。若只有${MIN_REVIEW_ITEMS}–${TARGET_MIN_REVIEW_ITEMS - 1}条同时满足质量与对应序号上下文要求，可少于常规目标发送，必须填写countDeviationReason说明质量或匹配原因；不得为了达到数量或平均目标降低质量。按整周年龄统计优化近30天与近365天软比例；比例偏离时必须填ageDeviationReason解释，不得为配比降低质量。少于${MIN_REVIEW_ITEMS}条则报告blocked，不凑数。每条reason不超过${MAX_REVIEW_REASON_CHARS}字，只写一条可执行的回看问题或判断，不写解释段落。复读每条原文，引用真实上下文。输出{date,contextHash,catalogHash,countDeviationReason,ageDeviationReason,items:[{noteKey,bodyHash,relevance:strong|background,reason,contextEvidence:[{path,quote}]}]}。` };
-  const directory = path.join(p.runtime, date); await atomicJson(path.join(directory, 'request.json'), packet);
+  const directory = path.join(p.runtime, date); await atomicJson(path.join(directory, 'request.json'), packet, p.root);
   return { date, qualifiedEligible: eligible.length, contextHash: packet.contextHash, catalogHash: packet.catalogHash,
     sourceMode: packet.sourceMode, snapshot: packet.snapshot, requestPath: path.join(directory, 'request.json'), missing: context.manifest.missing };
 }
@@ -279,17 +331,28 @@ function displayTitle(note) {
   const poem = flomoTags(note.body).includes('写诗');
   const firstLine = String(note.body || '').split('\n').find(line => line.trim() && !line.trim().startsWith('#') && !line.trim().startsWith('>'));
   if (!firstLine) return poem ? '诗：一首' : '回顾';
-  const title = [...firstLine.trim()].slice(0, poem ? 4 : 6).join('').replace(/\s+$/u, '');
+  const rawTitle = firstLine.trim().replace(/<br\s*\/?>/giu, ' ').replace(/ {2,}/gu, ' ');
+  const punctuation = rawTitle.search(/[，。：；！？、,.:;!?]/u);
+  const baseTitle = (punctuation === -1 ? rawTitle : rawTitle.slice(0, punctuation)).trim();
+  const title = [...baseTitle].slice(0, 10).join('').trim() ||
+    [...rawTitle].slice(0, 10).join('').trim();
   return poem ? `诗：${title}` : title;
 }
 
 function cardBody(note) {
-  const source = [...String(note.body || '')].slice(0, 180).join('').trim()
+  const source = String(note.body || '').trim()
     .replace(/\r\n?/g, '\n')
     .split('\n');
-  const lines = [];
+  const parts = [];
+  const generatedBreakOffsets = [];
+  let contentLength = 0;
   let inList = false;
   let pendingBreak = '';
+  const append = (value, generatedBreak = false) => {
+    if (generatedBreak) generatedBreakOffsets.push(contentLength, contentLength + 4);
+    parts.push(value);
+    contentLength += value.length;
+  };
   for (const rawLine of source) {
     const list = rawLine.match(/^\s*([-*+]|\d+[.)、])(?:\s*)(.*)$/);
     const text = rawLine.trim();
@@ -298,19 +361,24 @@ function cardBody(note) {
       continue;
     }
     if (list) {
-      if (lines.length) lines.push(inList ? '\n' : '\n\n');
+      if (parts.length) append(pendingBreak || '\n');
       const marker = /^\d/.test(list[1]) ? `${list[1].replace(/[、)]$/, '.')} ` : '- ';
-      lines.push(`${marker}${list[2].trim()}`);
+      append(`${marker}${list[2].trim()}`);
       inList = true;
-      pendingBreak = '\n\n';
+      pendingBreak = '\n';
     } else {
-      if (lines.length) lines.push(inList ? '\n\n' : (pendingBreak || '\n'));
-      lines.push(text);
+      if (parts.length) {
+        const separator = pendingBreak || '\n';
+        append(separator, separator === '<br><br>');
+      }
+      append(text);
       inList = false;
       pendingBreak = '';
     }
   }
-  return lines.join('').trim();
+  const untrimmed = parts.join('');
+  const leadingTrim = untrimmed.length - untrimmed.trimStart().length;
+  return { content: untrimmed.trim(), generatedBreakOffsets: generatedBreakOffsets.map(offset => offset - leadingTrim) };
 }
 
 function reviewSnapshotSubtitle(date, snapshot) {
@@ -341,26 +409,33 @@ export function renderReview(decision, notes, snapshot = null) {
   }
   const lastItemNumber = decision.items.length;
   message.push(`可以回复本条消息：“第2条有帮助”“第1条跳过”或“第${lastItemNumber}条已回顾”。`);
+  const cardElements = [
+    ...(decision.items.length < TARGET_MIN_REVIEW_ITEMS ? [{ tag: 'markdown', content: `本日符合质量与上下文要求的笔记不足${TARGET_MIN_REVIEW_ITEMS}条，实际推荐${decision.items.length}条。原因：${decision.countDeviationReason.trim()}` }] : []),
+  ];
+  const cardReadbackBreaks = [];
+  for (const [index, item] of decision.items.entries()) {
+    const note = notes.find(n => n.noteKey === item.noteKey);
+    const metadata = `${shanghaiDate(new Date(note.createdAt))}${item.relevance === 'background' ? ' · 背景' : ''}${note.source.url ? ` · [Flomo原文](${note.source.url})` : ''}`;
+    const prefix = `**${index + 1}. ${displayTitle(note)}**\n${metadata}<br><br>`;
+    const renderedBody = cardBody(note);
+    const elementIndex = cardElements.length;
+    cardElements.push({ tag: 'markdown', content: `${prefix}${renderedBody.content}` });
+    if (renderedBody.generatedBreakOffsets.length) {
+      cardReadbackBreaks.push({ elementIndex, offsets: renderedBody.generatedBreakOffsets.map(offset => prefix.length + offset) });
+    }
+    cardElements.push(
+      { tag: 'markdown', content: `> 回顾理由：${reviewReason(item)}` },
+    );
+    if (index < decision.items.length - 1) cardElements.push({ tag: 'hr' });
+  }
   const card = { schema: '2.0',
     header: {
       title: { tag: 'plain_text', content: `Flomo 回顾｜${decision.date}` },
       subtitle: { tag: 'plain_text', content: reviewSnapshotSubtitle(decision.date, snapshot) },
       template: 'indigo',
     },
-    body: { elements: [
-    ...(decision.items.length < TARGET_MIN_REVIEW_ITEMS ? [{ tag: 'markdown', content: `本日符合质量与上下文要求的笔记不足${TARGET_MIN_REVIEW_ITEMS}条，实际推荐${decision.items.length}条。原因：${decision.countDeviationReason.trim()}` }] : []),
-    ...decision.items.flatMap((item, index) => {
-      const note = notes.find(n => n.noteKey === item.noteKey);
-      return [
-        { tag: 'markdown', content: `**${index + 1}. ${displayTitle(note)}**\n\n${cardBody(note)}` },
-        { tag: 'markdown', content: `> 回顾理由：${reviewReason(item)}` },
-        { tag: 'markdown', text_size: 'notation', content: `${shanghaiDate(new Date(note.createdAt))}${item.relevance === 'background' ? ' · 背景' : ''}${note.source.url ? ` · [Flomo原文](${note.source.url})` : ''}` },
-        ...(index < decision.items.length - 1 ? [{ tag: 'hr' }] : []),
-      ];
-    }),
-    { tag: 'markdown', content: `可以回复本条消息：“第2条有帮助”“第1条跳过”或“第${lastItemNumber}条已回顾”。` },
-  ] } };
-  return { markdown: `${message.join('\n')}\n`, fullMarkdown: `${full.join('\n')}\n`, card };
+    body: { elements: [...cardElements, { tag: 'markdown', content: `可以回复本条消息：“第2条有帮助”“第1条跳过”或“第${lastItemNumber}条已回顾”。` }] } };
+  return { markdown: `${message.join('\n')}\n`, fullMarkdown: `${full.join('\n')}\n`, card, cardReadbackBreaks };
 }
 export async function inspectDecision(root, decision, { freshContext = false, contextOptions = {} } = {}) {
   const p = paths(root), catalog = await readJson(p.catalog), ledger = assertLedger(await readJson(p.ledger, emptyLedger()));
@@ -382,11 +457,12 @@ export async function inspectDecision(root, decision, { freshContext = false, co
   return { catalog, ledger, context, stats, ...renderReview(decision, catalog.notes, catalog.snapshot) };
 }
 export async function previewReview(root, decision) {
-  const result = await inspectDecision(root, decision), dir = path.join(paths(root).runtime, decision.date);
-  await atomicJson(path.join(dir, 'decision.json'), decision);
-  await writeFile(path.join(dir, 'review.md'), result.fullMarkdown, { mode: 0o600 });
-  await writeFile(path.join(dir, 'message.md'), result.markdown, { mode: 0o600 });
-  await atomicJson(path.join(dir, 'validation.json'), result.stats);
+  const result = await inspectDecision(root, decision), p = paths(root), dir = path.join(p.runtime, decision.date);
+  await makeProjectDirectory(p.root, dir);
+  await atomicJson(path.join(dir, 'decision.json'), decision, p.root);
+  await writeProjectFile(p.root, path.join(dir, 'review.md'), result.fullMarkdown, { mode: 0o600 });
+  await writeProjectFile(p.root, path.join(dir, 'message.md'), result.markdown, { mode: 0o600 });
+  await atomicJson(path.join(dir, 'validation.json'), result.stats, p.root);
   return { date: decision.date, count: decision.items.length, stats: result.stats, snapshot: result.catalog.snapshot || null, previewPath: path.join(dir, 'review.md') };
 }
 export async function sendReview(root, decision, { now = new Date(), deliveryOptions = {}, contextOptions = {} } = {}) {
@@ -398,9 +474,15 @@ export async function sendReview(root, decision, { now = new Date(), deliveryOpt
     const check = await inspectDecision(root, decision, { freshContext: true, contextOptions });
     const previous = check.ledger.batches[decision.date];
     if (previous && ['delivered', 'sending', 'needs_review', 'reserved'].includes(previous.status)) throw Error('date-already-reserved-or-delivered');
-    const preflight = await preflightDelivery({ ...config.delivery, now, ...deliveryOptions });
-    const dir = path.join(p.runtime, decision.date); await mkdir(dir, { recursive: true });
-    const auditPath = path.join(dir, 'review.md'); await writeFile(auditPath, check.fullMarkdown, { mode: 0o600 });
+    const preflight = await preflightDelivery({ ...config.delivery, now, runCli: deliveryOptions.runCli });
+    const dateTime = Date.parse(`${decision.date}T00:00:00Z`);
+    const mondayOffset = (new Date(dateTime).getUTCDay() + 6) % 7;
+    const historyStartDate = new Date(dateTime - (mondayOffset + 21) * 86400000).toISOString().slice(0, 10);
+    await auditRecentReviewHistory({ chatId: config.delivery.chatId, startDate: historyStartDate, end: now,
+      weeks: activeWeeks(decision.date), batches: check.ledger.batches, botSenderIds: preflight.botSenderIds,
+      profile: preflight.profile, runCli: deliveryOptions.runCli });
+    const dir = path.join(p.runtime, decision.date); await makeProjectDirectory(p.root, dir);
+    const auditPath = path.join(dir, 'review.md'); await writeProjectFile(p.root, auditPath, check.fullMarkdown, { mode: 0o600 });
     const batch = { date: decision.date, status: 'reserved', dedupeGeneration: check.catalog.dedupeGeneration || 'legacy',
       snapshot: check.catalog.snapshot || null, contextHash: decision.contextHash, catalogHash: decision.catalogHash,
       items: decision.items.map(i => {
@@ -410,15 +492,16 @@ export async function sendReview(root, decision, { now = new Date(), deliveryOpt
       }),
       ...(decision.items.length < TARGET_MIN_REVIEW_ITEMS ? { countDeviationReason: decision.countDeviationReason.trim() } : {}),
       stats: check.stats, chatId: config.delivery.chatId, profile: preflight.profile, botSenderId: preflight.botSenderId, botSenderIds: preflight.botSenderIds, idempotencyKey: `learn-x-flomo-review:${decision.date}`,
-      card: check.card, cardContentSha256: cardContentSha256(check.card), auditPath, auditSha256: sha256(check.fullMarkdown), createdAt: now.toISOString() };
-    check.ledger.batches[decision.date] = batch; await atomicJson(p.ledger, check.ledger);
-    batch.status = 'sending'; batch.sendStartedAt = new Date().toISOString(); await atomicJson(p.ledger, check.ledger);
+      card: check.card, cardReadbackBreaks: check.cardReadbackBreaks, cardContentSha256: cardContentSha256(check.card), auditPath, auditSha256: sha256(check.fullMarkdown), createdAt: now.toISOString() };
+    check.ledger.batches[decision.date] = batch; await atomicJson(p.ledger, check.ledger, p.root);
+    batch.status = 'sending'; batch.sendStartedAt = new Date().toISOString(); await atomicJson(p.ledger, check.ledger, p.root);
     try {
       const sent = await sendRecommendation({ chatId: batch.chatId, card: batch.card,
         dateMarker: `回顾日期：${batch.date}`, idempotencyKey: batch.idempotencyKey, profile: batch.profile, botSenderId: batch.botSenderId, botSenderIds: batch.botSenderIds,
-        onUploaded: async receipt => { Object.assign(batch, receipt); await atomicJson(p.ledger, check.ledger); }, ...deliveryOptions });
+        onUploaded: async receipt => { Object.assign(batch, receipt); await atomicJson(p.ledger, check.ledger, p.root); },
+        runCli: deliveryOptions.runCli, cardReadbackBreaks: batch.cardReadbackBreaks });
       Object.assign(batch, sent, { status: 'delivered', deliveredAt: new Date().toISOString() });
-      await atomicJson(p.ledger, check.ledger);
+      await atomicJson(p.ledger, check.ledger, p.root);
       return { date: batch.date, status: batch.status, count: batch.items.length, messageId: batch.messageId };
     } catch (error) {
       batch.status = error.uncertain === false ? 'failed' : 'needs_review';
@@ -432,7 +515,7 @@ export async function sendReview(root, decision, { now = new Date(), deliveryOpt
           items: batch.items.map(item => ({ ...item })), stats: batch.stats, contextHash: batch.contextHash, catalogHash: batch.catalogHash,
           cardContentSha256: batch.cardContentSha256, auditSha256: batch.auditSha256 });
       }
-      await atomicJson(p.ledger, check.ledger); throw error;
+      await atomicJson(p.ledger, check.ledger, p.root); throw error;
     }
   });
 }
@@ -445,9 +528,10 @@ export async function recoverReview(root, date, deliveryOptions = {}) {
   return withLock(root, async () => {
     const p = paths(root), ledger = assertLedger(await readJson(p.ledger, emptyLedger())), batch = ledger.batches[validDate(date)];
     if (!batch || !['sending', 'needs_review', 'reserved', 'delivered'].includes(batch.status)) throw Error('batch-not-recoverable');
-    const result = await recoverRecommendation({ ...batch, dateMarker: `回顾日期：${date}`, expectedCard: batch.card, expectedMarkdown: batch.markdown, ...deliveryOptions });
+    const result = await recoverRecommendation({ ...batch, dateMarker: `回顾日期：${date}`, expectedCard: batch.card,
+      expectedMarkdown: batch.markdown, runCli: deliveryOptions.runCli });
     if (!result?.messageId) throw Error('send-recovery-unresolved-no-resend');
-    Object.assign(batch, result, { status: 'delivered', recoveredAt: new Date().toISOString() }); await atomicJson(p.ledger, ledger);
+    Object.assign(batch, result, { status: 'delivered', recoveredAt: new Date().toISOString() }); await atomicJson(p.ledger, ledger, p.root);
     return { date, status: batch.status, messageId: batch.messageId };
   });
 }
@@ -490,7 +574,7 @@ export async function feedbackReview(root, { date = shanghaiDate(), targetDate, 
       const latest = latestByReply.get(event.replyId);
       event.superseded = versionTime(event) < versionTime(latest) || latest.state === 'deleted' || (Array.isArray(latest.eventKeys) && !latest.eventKeys.includes(event.eventKey));
     }
-    current.feedbackCheckedAt = new Date().toISOString(); await atomicJson(p.ledger, current);
+    current.feedbackCheckedAt = new Date().toISOString(); await atomicJson(p.ledger, current, p.root);
     return { checkedBatches: batches.length, events: result.events.length, newEvents, newObservations, totalFeedback: Object.keys(current.feedback).length };
   });
 }
@@ -516,8 +600,8 @@ export async function simulateCapacity(root = repoRoot, startDate = shanghaiDate
     maximumRepeatCount: Math.max(0, ...simulation.schedule.map(day => day.repeats)),
     maximumPairOverlap: Math.max(0, ...overlaps),
   };
-  const reportPath = path.join(paths(root).runtime, `capacity-${days}-verified-${isoWeek(startDate)}.json`);
-  await atomicJson(reportPath, report);
+  const p = paths(root), reportPath = path.join(p.runtime, `capacity-${days}-verified-${isoWeek(startDate)}.json`);
+  await atomicJson(reportPath, report, p.root);
   return { ...report, reportPath };
 }
 async function main(argv) {
@@ -527,8 +611,8 @@ async function main(argv) {
   if (command === 'activate-snapshot') return activateOnlineSnapshot(repoRoot, arg('--file'));
   if (command === 'restore-snapshot-backup') return restoreOnlineSnapshotBackup();
   if (command === 'quality-packets') {
-    const catalog = await readJson(p.catalog), packets = qualityPackets(catalog); const dir = path.join(p.runtime, 'quality-packets'); await mkdir(dir, { recursive: true });
-    for (const [i, packet] of packets.entries()) await atomicJson(path.join(dir, `${String(i + 1).padStart(3, '0')}.json`), packet);
+    const catalog = await readJson(p.catalog), packets = qualityPackets(catalog); const dir = await makeProjectDirectory(p.root, path.join(p.runtime, 'quality-packets'));
+    for (const [i, packet] of packets.entries()) await atomicJson(path.join(dir, `${String(i + 1).padStart(3, '0')}.json`), packet, p.root);
     return { packets: packets.length, notes: packets.reduce((s, x) => s + x.notes.length, 0), directory: dir };
   }
   if (command === 'quality-accept') return acceptQuality(repoRoot, await readJson(path.resolve(arg('--file'))));
@@ -548,8 +632,8 @@ async function main(argv) {
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main(process.argv.slice(2)).then(r => console.log(JSON.stringify(r))).catch(async e => {
-    const p = paths(); await mkdir(p.runtime, { recursive: true });
-    await atomicJson(path.join(p.runtime, 'last-failure.json'), { at: new Date().toISOString(), command: process.argv[2], error: e.message }).catch(() => {});
+    const p = paths(); await makeProjectDirectory(p.root, p.runtime);
+    await atomicJson(path.join(p.runtime, 'last-failure.json'), { at: new Date().toISOString(), command: process.argv[2], error: e.message }, p.root).catch(() => {});
     console.error(JSON.stringify({ status: 'blocked', error: e.message })); process.exitCode = 1;
   });
 }

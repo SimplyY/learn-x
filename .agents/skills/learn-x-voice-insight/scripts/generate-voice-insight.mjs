@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { homedir } from "node:os";
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { defaultWeeklyReviewWeek, isoWeekRangeShanghai, normalizeWeek } from "../../learn-x-input/scripts/collect-weread-weekly.mjs";
 import { writeVoiceWeekly } from "../../learn-x-input/scripts/collect-voice-weekly.mjs";
+import { safeBusinessOutcomeReason, writeBridgeBusinessOutcome } from "../../../lib/bridge-business-outcome.mjs";
 
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -27,12 +28,47 @@ export async function runVoiceInsight(options = {}) {
   const paths = { context: path.join(outputRoot, "_voice-insight-context.md"), generated: path.join(outputRoot, "_voice-insight.generated.md"), status: path.join(outputRoot, "_voice-insight-status.json") };
   await mkdir(outputRoot, { recursive: true });
   try {
-    return await runVoiceInsightInternal({ ...options, week, outputRoot, paths });
+    const result = await runVoiceInsightInternal({ ...options, week, outputRoot, paths });
+    await recordVoiceBusinessOutcome(result, options);
+    return result;
   } catch (error) {
     const previous = await readJson(paths.status);
     const failed = { ...(previous || {}), schemaVersion: 1, targetWeek: week, status: "failed", reason: String(error?.message || error), failedAt: new Date().toISOString() };
     try { await writeAtomic(paths.status, `${JSON.stringify(failed, null, 2)}\n`); } catch { /* preserve the original failure */ }
+    await recordVoiceBusinessOutcome(failed, options);
     throw error;
+  }
+}
+
+async function recordVoiceBusinessOutcome(state, options = {}) {
+  if (!state?.attemptId) return;
+  const status = state.status === "completed" ? "succeeded"
+    : state.status === "failed" ? "failed"
+      : state.status === "generated" || state.status === "submitted" ? "pending" : "needs_review";
+  const stage = state.status === "archive_pending" ? "delivery"
+    : state.status === "needs_review" && String(state.reason || "").startsWith("invalid-output:") ? "validation"
+      : state.status === "needs_review" || state.status === "failed" ? "submit" : undefined;
+  const event = {
+    source: "learn-x", caller: "learn-x:voice-insight", attemptId: state.attemptId,
+    clientRequestId: state.attemptId,
+    ...(typeof state.runId === "string" ? { runId: state.runId } : {}),
+    status, deliveryStatus: status,
+    businessValidationStatus: ["completed", "generated"].includes(state.status) ? "succeeded"
+      : state.status === "submitted" ? "pending" : "needs_review",
+    promotionStatus: state.status === "completed" ? "succeeded"
+      : state.status === "generated" || state.status === "submitted" ? "pending" : "needs_review",
+    readbackStatus: state.status === "completed" ? "succeeded"
+      : state.status === "generated" || state.status === "submitted" ? "pending" : "needs_review",
+    completionSource: state.status === "completed" || state.status === "generated" ? "ai-generated" : "unknown",
+    ...(stage ? { failureStage: stage } : {}),
+    ...(status === "succeeded" ? {} : { reason: await safeBusinessOutcomeReason(state, { bridgePath: options.bridgePath || defaultBridgePath }) }),
+  };
+  try {
+    const writer = options.recordBusinessOutcome || writeBridgeBusinessOutcome;
+    const result = await writer(event, { bridgePath: options.bridgePath || defaultBridgePath });
+    if (result?.status !== "recorded") throw new Error("outcome-write-unavailable");
+  } catch {
+    process.stderr.write(`${JSON.stringify({ event: "learn-x-business-outcome-write-failed", caller: event.caller, attemptId: event.attemptId, failureStage: "persistence" })}\n`);
   }
 }
 
@@ -72,16 +108,18 @@ async function runVoiceInsightInternal(options = {}) {
       return { ...preview, paths };
     }
     if (!options.confirm) throw new Error("send-requires-confirm");
-    const submitted = { schemaVersion: 1, targetWeek: week, status: "submitted", promptSha256: sha256(prompt), counts: countStatuses(classified), records: states, submittedAt: new Date().toISOString() };
+    const attemptId = randomUUID();
+    const callerLabel = "learn-x:voice-insight";
+    const submitted = { schemaVersion: 1, targetWeek: week, status: "submitted", attemptId, promptSha256: sha256(prompt), counts: countStatuses(classified), records: states, submittedAt: new Date().toISOString() };
     await writeAtomic(paths.status, `${JSON.stringify(submitted, null, 2)}\n`);
-    const bridge = await (options.runBridge || runBridgeCli)(prompt, options);
+    const bridge = await (options.runBridge || runBridgeCli)(prompt, { ...options, callerLabel, preallocatedRunId: attemptId });
     const bridgeResult = bridge?.result || bridge;
     if (bridgeResult?.status !== "succeeded") {
-      const review = { ...submitted, status: "needs_review", runId: bridgeResult?.runId, conversationUrl: bridgeResult?.conversationUrl, reason: bridgeResult?.reason || bridge?.exit?.error || "bridge-result-missing", retryAfterSeconds: bridgeResult?.retryAfterSeconds, outputSha256: bridgeResult?.text ? sha256(bridgeResult.text) : undefined, reviewedAt: new Date().toISOString() };
+      const review = { ...submitted, ...(bridgeResult?.contextPack ? { contextPack: bridgeResult.contextPack } : {}), status: "needs_review", runId: bridgeResult?.runId, conversationUrl: bridgeResult?.conversationUrl, reason: bridgeResult?.reason || bridge?.exit?.error || "bridge-result-missing", retryAfterSeconds: bridgeResult?.retryAfterSeconds, outputSha256: bridgeResult?.text ? sha256(bridgeResult.text) : undefined, reviewedAt: new Date().toISOString() };
       await writeAtomic(paths.status, `${JSON.stringify(review, null, 2)}\n`);
       return { ...review, paths };
     }
-    bridgeMeta = { runId: bridgeResult.runId, conversationUrl: bridgeResult.conversationUrl, outputSha256: sha256(bridgeResult.text || "") };
+    bridgeMeta = { attemptId: submitted.attemptId, runId: bridgeResult.runId, conversationUrl: bridgeResult.conversationUrl, outputSha256: sha256(bridgeResult.text || ""), ...(bridgeResult.contextPack ? { contextPack: bridgeResult.contextPack } : {}) };
     try { blocks = parseBatchOutput(bridgeResult.text, candidates.map((record) => record.id)); }
     catch (error) {
       const review = { ...submitted, ...bridgeMeta, status: "needs_review", reason: `invalid-output:${error.message}`, reviewedAt: new Date().toISOString() };
@@ -248,7 +286,11 @@ async function archiveWithVoiceX(record, content, { legacy = false } = {}) {
 
 export async function runBridgeCli(prompt, options = {}) {
   const bridgePath = options.bridgePath || process.env.LEARN_X_CHATGPT_BRIDGE || defaultBridgePath;
-  const result = await runProcess(process.execPath, [bridgePath], prompt, options.timeoutMs || 150_000);
+  const args = [bridgePath];
+  if (options.callerLabel) args.push("--caller-label", options.callerLabel);
+  if (options.preallocatedRunId) args.push("--run-id", options.preallocatedRunId);
+  if (options.contextPackDelivery !== undefined) args.push("--context-pack-delivery-json", JSON.stringify(options.contextPackDelivery));
+  const result = await runProcess(process.execPath, args, prompt, options.timeoutMs ?? 180_000);
   const parsed = result.stdout.split(/\r?\n/).concat(result.stderr.split(/\r?\n/)).map((line) => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean).reverse().find((value) => typeof value.status === "string");
   return { result: parsed, exit: result };
 }

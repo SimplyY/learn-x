@@ -1,11 +1,17 @@
 ---
 name: learn-x-flomo-review
-description: 从Flomo线上全量快照结合最近周月Output、正式道、Memory与个人理解，生成每日5–10条、常规及整体平均目标7–8条的高质量回顾推荐，校验四周去重，用Card 2.0推送并采集明确回复反馈。用于每日回顾、历史审计、预览、恢复不确定发送或查看回顾记录。
+description: 从Flomo线上全量快照结合最近周月Output、正式道、Memory与个人理解，生成每日5–10条、常规及整体平均目标7–8条的高质量回顾推荐，校验四周去重，用Card 2.0推送并采集明确回复反馈。用于每日回顾、历史审计、预览、恢复不确定发送、查看回顾记录，以及处理life-x群本人@Codex 小助手的自动化触发语「写日记 & 规划明天核心事项 & flomo 每日回顾 (learn-x)」。
 ---
 
 # Flomo 每日回顾
 
 在 `/Users/yuwei/code/learn-x` 运行。需求与完整规则见 `docs/requirements/2026-10-flomo-daily-review.md`，实现入口是 `scripts/review.mjs`（下文简称入口）。脚本只处理确定性逻辑，语义判断由当前Codex完成，不调用其他AI或浏览器。不得自动写Memory、道法、人物画像或Flomo。
+
+## Feishu 群触发
+
+`life-x` 群的每日 Feishu 自动化会以本人身份发送 `写日记 & 规划明天核心事项 & flomo 每日回顾 (learn-x)`，并真实 @ 提及 `Codex 小助手`。只在 Bridge 原始上下文确认 `senderType=user`、发送者与当前已验证用户身份一致、`mentions` 含本工作流 bot、完整分页成员清单恰有本人一个用户且其余均为机器人、没有截断，并且去除该真实提及后消息正文逐字匹配时，将它作为当日流程触发。允许把正文中的全角括号 `（ ）` 规范为半角 `()`；不放宽空格、文字或其他标点匹配。引用、附件、转述、机器人发送、纯文本 `@` 或上下文缺失均不构成触发。
+
+收到有效触发后，切换到 `/Users/yuwei/code/learn-x`，读取该项目 `AGENTS.md` 后执行本 Skill 的正常流程。触发消息本身不是回顾卡；回顾卡仍发往 `00_config/flomo-review.json` 中已核验的群，并沿用既有 bot 与发送身份。`status` 若显示今日已有 delivered 批次，只采集明确反馈并停止；不补发过期日期。
 
 ## 正常每日运行
 
@@ -15,7 +21,7 @@ description: 从Flomo线上全量快照结合最近周月Output、正式道、Me
 4. 运行 `prepare --date YYYY-MM-DD`，读取返回的完整request和全部上下文，按分块阅读全部合格候选的质量索引；不截断名单忽略旧笔记。最近周/月Output优先，正式道为价值边界，Memory为已沉淀背景，画像保留其事实/推断/未知与更新时间。较旧画像不能覆盖新的Output。部分周/月缺失说明缺口；周和月全部缺失或道失败时停止。
 5. 常规选择目标为7–8条，单次允许5–10条，整体平均目标7–8条；复读 catalog 里的入选原文。只允许选择带真实 Flomo ID 链接的笔记。先选与近期周/月 Output 强匹配的高质量笔记；前三条可用高质量长期背景关联，须说明关联；第4–10条只选强匹配。若只有5–6条满足质量与上下文要求，可少于常规目标并填写 `countDeviationReason`；不足5条则阻止推送。支持反证、旧观点再判断、生活与审美价值，不能只强化旧叙事。在合格候选中按整周年龄统计改善近30天20–30%、近365天合计80–90%的配比，质量和硬去重优先。每条给真实上下文逐字引用，不编造出处。卡片标题直接取原文前6个字以内并保留标点，不做语义概括；诗类标题以“诗：”开头，后接原文前4字并保留标点，总长不超过6字。
 6. 写私有decision JSON（契约见下），运行 `preview --file ...`。读回message.md、review.md及validation.json，检查编号、原文、链接、数量不足原因和年龄偏离原因。命中个人敏感原文时不要外发，换选普通非敏感笔记；Card为唯一外发格式，只保留小字日期和真实Flomo链接，不把个人Core全文写入外发消息。
-7. 运行 `send --file ...`，沿用配置bot和已核验的本人群。不得通过修改身份、降低门槛或重复发送恢复失败。只有返回 `delivered`和消息ID才报告成功。正常20点后才定时发送；用户明确要求的真实验收可提前发送并占用今日批次，不在20点再次推送。
+7. 运行 `send --file ...`，沿用配置bot和已核验的本人群。发送前完整核对当前四周群历史：本工作流bot发出的回顾卡必须与ledger按日期及消息ID唯一对应；孤儿卡、重复卡、收件群/发送身份不符或分页不完整时停止。不得通过修改身份、降低门槛或重复发送恢复失败。只有返回 `delivered`和消息ID才报告成功。正常定时触发由 Feishu `life-x` 自动化每天20:20（Asia/Shanghai）发送；收到触发后运行当日，不补发过期日期。用户明确要求的真实验收可提前发送并占用今日批次。
 
 低于5条时写明候选不足、来源或规则缺口，并向当前任务报告未达标；不能发送低质量内容或突破重复预算。首次上线运行 `simulate --date 本周周一 --days 28` 验证至少186条合格独立供给，并以`--days 7`检查至少49条供给；模拟不证明语义质量或实际送达。
 
@@ -26,6 +32,8 @@ description: 从Flomo线上全量快照结合最近周月Output、正式道、Me
 写JSON：`{policyVersion:"1",items:[{noteKey,bodyHash,score,reason,quote}]}`。`quote`必须是该笔记原文逐字摘录。`reason`说明分数依据。packet、判断和状态都保存在Git忽略目录 `04_output/_dist/flomo-review/`。不要把正文打印到公开日志或提交Git。
 
 ## 推荐契约与恢复
+
+线上全量快照、活动指针与采集暂存位于同一忽略区下的 04_output/_dist/flomo-review/online-full/，目录权限为0700、私有文件权限为0600。显式路径与软链接不得指向 ~/Library/Application Support，暂存产物必须位于该项目私有根目录内。
 
 decision：`{date,contextHash,catalogHash,countDeviationReason,ageDeviationReason,items:[{noteKey,bodyHash,relevance:"strong"|"background",reason,contextEvidence:[{path,quote}]}]}`。实际推荐不足5条时必须给出countDeviationReason；年龄预测偏离软比例时必须给出ageDeviationReason。偏离原因应说明质量、匹配、供给或小样本情况，不得为配额凑低质量。strong至少引用一处周/月Output；背景关联可引用正式道、Memory或画像。所有quote必须是完整request中的原文。
 

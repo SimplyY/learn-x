@@ -9,6 +9,12 @@ description: Learn-X 月度自动化中文工作流。Use when the user asks to 
 
 把本 Skill 作为月度固定操作规程。流程逻辑维护在 Markdown 中；确定性工作复用 `learn-x-monthly-journal`、`learn-x-process` 和现有 npm 命令。除非 Markdown 流程反复执行失败，否则不要新增编排脚本。
 
+## ChatGPT 请求上下文包
+
+阶段 1 两次理解导出均复用共享 [ChatGPT Bridge](/Users/yuwei/code/browser-runtime-governance/skills/chatgpt-web-bridge/SKILL.md)，每个实际请求在提交前默认保存相同输入的私有 TXT，不新增独立导出流程或手动版 Prompt，也不加入本地 Learn-X 材料。为两个请求提供稳定 `callerLabel`，附件身份按当前应用与认证本人私聊核验结果绑定 `contextPackDelivery`。
+
+用户通过 `result.contextPack.path` 或已确认的本人私聊附件取得包。附件交付默认预算 30 秒，失败或未知不阻塞原月度流程；`exactInput` 原样，未知发送只读核验、不自动重发。包不携带 ChatGPT 账户记忆，不能据此声称在不同账户复现相同理解。
+
 ## 快速命令
 
 ```bash

@@ -91,7 +91,7 @@ export async function generateWeeklyImage(options = {}) {
   const runner = options.runBridge || runBridgeCli;
   let bridge;
   try {
-    bridge = await runner(prompt, { ...options, image: true });
+    bridge = await runner(prompt, { ...options, image: true, callerLabel: "learn-x:weekly-image" });
   } catch (error) {
     bridge = { result: null, exit: { error: String(error?.message || error) } };
   }
@@ -104,6 +104,7 @@ export async function generateWeeklyImage(options = {}) {
       outputPath,
       reason: bridgeResult?.reason || bridge?.exit?.error || (bridge?.exit?.timedOut ? "bridge-timeout" : "bridge-result-missing"),
       runId: bridgeResult?.runId,
+      ...(bridgeResult?.contextPack ? { contextPack: bridgeResult.contextPack } : {}),
       conversationUrl: bridgeResult?.conversationUrl,
       retryAfterSeconds: bridgeResult?.retryAfterSeconds,
       diagnostics: bridgeResult?.diagnostics
@@ -118,6 +119,7 @@ export async function generateWeeklyImage(options = {}) {
       outputPath,
       reason: "invalid-image-output",
       runId: bridgeResult.runId,
+      ...(bridgeResult.contextPack ? { contextPack: bridgeResult.contextPack } : {}),
       conversationUrl: bridgeResult.conversationUrl,
       diagnostics: bridgeResult.diagnostics
     };
@@ -132,6 +134,7 @@ export async function generateWeeklyImage(options = {}) {
     imageBytes: image.bytes.length,
     imageSha256: sha256Bytes(image.bytes),
     runId: bridgeResult.runId,
+    ...(bridgeResult.contextPack ? { contextPack: bridgeResult.contextPack } : {}),
     conversationUrl: bridgeResult.conversationUrl
   };
 }

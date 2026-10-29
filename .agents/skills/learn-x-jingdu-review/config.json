@@ -1,0 +1,9 @@
+{
+  "chatId": "oc_846411e4168e681d7f7b491c837163fd",
+  "chatName": "Learn 群",
+  "docAs": "bot",
+  "docTitleTemplate": "精读｜{week}",
+  "parseTimeoutMs": 600000,
+  "lockStaleMs": 120000,
+  "lockTouchMs": 5000
+}

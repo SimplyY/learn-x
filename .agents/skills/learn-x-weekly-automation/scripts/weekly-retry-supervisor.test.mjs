@@ -8,6 +8,7 @@ import {
   parseArgs, readCurrentSourceOutcome, recordWeeklyStage, runConfiguredSource, runWeeklyRetrySupervisor
 } from "./weekly-retry-supervisor.mjs";
 import { WEEKLY_SOURCE_CONFIG } from "../../learn-x-input/scripts/lib/weekly-source-config.mjs";
+import { formatCliError } from "../../learn-x-input/scripts/collect-flomo-weekly.mjs";
 import { updateWeeklySourceStatus } from "../../learn-x-input/scripts/lib/source-status.mjs";
 import { withLock } from "../../learn-x-flomo-review/scripts/review.mjs";
 import { recordRecoveryIncident } from "./recovery-memory.mjs";
@@ -29,7 +30,7 @@ async function seedFailedSource(root, week, sourceId, overrides = {}) {
   return weekRoot;
 }
 
-async function runOneShotWindowScenario(t, resolveAtMinute) {
+async function runOneShotWindowScenario(t, resolveAtMinute, { missingDispatchStartedAt = false } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-ai-second-window-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const week = "2026-W40";
@@ -52,11 +53,14 @@ async function runOneShotWindowScenario(t, resolveAtMinute) {
   const originalDispatchAt = new Date(nowMs - 21 * 60_000).toISOString();
   await writeFile(sidecar, JSON.stringify({
     status: "needs_review", targetWeek: week, promptSha256: sha256(buildReviewPrompt(template, week)),
-    runId: originalRunId, localAttemptId: originalRunId, dispatchStartedAt: originalDispatchAt, startedAt: originalDispatchAt,
+    runId: originalRunId, localAttemptId: originalRunId,
+    ...(missingDispatchStartedAt ? {} : { dispatchStartedAt: originalDispatchAt }), startedAt: originalDispatchAt,
     submissionConfirmed: true, requestedConversationUrl: "https://chatgpt.com/", actualConversationUrl: conversationUrl,
-    conversationUrl, reason: "observer-window-ended", manualPrompt: "Complete synthetic manual prompt"
+    conversationUrl, reason: "observer-window-ended", manualPrompt: buildReviewPrompt(template, week)
   }));
   const calls = [];
+  const sleeps = [];
+  const events = [];
   const readOutcome = async () => {
     const current = JSON.parse(await readFile(sidecar, "utf8"));
     return { status: current.status, error: current.reason, updatedAt: current.completedAt || current.dispatchStartedAt };
@@ -64,7 +68,8 @@ async function runOneShotWindowScenario(t, resolveAtMinute) {
   const result = await runWeeklyRetrySupervisor({
     week, mode: "initial", repoRoot: root, maxDurationMs: 45 * 60_000,
     now: () => nowMs,
-    sleep: async (ms) => { nowMs += Math.max(ms, 60_000); },
+    sleep: async (ms) => { sleeps.push(ms); nowMs += Math.max(ms, 60_000); },
+    onEvent: (event) => events.push(event),
     readOutcome,
     runSource: async (_source, context) => {
       calls.push({ observe: context.observeUncertainAi, resubmit: context.resubmitUncertainAi, token: context.weeklyAiLockToken });
@@ -101,7 +106,7 @@ async function runOneShotWindowScenario(t, resolveAtMinute) {
       return { status: "needs_review", error: "original-run-result-pending" };
     }
   });
-  return { result, calls, sidecar, now: () => nowMs, replacementRunId };
+  return { result, calls, sleeps, events, sidecar, now: () => nowMs, replacementRunId };
 }
 
 async function runFreshUncertainAiScenario(t, { maxDurationMs = 60 * 60_000, lateOriginal = false, humanDuringWait = false,
@@ -165,7 +170,7 @@ async function runFreshUncertainAiScenario(t, { maxDurationMs = 60 * 60_000, lat
           status: "needs_review", targetWeek: week, promptSha256: sha256(buildReviewPrompt("# synthetic template", week)),
           runId: originalRunId, localAttemptId: originalRunId, dispatchStartedAt: originalDispatchAt, startedAt: originalDispatchAt,
           submissionConfirmed: true, requestedConversationUrl: "https://chatgpt.com/", actualConversationUrl: conversationUrl,
-          conversationUrl, reason: "observer-window-ended", manualPrompt: "Complete synthetic manual prompt"
+          conversationUrl, reason: "observer-window-ended", manualPrompt: buildReviewPrompt("# synthetic template", week)
         }));
         return { status: "needs_review", error: "observer-window-ended" };
       }
@@ -221,6 +226,12 @@ test("classifies recoverable network faults separately from login, schema, and u
   assert.deepEqual(classifyWeeklyFailure("ECONNRESET"), { errorClass: "network-transient", retryable: true, retryAfterMs: 20 * 60_000 });
   assert.deepEqual(classifyWeeklyFailure("ECONNRESET", { sourceId: "flomo" }), { errorClass: "network-transient", retryable: true, retryAfterMs: 10 * 60_000 });
   assert.equal(classifyWeeklyFailure("rate limit; retry-after=2400", { sourceId: "flomo" }).retryAfterMs, 40 * 60_000);
+  assert.deepEqual(classifyWeeklyFailure("service rate limit", {
+    sourceId: "flomo", retryAfterMs: 31 * 24 * 60 * 60_000,
+  }), { errorClass: "retry-after-exceeds-automatic-window", retryable: false, retryAfterMs: 0 });
+  assert.deepEqual(classifyWeeklyFailure("service rate limit; retry-after=2678401", { sourceId: "flomo" }), {
+    errorClass: "retry-after-exceeds-automatic-window", retryable: false, retryAfterMs: 0,
+  });
   assert.equal(classifyWeeklyFailure("rate limit; Retry-After: Mon, 26 Oct 2026 00:50:00 GMT", {
     sourceId: "flomo", now: Date.parse("2026-10-26T00:10:00.000Z")
   }).retryAfterMs, 40 * 60_000);
@@ -410,25 +421,38 @@ test("the one-shot replacement returns the full manual prompt after its second t
   const { result, calls, sidecar, replacementRunId } = await runOneShotWindowScenario(t, null);
   const finalSidecar = JSON.parse(await readFile(sidecar, "utf8"));
   assert.equal(result.sources.ai.status, "needs_review");
-  assert.equal(result.manualFallback.prompt, "Complete synthetic manual prompt");
+  assert.equal(result.manualFallback.prompt, buildReviewPrompt("# synthetic template", "2026-W40"));
   assert.equal(finalSidecar.runId, replacementRunId);
   assert.equal(finalSidecar.resubmissionCount, 1);
   assert.equal(calls.filter((call) => call.resubmit).length, 1);
   assert.equal(calls.filter((call) => call.observe).length, 2, "observe the original once, then the replacement at its deadline");
 });
 
-test("a known terminal replacement reason skips its remaining wait and preserves the manual prompt", async (t) => {
-  const { result, calls, sleeps, events, sidecar } = await runFreshUncertainAiScenario(t, {
-    terminalReplacementReason: "login-required"
-  });
+test("legacy AI intent without dispatch time is observed but never auto-resubmitted", async (t) => {
+  const { result, calls, sleeps, events, sidecar } = await runOneShotWindowScenario(t, null, { missingDispatchStartedAt: true });
   const finalSidecar = JSON.parse(await readFile(sidecar, "utf8"));
   assert.equal(result.sources.ai.status, "needs_review");
-  assert.equal(result.manualFallback.prompt, "Complete synthetic manual prompt");
-  assert.equal(finalSidecar.resubmissionCount, 1);
-  assert.equal(calls.filter((call) => call.resubmit).length, 1);
-  assert.equal(calls.filter((call) => call.observe).length, 2, "no replacement boundary observation follows a login block");
-  assert.equal(sleeps.filter((ms) => ms > 10 * 60_000).length, 1, "only the original run's required boundary wait occurs");
-  assert.ok(events.some((event) => event.outcome === "stopped-terminal-reason" && event.reasonCode === "login-required"));
+  assert.equal(result.manualFallback.prompt, buildReviewPrompt("# synthetic template", "2026-W40"));
+  assert.equal(finalSidecar.dispatchStartedAt, undefined);
+  assert.equal(finalSidecar.observation.reason, "original-run-result-pending");
+  assert.equal(calls.filter((call) => call.observe).length, 1, "inspect the known original run once");
+  assert.equal(calls.filter((call) => call.resubmit).length, 0, "creation time cannot authorize a new Bridge dispatch");
+  assert.equal(sleeps.length, 0, "without actual dispatch evidence there is no provable twenty-minute boundary");
+  assert.ok(!events.some((event) => event.outcome === "waiting-for-20m-deadline"));
+});
+
+test("a known terminal replacement reason skips its remaining wait and preserves the manual prompt", async (t) => {
+  for (const terminalReplacementReason of ["login-required", "formal-ai-md-changed-during-promotion"]) {
+    const { result, calls, sleeps, events, sidecar } = await runFreshUncertainAiScenario(t, { terminalReplacementReason });
+    const finalSidecar = JSON.parse(await readFile(sidecar, "utf8"));
+    assert.equal(result.sources.ai.status, "needs_review");
+    assert.equal(result.manualFallback.prompt, buildReviewPrompt("# synthetic template", "2026-W40"));
+    assert.equal(finalSidecar.resubmissionCount, 1);
+    assert.equal(calls.filter((call) => call.resubmit).length, 1);
+    assert.equal(calls.filter((call) => call.observe).length, 2, "no replacement boundary observation follows a terminal result");
+    assert.equal(sleeps.filter((ms) => ms > 10 * 60_000).length, 1, "only the original run's required boundary wait occurs");
+    assert.ok(events.some((event) => event.outcome === "stopped-terminal-reason" && event.reasonCode === terminalReplacementReason));
+  }
 });
 
 test("a fresh uncertain weekly AI run waits once to its twenty-minute boundary and accepts the late original result", async (t) => {
@@ -449,7 +473,7 @@ test("a fresh uncertain weekly AI run reserves at most one replacement after re-
   const { result, calls, sleeps, sidecar, now, originalRunId, replacementRunId } = await runFreshUncertainAiScenario(t);
   const finalSidecar = JSON.parse(await readFile(sidecar, "utf8"));
   assert.equal(result.sources.ai.status, "needs_review");
-  assert.equal(result.manualFallback.prompt, "Complete synthetic manual prompt");
+  assert.equal(result.manualFallback.prompt, buildReviewPrompt("# synthetic template", "2026-W40"));
   assert.equal(finalSidecar.runId, replacementRunId);
   assert.equal(finalSidecar.resubmissionCount, 1);
   assert.equal(finalSidecar.resubmissionOf.runId, originalRunId);
@@ -517,7 +541,7 @@ test("the AI wait does not save stale weekly state when lock reacquisition would
   t.after(() => rm(competingLock, { force: true }));
   assert.equal(result.skipped, "supervisor-state-lock-reacquire-timeout");
   assert.equal(result.diagnostic?.outcome, "reacquire-budget-exhausted", JSON.stringify(result));
-  assert.equal(result.manualFallback.prompt, "Complete synthetic manual prompt");
+  assert.equal(result.manualFallback.prompt, buildReviewPrompt("# synthetic template", "2026-W40"));
   assert.equal(calls.filter((call) => call.resubmit).length, 0);
   const owner = JSON.parse(await readFile(competingLock, "utf8"));
   assert.equal(owner.token, "synthetic-owner", "the losing invocation does not remove or overwrite the new lock owner");
@@ -808,7 +832,7 @@ test("the twenty-minute wait stops when human ai.md content appears before the b
   const { result, calls, sidecar, weekRoot } = await runFreshUncertainAiScenario(t, { humanDuringWait: true });
   const finalSidecar = JSON.parse(await readFile(sidecar, "utf8"));
   assert.equal(result.sources.ai.status, "needs_review");
-  assert.equal(result.manualFallback.prompt, "Complete synthetic manual prompt");
+  assert.equal(result.manualFallback.prompt, buildReviewPrompt("# synthetic template", "2026-W40"));
   assert.match(await readFile(path.join(weekRoot, "ai.md"), "utf8"), /用户人工周记/);
   assert.equal(finalSidecar.resubmissionCount, undefined);
   assert.equal(calls.filter((call) => call.resubmit).length, 0);
@@ -818,7 +842,7 @@ test("insufficient deadline budget surfaces the manual prompt without waiting or
   const { result, calls, sleeps, events, sidecar } = await runFreshUncertainAiScenario(t, { maxDurationMs: 35 * 60_000 });
   const finalSidecar = JSON.parse(await readFile(sidecar, "utf8"));
   assert.equal(result.sources.ai.status, "needs_review");
-  assert.equal(result.manualFallback.prompt, "Complete synthetic manual prompt");
+  assert.equal(result.manualFallback.prompt, buildReviewPrompt("# synthetic template", "2026-W40"));
   assert.equal(finalSidecar.resubmissionCount, undefined);
   assert.equal(calls.filter((call) => call.resubmit).length, 0);
   assert.equal(sleeps.length, 0);
@@ -871,6 +895,106 @@ test("rebuilds the complete manual prompt from the target-week template when the
 
   assert.equal(result.manualFallback.path, `03_input/weekly/${week}/ai.md`);
   assert.equal(sha256(result.manualFallback.prompt), sha256(buildReviewPrompt(template, week)));
+});
+
+test("verifies the manual fallback against the saved prompt hash and rebuilds a matching template safely", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-ai-manual-prompt-integrity-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const weekRoot = path.join(root, "03_input/weekly", week);
+  const template = "# synthetic template with integrity";
+  const prompt = buildReviewPrompt(template, week);
+  await mkdir(path.join(root, "03_input/weekly/00_template"), { recursive: true });
+  await mkdir(weekRoot, { recursive: true });
+  await writeFile(path.join(root, "03_input/weekly/00_template/ai.md"), template, "utf8");
+  const state = createWeeklyRetryState(week);
+  for (const source of WEEKLY_SOURCE_CONFIG) state.sources[source.id].status = source.collector ? "succeeded" : "recheck-only";
+  state.sources.ai.status = "needs_review";
+  await writeFile(path.join(weekRoot, "_weekly-retry-state.json"), `${JSON.stringify(state)}\n`);
+  await writeFile(path.join(weekRoot, "_ai-generated.json"), JSON.stringify({
+    targetWeek: week, status: "needs_review", promptSha256: sha256(prompt), manualPrompt: "TAMPERED_STALE_PROMPT",
+  }));
+
+  const result = await runWeeklyRetrySupervisor({
+    week, repoRoot: root, maxDurationMs: 0, now: () => Date.parse("2026-10-05T08:00:00Z"), readOutcome: async () => null,
+  });
+  assert.equal(result.manualFallback.prompt, prompt);
+  assert.equal(result.manualFallback.manualFallbackStatus, "rebuilt-matching-recorded-hash");
+  assert.equal(result.manualFallback.manualFallbackReasonCode, undefined);
+});
+
+test("reports an explicit blocked manual fallback when its hash is malformed or no reconstruction matches", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-ai-manual-prompt-blocked-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const weekRoot = path.join(root, "03_input/weekly", week);
+  await mkdir(weekRoot, { recursive: true });
+  const state = createWeeklyRetryState(week);
+  for (const source of WEEKLY_SOURCE_CONFIG) state.sources[source.id].status = source.collector ? "succeeded" : "recheck-only";
+  state.sources.ai.status = "needs_review";
+  await writeFile(path.join(weekRoot, "_weekly-retry-state.json"), `${JSON.stringify(state)}\n`);
+  await writeFile(path.join(weekRoot, "_ai-generated.json"), JSON.stringify({
+    targetWeek: week, status: "needs_review", promptSha256: sha256("expected prompt"), manualPrompt: "TAMPERED_STALE_PROMPT",
+  }));
+
+  const result = await runWeeklyRetrySupervisor({
+    week, repoRoot: root, maxDurationMs: 0, now: () => Date.parse("2026-10-05T08:00:00Z"), readOutcome: async () => null,
+  });
+  assert.equal(result.manualFallback.prompt, null);
+  assert.equal(result.manualFallback.manualFallbackStatus, "integrity-mismatch");
+  assert.equal(result.manualFallback.manualFallbackReasonCode, "prompt-integrity-mismatch");
+
+  await writeFile(path.join(weekRoot, "_ai-generated.json"), JSON.stringify({
+    targetWeek: week, status: "needs_review", promptSha256: "not-a-sha256", manualPrompt: "TAMPERED_STALE_PROMPT",
+  }));
+  const malformed = await runWeeklyRetrySupervisor({
+    week, repoRoot: root, maxDurationMs: 0, now: () => Date.parse("2026-10-05T08:00:00Z"), readOutcome: async () => null,
+  });
+  assert.equal(malformed.manualFallback.prompt, null);
+  assert.equal(malformed.manualFallback.manualFallbackStatus, "integrity-mismatch");
+  assert.equal(malformed.manualFallback.manualFallbackReasonCode, "prompt-integrity-mismatch");
+});
+
+test("reports an explicit unavailable state when neither the business receipt nor the template can provide a manual prompt", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-ai-manual-prompt-unavailable-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const weekRoot = path.join(root, "03_input/weekly", week);
+  await mkdir(weekRoot, { recursive: true });
+  const state = createWeeklyRetryState(week);
+  for (const source of WEEKLY_SOURCE_CONFIG) state.sources[source.id].status = source.collector ? "succeeded" : "recheck-only";
+  state.sources.ai.status = "needs_review";
+  await writeFile(path.join(weekRoot, "_weekly-retry-state.json"), `${JSON.stringify(state)}\n`);
+  await writeFile(path.join(weekRoot, "_ai-generated.json"), JSON.stringify({ targetWeek: week, status: "needs_review" }));
+
+  const result = await runWeeklyRetrySupervisor({
+    week, repoRoot: root, maxDurationMs: 0, now: () => Date.parse("2026-10-05T08:00:00Z"), readOutcome: async () => null,
+  });
+  assert.equal(result.manualFallback.prompt, null);
+  assert.equal(result.manualFallback.manualFallbackStatus, "unavailable");
+  assert.equal(result.manualFallback.manualFallbackReasonCode, "manual-prompt-unavailable");
+});
+
+test("reports an unavailable manual prompt when its saved hash exists but the template is missing", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-ai-hashed-prompt-unavailable-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const weekRoot = path.join(root, "03_input/weekly", week);
+  await mkdir(weekRoot, { recursive: true });
+  const state = createWeeklyRetryState(week);
+  for (const source of WEEKLY_SOURCE_CONFIG) state.sources[source.id].status = source.collector ? "succeeded" : "recheck-only";
+  state.sources.ai.status = "needs_review";
+  await writeFile(path.join(weekRoot, "_weekly-retry-state.json"), `${JSON.stringify(state)}\n`);
+  await writeFile(path.join(weekRoot, "_ai-generated.json"), JSON.stringify({
+    targetWeek: week, status: "needs_review", promptSha256: sha256("recorded prompt"),
+  }));
+
+  const result = await runWeeklyRetrySupervisor({
+    week, repoRoot: root, maxDurationMs: 0, now: () => Date.parse("2026-10-05T08:00:00Z"), readOutcome: async () => null,
+  });
+  assert.equal(result.manualFallback.prompt, null);
+  assert.equal(result.manualFallback.manualFallbackStatus, "unavailable");
+  assert.equal(result.manualFallback.manualFallbackReasonCode, "manual-prompt-unavailable");
 });
 
 test("migrates only untouched Health-X recheck-only state into the managed report collector", async (t) => {
@@ -1094,6 +1218,40 @@ test("different unknown errors stay separate while a repeated fingerprint keeps 
 
 test("weekly supervisor rejects a week 53 that does not exist in the requested ISO year", async () => {
   await assert.rejects(runWeeklyRetrySupervisor({ week: "2025-W53", mode: "manual", sourceId: "flomo" }), /invalid-week/);
+  await assert.rejects(runWeeklyRetrySupervisor({ week: "2026-W40", mode: "manual", sourceId: "flomo", scheduledAt: "tomorrow" }),
+    /scheduled-at-must-be-an-ISO-timestamp-with-timezone/);
+});
+
+test("weekly supervisor records planned trigger, actual start, and measured delay", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-schedule-telemetry-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const weekRoot = path.join(root, "03_input/weekly", week);
+  await mkdir(weekRoot, { recursive: true });
+  const seededState = createWeeklyRetryState(week);
+  for (const source of WEEKLY_SOURCE_CONFIG) seededState.sources[source.id].status = source.collector ? "succeeded" : "recheck-only";
+  await writeFile(path.join(weekRoot, "_weekly-retry-state.json"), `${JSON.stringify(seededState)}\n`);
+  const stateLockPath = path.join(weekRoot, "_weekly-retry-state.lock");
+  await writeFile(stateLockPath, JSON.stringify({ pid: process.pid, token: "active-owner" }));
+  let current = Date.parse("2026-10-05T07:07:30+08:00");
+  const scheduledAt = "2026-10-05T07:00:00+08:00";
+  assert.equal(parseArgs(["--week", week, "--scheduled-at", scheduledAt]).scheduledAt, "2026-10-04T23:00:00.000Z");
+  assert.throws(() => parseArgs(["--week", week, "--scheduled-at", "tomorrow"]),
+    /scheduled-at-must-be-an-ISO-timestamp-with-timezone/);
+  const result = await runWeeklyRetrySupervisor({
+    week, mode: "rescue", automationId: "weekly-rescue-0700", scheduledAt, repoRoot: root,
+    maxDurationMs: 1_000, now: () => current,
+    sleep: async (ms) => { current += ms; await rm(stateLockPath, { force: true }); },
+    readOutcome: async () => null,
+    runSource: async () => assert.fail("a fully successful snapshot must not rerun sources"),
+  });
+  const state = JSON.parse(await readFile(result.statePath, "utf8"));
+  const invocation = state.diagnostics.find((event) => event.step === "supervisor-invocation");
+  assert.equal(invocation.scheduledAt, "2026-10-04T23:00:00.000Z");
+  assert.equal(invocation.actualStartedAt, "2026-10-04T23:07:30.000Z");
+  assert.equal(invocation.triggerDelayMs, 450_000);
+  assert.equal(invocation.waitAttribution, "supervisor-lock");
+  assert.equal(invocation.queuedMs, 1_000);
 });
 
 test("weekly supervisor refuses a symlinked target week before writing its state", async (t) => {
@@ -1381,6 +1539,44 @@ test("the Flomo adapter passes the supervisor invocation UUID and automation ID 
   assert.equal(outcome.snapshotId, "snapshot-adapter");
 });
 
+test("the Flomo adapter carries sanitized Retry-After metadata into retry classification", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-retry-after-adapter-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const source = WEEKLY_SOURCE_CONFIG.find((item) => item.id === "flomo");
+  const retryAfterMs = 60 * 60_000;
+  const childStderr = formatCliError(Object.assign(new Error("ego-service-rate-limit"), { retryAfterMs }));
+  const outcome = await runConfiguredSource(source, {
+    week: "2026-W43", repoRoot: root, attemptToken: "fedcba98-7654-3210-fedc-ba9876543210",
+    invocationId: "123e4567-e89b-42d3-a456-426614174000", automationId: "learn-x-flomo-00-10", timeoutMs: 5_000,
+    executeCommand: async () => {
+      throw Object.assign(new Error("sync failed"), { stderr: childStderr });
+    },
+    readOutcome: async () => null,
+  });
+  assert.equal(outcome.status, "failed");
+  assert.equal(outcome.retryAfterMs, retryAfterMs);
+  const current = Date.parse("2026-10-26T00:10:00.000Z");
+  assert.equal(classifyOutcome("flomo", outcome, { now: current }).retryAfterMs, retryAfterMs);
+  const scheduled = await runWeeklyRetrySupervisor({
+    week: "2026-W43", mode: "manual", sourceId: "flomo", singleAttempt: true, skipPreparation: true,
+    automationId: "learn-x-flomo-00-10", repoRoot: root, maxDurationMs: 60_000, now: () => current,
+    readOutcome: async () => null, runSource: async () => outcome,
+  });
+  const scheduledState = JSON.parse(await readFile(scheduled.statePath, "utf8"));
+  assert.equal(Date.parse(scheduledState.sources.flomo.nextRetryAt), current + retryAfterMs,
+    "persisted cooldown honors the server delay rather than the twenty-minute default");
+
+  const excessiveDelay = { ...outcome, retryAfterMs: 31 * 24 * 60 * 60_000 };
+  const stopped = await runWeeklyRetrySupervisor({
+    week: "2026-W44", mode: "manual", sourceId: "flomo", singleAttempt: true, skipPreparation: true,
+    automationId: "learn-x-flomo-00-10", repoRoot: root, maxDurationMs: 60_000, now: () => current,
+    readOutcome: async () => null, runSource: async () => excessiveDelay,
+  });
+  const stoppedState = JSON.parse(await readFile(stopped.statePath, "utf8"));
+  assert.equal(stoppedState.sources.flomo.lastErrorClass, "retry-after-exceeds-automatic-window");
+  assert.equal(stoppedState.sources.flomo.nextRetryAt, null, "an unreasonable server delay stops unattended retries instead of retrying early or stalling for years");
+});
+
 test("Flomo single-attempt runner enforces a twenty-minute minimum, honors persisted backoff, and stops after success", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-flomo-single-attempt-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -1415,6 +1611,42 @@ test("Flomo single-attempt runner enforces a twenty-minute minimum, honors persi
   const afterSuccessState = JSON.parse(await readFile(afterSuccess.statePath, "utf8"));
   assert.equal(afterSuccessState.diagnostics.at(-1).outcome, "flomo-already-succeeded");
   assert.equal(calls, 2, "success ends the automation's retry sequence");
+});
+
+test("a new Flomo automation refreshes a pre-existing ready source but deduplicates its own success", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-flomo-preexisting-ready-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W43";
+  const weekRoot = path.join(root, "03_input/weekly", week);
+  await mkdir(weekRoot, { recursive: true });
+  await writeFile(path.join(weekRoot, "flomo.md"), "# synthetic prior weekly input\n", "utf8");
+  await updateWeeklySourceStatus({ weekRoot, week, source: "flomo", status: "ready", file: "flomo.md", count: 18,
+    summary: "synthetic pre-existing successful Flomo result" });
+
+  const automationId = "learn-x-flomo-00-10";
+  const current = Date.parse("2026-10-26T00:10:00+08:00");
+  let calls = 0;
+  const options = {
+    week, mode: "manual", sourceId: "flomo", singleAttempt: true, skipPreparation: true,
+    skipFlomoReviewImport: true, automationId, repoRoot: root, maxDurationMs: 60_000, now: () => current,
+    readOutcome: async (source) => readCurrentSourceOutcome(source, week, root),
+    runSource: async () => {
+      calls += 1;
+      return { status: "ready", count: 18, snapshotId: "fresh-automation-snapshot", capturedAt: new Date(current).toISOString() };
+    },
+  };
+
+  const first = await runWeeklyRetrySupervisor(options);
+  assert.equal(first.sources.flomo.status, "succeeded");
+  const firstState = JSON.parse(await readFile(first.statePath, "utf8"));
+  assert.equal(firstState.sources.flomo.automationAttemptCounts[automationId], 1);
+  assert.equal(firstState.sources.flomo.lastAutomationId, automationId);
+  assert.equal(calls, 1, "a pre-existing ready sidecar must not suppress this automation's full scan");
+
+  const second = await runWeeklyRetrySupervisor(options);
+  const state = JSON.parse(await readFile(second.statePath, "utf8"));
+  assert.equal(state.diagnostics.at(-1).outcome, "flomo-already-succeeded");
+  assert.equal(calls, 1, "the same automation must stop after its own successful scan");
 });
 
 test("Flomo single-attempt runner waits twenty minutes from failure completion before retrying", async (t) => {

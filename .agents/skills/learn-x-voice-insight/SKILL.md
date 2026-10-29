@@ -7,6 +7,12 @@ description: Learn-X 周日 Voice-X 批量洞察自动化。读取目标周已�
 
 这个 Skill 是周一 `learn-x-weekly-automation` 的独立前置阶段，不修改系统级调度，也不进入 `process:weekly`。
 
+## ChatGPT 请求上下文包
+
+真实批处理调用复用共享 [ChatGPT Bridge](/Users/yuwei/code/browser-runtime-governance/skills/chatgpt-web-bridge/SKILL.md)，默认在提交前每请求导出一个相同输入的私有 TXT，不另拼手动 Prompt；预览不触发 Bridge。使用稳定 `callerLabel`，按当前应用与认证本人私聊核验结果绑定 `contextPackDelivery`。
+
+用户通过 `result.contextPack.path` 或已确认的本人私聊附件取得包。附件交付默认预算 30 秒，失败或待核实不改变原批处理、校验与归档完成门；`exactInput` 原样，未知请求或发送只读核验、不自动重发。
+
 ## 目标与边界
 
 - 只读取 Voice-X Base 的目标周记录和「处理后原文」；不读取原始文字稿。

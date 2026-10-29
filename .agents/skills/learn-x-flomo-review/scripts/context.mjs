@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { readCoreTruth } from '/Users/yuwei/code/core/scripts/read-core-truth.mjs';
+import { assertFlomoPathWithinRoot, resolveFlomoPathAllowed } from '../../learn-x-input/scripts/lib/flomo-full-snapshot.mjs';
 
 export const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 export function shanghaiDate(now = new Date()) {
@@ -28,8 +29,11 @@ export function completedPeriods(date) {
   });
   return { weeks, months };
 }
-async function optional(file) {
-  try { return await readFile(file, 'utf8'); } catch (e) { if (e.code === 'ENOENT') return null; throw e; }
+async function safeRepoPath(safeRoot, candidate) {
+  return assertFlomoPathWithinRoot(safeRoot, await resolveFlomoPathAllowed(candidate));
+}
+async function optional(safeRoot, file) {
+  try { return await readFile(await safeRepoPath(safeRoot, file), 'utf8'); } catch (e) { if (e.code === 'ENOENT') return null; throw e; }
 }
 export function substantive(content) {
   const text = String(content || '').replace(/<!--[\s\S]*?-->/g, '').trim();
@@ -39,36 +43,44 @@ export function substantive(content) {
     .join('\n').trim();
   return body.length >= 120;
 }
-export async function buildReviewContext(repoRoot, { date = shanghaiDate(), readDao = () => readCoreTruth('dao') } = {}) {
+export async function buildReviewContext(repoRoot, { date = shanghaiDate(), readDao } = {}) {
+  repoRoot = await resolveFlomoPathAllowed(repoRoot);
   const periods = completedPeriods(date), materials = [], missing = [];
   const add = (p, content, role, extra = {}) => materials.push({ path: p, role, content, sha256: sha256(content), ...extra });
   for (const [kind, ids] of [['weekly', periods.weeks], ['monthly', periods.months]]) {
     for (const id of ids) {
       const candidates = kind === 'weekly' ? [`04_output/weekly/${id.replace('-W', '-')}.md`, `04_output/weekly/${id}.md`] : [`04_output/monthly/${id}.md`];
       const present = [];
-      for (const p of candidates) { const text = await optional(path.join(repoRoot, p)); if (text !== null && substantive(text)) present.push([p, text]); }
+      for (const p of candidates) { const text = await optional(repoRoot, path.join(repoRoot, p)); if (text !== null && substantive(text)) present.push([p, text]); }
       if (present.length > 1 && new Set(present.map(([, text]) => sha256(text))).size > 1) throw Error(`ambiguous-output:${id}`);
       if (!present.length) missing.push({ role: kind, period: id, reason: 'missing-or-placeholder' });
       else add(...present[0], kind, { period: id, confirmation: 'archived-context-not-new-confirmation' });
     }
   }
   if (!materials.length) throw Error('weekly-and-monthly-context-missing');
-  const dao = await readDao();
+  let dao;
+  if (readDao) dao = await readDao();
+  else {
+    const coreRoot = await resolveFlomoPathAllowed(path.resolve(repoRoot, '../core'));
+    const configPath = await safeRepoPath(coreRoot, path.join(coreRoot, 'config/core-truth.json'));
+    dao = await readCoreTruth('dao', { configPath });
+  }
   if (dao.kind !== 'dao' || !dao.content?.trim() || !Number.isInteger(dao.revision) || sha256(dao.content) !== dao.sha256) throw Error('dao-context-invalid');
   add('Core/道', dao.content, 'dao', { sourceUrl: dao.sourceUrl, revision: dao.revision, readAt: dao.readAt });
   const memoryDir = path.join(repoRoot, '01_core/memory');
-  const names = (await readdir(memoryDir)).filter(name => /^\d{4}(?:-Q[1-4])?\.memory\.md$/.test(name)).sort();
+  const safeMemoryDir = await safeRepoPath(repoRoot, memoryDir);
+  const names = (await readdir(safeMemoryDir)).filter(name => /^\d{4}(?:-Q[1-4])?\.memory\.md$/.test(name)).sort();
   if (!names.length) throw Error('active-memory-missing');
-  for (const name of names) { const p = `01_core/memory/${name}`; const text = await readFile(path.join(repoRoot, p), 'utf8'); if (!text.trim()) throw Error('active-memory-empty'); add(p, text, 'memory'); }
+  for (const name of names) { const p = `01_core/memory/${name}`; const text = await readFile(await safeRepoPath(repoRoot, path.join(repoRoot, p)), 'utf8'); if (!text.trim()) throw Error('active-memory-empty'); add(p, text, 'memory'); }
   for (const p of ['01_core/memory/ChatGPT-AI记忆版.md', '01_core/ChatGPT-自我阅读版.md']) {
-    const content = await optional(path.join(repoRoot, p));
+    const content = await optional(repoRoot, path.join(repoRoot, p));
     if (!content?.trim()) { missing.push({ path: p, reason: 'profile-missing' }); continue; }
     add(p, content, 'profile', { freshness: 'unverified-export-provenance' });
   }
   // Preserve export evidence without treating the latest failed attempt as a successful refresh.
   const exports = [];
   for (const id of periods.months) {
-    const p = `04_output/_dist/monthly/${id}/chatgpt-understanding.json`, raw = await optional(path.join(repoRoot, p));
+    const p = `04_output/_dist/monthly/${id}/chatgpt-understanding.json`, raw = await optional(repoRoot, path.join(repoRoot, p));
     if (raw) { const s = JSON.parse(raw); exports.push({ period: id, status: s.status, completedAt: s.completedAt || null, outputSha256: s.outputSha256 || null }); }
   }
   for (const material of materials.filter(m => m.role === 'profile')) {

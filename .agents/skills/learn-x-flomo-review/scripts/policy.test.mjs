@@ -136,7 +136,7 @@ test('reserved, sending, delivered and needs_review block date and weekly exposu
   assert.doesNotThrow(() => validateSelection({ date: '2026-10-05', notes: catalog, ledger: failed, items: items(catalog, [0, 1, 2, 3, 4]) }));
 });
 
-test('a new dedupe generation releases old exposure but keeps same-day occupancy', () => {
+test('a new dedupe generation resets old exposure but keeps same-day occupancy', () => {
   const catalog = notes();
   const ledger = {
     dedupeGeneration: 'online-current',

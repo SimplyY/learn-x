@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { buildEgoScanScript, buildFlomoTaskSpaceName, collectFlomoFullSnapshot, collectFlomoWeekly, formatCliError, parseArgs, parseMemoTime, scanFlomoWithEgo, validateCompleteScan } from "./collect-flomo-weekly.mjs";
+import { defaultFlomoPrivateDataRoot } from "./lib/flomo-full-snapshot.mjs";
+import { buildEgoFullScanScript, buildEgoScanScript, buildFlomoTaskSpaceName, collectFlomoFullSnapshot, collectFlomoWeekly, formatCliError, parseArgs, parseMemoTime, scanFlomoWithEgo, validateCompleteScan } from "./collect-flomo-weekly.mjs";
 
 test("each Flomo invocation gets an automation-scoped TaskSpace name", () => {
   const first = buildFlomoTaskSpaceName("123e4567-e89b-42d3-a456-426614174000", "learn-x-flomo-00-10");
@@ -86,14 +87,27 @@ test("CLI help exits without starting a Flomo collection", async (t) => {
 });
 
 test("CLI surfaces only allowlisted full-scan diagnostics on failure", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-cli-diagnostics-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-cli-diagnostics-"));
+  const root = await realpath(tempRoot);
+  t.after(() => rm(tempRoot, { recursive: true, force: true }));
   const bin = path.join(root, "bin");
+  const repoRoot = path.join(root, "repo");
+  const scriptsSource = path.dirname(fileURLToPath(import.meta.url));
+  const scriptsTarget = path.join(repoRoot, ".agents/skills/learn-x-input/scripts");
+  await mkdir(path.dirname(scriptsTarget), { recursive: true });
+  await cp(scriptsSource, scriptsTarget, { recursive: true });
+  const storageRoot = path.join(repoRoot, "04_output/_dist/flomo-review-tests");
+  const capturedResultPath = path.join(root, "captured-result-path.txt");
+  const capturedResultMode = path.join(root, "captured-result-mode.txt");
+  const capturedCliArgs = path.join(root, "captured-cli-args.json");
   await mkdir(bin, { recursive: true });
   await writeFile(path.join(bin, "ego-browser"), `#!/usr/bin/env node
 const fs = require("node:fs");
 const source = process.argv.at(-1);
 const resultPath = JSON.parse(source.match(/const resultPath = ("[^"]+");/)[1]);
+fs.writeFileSync(process.env.LEARN_X_TEST_CAPTURE_ARGS, JSON.stringify(process.argv.slice(2, -2)), "utf8");
+fs.writeFileSync(process.env.LEARN_X_TEST_CAPTURE_PATH, resultPath, "utf8");
+fs.writeFileSync(process.env.LEARN_X_TEST_CAPTURE_MODE, String(fs.statSync(resultPath).mode & 0o777), "utf8");
 fs.writeFileSync(resultPath, JSON.stringify({
   ok: false, error: "network-timeout", cleanup: "retained-after-error", executionFinished: true,
   taskSpaceId: 73, taskSpaceName: "learn-x-v2-flomo-run1", taskOwnership: "agent", stage: "wait-initial-library", expectedCount: null,
@@ -105,18 +119,19 @@ fs.writeFileSync(resultPath, JSON.stringify({
       editorPresent: false, targetListLinkVisible: true, memoId: "do-not-print-id", bodyText: "do-not-print-body" } }
 }), { mode: 0o600 });
 `, { mode: 0o700 });
-  const script = fileURLToPath(new URL("./collect-flomo-weekly.mjs", import.meta.url));
+  const script = path.join(scriptsTarget, "collect-flomo-weekly.mjs");
   let failure;
+  let output;
   try {
-    execFileSync(process.execPath, [script, "--full-snapshot"], {
-      cwd: path.resolve(path.dirname(script), "../../../../"),
-      env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH || ""}` },
+    output = execFileSync(process.execPath, [script, "--full-snapshot", "--storage-root", storageRoot], {
+      cwd: repoRoot,
+      env: { ...process.env, LEARN_X_TEST_CAPTURE_ARGS: capturedCliArgs, LEARN_X_TEST_CAPTURE_PATH: capturedResultPath, LEARN_X_TEST_CAPTURE_MODE: capturedResultMode, PATH: `${bin}${path.delimiter}${process.env.PATH || ""}` },
       encoding: "utf8",
     });
   } catch (error) {
     failure = error;
   }
-  assert.equal(failure?.status, 1);
+  assert.equal(failure?.status, 1, String(failure?.stderr || output || failure?.message || "CLI exited without the expected failure"));
   const stderr = String(failure.stderr);
   assert.match(stderr, /^ego-network-timeout /);
   const details = JSON.parse(stderr.slice(stderr.indexOf("{")).trim());
@@ -128,6 +143,12 @@ fs.writeFileSync(resultPath, JSON.stringify({
     sheetVisible: true, routeMatches: false, targetLinkCount: 0, bodyPresent: false,
     editorPresent: false, targetListLinkVisible: true,
   });
+  const resultPath = await readFile(capturedResultPath, "utf8");
+  assert.equal(await realpath(path.dirname(resultPath)), await realpath(path.join(storageRoot, "staged")));
+  assert.deepEqual(JSON.parse(await readFile(capturedCliArgs, "utf8")), ["nodejs"]);
+  assert.equal((await stat(path.dirname(resultPath))).mode & 0o777, 0o700);
+  assert.equal(Number(await readFile(capturedResultMode, "utf8")), 0o600);
+  await assert.rejects(readFile(resultPath), { code: "ENOENT" });
   assert.doesNotMatch(stderr, /do-not-print|privateBody|do-not-print-id|do-not-print-body/);
 });
 
@@ -336,7 +357,9 @@ fs.writeFileSync(resultPath, JSON.stringify({ ok: false, error: process.env.LEAR
     ]) {
       const outputRoot = path.join(root, expected);
       process.env.LEARN_X_TEST_EGO_RESULT_ERROR = browserError;
-      await assert.rejects(collectFlomoWeekly({ week: "2026-W40", outputRoot }), new RegExp(`flomo-weekly-${expected}`));
+      await assert.rejects(collectFlomoWeekly({ week: "2026-W40", outputRoot,
+        scan: ({ week: targetWeek, range }) => scanFlomoWithEgo({ week: targetWeek, range, repoRoot: root,
+          storageRoot: defaultFlomoPrivateDataRoot(root) }) }), new RegExp(`flomo-weekly-${expected}`));
       const status = JSON.parse(await readFile(path.join(outputRoot, "_source-status.json"), "utf8"));
       assert.equal(status.sources.flomo.status, "failed", browserError);
       assert.match(status.sources.flomo.summary, new RegExp(expected), browserError);
@@ -357,7 +380,7 @@ test("reports Ego bootstrap denial as unavailable instead of a live scan with un
   const previousPath = process.env.PATH;
   process.env.PATH = `${bin}${path.delimiter}${previousPath || ""}`;
   try {
-    await assert.rejects(collectFlomoFullSnapshot({ taskSpaceId: 98, taskSpaceName: "learn-x-v2-flomo-run1" }), /ego-bootstrap-unavailable/);
+    await assert.rejects(collectFlomoFullSnapshot({ repoRoot: root, taskSpaceId: 98, taskSpaceName: "learn-x-v2-flomo-run1" }), /ego-bootstrap-unavailable/);
   } finally {
     process.env.PATH = previousPath;
   }
@@ -377,12 +400,84 @@ fs.writeFileSync(resultPath, JSON.stringify({ ok: false, error: "network-timeout
   const previousPath = process.env.PATH;
   process.env.PATH = `${bin}${path.delimiter}${previousPath || ""}`;
   try {
-    await assert.rejects(scanFlomoWithEgo({ mode: "full" }), error => {
+    await assert.rejects(scanFlomoWithEgo({ mode: "full", repoRoot: root }), error => {
       assert.equal(error.message, "ego-network-timeout");
       assert.equal(error.stage, "wait-initial-library");
       assert.equal(error.observedUniqueIds, 0);
       assert.equal(error.step, -1);
       assert.equal(JSON.stringify(error).includes("body"), false);
+      return true;
+    });
+  } finally {
+    process.env.PATH = previousPath;
+  }
+});
+
+test("full scan carries a 429 Retry-After header through its sanitized failure result", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-retry-after-browser-mock-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const resultPath = path.join(root, "result.json");
+  const expectedTaskSpaceName = "learn-x-flomo-00-10-flomo-123e4567-e89b-42d3-a456-426614174010";
+  const responseHandlers = [];
+  let retryAfterHeader = "3600";
+  const previousTaskSpace = globalThis.taskSpace;
+  const previousCliLog = globalThis.cliLog;
+  globalThis.taskSpace = async () => ({
+    ownership: "agent", spaceId: 101, id: 101, name: expectedTaskSpaceName,
+    page: () => ({
+      on: (event, handler) => { if (event === "response") responseHandlers.push(handler); },
+      goto: async () => {
+        for (const handler of responseHandlers) handler({ status: () => 429, headers: () => ({ "retry-after": retryAfterHeader }) });
+        throw new Error("HTTP 429 Too Many Requests");
+      },
+      evaluate: async () => null,
+    }),
+    finish: async () => {},
+  });
+  globalThis.cliLog = () => {};
+  try {
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+    for (const header of ["3600", new Date(Date.now() + 60 * 60_000).toUTCString()]) {
+      retryAfterHeader = header;
+      responseHandlers.length = 0;
+      const script = buildEgoFullScanScript({ taskName: expectedTaskSpaceName, resultPath, maxSteps: 1 });
+      await new AsyncFunction("taskSpace", "cliLog", script)(globalThis.taskSpace, globalThis.cliLog);
+      const result = JSON.parse(await readFile(resultPath, "utf8"));
+      assert.equal(result.error, "service-rate-limit");
+      assert.equal(JSON.stringify(result).includes("retry-after"), false);
+      if (header === "3600") assert.equal(result.retryAfterMs, 3_600_000);
+      else assert.ok(result.retryAfterMs >= 3_599_000 && result.retryAfterMs <= 3_600_000, String(result.retryAfterMs));
+    }
+  } finally {
+    if (previousTaskSpace === undefined) delete globalThis.taskSpace;
+    else globalThis.taskSpace = previousTaskSpace;
+    if (previousCliLog === undefined) delete globalThis.cliLog;
+    else globalThis.cliLog = previousCliLog;
+  }
+});
+
+test("full-scan adapter and CLI preserve only a bounded Retry-After delay", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-retry-after-adapter-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const bin = path.join(root, "bin");
+  await mkdir(bin, { recursive: true });
+  await writeFile(path.join(bin, "ego-browser"), `#!/usr/bin/env node
+const fs = require("node:fs");
+const source = process.argv.at(-1);
+const resultPath = JSON.parse(source.match(/const resultPath = ("[^"]+");/)[1]);
+fs.writeFileSync(resultPath, JSON.stringify({ ok: false, error: "service-rate-limit", retryAfterMs: 3600000,
+  cleanup: "finished", executionFinished: true }), { mode: 0o600 });
+`, { mode: 0o700 });
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${bin}${path.delimiter}${previousPath || ""}`;
+  try {
+    await assert.rejects(scanFlomoWithEgo({ mode: "full", repoRoot: root, storageRoot: defaultFlomoPrivateDataRoot(root) }), (error) => {
+      assert.equal(error.message, "ego-service-rate-limit");
+      assert.equal(error.retryAfterMs, 3_600_000);
+      const output = formatCliError(error);
+      assert.match(output, /^ego-service-rate-limit /);
+      const details = JSON.parse(output.slice(output.indexOf("{")));
+      assert.deepEqual(details, { retryAfterMs: 3_600_000 });
       return true;
     });
   } finally {

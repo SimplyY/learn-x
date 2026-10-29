@@ -11,13 +11,17 @@ import {
   confirmManualAiReview,
   DEFAULT_BRIDGE_TIMEOUT_MS,
   generateAiReview,
+  extractBridgePersistenceDiagnostics,
   manualAiShell,
   normalizeAiReviewText,
   parseGenerateAiReviewArgs,
   promoteAiReview,
+  readWeeklyAiDiagnosticOutbox,
+  readWeeklyAiDiagnosticStatus,
   runBridgeCli,
   sha256,
-  stripOuterMarkdownFence
+  stripOuterMarkdownFence,
+  weeklyAiOutcomeEvent,
 } from "./generate-ai-review.mjs";
 import { tryAcquireWeeklyAiLock } from "./lib/weekly-ai-lock.mjs";
 
@@ -42,16 +46,183 @@ test("bridge adapter timeout covers the Bridge protocol budget", () => {
   assert.ok(DEFAULT_BRIDGE_TIMEOUT_MS >= 210_000);
 });
 
+test("Bridge persistence stderr is projected to fixed diagnostic codes without raw fields", () => {
+  const diagnostics = extractBridgePersistenceDiagnostics([
+    JSON.stringify({ event: "bridge-primary-journal-write-failed", operationId: "PRIVATE_RUN_SENTINEL", reason: "append-failed", private: "PRIVATE_BODY_SENTINEL" }),
+    JSON.stringify({ event: "bridge-client-journal-write-failed", failureClass: "transport", reason: "client-journal-append-failed" }),
+    JSON.stringify({ event: "unrelated-error", message: "PRIVATE_BODY_SENTINEL" }),
+  ].join("\n"));
+  assert.deepEqual(diagnostics, [
+    { reason: "diagnostic-write-failed", originalReason: "append-failed", failureStage: "persistence", phase: "persistence" },
+    { reason: "diagnostic-write-failed", failureStage: "persistence", phase: "persistence" },
+  ]);
+  assert.doesNotMatch(JSON.stringify(diagnostics), /PRIVATE_RUN_SENTINEL|PRIVATE_BODY_SENTINEL/);
+});
+
+test("a weekly diagnostic journal failure remains queryable in the local fallback journal", async (t) => {
+  const root = await fixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W27";
+  const persistenceError = Object.assign(new Error("PRIVATE_DIAGNOSTIC_PATH_SENTINEL"), { code: "ENOTDIR" });
+  const result = await generateAiReview({
+    repoRoot: root,
+    week,
+    diagnosticWriter: async () => { throw persistenceError; },
+    runBridge: async (_prompt, options) => successfulBridgeResult(validReview, options),
+  });
+
+  assert.equal(result.status, "confirmed");
+  const outboxDir = path.join(root, "03_input/weekly/.diagnostic-outbox/journal");
+  const files = await readdir(outboxDir).catch((error) => {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  });
+  const events = (await Promise.all(files.map(async (file) =>
+    (await readFile(path.join(outboxDir, file), "utf8")).split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line))
+  ))).flat();
+  assert.ok(events.some((event) => event.type === "diagnostic-write-failed" && event.week === week),
+    "journal failure must leave a queryable fallback event");
+  assert.ok(events.every((event) => event.systemErrorCode === "ENOTDIR"));
+  assert.doesNotMatch(JSON.stringify(events), /PRIVATE_DIAGNOSTIC_PATH_SENTINEL|真实判断|AI 对话提示词/);
+  const queried = await readWeeklyAiDiagnosticOutbox({ repoRoot: root, week });
+  assert.ok(queried.length > 0);
+  assert.ok(queried.every((event) => event.reason === "diagnostic-write-failed" && event.failureStage === "persistence"));
+  assert.ok(queried.some((event) => event.originalEventType === "weekly-ai-outcome"
+    && event.originalStatus === "succeeded" && event.originalPhase === "delivery"
+    && event.originalFailureStage === "delivery" && event.deliveryStatus === "succeeded"),
+  "fallback must retain the safe business result whose journal write failed");
+});
+
+test("weekly diagnostic outbox retention failures remain queryable", async (t) => {
+  const root = await fixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W27";
+  const result = await generateAiReview({
+    repoRoot: root,
+    week,
+    diagnosticWriter: async () => { throw Object.assign(new Error("PRIVATE_JOURNAL_ERROR"), { code: "ENOTDIR" }); },
+    diagnosticOutboxPruner: async () => { throw Object.assign(new Error("PRIVATE_RETENTION_ERROR"), { code: "EACCES" }); },
+    runBridge: async (_prompt, options) => successfulBridgeResult(validReview, options),
+  });
+  assert.equal(result.status, "confirmed");
+  const status = await readWeeklyAiDiagnosticStatus({ repoRoot: root, week });
+  assert.equal(status.retentionStatus, "failed");
+  assert.ok(status.count > 0);
+  assert.ok(status.events.every((event) => event.fallbackRetentionStatus === "failed"
+    && event.fallbackSystemErrorCode === "EACCES"));
+  assert.doesNotMatch(JSON.stringify(status), /PRIVATE_JOURNAL_ERROR|PRIVATE_RETENTION_ERROR/);
+});
+
+test("weekly AI outcomes retain distinct failure stages and manual completion provenance", () => {
+  const observer = weeklyAiOutcomeEvent({ localAttemptId: "attempt-observer", status: "needs_review", reason: "observer-window-ended" });
+  assert.equal(observer.failureStage, "observer");
+  assert.equal(observer.phase, "observe");
+  assert.equal(observer.reason, "observer-window-ended");
+
+  const submit = weeklyAiOutcomeEvent({ localAttemptId: "attempt-submit", status: "needs_review", reason: "login-required" });
+  assert.equal(submit.failureStage, "submit");
+  assert.equal(submit.phase, "submit");
+  const staleObservation = weeklyAiOutcomeEvent({ localAttemptId: "attempt-stale-observation", status: "failed",
+    reason: "login-required", phase: "submit", failureStage: "submit",
+    observation: { reason: "observer-window-ended", observedAt: "2026-10-20T00:00:00.000Z" } });
+  assert.equal(staleObservation.reason, "login-required");
+  assert.equal(staleObservation.originalReason, "observer-window-ended");
+  assert.equal(staleObservation.failureStage, "submit");
+  assert.equal(staleObservation.phase, "submit");
+  const persistence = weeklyAiOutcomeEvent({ localAttemptId: "attempt-persist", status: "failed", reason: "diagnostic-write-failed" });
+  assert.equal(persistence.failureStage, "persistence");
+  assert.equal(persistence.phase, "persistence");
+  const recovered = weeklyAiOutcomeEvent({ localAttemptId: "attempt-recovery", runId: "attempt-recovery", status: "confirmed",
+    resubmissionOf: { runId: "attempt-original", dispatchStartedAt: "2026-10-20T00:00:00.000Z" }, resubmissionCount: 1 });
+  assert.equal(recovered.parentAttemptId, "attempt-original");
+  assert.equal(recovered.recoveryAction, "one-shot-resubmit");
+  assert.equal(recovered.recoveryStatus, "succeeded");
+  assert.equal(recovered.completionSource, "unknown", "legacy confirmation without source evidence remains unknown");
+  const generated = weeklyAiOutcomeEvent({ localAttemptId: "attempt-generated", status: "confirmed", completionSource: "ai-generated" });
+  assert.equal(generated.completionSource, "ai-generated");
+
+  const manual = weeklyAiOutcomeEvent({ localAttemptId: "attempt-manual", status: "confirmed", completionSource: "user-manual",
+    manualConfirmation: { confirmedAt: "2026-10-20T00:00:00.000Z" }, confirmedAt: "2026-10-20T00:00:00.000Z" });
+  assert.equal(manual.phase, "manual-confirmation");
+  assert.equal(manual.completionSource, "user-manual");
+  assert.equal(manual.humanConfirmed, true);
+
+  const unknown = weeklyAiOutcomeEvent({ localAttemptId: "attempt-unknown", status: "needs_review" });
+  assert.equal(unknown.failureStage, "unknown");
+  assert.equal(unknown.phase, "unknown");
+
+  const legacyDuration = weeklyAiOutcomeEvent({ localAttemptId: "attempt-legacy-duration", status: "confirmed",
+    startedAt: "2026-10-20T00:00:00.000Z", completedAt: "2026-10-20T00:20:00.000Z" });
+  assert.equal(legacyDuration.durationMs, undefined, "attempt creation is not evidence of actual Bridge dispatch");
+
+  const timedOut = weeklyAiOutcomeEvent({ localAttemptId: "attempt-timeout", status: "needs_review", reason: "bridge-timeout",
+    remoteOutcomeUnknown: true, localProcessExitConfirmed: true });
+  assert.equal(timedOut.reason, "bridge-timeout");
+  assert.equal(timedOut.failureStage, "runtime");
+  assert.equal(timedOut.remoteOutcomeUnknown, true);
+  assert.equal(timedOut.localProcessExitConfirmed, true);
+
+  const missingBridgeResult = weeklyAiOutcomeEvent({ localAttemptId: "attempt-missing-result", status: "needs_review",
+    reason: "bridge-result-missing" });
+  assert.equal(missingBridgeResult.reason, "bridge-result-missing");
+});
+
 test("Bridge adapter passes the preallocated stable run ID through its CLI", async (t) => {
   const root = await fixture();
   t.after(() => rm(root, { recursive: true, force: true }));
   const bridgePath = path.join(root, "bridge-stub.mjs");
-  await writeFile(bridgePath, "const index = process.argv.indexOf('--run-id'); const urlIndex = process.argv.indexOf('--conversation-url'); process.stdout.write(JSON.stringify({ status: 'needs_review', runId: process.argv[index + 1], conversationUrl: process.argv[urlIndex + 1] }) + '\\n');\n", "utf8");
+  await writeFile(bridgePath, "const index = process.argv.indexOf('--run-id'); const urlIndex = process.argv.indexOf('--conversation-url'); const deliveryIndex = process.argv.indexOf('--context-pack-delivery-json'); process.stdout.write(JSON.stringify({ status: 'needs_review', runId: process.argv[index + 1], conversationUrl: process.argv[urlIndex + 1], receivedDelivery: JSON.parse(process.argv[deliveryIndex + 1]), contextPack: { status: 'ready', path: '/private/fixture-request.txt' } }) + '\\n');\n", "utf8");
   const runId = "123e4567-e89b-42d3-a456-426614174000";
   const conversationUrl = "https://chatgpt.com/";
-  const result = await runBridgeCli("synthetic prompt", { bridgePath, preallocatedRunId: runId, conversationUrl });
+  const contextPackDelivery = { profile: "learn-fixture", appId: "cli_fixture", userId: "ou_fixture", chatId: "oc_fixture" };
+  const result = await runBridgeCli("synthetic prompt", { bridgePath, preallocatedRunId: runId, conversationUrl, contextPackDelivery });
   assert.equal(result.result.runId, runId);
   assert.equal(result.result.conversationUrl, conversationUrl);
+  assert.deepEqual(result.result.receivedDelivery, contextPackDelivery);
+  assert.equal(result.result.contextPack.path, "/private/fixture-request.txt");
+});
+
+test("unknown Bridge failure reasons are normalized before terminal and sidecar persistence", async (t) => {
+  const root = await fixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W27";
+  const bridgePath = path.join(root, "bridge-untrusted-reason.mjs");
+  const sentinel = "SYNTHETIC_ERROR_BODY_SENTINEL_8842";
+  await writeFile(bridgePath,
+    `process.stdout.write(JSON.stringify({ status: "failed", reason: ${JSON.stringify(sentinel)} }) + "\\n");\n`,
+    "utf8");
+
+  const result = await generateAiReview({ repoRoot: root, week, bridgePath, timeoutMs: 2_000 });
+  const sidecar = JSON.parse(await readFile(path.join(root, "03_input/weekly", week, "_ai-generated.json"), "utf8"));
+  assert.equal(result.status, "failed");
+  assert.equal(result.reason, "unknown");
+  assert.equal(sidecar.reason, "unknown");
+  assert.doesNotMatch(JSON.stringify(sidecar), new RegExp(sentinel));
+});
+
+test("Bridge timeout waits for a SIGTERM-delayed child close and records remote uncertainty", async (t) => {
+  const root = await fixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const bridgePath = path.join(root, "bridge-term-delay.mjs");
+  const closedPath = path.join(root, "child-closed");
+  await writeFile(bridgePath, `process.on("SIGTERM", () => setTimeout(async () => { const { writeFile } = await import("node:fs/promises"); await writeFile(${JSON.stringify(closedPath)}, "closed"); process.exit(143); }, 50)); setInterval(() => {}, 1000);`, "utf8");
+  const result = await runBridgeCli("synthetic prompt", { bridgePath, timeoutMs: 2_000, termGraceMs: 250, killGraceMs: 100 });
+  assert.equal(result.exit.timedOut, true);
+  assert.equal(result.exit.localProcessExitConfirmed, true);
+  assert.equal(result.exit.remoteOutcomeUnknown, true);
+  assert.equal(await readFile(closedPath, "utf8"), "closed");
+});
+
+test("Bridge timeout escalates to SIGKILL and waits for close when a child ignores SIGTERM", async (t) => {
+  const root = await fixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const bridgePath = path.join(root, "bridge-ignore-term.mjs");
+  await writeFile(bridgePath, `process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);`, "utf8");
+  const result = await runBridgeCli("synthetic prompt", { bridgePath, timeoutMs: 500, termGraceMs: 25, killGraceMs: 250 });
+  assert.equal(result.exit.timedOut, true);
+  assert.equal(result.exit.signal, "SIGKILL");
+  assert.equal(result.exit.localProcessExitConfirmed, true);
+  assert.equal(result.exit.remoteOutcomeUnknown, true);
 });
 
 test("manual fallback shell is stable and does not contain the prompt", () => {
@@ -61,6 +232,9 @@ test("manual fallback shell is stable and does not contain the prompt", () => {
 test("the public CLI ignores the legacy lock-held bypass and accepts only a token field", () => {
   assert.equal(parseGenerateAiReviewArgs(["--week", "2026-W27", "--weekly-ai-lock-held"]).weeklyAiLockHeld, undefined);
   assert.equal(parseGenerateAiReviewArgs(["--week", "2026-W27", "--weekly-ai-lock-token", "lock-token"]).weeklyAiLockToken, "lock-token");
+  assert.deepEqual(parseGenerateAiReviewArgs(["--week", "2026-W27", "--diagnostic-status"]), {
+    confirm: false, week: "2026-W27", diagnosticStatus: true,
+  });
 });
 
 test("confirms a valid user-completed manual fallback without resubmitting or rewriting ai.md", async (t) => {
@@ -147,11 +321,12 @@ test("auto-confirms a valid generated draft into formal ai.md", async () => {
     assert.equal(result.status, "confirmed");
     assert.equal(await readFile(path.join(root, "03_input/weekly/2026-W27/ai.md"), "utf8"), `${validReview}\n`);
     assert.equal(await readdir(path.join(root, "03_input/weekly/2026-W27")).then((files) => files.includes("ai.generated.md")), false);
-    assert.deepEqual(diagnosticEvents.map(({ type }) => type), ["weekly-ai-dispatch", "weekly-ai-outcome"]);
-    assert.equal(diagnosticEvents[1].deliveryStatus, "succeeded");
-    assert.equal(diagnosticEvents[1].readbackStatus, "succeeded");
-    assert.equal(diagnosticEvents[1].week, "2026-W27");
-    assert.equal(diagnosticEvents[1].clientRequestId, diagnosticEvents[0].clientRequestId);
+    assert.deepEqual(diagnosticEvents.map(({ type }) => type), ["weekly-ai-dispatch-intent", "weekly-ai-dispatch", "weekly-ai-outcome"]);
+    assert.equal(diagnosticEvents[2].deliveryStatus, "succeeded");
+    assert.equal(diagnosticEvents[2].readbackStatus, "succeeded");
+    assert.equal(diagnosticEvents[2].completionSource, "ai-generated");
+    assert.equal(diagnosticEvents[2].week, "2026-W27");
+    assert.equal(diagnosticEvents[2].clientRequestId, diagnosticEvents[0].clientRequestId);
     for (const event of diagnosticEvents) {
       assert.equal("prompt" in event, false);
       assert.equal("text" in event, false);
@@ -166,6 +341,7 @@ test("preserves detailed Bridge identity and submission reasons in weekly AI eve
   const reasons = [
     "conversation-session-mismatch", "conversation-session-not-bound", "observer-identity-mismatch",
     "original-run-identity-mismatch", "submission-unconfirmed", "new-user-message-not-found",
+    "recovery-lease-heartbeat-failed",
   ];
   for (const [index, reason] of reasons.entries()) {
     const root = await fixture();
@@ -387,6 +563,7 @@ test("persists dispatch intent before Bridge submit and never resubmits when the
     assert.equal(first.status, "needs_review");
     assert.equal(first.submissionStateUncertain, true);
     assert.equal(first.reason, "bridge-timeout");
+    assert.equal(first.remoteOutcomeUnknown, true);
     let observations = 0;
     let observedRunId;
     const second = await generateAiReview({
@@ -402,6 +579,47 @@ test("persists dispatch intent before Bridge submit and never resubmits when the
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("starts the twenty-minute business timer after dispatch diagnostics finish and at Bridge invocation", async (t) => {
+  const root = await fixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W27";
+  let dispatchDiagnosticFinishedAt;
+  let invocationReceipt;
+  let invocationStartedAt;
+  let runnerInvoked = false;
+  const diagnosticEvents = [];
+  const result = await generateAiReview({
+    repoRoot: root,
+    week,
+    diagnosticWriter: async (event) => {
+      if (event.type === "weekly-ai-dispatch-intent") {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        dispatchDiagnosticFinishedAt = Date.now();
+      }
+      if (event.type === "weekly-ai-dispatch") assert.equal(runnerInvoked, true);
+      diagnosticEvents.push(event);
+    },
+    runBridge: async (_prompt, options) => {
+      runnerInvoked = true;
+      invocationReceipt = JSON.parse(await readFile(path.join(root, "03_input/weekly", week, "_ai-generated.json"), "utf8"));
+      assert.equal(options.preallocatedRunId, invocationReceipt.runId);
+      invocationStartedAt = options.dispatchStartedAt;
+      assert.ok(Date.parse(invocationStartedAt) >= dispatchDiagnosticFinishedAt);
+      return {
+        ...successfulBridgeResult(validReview, options),
+        persistenceDiagnostics: [{ reason: "diagnostic-write-failed", failureStage: "persistence", phase: "persistence" }],
+      };
+    },
+  });
+  assert.equal(result.status, "confirmed");
+  assert.ok(invocationReceipt.dispatchIntentAt);
+  const finalReceipt = JSON.parse(await readFile(path.join(root, "03_input/weekly", week, "_ai-generated.json"), "utf8"));
+  assert.equal(finalReceipt.dispatchStartedAt, invocationStartedAt);
+  const persistenceEvent = diagnosticEvents.find((event) => event.type === "weekly-ai-persistence-diagnostic");
+  assert.equal(persistenceEvent?.reason, "diagnostic-write-failed");
+  assert.equal(persistenceEvent?.attemptId, invocationReceipt.runId);
 });
 
 test("a legacy crash after persisting dispatch intent blocks observe and resubmit without a stable Bridge run ID", async () => {
@@ -642,9 +860,38 @@ test("one-shot automatic resubmission becomes eligible at exactly twenty minutes
   assert.equal(await canResubmitUncertainAi({ repoRoot: root, week, nowMs: dispatchMs + 19 * 60_000 + 59_999 }), false);
   assert.equal(await canResubmitUncertainAi({ repoRoot: root, week, nowMs: dispatchMs + 20 * 60_000 }), true);
   const current = JSON.parse(await readFile(path.join(weekDir, "_ai-generated.json"), "utf8"));
+  for (const invalidCount of [2, -1, 1.5, "2", null]) {
+    current.resubmissionCount = invalidCount;
+    await writeFile(path.join(weekDir, "_ai-generated.json"), JSON.stringify(current));
+    assert.equal(await canResubmitUncertainAi({ repoRoot: root, week, nowMs: dispatchMs + 25 * 60_000 }), false,
+      `unexpected resubmission count ${String(invalidCount)} must fail closed`);
+  }
+  current.resubmissionCount = 0;
+  await writeFile(path.join(weekDir, "_ai-generated.json"), JSON.stringify(current));
+  assert.equal(await canResubmitUncertainAi({ repoRoot: root, week, nowMs: dispatchMs + 25 * 60_000 }), true);
   current.submissionConfirmed = false;
   await writeFile(path.join(weekDir, "_ai-generated.json"), JSON.stringify(current));
   assert.equal(await canResubmitUncertainAi({ repoRoot: root, week, nowMs: dispatchMs + 25 * 60_000 }), false);
+});
+
+test("legacy intent older than twenty minutes is not eligible without actual dispatch evidence", async (t) => {
+  const root = await fixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W27";
+  const weekDir = path.join(root, "03_input/weekly", week);
+  await import("node:fs/promises").then(({ mkdir }) => mkdir(weekDir, { recursive: true }));
+  const template = await readFile(path.join(root, "03_input/weekly/00_template/ai.md"), "utf8");
+  const prompt = buildReviewPrompt(template, week);
+  const runId = "123e4567-e89b-42d3-a456-426614174223";
+  const oldIntentAt = "2026-10-20T00:00:00.000Z";
+  const conversationUrl = `https://chatgpt.com/c/${runId}`;
+  await writeFile(path.join(weekDir, "_ai-generated.json"), JSON.stringify({
+    status: "needs_review", targetWeek: week, promptSha256: sha256(prompt), runId, localAttemptId: runId,
+    startedAt: oldIntentAt, submissionConfirmed: true, actualConversationUrl: conversationUrl, conversationUrl,
+    reason: "observer-window-ended",
+    observation: { status: "needs_review", runId, reason: "original-run-result-pending" }
+  }));
+  assert.equal(await canResubmitUncertainAi({ repoRoot: root, week, nowMs: Date.parse(oldIntentAt) + 60 * 60_000 }), false);
 });
 
 test("preserves substantive manual ai.md when automatic review needs review", async () => {
