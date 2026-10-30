@@ -345,11 +345,16 @@ function cardBody(note) {
     .split('\n');
   const parts = [];
   const generatedBreakOffsets = [];
+  const generatedSpacerOffsets = [];
   let contentLength = 0;
   let inList = false;
-  let pendingBreak = '';
-  const append = (value, generatedBreak = false) => {
+  let pendingBreaks = 0;
+  const appendParagraphBreaks = () => {
+    for (let index = 0; index <= pendingBreaks; index += 1) append('&nbsp;<br>', false, true);
+  };
+  const append = (value, generatedBreak = false, generatedSpacer = false) => {
     if (generatedBreak) generatedBreakOffsets.push(contentLength, contentLength + 4);
+    if (generatedSpacer) generatedSpacerOffsets.push(contentLength, contentLength + value.length);
     parts.push(value);
     contentLength += value.length;
   };
@@ -357,28 +362,32 @@ function cardBody(note) {
     const list = rawLine.match(/^\s*([-*+]|\d+[.)、])(?:\s*)(.*)$/);
     const text = rawLine.trim();
     if (!text) {
-      pendingBreak = '<br><br>';
+      pendingBreaks += 1;
       continue;
     }
     if (list) {
-      if (parts.length) append(pendingBreak || '\n');
+      if (parts.length) {
+        if (pendingBreaks) appendParagraphBreaks();
+        else append('\n');
+      }
       const marker = /^\d/.test(list[1]) ? `${list[1].replace(/[、)]$/, '.')} ` : '- ';
       append(`${marker}${list[2].trim()}`);
       inList = true;
-      pendingBreak = '\n';
+      pendingBreaks = 0;
     } else {
       if (parts.length) {
-        const separator = pendingBreak || '\n';
-        append(separator, separator === '<br><br>');
+        if (pendingBreaks) appendParagraphBreaks();
+        else append(inList ? '\n' : '<br>');
       }
       append(text);
       inList = false;
-      pendingBreak = '';
+      pendingBreaks = 0;
     }
   }
   const untrimmed = parts.join('');
   const leadingTrim = untrimmed.length - untrimmed.trimStart().length;
-  return { content: untrimmed.trim(), generatedBreakOffsets: generatedBreakOffsets.map(offset => offset - leadingTrim) };
+  return { content: untrimmed.trim(), generatedBreakOffsets: generatedBreakOffsets.map(offset => offset - leadingTrim),
+    generatedSpacerOffsets: generatedSpacerOffsets.map(offset => offset - leadingTrim) };
 }
 
 function reviewSnapshotSubtitle(date, snapshot) {
@@ -413,15 +422,25 @@ export function renderReview(decision, notes, snapshot = null) {
     ...(decision.items.length < TARGET_MIN_REVIEW_ITEMS ? [{ tag: 'markdown', content: `本日符合质量与上下文要求的笔记不足${TARGET_MIN_REVIEW_ITEMS}条，实际推荐${decision.items.length}条。原因：${decision.countDeviationReason.trim()}` }] : []),
   ];
   const cardReadbackBreaks = [];
+  const cardReadbackSpacers = [];
   for (const [index, item] of decision.items.entries()) {
     const note = notes.find(n => n.noteKey === item.noteKey);
     const metadata = `${shanghaiDate(new Date(note.createdAt))}${item.relevance === 'background' ? ' · 背景' : ''}${note.source.url ? ` · [Flomo原文](${note.source.url})` : ''}`;
-    const prefix = `**${index + 1}. ${displayTitle(note)}**\n${metadata}<br><br>`;
+    const prefix = `**${index + 1}. ${displayTitle(note)}**<br>${metadata}<br><br>`;
+    const titlePrefixLength = `**${index + 1}. ${displayTitle(note)}**`.length;
+    const prefixBreakOffsets = [
+      titlePrefixLength, titlePrefixLength + 4,
+      titlePrefixLength + 4 + metadata.length, titlePrefixLength + 4 + metadata.length + 8,
+    ];
     const renderedBody = cardBody(note);
     const elementIndex = cardElements.length;
     cardElements.push({ tag: 'markdown', content: `${prefix}${renderedBody.content}` });
-    if (renderedBody.generatedBreakOffsets.length) {
-      cardReadbackBreaks.push({ elementIndex, offsets: renderedBody.generatedBreakOffsets.map(offset => prefix.length + offset) });
+    const breakOffsets = [...prefixBreakOffsets, ...renderedBody.generatedBreakOffsets.map(offset => prefix.length + offset)];
+    if (breakOffsets.length) {
+      cardReadbackBreaks.push({ elementIndex, offsets: breakOffsets });
+    }
+    if (renderedBody.generatedSpacerOffsets.length) {
+      cardReadbackSpacers.push({ elementIndex, offsets: renderedBody.generatedSpacerOffsets.map(offset => prefix.length + offset) });
     }
     cardElements.push(
       { tag: 'markdown', content: `> 回顾理由：${reviewReason(item)}` },
@@ -435,7 +454,7 @@ export function renderReview(decision, notes, snapshot = null) {
       template: 'indigo',
     },
     body: { elements: [...cardElements, { tag: 'markdown', content: `可以回复本条消息：“第2条有帮助”“第1条跳过”或“第${lastItemNumber}条已回顾”。` }] } };
-  return { markdown: `${message.join('\n')}\n`, fullMarkdown: `${full.join('\n')}\n`, card, cardReadbackBreaks };
+  return { markdown: `${message.join('\n')}\n`, fullMarkdown: `${full.join('\n')}\n`, card, cardReadbackBreaks, cardReadbackSpacers };
 }
 export async function inspectDecision(root, decision, { freshContext = false, contextOptions = {} } = {}) {
   const p = paths(root), catalog = await readJson(p.catalog), ledger = assertLedger(await readJson(p.ledger, emptyLedger()));
@@ -492,14 +511,14 @@ export async function sendReview(root, decision, { now = new Date(), deliveryOpt
       }),
       ...(decision.items.length < TARGET_MIN_REVIEW_ITEMS ? { countDeviationReason: decision.countDeviationReason.trim() } : {}),
       stats: check.stats, chatId: config.delivery.chatId, profile: preflight.profile, botSenderId: preflight.botSenderId, botSenderIds: preflight.botSenderIds, idempotencyKey: `learn-x-flomo-review:${decision.date}`,
-      card: check.card, cardReadbackBreaks: check.cardReadbackBreaks, cardContentSha256: cardContentSha256(check.card), auditPath, auditSha256: sha256(check.fullMarkdown), createdAt: now.toISOString() };
+      card: check.card, cardReadbackBreaks: check.cardReadbackBreaks, cardReadbackSpacers: check.cardReadbackSpacers, cardContentSha256: cardContentSha256(check.card), auditPath, auditSha256: sha256(check.fullMarkdown), createdAt: now.toISOString() };
     check.ledger.batches[decision.date] = batch; await atomicJson(p.ledger, check.ledger, p.root);
     batch.status = 'sending'; batch.sendStartedAt = new Date().toISOString(); await atomicJson(p.ledger, check.ledger, p.root);
     try {
       const sent = await sendRecommendation({ chatId: batch.chatId, card: batch.card,
         dateMarker: `回顾日期：${batch.date}`, idempotencyKey: batch.idempotencyKey, profile: batch.profile, botSenderId: batch.botSenderId, botSenderIds: batch.botSenderIds,
         onUploaded: async receipt => { Object.assign(batch, receipt); await atomicJson(p.ledger, check.ledger, p.root); },
-        runCli: deliveryOptions.runCli, cardReadbackBreaks: batch.cardReadbackBreaks });
+        runCli: deliveryOptions.runCli, cardReadbackBreaks: batch.cardReadbackBreaks, cardReadbackSpacers: batch.cardReadbackSpacers });
       Object.assign(batch, sent, { status: 'delivered', deliveredAt: new Date().toISOString() });
       await atomicJson(p.ledger, check.ledger, p.root);
       return { date: batch.date, status: batch.status, count: batch.items.length, messageId: batch.messageId };

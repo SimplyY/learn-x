@@ -126,7 +126,7 @@ export async function resolveFlomoPrivateDataRoot(repoRoot, storageRoot) {
 }
 
 export function normalizeFlomoBody(text) {
-  return String(text || "").replace(/\r\n?/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  return String(text || "").replace(/\r\n?/g, "\n").replace(/[ \t]+\n/g, "\n").trim();
 }
 
 export function flomoBodyHash(text) {

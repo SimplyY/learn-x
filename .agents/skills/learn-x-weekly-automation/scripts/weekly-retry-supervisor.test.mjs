@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -1460,6 +1460,67 @@ test("a Flomo review import error is diagnostic and does not suppress the Wisdom
   assert.equal(dependencyEvents[0].outcome, "failed");
   assert.equal(dependencyEvents[0].errorClass, "source-contract-mismatch");
   assert.doesNotMatch(JSON.stringify(dependencyEvents), /field contract mismatch/);
+});
+
+test("manual daily runs once under the weekly lock without AI or other side effects", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-manual-daily-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const calls = [];
+  const options = { week: "2026-W40", mode: "manual", sourceId: "daily", repoRoot: root,
+    skipPreparation: true, enableFlomoReviewImport: false, maxDurationMs: 1000,
+    readOutcome: async () => null,
+    prepareInputs: async () => assert.fail("preparation must not run"),
+    importFlomoReviews: async () => assert.fail("review import must not run"),
+    runSource: async source => {
+      calls.push(source.id);
+      await access(path.join(root, "03_input/weekly/2026-W40/_weekly-retry-state.lock"));
+      return { status: "ready", count: 1 };
+    }
+  };
+  await runWeeklyRetrySupervisor(options);
+  await runWeeklyRetrySupervisor(options);
+  assert.deepEqual(calls, ["daily"]);
+  await assert.rejects(runWeeklyRetrySupervisor({ ...options, skipPreparation: false }), /manual-daily-requires-skipped-side-effects/);
+});
+
+test("manual daily retries only a retryable failure after its persisted cooldown", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retry-daily-cooldown-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let time = Date.parse("2026-10-05T00:00:00Z");
+  const calls = [];
+  const options = { week: "2026-W40", mode: "manual", sourceId: "daily", repoRoot: root,
+    skipPreparation: true, enableFlomoReviewImport: false, maxDurationMs: 1000,
+    now: () => time, readOutcome: async () => null,
+    prepareInputs: async () => assert.fail("preparation must not run"),
+    importFlomoReviews: async () => assert.fail("review import must not run"),
+    runSource: async source => {
+      calls.push(source.id);
+      return calls.length === 1 ? { status: "failed", error: "ECONNRESET" } : { status: "ready", count: 1 };
+    }
+  };
+  await runWeeklyRetrySupervisor(options);
+  await runWeeklyRetrySupervisor(options);
+  assert.deepEqual(calls, ["daily"]);
+  time += 20 * 60_000;
+  await runWeeklyRetrySupervisor(options);
+  await runWeeklyRetrySupervisor(options);
+  assert.deepEqual(calls, ["daily", "daily"]);
+});
+
+test("manual daily preserves unsafe or exhausted failure states", async (t) => {
+  for (const overrides of [
+    { lastErrorClass: "network-transient", nextRetryAt: "invalid" },
+    { lastErrorClass: "permission-or-human-control", nextRetryAt: "2026-10-01T00:00:00Z" },
+    { lastErrorClass: "network-transient", nextRetryAt: "2026-10-01T00:00:00Z", attempts: 999 }
+  ]) {
+    const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-daily-unsafe-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    await seedFailedSource(root, "2026-W40", "daily", overrides);
+    await runWeeklyRetrySupervisor({ week: "2026-W40", mode: "manual", sourceId: "daily", repoRoot: root,
+      skipPreparation: true, enableFlomoReviewImport: false, maxDurationMs: 1000,
+      now: () => Date.parse("2026-10-05T00:00:00Z"), readOutcome: async () => null,
+      runSource: async () => assert.fail("unsafe daily retry must not run") });
+  }
 });
 
 test("manual Flomo refresh uses the supervisor lock and attempt token without rerunning other sources", async (t) => {

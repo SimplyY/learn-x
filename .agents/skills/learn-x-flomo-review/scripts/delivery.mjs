@@ -179,26 +179,45 @@ function cardIncludesMarker(content, marker) {
 }
 
 /** Expand only break tags recorded by the card renderer as presentation separators. */
-function expandGeneratedCardBreaks(card, breakGroups) {
-  if (!Array.isArray(breakGroups) || !breakGroups.length || !Array.isArray(card?.body?.elements)) return null;
+function expandGeneratedCardBreaks(card, breakGroups, spacerGroups = []) {
+  if ((!Array.isArray(breakGroups) || !breakGroups.length) && (!Array.isArray(spacerGroups) || !spacerGroups.length)) return null;
+  if (!Array.isArray(card?.body?.elements)) return null;
+  const variantsByKind = {
+    break: [{ tag: '<br><br>', replacement: '\n\n' }, { tag: '<br>', replacement: '\n' }],
+    spacer: [
+      { tag: '&nbsp;<br>', replacement: '\u00A0\n' },
+      { tag: '<br>&nbsp;<br>', replacement: '\n\u00A0\n' },
+      { tag: '&nbsp;<br><br>', replacement: '\n\n \n\n' },
+    ],
+  };
   const offsetsByElement = new Map();
-  for (const group of breakGroups) {
-    if (!Number.isInteger(group?.elementIndex) || group.elementIndex < 0 || group.elementIndex >= card.body.elements.length ||
-        !Array.isArray(group.offsets) || !group.offsets.length || offsetsByElement.has(group.elementIndex)) return null;
-    offsetsByElement.set(group.elementIndex, group.offsets);
+  for (const [groups, kind] of [
+    [breakGroups, 'break'],
+    [spacerGroups, 'spacer'],
+  ]) {
+    for (const group of groups) {
+      if (!Number.isInteger(group?.elementIndex) || group.elementIndex < 0 || group.elementIndex >= card.body.elements.length ||
+          !Array.isArray(group.offsets) || !group.offsets.length) return null;
+      if (group.offsets.length % 2 !== 0) return null;
+      const entries = offsetsByElement.get(group.elementIndex) ?? [];
+      for (let index = 0; index < group.offsets.length; index += 2) {
+      entries.push({ start: group.offsets[index], kind });
+      }
+      offsetsByElement.set(group.elementIndex, entries);
+    }
   }
   const elements = card.body.elements.map((element, elementIndex) => {
-    const offsets = offsetsByElement.get(elementIndex);
-    if (!offsets) return element;
+    const replacements = (offsetsByElement.get(elementIndex) ?? []).sort((a, b) => a.start - b.start);
+    if (!replacements.length) return element;
     if (element?.tag !== 'markdown' || typeof element.content !== 'string') return null;
     let expanded = '', cursor = 0;
-    if (offsets.length % 2 !== 0) return null;
-    for (let index = 0; index < offsets.length; index += 2) {
-      const first = offsets[index], second = offsets[index + 1];
-      if (!Number.isInteger(first) || !Number.isInteger(second) || first < cursor || second !== first + 4 ||
-          element.content.slice(first, first + 8) !== '<br><br>') return null;
-      expanded += `${element.content.slice(cursor, first)}\n\n`;
-      cursor = first + 8;
+    for (const replacement of replacements) {
+      const { start, kind } = replacement;
+      if (!Number.isInteger(start) || start < cursor) return null;
+      const variant = variantsByKind[kind].find(({ tag }) => element.content.startsWith(tag, start));
+      if (!variant) return null;
+      expanded += `${element.content.slice(cursor, start)}${variant.replacement}`;
+      cursor = start + variant.tag.length;
     }
     return { ...element, content: expanded + element.content.slice(cursor) };
   });
@@ -206,16 +225,16 @@ function expandGeneratedCardBreaks(card, breakGroups) {
   return { ...card, body: { ...card.body, elements } };
 }
 
-function cardReadbackMatches(actual, card, breakGroups) {
+function cardReadbackMatches(actual, card, breakGroups, spacerGroups = []) {
   if (typeof actual !== 'string') return false;
   const expected = renderCardReadback(card);
   if (!expected) return false;
   if (actual === expected) return true;
-  const expanded = expandGeneratedCardBreaks(card, breakGroups);
+  const expanded = expandGeneratedCardBreaks(card, breakGroups, spacerGroups);
   return Boolean(expanded && renderCardReadback(expanded) === actual);
 }
 
-function verifyCardContent(content, { expectedCard, expectedCardSha256, expectedReadbackSha256, cardReadbackBreaks }) {
+function verifyCardContent(content, { expectedCard, expectedCardSha256, expectedReadbackSha256, cardReadbackBreaks, cardReadbackSpacers }) {
   const card = cardJSON(content);
   if (card) {
     if (card.schema !== '2.0') throw new DeliveryError('card-readback-invalid');
@@ -230,7 +249,7 @@ function verifyCardContent(content, { expectedCard, expectedCardSha256, expected
   const contentSha256 = cardContentSha256(expectedCard);
   if (expectedCardSha256 && contentSha256 !== expectedCardSha256) throw new DeliveryError('card-content-hash-mismatch');
   const matchesSavedReadback = typeof expectedReadbackSha256 === 'string' && hash(content) === expectedReadbackSha256;
-  if (!matchesSavedReadback && !cardReadbackMatches(content, expectedCard, cardReadbackBreaks)) throw new DeliveryError('card-content-hash-mismatch');
+    if (!matchesSavedReadback && !cardReadbackMatches(content, expectedCard, cardReadbackBreaks, cardReadbackSpacers)) throw new DeliveryError('card-content-hash-mismatch');
   return { cardContentSha256: contentSha256, cardReadbackSha256: hash(content) };
 }
 
@@ -268,12 +287,12 @@ function verifyLegacyMessage(message, { chatId, messageId, markdownSha256, attac
   return { messageId, chatId, normalizationVersion: MESSAGE_NORMALIZATION_VERSION, markdownSha256: content.markdownSha256, attachmentKeys: content.attachments, readback: true, threadId: message.thread_id ?? null };
 }
 
-function verifyMessage(message, { chatId, messageId, cardContentSha256: expectedCardSha256, cardReadbackSha256: expectedReadbackSha256, cardReadbackBreaks, expectedCard, dateMarker, botSenderId, botSenderIds }) {
+function verifyMessage(message, { chatId, messageId, cardContentSha256: expectedCardSha256, cardReadbackSha256: expectedReadbackSha256, cardReadbackBreaks, cardReadbackSpacers, expectedCard, dateMarker, botSenderId, botSenderIds }) {
   if (!message || message.message_id !== messageId || message.chat_id !== chatId || message.deleted !== false) throw new DeliveryError('message-readback-invalid');
   const allowedBots = [...(botSenderIds ?? []), ...(botSenderId ? [botSenderId] : [])];
   if (senderKind(message.sender) !== 'bot' || !senderIds(message.sender).length || (allowedBots.length && !senderIds(message.sender).some((id) => allowedBots.includes(id)))) throw new DeliveryError('message-bot-mismatch');
   if (message.msg_type !== 'interactive') throw new DeliveryError('card-message-type-mismatch');
-  const cardReceipt = verifyCardContent(message.content, { expectedCard, expectedCardSha256, expectedReadbackSha256, cardReadbackBreaks });
+  const cardReceipt = verifyCardContent(message.content, { expectedCard, expectedCardSha256, expectedReadbackSha256, cardReadbackBreaks, cardReadbackSpacers });
   if (!cardIncludesMarker(message.content, dateMarker)) throw new DeliveryError('date-marker-mismatch');
   return { messageId, chatId, normalizationVersion: MESSAGE_NORMALIZATION_VERSION, ...cardReceipt, readback: true, threadId: message.thread_id ?? null };
 }
@@ -342,7 +361,7 @@ export async function auditRecentReviewHistory({ chatId, startDate, end = new Da
       }
       verifyMessage(messages[0], { chatId, messageId: batch.messageId,
         cardContentSha256: batch.cardContentSha256, cardReadbackSha256: batch.cardReadbackSha256,
-        cardReadbackBreaks: batch.cardReadbackBreaks, expectedCard: batch.card,
+        cardReadbackBreaks: batch.cardReadbackBreaks, cardReadbackSpacers: batch.cardReadbackSpacers, expectedCard: batch.card,
         dateMarker: `回顾日期：${date}`, botSenderId: batch.botSenderId, botSenderIds: batch.botSenderIds });
     }
   }
@@ -406,7 +425,7 @@ async function readDownloadedMessage(runCli, messageId, cwd) {
   return messages[0];
 }
 
-export async function sendRecommendation({ chatId, card, cardReadbackBreaks, dateMarker, idempotencyKey, botSenderId, botSenderIds, profile, runCli = runLarkCli }) {
+export async function sendRecommendation({ chatId, card, cardReadbackBreaks, cardReadbackSpacers, dateMarker, idempotencyKey, botSenderId, botSenderIds, profile, runCli = runLarkCli }) {
   runCli = useProfile(runCli, profile);
   assertId(chatId, 'oc_', 'chat-id-invalid');
   let messageId, sendAttempted = false;
@@ -422,7 +441,7 @@ export async function sendRecommendation({ chatId, card, cardReadbackBreaks, dat
       assertId(messageId, 'om_', 'sent-message-id-missing');
       if (sent.chat_id !== chatId) throw new DeliveryError('sent-chat-mismatch');
       const message = await readDownloadedMessage(runCli, messageId);
-      return { ...verifyMessage(message, { chatId, messageId, cardContentSha256: cardSha256, cardReadbackBreaks, expectedCard: card, dateMarker, botSenderId, botSenderIds }), idempotencyKey };
+      return { ...verifyMessage(message, { chatId, messageId, cardContentSha256: cardSha256, cardReadbackBreaks, cardReadbackSpacers, expectedCard: card, dateMarker, botSenderId, botSenderIds }), idempotencyKey };
   } catch (error) {
     throw new DeliveryError(error.code ?? 'send-result-uncertain', { uncertain: sendAttempted, ...(messageId ? { messageId } : {}) });
   }
@@ -461,7 +480,7 @@ export async function sendLegacyRecommendation({ chatId, markdown, attachmentPat
   }
 }
 
-export async function recoverRecommendation({ chatId, messageId, idempotencyKey, dateMarker, expectedCard, cardContentSha256: expectedCardSha256, cardReadbackSha256: expectedReadbackSha256, cardReadbackBreaks, expectedMarkdown, markdownSha256, attachmentPath, attachmentSha256, uploadKey, attachmentKey, sendStartedAt, botSenderId, botSenderIds, profile, runCli = runLarkCli }) {
+export async function recoverRecommendation({ chatId, messageId, idempotencyKey, dateMarker, expectedCard, cardContentSha256: expectedCardSha256, cardReadbackSha256: expectedReadbackSha256, cardReadbackBreaks, cardReadbackSpacers, expectedMarkdown, markdownSha256, attachmentPath, attachmentSha256, uploadKey, attachmentKey, sendStartedAt, botSenderId, botSenderIds, profile, runCli = runLarkCli }) {
   runCli = useProfile(runCli, profile);
   assertId(chatId, 'oc_', 'chat-id-invalid');
   let format;
@@ -492,7 +511,7 @@ export async function recoverRecommendation({ chatId, messageId, idempotencyKey,
       const readback = cardJSON(message.content);
       if (readback) return readback.schema === '2.0' && cardContentSha256(readback) === expectedHash;
       const matchesSavedReadback = typeof expectedReadbackSha256 === 'string' && hash(String(message.content ?? '')) === expectedReadbackSha256;
-      return (matchesSavedReadback || cardReadbackMatches(message.content, expectedCard, cardReadbackBreaks)) && cardContentSha256(expectedCard) === expectedHash;
+      return (matchesSavedReadback || cardReadbackMatches(message.content, expectedCard, cardReadbackBreaks, cardReadbackSpacers)) && cardContentSha256(expectedCard) === expectedHash;
     });
     if (!exact.length) throw new DeliveryError('message-content-hash-mismatch');
     if (exact.length !== 1) throw new DeliveryError('recovery-multiple-matches');
@@ -502,7 +521,7 @@ export async function recoverRecommendation({ chatId, messageId, idempotencyKey,
       const receipt = verifyLegacyMessage(message, { chatId, messageId: exact[0].message_id, markdownSha256, dateMarker, botSenderId, botSenderIds });
       return { status: 'delivered', matched: true, ...receipt, ...await verifyDownloadedAttachment(message, original), ...(uploadKey ? { uploadKey } : {}) };
     }
-    const receipt = verifyMessage(message, { chatId, messageId: exact[0].message_id, cardContentSha256: expectedCardSha256, cardReadbackSha256: expectedReadbackSha256, cardReadbackBreaks, expectedCard, dateMarker, botSenderId, botSenderIds });
+    const receipt = verifyMessage(message, { chatId, messageId: exact[0].message_id, cardContentSha256: expectedCardSha256, cardReadbackSha256: expectedReadbackSha256, cardReadbackBreaks, cardReadbackSpacers, expectedCard, dateMarker, botSenderId, botSenderIds });
     return { status: 'delivered', matched: true, ...receipt };
   } catch (error) { throw new DeliveryError(error.code ?? 'recovery-uncertain', { uncertain: true }); }
 }
@@ -582,7 +601,7 @@ export async function collectFeedback({ batches, ownerId, profile, runCli = runL
       if (!root || root.chat_id !== batch.chatId || root.deleted !== false) throw new DeliveryError('feedback-root-invalid');
       if (root.updated === true) throw new DeliveryError('feedback-root-edited');
       const format = receiptFormat(batch);
-      if (format === 'card') verifyMessage(root, { chatId: batch.chatId, messageId: batch.messageId, cardContentSha256: batch.cardContentSha256, cardReadbackSha256: batch.cardReadbackSha256, cardReadbackBreaks: batch.cardReadbackBreaks, expectedCard: batch.card, dateMarker: `回顾日期：${batch.date}`, botSenderId: batch.botSenderId, botSenderIds: batch.botSenderIds });
+      if (format === 'card') verifyMessage(root, { chatId: batch.chatId, messageId: batch.messageId, cardContentSha256: batch.cardContentSha256, cardReadbackSha256: batch.cardReadbackSha256, cardReadbackBreaks: batch.cardReadbackBreaks, cardReadbackSpacers: batch.cardReadbackSpacers, expectedCard: batch.card, dateMarker: `回顾日期：${batch.date}`, botSenderId: batch.botSenderId, botSenderIds: batch.botSenderIds });
       else verifyLegacyMessage(root, { chatId: batch.chatId, messageId: batch.messageId, markdownSha256: batch.markdownSha256, attachmentKey: batch.attachmentKey, dateMarker: `回顾日期：${batch.date}`, botSenderId: batch.botSenderId, botSenderIds: batch.botSenderIds });
       if (!root.thread_id) {
         if (root.thread_replies?.length || root.thread_has_more || root.thread_replies_error) throw new DeliveryError('feedback-thread-id-missing');

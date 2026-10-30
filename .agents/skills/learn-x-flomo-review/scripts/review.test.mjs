@@ -290,11 +290,12 @@ test('cards use original opening text as titles and include Flomo links', () => 
   const decision = { date, countDeviationReason: '测试渲染', items: notes.map(note => ({ noteKey: note.noteKey, bodyHash: note.bodyHash, relevance: 'strong', reason: '现实反馈需再检验' })) };
   const snapshot = { sourceMode: 'flomo-online-full', capturedAt: '2026-10-11T14:05:56.141Z', coverage: { observedCount: 950, expectedCount: 951 } };
   const result = renderReview(decision, notes, snapshot);
-  assert.equal(result.cardReadbackBreaks.length, 1);
-  assert.equal(result.cardReadbackBreaks[0].offsets.length, 4);
+  assert.equal(result.cardReadbackBreaks.length, 3);
+  assert.equal(result.cardReadbackSpacers.length, 1);
+  assert.equal(result.cardReadbackSpacers[0].offsets.length, 8);
   assert.match(JSON.stringify(result.card), /1\. 诗：风来东湖/);
-assert.match(JSON.stringify(result.card), /风来东湖涌，<br><br>桥卧山水间/);
-assert.match(JSON.stringify(result.card), /鱼不存在，世俗的成就。\\n普通换行保留。\\n1\. 对于复杂概率/);
+assert.match(JSON.stringify(result.card), /风来东湖涌，&nbsp;<br>&nbsp;<br>桥卧山水间/);
+assert.match(JSON.stringify(result.card), /鱼不存在，世俗的成就。<br>普通换行保留。\\n1\. 对于复杂概率/);
 assert.match(JSON.stringify(result.card), /1\. 对于复杂概率，人大概率计算错\\n2\. 人天然对随机性无法合理预测。/);
   assert.match(JSON.stringify(result.card), /2\. 鱼不存在/);
   assert.match(JSON.stringify(result.card), /3\. 标题超过六个/);
@@ -316,8 +317,8 @@ test('card titles occupy their own line and blank lines separate paragraphs', ()
   const decision = { date, countDeviationReason: '布局测试', items: [{ noteKey: note.noteKey, bodyHash: note.bodyHash, relevance: 'strong', reason: '检查布局' }] };
   const result = renderReview(decision, [note]);
   const content = result.card.body.elements.find(element => element.tag === 'markdown' && element.content.includes('1. 第一段')).content;
-  assert.match(content, /^\*\*1\. 第一段\*\*\n2026-10-15 · \[Flomo原文\]\(https:\/\/v\.flomoapp\.com\/mine\/\?memo_id=layout\)<br><br>/);
-  assert.match(content, /第一段。<br><br>第二段。/);
+  assert.match(content, /^\*\*1\. 第一段\*\*<br>2026-10-15 · \[Flomo原文\]\(https:\/\/v\.flomoapp\.com\/mine\/\?memo_id=layout\)<br><br>/);
+assert.match(content, /第一段。&nbsp;<br>&nbsp;<br>第二段。/);
 });
 
 test('card body preserves literal break tags without renderer-added breaks', () => {
@@ -327,10 +328,32 @@ test('card body preserves literal break tags without renderer-added breaks', () 
   const decision = { date, countDeviationReason: '单条渲染测试', items: [{ noteKey: note.noteKey, bodyHash: note.bodyHash, relevance: 'strong', reason: '检查原文换行' }] };
   const result = renderReview(decision, [note]);
   assert.equal(result.cardReadbackBreaks.length, 1);
-  assert.equal(result.cardReadbackBreaks[0].offsets.length, 2);
+  assert.equal(result.cardReadbackSpacers[0].offsets.length, 4);
   const content = result.card.body.elements.find(element => element.tag === 'markdown' && element.content.includes('正文保留字面')).content;
-  assert.equal([...content.matchAll(/<br><br>/g)].length, 2);
+  assert.equal([...content.matchAll(/<br><br>/g)].length, 1);
+  assert.equal([...content.matchAll(/&nbsp;<br>/g)].length, 2);
   assert.equal([...content.matchAll(/正文保留字面 <br> 标签/g)].length, 1);
+});
+
+test('card body keeps original paragraph and plain line breaks visible', () => {
+  const note = { noteKey: 'plain-breaks', createdAt: '2026-10-15T09:00:00+08:00',
+    body: '第一段。\n第二段。\n\n第三段。\n第四段。', bodyHash: 'plain-breaks-hash',
+    source: { path: 'flomo.md', line: 1, url: 'https://v.flomoapp.com/mine/?memo_id=plain-breaks' }, quality: { score: 3 } };
+  const decision = { date, countDeviationReason: '换行渲染测试', items: [{ noteKey: note.noteKey, bodyHash: note.bodyHash, relevance: 'strong', reason: '检查原文换行' }] };
+  const result = renderReview(decision, [note]);
+  const content = result.card.body.elements.find(element => element.tag === 'markdown' && element.content.includes('1. 第一段')).content;
+assert.match(content, /第一段。<br>第二段。&nbsp;<br>&nbsp;<br>第三段。<br>第四段。/);
+});
+
+test('card body preserves consecutive blank lines as separate paragraph gaps', () => {
+  const note = { noteKey: 'consecutive-blank-lines', createdAt: '2026-10-15T09:00:00+08:00',
+    body: '第一段。\n\n\n第二段。', bodyHash: 'consecutive-blank-lines-hash',
+    source: { path: 'flomo.md', line: 1, url: 'https://v.flomoapp.com/mine/?memo_id=consecutive-blank-lines' }, quality: { score: 3 } };
+  const decision = { date, countDeviationReason: '连续空行测试', items: [{ noteKey: note.noteKey, bodyHash: note.bodyHash, relevance: 'strong', reason: '检查连续空行' }] };
+  const result = renderReview(decision, [note]);
+  const content = result.card.body.elements.find(element => element.tag === 'markdown' && element.content.includes('1. 第一段')).content;
+assert.match(content, /第一段。&nbsp;<br>&nbsp;<br>&nbsp;<br>第二段。/);
+  assert.equal(result.cardReadbackSpacers[0].offsets.length, 6);
 });
 
 test('card body keeps complete flomo text and resumes plain paragraphs after lists', () => {
@@ -340,9 +363,9 @@ test('card body keeps complete flomo text and resumes plain paragraphs after lis
   const decision = { date, countDeviationReason: '单条渲染测试', items: [{ noteKey: note.noteKey, bodyHash: note.bodyHash, relevance: 'strong', reason: '检查完整原文' }] };
   const result = renderReview(decision, [note]);
   const content = result.card.body.elements.find(element => element.tag === 'markdown' && element.content.includes('庄子逍遥游')).content;
-  assert.match(content, /定义一\n2\. 定义二<br><br>如何逍遥游\？/);
+assert.match(content, /定义一\n2\. 定义二&nbsp;<br>&nbsp;<br>如何逍遥游\？/);
   assert.match(content, /无尺子\n2\. 无期望/);
-  assert.match(content, /#记录\/读书笔记<br><br>庄子逍遥游<br><br>什么是逍遥游\？/);
+assert.match(content, /#记录\/读书笔记&nbsp;<br>&nbsp;<br>庄子逍遥游&nbsp;<br>&nbsp;<br>什么是逍遥游\？/);
 });
 
 test('capacity report supports seven and twenty-eight days without exposing note identities', async (t) => {

@@ -253,7 +253,7 @@ export async function runWeeklyRetrySupervisor({
     throw new Error("single-attempt-requires-manual-flomo-automation-and-skipped-side-effects");
   }
   if (mode === "recovery" && !sourceId) throw new Error("recovery-mode-requires-source");
-  const supportedManualSource = sourceId === "flomo" || (sourceId === "ai" && resubmitUncertainAi);
+  const supportedManualSource = sourceId === "flomo" || sourceId === "daily" || (sourceId === "ai" && resubmitUncertainAi);
   const recoverySource = sourceId && WEEKLY_SOURCE_CONFIG.find((source) => source.id === sourceId);
   if (sourceId != null && mode === "recovery") {
     if (!recoverySource?.collector || sourceId === "ai") throw new Error("recovery-mode-source-not-supported");
@@ -271,7 +271,8 @@ export async function runWeeklyRetrySupervisor({
     throw new Error("source-filter-only-supports-manual-flomo-or-confirmed-ai-resubmission-or-recovery");
   }
   if (resubmitUncertainAi && (mode !== "manual" || sourceId !== "ai")) throw new Error("uncertain-ai-resubmission-requires-manual-source-ai");
-  if (mode === "manual" && sourceId !== "flomo" && !(sourceId === "ai" && resubmitUncertainAi)) throw new Error("manual-mode-requires-source-flomo-or-confirmed-ai-resubmission");
+  if (mode === "manual" && !["flomo", "daily"].includes(sourceId) && !(sourceId === "ai" && resubmitUncertainAi)) throw new Error("manual-mode-requires-source-flomo-daily-or-confirmed-ai-resubmission");
+  if (mode === "manual" && sourceId === "daily" && (!skipPreparation || enableFlomoReviewImport)) throw new Error("manual-daily-requires-skipped-side-effects");
   const selectedSources = sourceId ? WEEKLY_SOURCE_CONFIG.filter((source) => source.id === sourceId) : WEEKLY_SOURCE_CONFIG;
   const safePaths = await ensureWeeklyDirectory(repoRoot, normalizedWeek);
   repoRoot = safePaths.repoRoot;
@@ -635,6 +636,13 @@ export async function runWeeklyRetrySupervisor({
       } else {
         await runBatch([source], "manual", sourceContext());
       }
+    } else if (mode === "manual" && sourceId === "daily") {
+      const source = selectedSources[0], entry = state.sources.daily;
+      const retryAt = Date.parse(entry.nextRetryAt || "");
+      const initial = entry.status === "pending" && entry.attempts === 0;
+      const retry = Number.isFinite(retryAt) && canRetrySource(source, entry, "initial", now());
+      if (initial || retry) await runBatch([source], retry ? "retry" : "manual", sourceContext());
+      else event({ step: "manual-daily", sourceId: "daily", outcome: "existing-state-preserved", evidence: STATE_FILE });
     } else if (mode === "manual") {
       const source = selectedSources[0], entry = state.sources[source.id];
       let blockedByCooldown = false;

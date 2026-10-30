@@ -157,7 +157,7 @@ export async function fetchWeeklyJournalSection({ docUrl, blockId, timeoutMs = 6
   catch { throw new Error("weekly-journal-fetch-failed: CLI response was not valid JSON"); }
 }
 
-function validateAnchor(anchor, week) {
+export function validateAnchor(anchor, week) {
   const expected = expectedJournalDates(week);
   if (!anchor || anchor.schemaVersion !== 1 || anchor.week !== week || anchor.documentUrl !== WEEKLY_JOURNAL_DOCUMENT_URL
     || typeof anchor.documentId !== "string" || typeof anchor.targetBlockId !== "string"
@@ -167,12 +167,12 @@ function validateAnchor(anchor, week) {
   }
 }
 
-function hasExpectedJournalDate(title, shortTitle) {
+export function hasExpectedJournalDate(title, shortTitle) {
   const escaped = shortTitle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`(?:^|[^\\d])${escaped}(?!\\d)`).test(title);
 }
 
-function expectedJournalDates(week) {
+export function expectedJournalDates(week) {
   const { start, end } = isoWeekRange(week);
   const lastCoveredDate = new Date(end.getTime() - 86_400_000);
   const writeDate = new Date(lastCoveredDate.getTime() + 86_400_000);

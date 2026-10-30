@@ -73,6 +73,12 @@ test("default Flomo snapshot storage is a project-local ignored directory", () =
   assert.doesNotMatch(defaultFlomoPrivateDataRoot(), /(?:^|[/\\])Library(?:[/\\]|$)/);
 });
 
+test("normalization preserves line endings and consecutive blank lines", () => {
+  const body = "第一段。\r\n\r\n \t\n第二段。";
+  assert.equal(normalizeFlomoBody(body), "第一段。\n\n\n第二段。");
+  assert.equal(flomoBodyHash(body), flomoBodyHash("第一段。\n\n\n第二段。"));
+});
+
 test("rejects a Library storage path before scanning or writing staged data", async (t) => {
   const forbiddenRoot = path.join(os.homedir(), "Library", "Application Support", "Learn-X", "flomo-review");
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-forbidden-root-"));
@@ -346,6 +352,9 @@ function makeBrowserHarness({ initialRecords, nextRecords = [], libraryCount, de
       detailCard.innerHTML = `${detailLink}<div class="display"><div class="mainContent"><div class="content copy-allowed richText">${detailRecord.bodyMarkup ?? detailRecord.bodyText}</div></div></div>`;
       const detailBody = detailCard.querySelector(".richText");
       detailBody.getBoundingClientRect = () => ({ top: 150, bottom: 230, left: 0, right: 400, width: 400, height: 80 });
+      for (const target of detailCard.querySelectorAll("p, li, blockquote")) {
+        target.getBoundingClientRect = () => ({ top: 160, bottom: 220, left: 0, right: 400, width: 400, height: 60 });
+      }
       sheet.append(detailCard);
       if (detailSheetHasRelatedDuplicateLink) {
         const relatedCard = document.createElement("div");
@@ -367,6 +376,9 @@ function makeBrowserHarness({ initialRecords, nextRecords = [], libraryCount, de
     card.getBoundingClientRect = () => ({ top: index * 100, bottom: index * 100 + 80, left: 0, right: 400, width: 400, height: 80 });
     for (const target of card.querySelectorAll(".display, .mainContent")) {
       target.getBoundingClientRect = () => ({ top: 0, bottom: 80, left: 0, right: 400, width: 400, height: 80 });
+    }
+    for (const target of card.querySelectorAll("p, li, blockquote")) {
+      target.getBoundingClientRect = () => ({ top: 10, bottom: 90, left: 0, right: 400, width: 400, height: 80 });
     }
     const body = card.querySelector(".richText");
     body.getBoundingClientRect = () => ({ top: 10, bottom: 90, left: 0, right: 400, width: 400, height: 80 });
@@ -654,6 +666,56 @@ test("full browser scan preserves exact DOM tags separately when their body text
   assert.doesNotThrow(() => validateFullFlomoScan(result));
 });
 
+test("full browser scan preserves Flomo paragraph and blank-paragraph line structure", async (t) => {
+  const bodyText = "人死如灯灭，\n何不逍遥游？\n\n死亡让一切变得不重要，";
+  const memo = sourceRecord("memo-paragraph-newlines", bodyText, {
+    bodyMarkup: "<p>人死如灯灭，</p><p>何不逍遥游？</p><p></p><p>死亡让一切变得不重要，</p>",
+  });
+  const { result } = await runBrowserScan(t, {
+    initialRecords: [memo],
+    libraryCount: 1,
+    detailRecord: memo,
+    detailEditorText: bodyText,
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.records[0].bodyText, bodyText);
+  assert.equal(result.detailVerification.bodyHash, flomoBodyHash(bodyText));
+  assert.doesNotThrow(() => validateFullFlomoScan(result));
+});
+
+test("full browser scan preserves embedded newlines inside flattened list items", async (t) => {
+  const bodyText = "- 第一行\n第二行\n- 第二项";
+  const memo = sourceRecord("memo-list-newlines", bodyText, {
+    bodyMarkup: "<ul><li>第一行\n第二行</li><li>第二项</li></ul>",
+  });
+  const { result } = await runBrowserScan(t, {
+    initialRecords: [memo],
+    libraryCount: 1,
+    detailRecord: memo,
+    detailEditorText: bodyText,
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.records[0].bodyText, bodyText);
+  assert.equal(result.detailVerification.bodyHash, flomoBodyHash(bodyText));
+  assert.doesNotThrow(() => validateFullFlomoScan(result));
+});
+
+test("full browser scan preserves text nodes created by flattened lists", async (t) => {
+  const bodyText = "1. 第一项\n2. 第二项列表后的正文";
+  const memo = sourceRecord("memo-flat-text-node", bodyText, {
+    bodyMarkup: "<ol><li>第一项</li><li>第二项</li></ol><p>列表后的正文</p>",
+  });
+  const { result } = await runBrowserScan(t, {
+    initialRecords: [memo],
+    libraryCount: 1,
+    detailRecord: memo,
+    detailEditorText: bodyText,
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.records[0].bodyText, bodyText);
+  assert.doesNotThrow(() => validateFullFlomoScan(result));
+});
+
 test("full browser scan restores inline link URLs and ignores editor-only layout whitespace", async (t) => {
   const opening = `链接前的完整正文。${"内容段落。".repeat(30)}`;
   const url = "https://example.com/source-note";
@@ -808,7 +870,7 @@ test("longest-note detail rejects an unrelated route and reports only structural
     detailPageUrl: "https://v.flomoapp.com/mine/?memo_id=another-memo",
   });
   assert.equal(result.ok, false);
-  assert.equal(result.error, "network-timeout");
+  assert.equal(result.error, "detail-link-unresolved");
   assert.equal(result.stage, "wait-longest-note");
   assert.deepEqual(result.pageDiagnostics.detail, {
     sheetVisible: true,
@@ -817,6 +879,15 @@ test("longest-note detail rejects an unrelated route and reports only structural
     bodyPresent: false,
     editorPresent: false,
     targetListLinkVisible: true,
+    primaryRootCount: 1,
+    timeTargetLinkCount: 0,
+    rootCount: 0,
+    bodyRootCount: 0,
+    primaryBodyRootCount: 1,
+    bodyTextMatched: false,
+    bodySourceMatched: false,
+    cardFound: true,
+    cardBodyPresent: true,
   });
   assert.doesNotMatch(JSON.stringify(result), /memo-route-bound|隐私正文/);
   assert.equal(harness.finished, 0);
@@ -951,6 +1022,10 @@ test("full browser scan exposes structural-only diagnostics when the library nev
     emptyStateVisible: false,
     loginIndicator: false,
     captchaIndicator: false,
+    bodyIncompleteDiagnostics: {
+      invalidTime: 0, missingBody: 0, emptyText: 0,
+      folded: 0, showVisible: 0, layoutOverflow: 0,
+    },
   });
   assert.doesNotMatch(JSON.stringify(result), /这段正文不能进入错误诊断/);
   assert.equal(result.cleanup, "retained-after-error");

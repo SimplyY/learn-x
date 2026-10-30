@@ -217,7 +217,15 @@ export async function updateWeeklySourceStatus({
 }
 
 async function acquireStatusLock(weekRoot) {
-  const lockPath = path.join(weekRoot, `${SOURCE_STATUS_FILE}.lock`);
+  return acquireWeeklyFileLock(weekRoot, `${SOURCE_STATUS_FILE}.lock`);
+}
+
+// Independent names allow a consumer to hold its own transaction lock while
+// the nested source-status update acquires the separate status lock.
+export async function acquireWeeklyFileLock(weekRoot, lockName) {
+  if (!/^[A-Za-z0-9_.-]+\.lock$/.test(lockName)) throw new Error("非法周文件锁名称");
+  await mkdir(weekRoot, { recursive: true });
+  const lockPath = path.join(weekRoot, lockName);
   const reapPath = `${lockPath}.reap`;
   const owner = JSON.stringify({ pid: process.pid, token: randomUUID(), createdAt: new Date().toISOString() });
   const deadline = Date.now() + 30_000;

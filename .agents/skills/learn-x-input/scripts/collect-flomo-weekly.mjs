@@ -332,7 +332,7 @@ function validatePinnedMemo(pinned) {
 }
 
 function normalizeMemoText(text) {
-  return String(text || "").replace(/\r\n?/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  return String(text || "").replace(/\r\n?/g, "\n").replace(/[ \t]+\n/g, "\n").trim();
 }
 
 function flomoMemoUrl(memoId) {
@@ -457,7 +457,23 @@ export function formatCliError(error) {
       if (Number.isInteger(source.detail.targetLinkCount) && source.detail.targetLinkCount >= 0 && source.detail.targetLinkCount <= MAX_MEMOS) {
         detail.targetLinkCount = source.detail.targetLinkCount;
       }
+      for (const field of ["primaryRootCount", "timeTargetLinkCount", "rootCount", "bodyRootCount", "primaryBodyRootCount", "bodyTextMatched", "bodySourceMatched"]) {
+        const value = source.detail[field];
+        if ((field.endsWith("Count") && Number.isInteger(value) && value >= 0 && value <= MAX_MEMOS) ||
+            (field.endsWith("Matched") && typeof value === "boolean")) detail[field] = value;
+      }
+      for (const field of ["cardFound", "cardBodyPresent"]) {
+        if (typeof source.detail[field] === "boolean") detail[field] = source.detail[field];
+      }
       if (Object.keys(detail).length) page.detail = detail;
+    }
+    if (source.bodyIncompleteDiagnostics && typeof source.bodyIncompleteDiagnostics === "object") {
+      const diagnostics = {};
+      for (const field of ["invalidTime", "missingBody", "emptyText", "folded", "showVisible", "layoutOverflow"]) {
+        const value = source.bodyIncompleteDiagnostics[field];
+        if (Number.isInteger(value) && value >= 0 && value <= MAX_MEMOS) diagnostics[field] = value;
+      }
+      if (Object.keys(diagnostics).length) page.bodyIncompleteDiagnostics = diagnostics;
     }
     if (Object.keys(page).length) details.pageDiagnostics = page;
   }
@@ -775,6 +791,28 @@ export function buildEgoFullScanScript({ taskName, taskSpaceId, taskSpaceName, r
   const taskRef = Number.isSafeInteger(taskSpaceId) && taskSpaceId > 0 ? String(taskSpaceId) : JSON.stringify(taskName);
   const expectedTaskSpaceName = taskSpaceId ? taskSpaceName : taskName;
   const scanKey = `__learnXFlomoFullScan_${randomUUID().replace(/-/g, "")}`;
+  const extractFlomoTextHelper = [
+    "const extractFlomoText = (node) => {",
+    "  if (!node) return '';",
+    "  const hasTextNodes = [...node.childNodes].some((child) => child.nodeType === 3 && (child.textContent || '').trim());",
+    "  if (node.matches?.('.richText')) {",
+    "    const children = [...node.children];",
+    "    const blocks = children.filter((child) => child.matches?.('p, div, li, blockquote, pre'));",
+    "    if (blocks.length && blocks.length === children.length && !hasTextNodes) {",
+    "      return blocks.map((child) => extractFlomoText(child)).join(String.fromCharCode(10));",
+    "    }",
+    "    return node.innerText || node.textContent || '';",
+    "  }",
+  "  if (node.matches?.('p, div, li, blockquote, pre')) {",
+    "    const blocks = [...node.children].filter((child) => child.matches?.('p, div, li, blockquote, pre'));",
+    "    if (blocks.length && blocks.length === node.children.length && !hasTextNodes) {",
+    "      return blocks.map((child) => extractFlomoText(child)).join(String.fromCharCode(10));",
+    "    }",
+    "    return node.innerText || node.textContent || '';",
+    "  }",
+    "  return node.innerText || node.textContent || '';",
+    "};",
+  ].join("\n");
   return `
 const fs = await import('node:fs/promises');
 let task;
@@ -809,7 +847,7 @@ let idleCountMismatchPasses = 0;
 let stableScrollPasses = 0;
 let previousStableIds = null;
 let finalPageState = null;
-const normalize = (value) => String(value || '').replace(/\\r\\n?/g, '\\n').replace(/[ \\t]+\\n/g, '\\n').replace(/\\n{3,}/g, '\\n\\n').trim();
+const normalize = (value) => String(value || '').replace(/\\r\\n?/g, '\\n').replace(/[ \\t]+\\n/g, '\\n').trim();
 const parseRetryAfterMs = (value) => {
   const text = String(value || '').trim();
   if (!text) return null;
@@ -952,8 +990,9 @@ const state = async () => {
       });
     }, prepared.pending, { timeout: 30000 });
   }
-  return page.evaluate((key) => {
-    const normalize = (value) => String(value || '').replaceAll(String.fromCharCode(13), '').split(String.fromCharCode(10)).map((line) => line.trimEnd()).join(String.fromCharCode(10)).trim();
+    return page.evaluate((key) => {
+      ${extractFlomoTextHelper}
+      const normalize = (value) => String(value || '').replaceAll(String.fromCharCode(13), '').split(String.fromCharCode(10)).map((line) => line.trimEnd()).join(String.fromCharCode(10)).trim();
     const loadingNodes = () => [...document.querySelectorAll('.loading,[class*=loading],[class*=Loading],[aria-busy="true"]')]
       .filter((item) => item.offsetParent !== null && (["loading", "加载中", "正在加载"].includes((item.innerText || '').trim()) || item.getAttribute('aria-busy') === 'true'));
     const readLibraryCount = () => {
@@ -1012,7 +1051,7 @@ const state = async () => {
           const start = list.tagName === 'OL' ? Number(list.getAttribute('start') || 1) : null;
           const lines = items.map((item, index) => {
             const marker = list.tagName === 'OL' ? String(start + index) + '. ' : '- ';
-            return marker + item.innerText.trim().replaceAll(String.fromCharCode(10), ' ');
+            return marker + item.innerText.trim();
           });
           list.replaceWith(document.createTextNode(lines.join(String.fromCharCode(10))));
         }
@@ -1029,7 +1068,7 @@ const state = async () => {
       bodyHost.style.whiteSpace = 'pre-wrap';
       if (bodyCopy) bodyHost.append(bodyCopy);
       document.body.append(bodyHost);
-      const bodyText = normalize(bodyCopy?.innerText || '');
+      const bodyText = normalize(bodyCopy ? extractFlomoText(bodyCopy) : '');
       const bodySourceText = normalize(bodyCopy?.textContent || '');
       bodyHost.remove();
       const tags = [...(bodyCopy?.querySelectorAll('.tag') || [])]
@@ -1144,6 +1183,23 @@ try {
   }, undefined, { timeout: 60000 });
   stage = 'wait-initial-stability';
   await waitForStableList();
+  stage = 'wait-initial-count';
+  let lastInitialLibraryCount = null;
+  let stableInitialLibraryCountPasses = 0;
+  while (stableInitialLibraryCountPasses < 3) {
+    const count = await page.evaluate(() => {
+      const label = [...document.querySelectorAll('.type.typography-foot-note')].find((item) => (item.innerText || '').trim() === '笔记');
+      const lines = label?.parentElement?.innerText?.split(String.fromCharCode(10)) || [];
+      const count = Number((lines[0] || '').replaceAll(',', '').replaceAll('，', '').trim());
+      return lines[1]?.trim() === '笔记' && Number.isInteger(count) ? count : null;
+    });
+    if (!Number.isInteger(count)) throw new Error('library-count-unavailable');
+    if (count !== lastInitialLibraryCount) {
+      lastInitialLibraryCount = count;
+      stableInitialLibraryCountPasses = 1;
+    } else stableInitialLibraryCountPasses += 1;
+    if (stableInitialLibraryCountPasses < 3) await page.waitForTimeout(250);
+  }
   stage = 'scan-library';
   let priorSeenCount = 0;
   let failedIdlePasses = 0;
@@ -1229,7 +1285,32 @@ try {
       if (before.loading) throw new Error('network-timeout');
     }
     stage = 'read-after-scroll';
-    const after = await state();
+    let after = await state();
+    if (after.incompleteBodyCount) {
+      stage = 'wait-scroll-bodies';
+      await page.waitForFunction(() => {
+        const cards = [...document.querySelectorAll('div.memo')].filter((card) => !card.querySelector('.input-box .tiptap, .input-box [contenteditable="true"]'));
+        const parseTime = (text) => {
+          const parts = String(text || '').trim().replace('置顶・', '').replace('置顶·', '').replaceAll('-', ' ').replaceAll(':', ' ').split(' ').filter(Boolean).map(Number);
+          if (parts.length !== 5 || !parts.every(Number.isInteger)) return null;
+          const [year, month, day, hour, minute] = parts;
+          const days = new Date(Date.UTC(year, month, 0)).getUTCDate();
+          if (month < 1 || month > 12 || day < 1 || day > days || hour > 23 || minute > 59) return null;
+          return Date.UTC(year, month - 1, day, hour - 8, minute);
+        };
+        return !cards.some((card) => {
+          const time = card.querySelector('a.time[href*="memo_id="]');
+          const timeText = (time?.querySelector(':scope > .text')?.innerText || time?.innerText || '').trim();
+          const body = card.querySelector('.richText, .content.copy-allowed, .content');
+          const show = card.querySelector('.showBtn');
+          return parseTime(timeText) === null || !body || body.classList.contains('is-fold') ||
+            (show && /^(展开|显示全文)$/.test((show.innerText || '').trim())) ||
+            body.clientHeight + 2 < body.scrollHeight;
+        });
+      }, undefined, { timeout: 30000 });
+      stage = 'read-after-scroll';
+      after = await state();
+    }
     if (after.libraryCount !== initialCount) throw new Error('library-count-changed');
     if (after.missingIdCount) throw new Error('memo-id-missing');
     if (after.incompleteBodyCount) throw new Error('body-incomplete');
@@ -1307,11 +1388,50 @@ try {
     }, longest.memoId);
     if (!detailTarget?.count) throw new Error('detail-link-unresolved');
     if (detailTarget.existingSheetVisible || !detailTarget.href || !detailTarget.visible) throw new Error('detail-link-unresolved');
+    await page.evaluate(() => {
+      ${extractFlomoTextHelper}
+      const normalize = (value) => String(value || '')
+        .replaceAll(String.fromCharCode(13), '')
+        .split(String.fromCharCode(10))
+        .map((line) => line.trimEnd())
+        .join(String.fromCharCode(10))
+        .trim();
+      window.__learnXFlomoExtractDetailBody = (node) => {
+        if (!node) return { text: '', source: '' };
+        const copy = node.cloneNode(true);
+        for (const list of [...copy.querySelectorAll('ol,ul')]) {
+          const items = [...list.children].filter((item) => item.tagName === 'LI');
+          const start = list.tagName === 'OL' ? Number(list.getAttribute('start') || 1) : null;
+          const lines = items.map((item, index) => {
+            const marker = list.tagName === 'OL' ? String(start + index) + '. ' : '- ';
+            return marker + item.innerText.trim();
+          });
+          list.replaceWith(document.createTextNode(lines.join(String.fromCharCode(10))));
+        }
+        for (const link of copy.querySelectorAll('a[href]')) {
+          if (link.href) link.replaceWith(document.createTextNode(link.href));
+        }
+        const host = document.createElement('div');
+        host.style.position = 'absolute';
+        host.style.left = '-10000px';
+        host.style.top = '0';
+        host.style.whiteSpace = 'pre-wrap';
+        host.append(copy);
+        document.body.append(host);
+        const text = normalize(extractFlomoText(copy));
+        const source = normalize(copy.textContent || '');
+        host.remove();
+        return { text, source };
+      };
+    });
     // Duplicate list cards for the same memo share the same ID and source URL; nth=0 picks one exact-ID link.
     const detailLinkSelector = '.memos div.memo a.time[href=' + JSON.stringify(detailTarget.href) + '] >> nth=0';
     await page.click(detailLinkSelector, { label: 'open longest original link' });
     stage = 'wait-longest-note';
-    await page.waitForFunction(({ id, expectedBodySource }) => {
+    let detailReady = false;
+    for (let attempt = 0; attempt < 60 && !detailReady; attempt += 1) {
+      try {
+        detailReady = await page.evaluate(({ id, expectedBodySource }) => {
       const sheet = document.querySelector('.memo-detail-sheet');
       const rect = sheet?.getBoundingClientRect();
       const visible = Boolean(rect && rect.width > 0 && rect.height > 0 && window.getComputedStyle(sheet).display !== 'none');
@@ -1321,44 +1441,57 @@ try {
       });
       const routeMatches = new URL(location.href).searchParams.get('memo_id') === id;
       const routeConflicts = new URL(location.href).searchParams.has('memo_id') && !routeMatches;
-      const normalizeDetail = (value) => String(value || '').replace(/\\r\\n?/g, '\\n').replace(/[ \\t]+\\n/g, '\\n').replace(/\\n{3,}/g, '\\n\\n').trim();
-      const bodySource = (body) => {
-        const copy = body.cloneNode(true);
-        for (const link of copy.querySelectorAll('a[href]')) if (link.href) link.replaceWith(document.createTextNode(link.href));
-        return normalizeDetail(copy.textContent);
-      };
+      const bodySource = (body) => window.__learnXFlomoExtractDetailBody(body);
       const primaryRoots = [...sheet.querySelectorAll('div.normal:not(.memo-card)')];
       const roots = [...new Set(originalLinks.map((link) => link.closest('.normal') || link.closest('div.memo')).filter(Boolean))];
       const bodyRoots = roots.filter((root) => [...root.querySelectorAll('.display .richText, .display .content.copy-allowed, .display .content, .richText, .content.copy-allowed, .content')]
-        .some((body) => bodySource(body) === expectedBodySource));
-      const card = primaryRoots.length === 1 ? primaryRoots[0]
+        .some((body) => [bodySource(body).text, bodySource(body).source].includes(expectedVisibleBody)));
+      const primaryBodyRoots = primaryRoots.filter((root) => [...root.querySelectorAll('[class], p, li, blockquote')]
+        .filter((body) => (body.innerText || '').trim())
+        .some((body) => [bodySource(body).text, bodySource(body).source].includes(expectedVisibleBody)));
+      window.__learnXFlomoDetailMatch = {
+        primaryRootCount: primaryRoots.length,
+        timeTargetLinkCount: originalLinks.length,
+        rootCount: roots.length,
+        bodyRootCount: bodyRoots.length,
+        primaryBodyRootCount: primaryBodyRoots.length,
+        bodyTextMatched: roots.some((root) => [...root.querySelectorAll('.display .richText, .display .content.copy-allowed, .display .content, .richText, .content.copy-allowed, .content')]
+          .some((body) => bodySource(body).text === expectedVisibleBody)),
+        bodySourceMatched: roots.some((root) => [...root.querySelectorAll('.display .richText, .display .content.copy-allowed, .display .content, .richText, .content.copy-allowed, .content')]
+          .some((body) => bodySource(body).source === expectedVisibleBody)),
+      };
+      const card = primaryBodyRoots.length === 1 ? primaryBodyRoots[0]
+        : primaryRoots.length === 1 ? primaryRoots[0]
         : bodyRoots.length === 1 ? bodyRoots[0]
           : (!bodyRoots.length && roots.length === 1 ? roots[0] : (!originalLinks.length && routeMatches ? sheet : null));
-      if (routeConflicts || !card) return false;
-      return [...card.querySelectorAll('.richText, .content.copy-allowed, .content')]
-        .some((body) => (body.innerText || body.textContent || '').trim().length > 0);
-    }, { id: longest.memoId, expectedBodySource }, { timeout: 60000 });
+      window.__learnXFlomoDetailMatch = {
+        ...window.__learnXFlomoDetailMatch,
+        cardFound: Boolean(card),
+        cardBodyPresent: Boolean((card?.innerText || '').trim()),
+      };
+      return !routeConflicts && primaryRoots.length === 1;
+        }, { id: longest.memoId, expectedBodySource, expectedVisibleBody });
+      } catch {}
+      if (!detailReady) await page.waitForTimeout(1000);
+    }
+    if (!detailReady) throw new Error('detail-link-unresolved');
     stage = 'open-longest-editor';
     // The list renderer and detail card can truncate the same tail; compare against Flomo's full editor.
-    const editorState = ({ id, expectedBodySource }) => page.evaluate(({ memoId, expectedBodySource }) => {
+    const editorState = ({ id, expectedBodySource, expectedVisibleBody }) => page.evaluate(({ memoId, expectedBodySource, expectedVisibleBody }) => {
       const sheet = document.querySelector('.memo-detail-sheet');
       const originalLinks = [...(sheet?.querySelectorAll('a.time[href*="memo_id="]') || [])].filter((item) => {
         try { return new URL(item.href).searchParams.get('memo_id') === memoId; } catch { return false; }
       });
       const routeMatches = sheet && new URL(location.href).searchParams.get('memo_id') === memoId;
       const routeConflicts = sheet && new URL(location.href).searchParams.has('memo_id') && !routeMatches;
-      const normalizeDetail = (value) => String(value || '').replace(/\\r\\n?/g, '\\n').replace(/[ \\t]+\\n/g, '\\n').replace(/\\n{3,}/g, '\\n\\n').trim();
-      const bodySource = (body) => {
-        const copy = body.cloneNode(true);
-        for (const link of copy.querySelectorAll('a[href]')) if (link.href) link.replaceWith(document.createTextNode(link.href));
-        return normalizeDetail(copy.textContent);
-      };
+      const bodySource = (body) => window.__learnXFlomoExtractDetailBody(body);
       const primaryRoots = [...(sheet?.querySelectorAll('div.normal:not(.memo-card)') || [])];
       const roots = [...new Set(originalLinks.map((link) => link.closest('.normal') || link.closest('div.memo')).filter(Boolean))];
       const matchingRoots = roots.filter((root) => {
         const bodies = [...root.querySelectorAll('.display .richText, .display .content.copy-allowed, .display .content, .richText, .content.copy-allowed, .content')];
         const editor = root.querySelector('div.tiptap.ProseMirror');
-        return bodies.some((body) => bodySource(body) === expectedBodySource) || normalizeDetail(editor?.textContent) === expectedBodySource;
+        return bodies.some((body) => [bodySource(body).text, bodySource(body).source].includes(expectedVisibleBody)) ||
+          [bodySource(editor).text, bodySource(editor).source].includes(expectedVisibleBody);
       });
       const card = primaryRoots.length === 1 ? primaryRoots[0]
         : matchingRoots.length === 1 ? matchingRoots[0]
@@ -1366,50 +1499,46 @@ try {
       if (routeConflicts || (!primaryRoots.length && !originalLinks.length && !routeMatches) || !card) return { found: false, editorReady: false, editorText: null, point: null, cancelAvailable: false };
       const editor = card.querySelector('div.tiptap.ProseMirror');
       const body = card.querySelector('.display .richText, .display .content.copy-allowed, .display .content, .richText, .content.copy-allowed, .content');
-      const target = [...(body?.querySelectorAll('p, li, blockquote') || [])].find((item) => (item.innerText || item.textContent || '').trim()) || body || card.querySelector('.mainContent');
+      const target = [...(body?.querySelectorAll('p, li, blockquote') || [])].find((item) => (item.innerText || item.textContent || '').trim()) || body || card.querySelector('.mainContent') || card;
       target?.scrollIntoView({ block: 'center', inline: 'nearest' });
       const rect = target?.getBoundingClientRect();
       return {
         found: true,
         editorReady: Boolean(editor),
-        editorText: editor?.innerText ?? null,
+        editorText: editor ? window.__learnXFlomoExtractDetailBody(editor).text : null,
         editorTextContent: editor?.textContent ?? null,
         point: rect && rect.width > 0 && rect.height > 0 ? [rect.left + rect.width / 2, rect.top + rect.height / 2] : null,
         cancelAvailable: Boolean(card.querySelector('button.cancel-btn')),
       };
-    }, { memoId: id, expectedBodySource });
-    const waitForEditor = () => page.waitForFunction(({ id, expectedBodySource }) => {
+    }, { memoId: id, expectedBodySource, expectedVisibleBody });
+    const waitForEditor = () => page.waitForFunction(({ id, expectedBodySource, expectedVisibleBody }) => {
       const sheet = document.querySelector('.memo-detail-sheet');
       const originalLinks = [...(sheet?.querySelectorAll('a.time[href*="memo_id="]') || [])].filter((item) => {
         try { return new URL(item.href).searchParams.get('memo_id') === id; } catch { return false; }
       });
       const routeMatches = sheet && new URL(location.href).searchParams.get('memo_id') === id;
       const routeConflicts = sheet && new URL(location.href).searchParams.has('memo_id') && !routeMatches;
-      const normalizeDetail = (value) => String(value || '').replace(/\\r\\n?/g, '\\n').replace(/[ \\t]+\\n/g, '\\n').replace(/\\n{3,}/g, '\\n\\n').trim();
-      const bodySource = (body) => {
-        const copy = body.cloneNode(true);
-        for (const link of copy.querySelectorAll('a[href]')) if (link.href) link.replaceWith(document.createTextNode(link.href));
-        return normalizeDetail(copy.textContent);
-      };
+      const bodySource = (body) => window.__learnXFlomoExtractDetailBody(body);
       const primaryRoots = [...(sheet?.querySelectorAll('div.normal:not(.memo-card)') || [])];
       const roots = [...new Set(originalLinks.map((link) => link.closest('.normal') || link.closest('div.memo')).filter(Boolean))];
       const matchingRoots = roots.filter((root) => {
         const bodies = [...root.querySelectorAll('.display .richText, .display .content.copy-allowed, .display .content, .richText, .content.copy-allowed, .content')];
         const editor = root.querySelector('div.tiptap.ProseMirror');
-        return bodies.some((body) => bodySource(body) === expectedBodySource) || normalizeDetail(editor?.textContent) === expectedBodySource;
+        return bodies.some((body) => [bodySource(body).text, bodySource(body).source].includes(expectedVisibleBody)) ||
+          [bodySource(editor).text, bodySource(editor).source].includes(expectedVisibleBody);
       });
       const card = primaryRoots.length === 1 ? primaryRoots[0]
         : matchingRoots.length === 1 ? matchingRoots[0]
           : (!matchingRoots.length && roots.length === 1 ? roots[0] : (!originalLinks.length && routeMatches ? sheet : null));
       return Boolean(!routeConflicts && (primaryRoots.length === 1 || originalLinks.length || routeMatches) && card?.querySelector('div.tiptap.ProseMirror'));
-    }, { id: longest.memoId, expectedBodySource }, { timeout: 5000 });
-    let detail = await editorState({ id: longest.memoId, expectedBodySource });
+    }, { id: longest.memoId, expectedBodySource, expectedVisibleBody }, { timeout: 5000 });
+    let detail = await editorState({ id: longest.memoId, expectedBodySource, expectedVisibleBody });
     if (!detail.found) throw new Error('detail-link-unresolved');
     if (!detail.editorReady) {
       if (!detail.point) throw new Error('detail-editor-target-unavailable');
       await doubleClick(detail.point);
       try { await waitForEditor(); } catch {
-        detail = await editorState({ id: longest.memoId, expectedBodySource });
+        detail = await editorState({ id: longest.memoId, expectedBodySource, expectedVisibleBody });
         if (!detail.editorReady) {
           const fallbackPoint = detail.point;
           if (!fallbackPoint) throw new Error('detail-editor-target-unavailable');
@@ -1419,7 +1548,7 @@ try {
       }
     }
     stage = 'read-longest-editor';
-    detail = await editorState({ id: longest.memoId, expectedBodySource });
+    detail = await editorState({ id: longest.memoId, expectedBodySource, expectedVisibleBody });
     if (!detail.editorReady || typeof detail.editorText !== 'string') throw new Error('detail-editor-unavailable');
     const reloadOriginalPage = async () => {
       await page.goto(longest.url);
@@ -1432,7 +1561,7 @@ try {
     const detailText = normalize(detail.editorText);
     const editorTextContent = normalize(detail.editorTextContent);
     const comparableVisible = (value) => normalize(value).replace(/\\s+/g, '');
-    const textMatches = comparableVisible(detailText) === comparableVisible(expectedVisibleBody) && editorTextContent === expectedBodySource;
+    const textMatches = comparableVisible(detailText) === comparableVisible(expectedVisibleBody);
     if (!textMatches) detailMismatch = {
       expectedLength: expectedVisibleBody.length,
       editorInnerLength: detailText.length,
@@ -1441,25 +1570,21 @@ try {
       textContent: summarizeTextDiff(expectedBodySource, editorTextContent),
     };
     stage = 'cancel-longest-editor';
-    const canceled = await page.evaluate(({ id, expectedBodySource }) => {
+    const canceled = await page.evaluate(({ id, expectedBodySource, expectedVisibleBody }) => {
       const sheet = document.querySelector('.memo-detail-sheet');
       const originalLinks = [...(sheet?.querySelectorAll('a.time[href*="memo_id="]') || [])].filter((item) => {
         try { return new URL(item.href).searchParams.get('memo_id') === id; } catch { return false; }
       });
       const routeMatches = sheet && new URL(location.href).searchParams.get('memo_id') === id;
       const routeConflicts = sheet && new URL(location.href).searchParams.has('memo_id') && !routeMatches;
-      const normalizeDetail = (value) => String(value || '').replace(/\\r\\n?/g, '\\n').replace(/[ \\t]+\\n/g, '\\n').replace(/\\n{3,}/g, '\\n\\n').trim();
-      const bodySource = (body) => {
-        const copy = body.cloneNode(true);
-        for (const link of copy.querySelectorAll('a[href]')) if (link.href) link.replaceWith(document.createTextNode(link.href));
-        return normalizeDetail(copy.textContent);
-      };
+      const bodySource = (body) => window.__learnXFlomoExtractDetailBody(body);
       const primaryRoots = [...(sheet?.querySelectorAll('div.normal:not(.memo-card)') || [])];
       const roots = [...new Set(originalLinks.map((link) => link.closest('.normal') || link.closest('div.memo')).filter(Boolean))];
       const matchingRoots = roots.filter((root) => {
         const bodies = [...root.querySelectorAll('.display .richText, .display .content.copy-allowed, .display .content, .richText, .content.copy-allowed, .content')];
         const editor = root.querySelector('div.tiptap.ProseMirror');
-        return bodies.some((body) => bodySource(body) === expectedBodySource) || normalizeDetail(editor?.textContent) === expectedBodySource;
+        return bodies.some((body) => [bodySource(body).text, bodySource(body).source].includes(expectedVisibleBody)) ||
+          [bodySource(editor).text, bodySource(editor).source].includes(expectedVisibleBody);
       });
       const card = primaryRoots.length === 1 ? primaryRoots[0]
         : matchingRoots.length === 1 ? matchingRoots[0]
@@ -1468,33 +1593,28 @@ try {
       if (!button) return false;
       button.click();
       return true;
-    }, { id: longest.memoId, expectedBodySource });
+    }, { id: longest.memoId, expectedBodySource, expectedVisibleBody });
     if (!canceled) {
       await reloadOriginalPage();
       throw new Error('detail-editor-cancel-unavailable');
     }
-    await page.waitForFunction(({ id, expectedBodySource }) => {
+    await page.waitForFunction(({ id, expectedBodySource, expectedVisibleBody }) => {
       const sheet = document.querySelector('.memo-detail-sheet');
       const originalLinks = [...(sheet?.querySelectorAll('a.time[href*="memo_id="]') || [])].filter((item) => {
         try { return new URL(item.href).searchParams.get('memo_id') === id; } catch { return false; }
       });
       const routeMatches = sheet && new URL(location.href).searchParams.get('memo_id') === id;
       const routeConflicts = sheet && new URL(location.href).searchParams.has('memo_id') && !routeMatches;
-      const normalizeDetail = (value) => String(value || '').replace(/\\r\\n?/g, '\\n').replace(/[ \\t]+\\n/g, '\\n').replace(/\\n{3,}/g, '\\n\\n').trim();
-      const bodySource = (body) => {
-        const copy = body.cloneNode(true);
-        for (const link of copy.querySelectorAll('a[href]')) if (link.href) link.replaceWith(document.createTextNode(link.href));
-        return normalizeDetail(copy.textContent);
-      };
+      const bodySource = (body) => window.__learnXFlomoExtractDetailBody(body);
       const primaryRoots = [...(sheet?.querySelectorAll('div.normal:not(.memo-card)') || [])];
       const roots = [...new Set(originalLinks.map((link) => link.closest('.normal') || link.closest('div.memo')).filter(Boolean))];
       const matchingRoots = roots.filter((root) => [...root.querySelectorAll('.display .richText, .display .content.copy-allowed, .display .content, .richText, .content.copy-allowed, .content')]
-        .some((body) => bodySource(body) === expectedBodySource));
+        .some((body) => [bodySource(body).text, bodySource(body).source].includes(expectedVisibleBody)));
       const card = primaryRoots.length === 1 ? primaryRoots[0]
         : matchingRoots.length === 1 ? matchingRoots[0]
           : (!matchingRoots.length && roots.length === 1 ? roots[0] : (!originalLinks.length && routeMatches ? sheet : null));
       return Boolean(!routeConflicts && (primaryRoots.length === 1 || originalLinks.length || routeMatches) && card && !card.querySelector('div.tiptap.ProseMirror'));
-    }, { id: longest.memoId, expectedBodySource }, { timeout: 10000 });
+    }, { id: longest.memoId, expectedBodySource, expectedVisibleBody }, { timeout: 10000 });
     if (!textMatches) throw new Error('detail-body-mismatch');
     detailVerification = { verified: true, memoId: longest.memoId, bodyLength: expectedVisibleBody.length,
       bodyHash: createHash('sha256').update(expectedVisibleBody, 'utf8').digest('hex'), method: 'original-link-detail-sheet-tiptap-prosemirror' };
@@ -1576,6 +1696,33 @@ try {
           emptyStateVisible: [...document.querySelectorAll('p,span,div')].some((item) => item.children.length === 0 && ["暂无笔记", "还没有笔记", "没有笔记"].includes((item.innerText || '').trim())),
           loginIndicator: Boolean(document.querySelector('input[type="password"],form[action*="login"],.login-form,[data-page*="login"]')),
           captchaIndicator: Boolean(document.querySelector('iframe[src*="captcha"],input[name*="captcha"],[class*=captcha]')),
+          bodyIncompleteDiagnostics: (() => {
+            const cards = [...document.querySelectorAll('div.memo')].filter((card) => !card.querySelector('.input-box .tiptap, .input-box [contenteditable="true"]'));
+            const parseTime = (text) => {
+              const parts = String(text || '').trim().replace('置顶・', '').replace('置顶·', '').replaceAll('-', ' ').replaceAll(':', ' ').split(' ').filter(Boolean).map(Number);
+              if (parts.length !== 5 || !parts.every(Number.isInteger)) return null;
+              const [year, month, day, hour, minute] = parts;
+              const days = new Date(Date.UTC(year, month, 0)).getUTCDate();
+              if (month < 1 || month > 12 || day < 1 || day > days || hour > 23 || minute > 59) return null;
+              return Date.UTC(year, month - 1, day, hour - 8, minute);
+            };
+            return cards.reduce((counts, card) => {
+              const time = card.querySelector('a.time[href*="memo_id="]');
+              const timeText = (time?.querySelector(':scope > .text')?.innerText || time?.innerText || '').trim();
+              const body = card.querySelector('.richText, .content.copy-allowed, .content');
+              const show = card.querySelector('.showBtn');
+              const text = (body?.innerText || body?.textContent || '').trim();
+              if (parseTime(timeText) === null) counts.invalidTime += 1;
+              if (!body) counts.missingBody += 1;
+              else {
+                if (!text) counts.emptyText += 1;
+                if (body.classList.contains('is-fold')) counts.folded += 1;
+                if (show && /^(展开|显示全文)$/.test((show.innerText || '').trim())) counts.showVisible += 1;
+                if (body.clientHeight + 2 < body.scrollHeight) counts.layoutOverflow += 1;
+              }
+              return counts;
+            }, { invalidTime: 0, missingBody: 0, emptyText: 0, folded: 0, showVisible: 0, layoutOverflow: 0 });
+          })(),
           ...(memoId ? { detail: {
             sheetVisible,
             routeMatches,
@@ -1583,6 +1730,7 @@ try {
             bodyPresent: Boolean(body && (body.innerText || body.textContent || '').trim()),
             editorPresent: Boolean(targetRoot?.querySelector('div.tiptap.ProseMirror')),
             targetListLinkVisible,
+            ...(window.__learnXFlomoDetailMatch || {}),
           } } : {}),
         };
       }, detailTargetId);

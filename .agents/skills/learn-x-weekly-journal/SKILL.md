@@ -22,6 +22,10 @@ node /Users/yuwei/code/skills/prompt-governance/scripts/fetch-prompt.mjs learn-x
 
 在周自动化明确启动 M1 试点时，接收其已读回核验的同周 Core 文档链接；仅在新复制模板的安全空位中使用 bot 写入可点击链接并回读核验。按周自动化「同周 Core 文档试点入口」处理失败、已有草稿及人工内容；不为补链覆盖原文。非试点运行不改变现有写入流程。
 
+当前模板没有 Core 专用格。仅对本次新复制的目标周段落，在刚创建的目标 h2 后插入一个独立段落 `Core 复盘入口（待链接）`，并立即以 `--detail full` 读回确认它是 h2 的直接下一块且只有一处，保存该段落的真实 block ID；不占用任何已有表格字段。插入结果未知时先读取目标节，无法唯一确定时停止，不重复插入。已有草稿、已有人工作品或没有本次新建证据时不添加占位。
+
+在记录周记锚点且 Core 骨架已读回后执行 `node .agents/skills/learn-x-weekly-journal/scripts/link-core.mjs --week YYYY-Www --slot-id <读回的占位段落ID>`。该命令从本地周记锚点和 Core 周绑定核对同周，读取两个飞书文档，局部替换原样占位并检查链接及周记其余内容；未知结果只读核验，不重发。失败时保留占位和用户内容并汇报，不影响周记草稿。
+
 ### 目标段落链接
 
 - 写入并回读确认目标段落后，使用同一次 `lark-cli docs +fetch --detail with-ids` 返回的底层 `document_id` 作为导航链接路径：`https://ywhome.feishu.cn/docx/<document_id>#<target-block-id>`。目标 fragment 必须来自本次回读确认的目标周标题；若 CLI 提供该标题实际 `#share-...` fragment，可替换 block ID fragment。
