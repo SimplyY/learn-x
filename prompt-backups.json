@@ -1,0 +1,150 @@
+{
+  "schema_version": "prompt-repo-backups/v1",
+  "repository": "learn-x",
+  "assets": {
+    "chatpack.book-decode": {
+      "local_path": "02_prompts/chatpack/learning-insight/book-decode.md",
+      "synced": {
+        "document_id": "LTqfdSwmFoZnqbxhLa1c63P3nZb",
+        "revision": 60,
+        "sha256": "8dbe279593e50f4338c61c0d2d7350e677f4c1f13f187ac232ef2a3a7713bafd",
+        "at": "2026-11-02T14:36:02.122Z"
+      }
+    },
+    "chatpack.first-principles": {
+      "local_path": "02_prompts/chatpack/learning-insight/first-principles.md",
+      "synced": {
+        "document_id": "GCuIdQ97NoxzfAx7Gbxc7mRPnmP",
+        "revision": 3,
+        "sha256": "ad560288ca5411dc3262192bca44bd613ab64873ed787d41b8253a14783eb593",
+        "at": "2026-09-17T06:36:13.455Z"
+      }
+    },
+    "chatpack.insight-blind-spot": {
+      "local_path": "02_prompts/chatpack/insight/blind-spot.md",
+      "synced": {
+        "document_id": "PtVYdwGgaoisOaxeIChcExwan75",
+        "revision": 19,
+        "sha256": "f9f2a9babb4db16872925a1660b157a4e0ffd0005d08eecb6e7ea5ed7e3c75d5",
+        "at": "2026-09-17T06:36:12.321Z"
+      }
+    },
+    "chatpack.insight-director-view": {
+      "local_path": "02_prompts/chatpack/insight/director-view.md",
+      "synced": {
+        "document_id": "D7CmdZYf8otKu2xAySfcUtbknPf",
+        "revision": 14,
+        "sha256": "3bf660b86096a64872251a7496f85a5f09615eb8c8bb49a894b1ffcfbe111c4f",
+        "at": "2026-09-17T06:36:11.055Z"
+      }
+    },
+    "chatpack.insight-friend-view": {
+      "local_path": "02_prompts/chatpack/insight/friend-view.md",
+      "synced": {
+        "document_id": "SgW9dkrcLo8SzVxwbidcQOr6nFb",
+        "revision": 12,
+        "sha256": "d7af181cd6c7fc2940fe6277b5912b84b1f7ef740a0908e6e2251ba8dc87b755",
+        "at": "2026-09-17T06:36:11.735Z"
+      }
+    },
+    "chatpack.insight-inner-question": {
+      "local_path": "02_prompts/chatpack/insight/inner-question.md",
+      "synced": {
+        "document_id": "JtbcdE6AuoadikxTJ38cdf7gnWf",
+        "revision": 30,
+        "sha256": "14eb547ca3b1649b5efe894e26da79ad5b90d7f1d9f791f5e375a3bc608e6208",
+        "at": "2026-09-17T06:36:10.398Z"
+      }
+    },
+    "chatpack.insight-weekly-review": {
+      "local_path": "02_prompts/chatpack/insight/weekly-review.md",
+      "synced": {
+        "document_id": "WY8hdEPKroFeUtxemxrcoX57nwg",
+        "revision": 7,
+        "sha256": "ed374b62bd34984182660021acb2e8d6c654a823341af3dfd7abdcab28c6c92a",
+        "at": "2026-09-17T06:36:09.789Z"
+      }
+    },
+    "chatpack.monthly-output": {
+      "local_path": "02_prompts/chatpack/reflective-decision/monthly-output.md",
+      "synced": {
+        "document_id": "ABjzdez4joY0PUxdlaicIKkwnwh",
+        "revision": 10,
+        "sha256": "6b453517ebfcb00e7051abf261a1ad842ecfedbee6fc16a14b756be5630cd5b7",
+        "at": "2026-10-03T01:14:56.534Z"
+      }
+    },
+    "chatpack.monthly-output-rules": {
+      "local_path": "02_prompts/chatpack/reflective-decision/monthly-output-rules.md",
+      "synced": {
+        "document_id": "SMc0dptbFow7auxvPYychQlmnsK",
+        "revision": 6,
+        "sha256": "1a55aed88e92c78aaca54529b049921d1327be5779386df260417ac685cff5dd",
+        "at": "2026-10-31T12:32:22.503Z"
+      }
+    },
+    "chatpack.munger-soul": {
+      "local_path": "02_prompts/chatpack/enhancers/munger-soul.md",
+      "synced": {
+        "document_id": "WOtXdvxiAoCTP0x3bgNcL0swnNf",
+        "revision": 4,
+        "sha256": "f6972b31ba1b7ca5483639fd20a2991ae996b942d00ee1e23142ba3d5a40925e",
+        "at": "2026-10-31T12:32:22.939Z"
+      }
+    },
+    "chatpack.one-step-deeper": {
+      "local_path": "02_prompts/chatpack/enhancers/one-step-deeper.md",
+      "synced": {
+        "document_id": "CfgGdKke4orF30xkBhFcuQ3bnke",
+        "revision": 12,
+        "sha256": "613c0e55c9fd55aeb6f26963f7f9fa94a37c8474b1e53fb711df9cc9c7448e10",
+        "at": "2026-09-27T07:54:10.317Z"
+      }
+    },
+    "chatpack.weekly-output": {
+      "local_path": "02_prompts/chatpack/reflective-decision/weekly-output.md",
+      "synced": {
+        "document_id": "KRShd91W2oY352xSB4kciB0hnrf",
+        "revision": 65,
+        "sha256": "041359c26d76664043cd1c741fbba1ba314e2e0e2519bd6872c0058a8571897b",
+        "at": "2026-10-31T12:32:23.882Z"
+      }
+    },
+    "chatpack.weekly-output-rules": {
+      "local_path": "02_prompts/chatpack/reflective-decision/weekly-output-rules.md",
+      "synced": {
+        "document_id": "NCSwd0Y7uoBElaxEEMKcRzqDn5c",
+        "revision": 5,
+        "sha256": "d7e220488082efa2c9605f0b44a5f9673c415b7e4b560f26719d923ea22e1087",
+        "at": "2026-10-31T12:32:24.350Z"
+      }
+    },
+    "chatpack.yearly-output": {
+      "local_path": "02_prompts/chatpack/reflective-decision/yearly-output.md",
+      "synced": {
+        "document_id": "KZ0WdBeHioqolrxmWQmc1rOTnZe",
+        "revision": 24,
+        "sha256": "351333d35714483b7b265f9611a1c3ca3bf2cff289a4a998ec1d0f30e167267d",
+        "at": "2026-10-03T08:48:12.919Z"
+      }
+    },
+    "learn-x.monthly-journal": {
+      "local_path": "02_prompts/journal/monthly-journal.md",
+      "synced": {
+        "document_id": "Upe0d9AOKozhtlxkmvHceORJnTg",
+        "revision": 3,
+        "sha256": "6549cf26d0bda5be9b663eaa64365b52508a6108c4fbad1bdf7e59e44842b045",
+        "at": "2026-10-02T13:19:44.345Z"
+      }
+    },
+    "learn-x.weekly-journal": {
+      "local_path": "02_prompts/journal/weekly-journal.md",
+      "synced": {
+        "document_id": "DovOdEwTGoXnsOxe9U8cC5lIn4b",
+        "revision": 5,
+        "sha256": "6e7277dd9cae71c41730a8aaf2a1d898da242f4e614c725eb3bde39f9d7f18fe",
+        "at": "2026-10-02T13:19:35.631Z"
+      }
+    }
+  }
+}
