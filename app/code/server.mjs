@@ -12,13 +12,18 @@ import { buildUsageView, readLocalUsageStore, readUsageBaseline, recordLocalUsag
 import { readPromptAssets } from "./scripts/prompt-assets.mjs";
 import { containsPromptFragment, loadRegistry } from "../../../skills/prompt-governance/scripts/fetch-prompt.mjs";
 import { ChatPackCache } from "./scripts/chatpack-cache.mjs";
+import { configureFeishuProxyRouting, configureLarkCliShim } from "./scripts/network-proxy.mjs";
 import { readChatPackConfig } from "./scripts/static-graph.mjs";
 import { buildInsightContext } from "../../.agents/skills/learn-x-periodic-insight/scripts/periodic-insight-core.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../..");
 const defaultDistRoot = path.join(repoRoot, "dist");
-const distRoot = resolveDistRoot(process.env.LEARN_X_DIST_DIR);
+const localSiteRoot = path.join(repoRoot, "app/code/.local/site");
+const distArg = process.argv.find((argument) => argument.startsWith("--dist-dir="))?.slice("--dist-dir=".length);
+const distRoot = resolveDistRoot(process.env.LEARN_X_DIST_DIR || distArg);
+const larkCliShim = configureLarkCliShim(process.env);
+const proxyRouting = configureFeishuProxyRouting(process.env);
 const execFileAsync = promisify(execFile);
 const port = Number(process.env.PORT || 4173);
 const host = process.env.HOST || "127.0.0.1";
@@ -62,6 +67,13 @@ const chatPackCache = new ChatPackCache({
   }
 });
 let chatPackCacheInitialization;
+
+if (proxyRouting.changed) {
+  console.log(`Feishu proxy routing enabled; filtered ${proxyRouting.filtered.length} NO_PROXY entr${proxyRouting.filtered.length === 1 ? "y" : "ies"}.`);
+}
+if (larkCliShim.changed) {
+  console.log("Lark CLI shim enabled for governed Prompt and Core reads.");
+}
 
 function ensureChatPackCache() {
   if (!chatPackCacheInitialization) chatPackCacheInitialization = chatPackCache.initialize();
@@ -107,8 +119,9 @@ async function serveStatic(_req, res, url) {
 function resolveDistRoot(configuredPath) {
   if (!configuredPath) return defaultDistRoot;
   const resolved = path.resolve(repoRoot, configuredPath);
+  if (resolved === localSiteRoot) return resolved;
   const relative = path.relative(defaultDistRoot, resolved);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("LEARN_X_DIST_DIR must stay inside dist/");
+  if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("Server dist directory must stay inside dist/ or use app/code/.local/site");
   return resolved;
 }
 
@@ -140,7 +153,7 @@ function startMarkdownBuildWatcher() {
     isBuilding = true;
     console.log(`Markdown changed (${reason}); rebuilding static site...`);
 
-    const build = spawn(process.execPath, ["app/code/scripts/build-static-data.mjs", "--target=local"], {
+    const build = spawn(process.execPath, ["app/code/scripts/build-static-data.mjs", "--target=local", "--out-dir=app/code/.local/site"], {
       cwd: repoRoot,
       stdio: "inherit"
     });
@@ -524,7 +537,7 @@ function readJsonBody(req) {
 
 function runLocalBuild() {
   return new Promise((resolve, reject) => {
-    const build = spawn(process.execPath, ["app/code/scripts/build-static-data.mjs", "--target=local"], {
+    const build = spawn(process.execPath, ["app/code/scripts/build-static-data.mjs", "--target=local", "--out-dir=app/code/.local/site"], {
       cwd: repoRoot,
       stdio: "inherit"
     });

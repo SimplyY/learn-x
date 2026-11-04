@@ -4,7 +4,7 @@ module.exports = {
       name: "ywdev-learn-x",
       cwd: __dirname,
       script: "/bin/zsh",
-      args: ["-lc", "npm run build:local && exec node app/code/server.mjs"],
+      args: ["-lc", "npm run build:local && exec node app/code/server.mjs --dist-dir=app/code/.local/site"],
       interpreter: "none",
       instances: 1,
       exec_mode: "fork",

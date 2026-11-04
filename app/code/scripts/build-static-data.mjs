@@ -9,6 +9,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../..");
 const publicRoot = path.join(repoRoot, "app/code/public");
 const defaultDistRoot = path.join(repoRoot, "dist");
+const localSiteRoot = path.join(repoRoot, "app/code/.local/site");
 
 const targetArg = process.argv.find((argument) => argument.startsWith("--target="));
 const target = targetArg?.split("=")[1] || "public";
@@ -62,6 +63,7 @@ console.log(
 function resolveDistRoot(outDir) {
   if (!outDir) return defaultDistRoot;
   const resolved = path.resolve(repoRoot, outDir);
+  if (resolved === localSiteRoot) return resolved;
   const relative = path.relative(defaultDistRoot, resolved);
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new Error("--out-dir must stay inside dist/");

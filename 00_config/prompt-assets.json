@@ -27,9 +27,9 @@
       "derived_from": "common.munger-soul-unused-skip",
       "synced": {
         "document_id": "KRShd91W2oY352xSB4kciB0hnrf",
-        "revision": 10,
-        "sha256": "cf1ae9f5b8e4025faa0e49a4f56ef570cd61beb228047d6b681fc8b72c1f24db",
-        "at": "2026-10-03T01:14:11.911Z"
+        "revision": 65,
+        "sha256": "041359c26d76664043cd1c741fbba1ba314e2e0e2519bd6872c0058a8571897b",
+        "at": "2026-10-31T12:32:23.882Z"
       }
     },
     "chatpack.monthly-output": {
@@ -109,9 +109,9 @@
       "derived_from": "common.munger-soul",
       "synced": {
         "document_id": "WOtXdvxiAoCTP0x3bgNcL0swnNf",
-        "revision": 3,
+        "revision": 4,
         "sha256": "f6972b31ba1b7ca5483639fd20a2991ae996b942d00ee1e23142ba3d5a40925e",
-        "at": "2026-09-17T06:36:12.914Z"
+        "at": "2026-10-31T12:32:22.939Z"
       }
     },
     "chatpack.first-principles": {
@@ -142,6 +142,26 @@
         "revision": 3,
         "sha256": "6549cf26d0bda5be9b663eaa64365b52508a6108c4fbad1bdf7e59e44842b045",
         "at": "2026-10-02T13:19:44.345Z"
+      }
+    },
+    "learn-x.reading-weekly": {
+      "tier": "P0",
+      "local_path": "02_prompts/meta/chatgpt-reading-weekly.md",
+      "synced": {
+        "document_id": "XJPudJuBWoCkNHxKotgc8Jaintg",
+        "revision": 3,
+        "sha256": "8b52eef6d627e4e11fb0a0fb38b7c0dfef87f65d162a061625bd3111219d5214",
+        "at": "2026-11-04T01:48:35.667Z"
+      }
+    },
+    "learn-x.reading-daily": {
+      "tier": "P0",
+      "local_path": "02_prompts/meta/chatgpt-reading-daily.md",
+      "synced": {
+        "document_id": "T1TYd15wXodwBIxSb5Icr3rXnNb",
+        "revision": 11,
+        "sha256": "d68893967cb48307f86f9c7ae9851d80e71bff807530ca0d44d6af156f164e4a",
+        "at": "2026-11-04T03:22:05.067Z"
       }
     }
   }

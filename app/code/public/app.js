@@ -52,13 +52,21 @@ export let ENHANCERS = CHATPACK_CONFIG.enhancers;
 const PERIOD_OUTPUTS = {
   weekly: {
     subtypeIds: ["reflective-decision.weekly-output"],
-    label: "第几周",
+    label: "第几周（可多选）",
     emptyLabel: "暂无周输出包",
-    pattern: /^04_output\/_dist\/weekly\/(\d{4})-W(\d{2})\/process-pack\.md$/,
-    valueFromMatch: (match) => `${match[1]}-W${match[2]}`,
+    pattern: /^04_output\/_dist\/weekly\/(\d{4}-W\d{2}(?:-W\d{2}|-\d{4}-W\d{2})?)\/process-pack\.md$/,
+    valueFromMatch: (match) => match[1],
     labelFromValue: (value) => {
-      const match = value.match(/^(\d{4})-W(\d{2})$/);
-      return match ? `${match[1]} 年第 ${Number(match[2])} 周` : value;
+      const sameYear = value.match(/^(\d{4})-W(\d{2})(?:-W(\d{2}))?$/);
+      if (sameYear) {
+        return sameYear[3]
+          ? `${sameYear[1]} 年第 ${Number(sameYear[2])}–${Number(sameYear[3])} 周`
+          : `${sameYear[1]} 年第 ${Number(sameYear[2])} 周`;
+      }
+      const crossYear = value.match(/^(\d{4})-W(\d{2})-(\d{4})-W(\d{2})$/);
+      return crossYear
+        ? `${crossYear[1]} 年第 ${Number(crossYear[2])} 周–${crossYear[3]} 年第 ${Number(crossYear[4])} 周`
+        : value;
     },
     prefixFromValue: (value) => `04_output/_dist/weekly/${value}/`
   },
@@ -631,9 +639,12 @@ function bindEvents() {
   els.periodSelect.addEventListener("change", () => {
     const mode = activePeriodOutputMode();
     if (!mode) return;
-    state.activePeriodValues[mode] = els.periodSelect.value;
+    const selectedValue = mode === "weekly"
+      ? [...els.periodSelect.selectedOptions].map((option) => option.value).filter(Boolean)
+      : els.periodSelect.value;
+    state.activePeriodValues[mode] = selectedValue;
     applyRecommendedSources();
-    const count = applyPeriodContextSelection(mode, els.periodSelect.value);
+    const count = applyPeriodContextSelection(mode, selectedValue);
     resetExpandedContextDirs();
     renderSourceChecklist();
     resetGeneratedContext(count ? `已选择${PERIOD_OUTPUTS[mode].label}：${selectedPeriodLabel(mode)}。` : "未找到对应周期过程包。");
@@ -1113,20 +1124,26 @@ function renderPeriodPicker() {
 
   const config = PERIOD_OUTPUTS[mode];
   const options = periodOptions(mode);
-  const fallbackValue = options[0]?.value || "";
-  const selectedValue = options.some((option) => option.value === state.activePeriodValues[mode])
-    ? state.activePeriodValues[mode]
-    : fallbackValue;
+  const multiSelect = mode === "weekly";
+  const currentValue = state.activePeriodValues[mode];
+  const currentValues = multiSelect
+    ? (Array.isArray(currentValue) ? currentValue : currentValue ? [currentValue] : [])
+    : [currentValue];
+  const selectedValues = currentValues.filter((value) => options.some((option) => option.value === value));
+  if (!selectedValues.length && options[0]) selectedValues.push(options[0].value);
 
-  state.activePeriodValues[mode] = selectedValue;
+  state.activePeriodValues[mode] = multiSelect ? selectedValues : (selectedValues[0] || "");
   els.periodPicker.hidden = false;
   els.periodPickerLabel.textContent = config.label;
+  els.periodSelect.multiple = multiSelect;
+  els.periodSelect.size = multiSelect ? Math.min(4, Math.max(options.length, 1)) : 1;
+  els.periodSelect.title = multiSelect ? "按住 ⌘/Ctrl 或 Shift 点击可多选" : "";
   els.periodSelect.disabled = !options.length;
   els.periodSelect.innerHTML = options.length
     ? options.map((option) => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>`).join("")
     : `<option value="">${escapeHtml(config.emptyLabel)}</option>`;
-  els.periodSelect.value = selectedValue;
-  applyPeriodContextSelection(mode, selectedValue);
+  for (const option of els.periodSelect.options) option.selected = selectedValues.includes(option.value);
+  applyPeriodContextSelection(mode, state.activePeriodValues[mode]);
   resetExpandedContextDirs();
 }
 
@@ -1222,10 +1239,11 @@ function periodOptionPatterns(config) {
 }
 
 function applyPeriodContextSelection(mode, value) {
-  if (!mode || !value) return 0;
+  const values = (Array.isArray(value) ? value : [value]).filter(Boolean);
+  if (!mode || !values.length) return 0;
   let count = 0;
   for (const file of state.customContextFiles) {
-    const strategy = periodContextStrategy(mode, value, file.path);
+    const strategy = values.map((period) => periodContextStrategy(mode, period, file.path)).find(Boolean);
     if (!strategy) continue;
     state.contextSelections.set(file.path, strategy);
     count += 1;
@@ -1267,8 +1285,11 @@ function yearlyContextStrategy(value, filePath) {
 }
 
 function selectedPeriodLabel(mode) {
-  const value = state.activePeriodValues[mode] || "";
-  return value ? PERIOD_OUTPUTS[mode].labelFromValue(value) : "";
+  const values = (Array.isArray(state.activePeriodValues[mode])
+    ? state.activePeriodValues[mode]
+    : [state.activePeriodValues[mode]])
+    .filter(Boolean);
+  return values.map((value) => PERIOD_OUTPUTS[mode].labelFromValue(value)).join("、");
 }
 
 function activeDialogueType() {

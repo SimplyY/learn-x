@@ -7,26 +7,38 @@ import { fileURLToPath } from "node:url";
 import { JSDOM } from "jsdom";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+const localSiteRoot = path.join(repoRoot, "app/code/.local/site");
 
 test("built modules reference the hashed application entry", async () => {
-  execFileSync(process.execPath, ["app/code/scripts/build-static-data.mjs", "--target=local"], {
+  execFileSync(process.execPath, ["app/code/scripts/build-static-data.mjs", "--target=local", "--out-dir=app/code/.local/site"], {
     cwd: repoRoot,
     stdio: "ignore"
   });
-  const index = await readFile(path.join(repoRoot, "dist/index.html"), "utf8");
+  const index = await readFile(path.join(localSiteRoot, "index.html"), "utf8");
   const appEntry = index.match(/src="(app\.[^"]+\.js)"/)?.[1];
   assert.ok(appEntry);
-  const editor = await readFile(path.join(repoRoot, "dist/editor.js"), "utf8");
+  const editor = await readFile(path.join(localSiteRoot, "editor.js"), "utf8");
   assert.match(editor, new RegExp(`from "\\./${appEntry.replaceAll(".", "\\.")}"`));
 });
 
-test("public build does not expose the local periodic insight route", async () => {
-  execFileSync(process.execPath, ["app/code/scripts/build-static-data.mjs", "--target=local"], { cwd: repoRoot, stdio: "ignore" });
-  const localIndex = await readFile(path.join(repoRoot, "dist/index.html"), "utf8");
+test("public build does not overwrite the isolated local site or expose its route", async () => {
+  execFileSync(process.execPath, ["app/code/scripts/build-static-data.mjs", "--target=local", "--out-dir=app/code/.local/site"], { cwd: repoRoot, stdio: "ignore" });
+  const localIndex = await readFile(path.join(localSiteRoot, "index.html"), "utf8");
   assert.match(localIndex, /LEARN_X_PERIODIC_INSIGHT_CONTEXT_API/);
+  const localGraphFile = (await readdir(path.join(localSiteRoot, "data"))).find((file) => /^graph\..+\.json$/.test(file));
+  assert.ok(localGraphFile);
+  const localGraph = JSON.parse(await readFile(path.join(localSiteRoot, "data", localGraphFile), "utf8"));
+  assert.equal(localGraph.runtime.target, "local");
+
   execFileSync(process.execPath, ["app/code/scripts/build-static-data.mjs", "--target=public"], { cwd: repoRoot, stdio: "ignore" });
   const publicIndex = await readFile(path.join(repoRoot, "dist/index.html"), "utf8");
   assert.doesNotMatch(publicIndex, /LEARN_X_PERIODIC_INSIGHT_CONTEXT_API/);
+  const retainedLocalIndex = await readFile(path.join(localSiteRoot, "index.html"), "utf8");
+  assert.match(retainedLocalIndex, /LEARN_X_PERIODIC_INSIGHT_CONTEXT_API/);
+  const publicGraphFile = (await readdir(path.join(repoRoot, "dist/data"))).find((file) => /^graph\..+\.json$/.test(file));
+  assert.ok(publicGraphFile);
+  const publicGraph = JSON.parse(await readFile(path.join(repoRoot, "dist/data", publicGraphFile), "utf8"));
+  assert.equal(publicGraph.runtime.target, "public");
   const appEntry = publicIndex.match(/src="(app\.[^"]+\.js)"/)?.[1];
   assert.ok(appEntry);
   const app = await readFile(path.join(repoRoot, "dist", appEntry), "utf8");

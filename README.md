@@ -7,6 +7,8 @@
 - [人生核心议题](https://ywhome.feishu.cn/wiki/QIaQwXf07iMvqokKQf3cp3XmnMC)
 - [Learn-X Flomo 使用说明](https://ywhome.feishu.cn/wiki/JzzLwuVGZiJSIBkUhLbc2Mbwnwg)
 - [Learn-X Chat Pack 使用说明](https://ywhome.feishu.cn/wiki/NUkgwfx7Qi9HhxkB3OQcm8nVnSd)
+- [Learn-X 阅读沉淀与 ChatGPT 精读使用说明](https://ywhome.feishu.cn/docx/HQL8dxOGuoacHUxAhvPcQ770nfh)
+- [Learn-X 周记与 Core 复盘使用说明](https://ywhome.feishu.cn/wiki/KPAQwbCsZihYurknpEacujQUnKf)
 - [learn-x](https://simplyy.github.io/learn-x/index.html#learning)
 
 ## 核心目标
@@ -88,6 +90,7 @@ Learn-X 不以 Output 为终点。
 | `.agents/skills/` | 可复用工作流，例如 Weekly Process。 |
 | `app/code/` | Chat Pack 与本地应用代码。技术边界详见 `docs/TECH.md`。 |
 | `docs/architecture.md` | 架构真值：系统分层、数据流与已知边界。 |
+| `docs/CHATGPT_READING.md` | 微信读书采集、伴读包和 ChatGPT 每周精读用法。 |
 | `docs/requirements/wechat-evidence-source.md` | 微信 Evidence Source（TraceMemo 接入 PoC）冻结需求；ADR 与 Case 链见 `docs/adr/`、`docs/cases/`。 |
 | `docs/CHAT_PACK.md` | Chat Pack 的目标、组成、使用流程和功能边界。 |
 | `docs/LEARN_X_PROCESS.md` | `learn-x-process` 的阶段、产物、职责和功能边界。 |
