@@ -24,6 +24,7 @@ import {
   weeklyAiOutcomeEvent,
 } from "./generate-ai-review.mjs";
 import { tryAcquireWeeklyAiLock } from "./lib/weekly-ai-lock.mjs";
+import { importLearnXCandidate } from "./manual-handoff-adapter.mjs";
 
 async function fixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-ai-review-"));
@@ -167,19 +168,42 @@ test("weekly AI outcomes retain distinct failure stages and manual completion pr
   assert.equal(missingBridgeResult.reason, "bridge-result-missing");
 });
 
-test("Bridge adapter passes the preallocated stable run ID through its CLI", async (t) => {
+test("default Bridge adapter requires manual handoff metadata and never starts a legacy bridge executable", async (t) => {
   const root = await fixture();
   t.after(() => rm(root, { recursive: true, force: true }));
   const bridgePath = path.join(root, "bridge-stub.mjs");
-  await writeFile(bridgePath, "const index = process.argv.indexOf('--run-id'); const urlIndex = process.argv.indexOf('--conversation-url'); const deliveryIndex = process.argv.indexOf('--context-pack-delivery-json'); process.stdout.write(JSON.stringify({ status: 'needs_review', runId: process.argv[index + 1], conversationUrl: process.argv[urlIndex + 1], receivedDelivery: JSON.parse(process.argv[deliveryIndex + 1]), contextPack: { status: 'ready', path: '/private/fixture-request.txt' } }) + '\\n');\n", "utf8");
-  const runId = "123e4567-e89b-42d3-a456-426614174000";
-  const conversationUrl = "https://chatgpt.com/";
-  const contextPackDelivery = { profile: "learn-fixture", appId: "cli_fixture", userId: "ou_fixture", chatId: "oc_fixture" };
-  const result = await runBridgeCli("synthetic prompt", { bridgePath, preallocatedRunId: runId, conversationUrl, contextPackDelivery });
-  assert.equal(result.result.runId, runId);
-  assert.equal(result.result.conversationUrl, conversationUrl);
-  assert.deepEqual(result.result.receivedDelivery, contextPackDelivery);
-  assert.equal(result.result.contextPack.path, "/private/fixture-request.txt");
+  const marker = path.join(root, "bridge-was-started");
+  await writeFile(bridgePath, `import { writeFile } from "node:fs/promises"; await writeFile(${JSON.stringify(marker)}, "started");`, "utf8");
+  const result = await runBridgeCli("synthetic prompt", { bridgePath });
+  assert.equal(result.result.status, "needs_review");
+  assert.equal(result.result.reason, "manual-handoff-metadata-missing");
+  await assert.rejects(readFile(marker), { code: "ENOENT" });
+});
+
+test("weekly handoff rejects a candidate after its frozen Prompt changes", async (t) => {
+  const root = await fixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W27";
+  const waiting = await generateAiReview({ repoRoot: root, week });
+  assert.equal(waiting.status, "awaiting_manual");
+  const imported = await importLearnXCandidate({ repoRoot: root, handoffId: waiting.handoffId,
+    eventId: "codex-task:weekly-before-prompt-change",
+    sourceClaim: "用户声明此内容来自 ChatGPT", resultBytes: Buffer.from(validReview, "utf8") });
+  await writeFile(path.join(root, "03_input/weekly/00_template/ai.md"), "# 更新后的正式周回顾提示词", "utf8");
+
+  const resumed = await generateAiReview({ repoRoot: root, week, manualCandidateId: imported.candidate.candidateId });
+  assert.equal(resumed.status, "needs_review");
+  assert.equal(resumed.reason, "input-changed-after-manual-handoff");
+  await assert.rejects(readFile(path.join(root, "03_input/weekly", week, "ai.generated.md")), { code: "ENOENT" });
+  const status = JSON.parse(await readFile(path.join(root, "03_input/weekly", week, "_ai-generated.json"), "utf8"));
+  assert.equal(status.handoffId, waiting.handoffId);
+  assert.equal(status.manualCandidateId, undefined);
+
+  const refreshedHandoff = await generateAiReview({ repoRoot: root, week, retry: true });
+  assert.equal(refreshedHandoff.status, "awaiting_manual");
+  assert.notEqual(refreshedHandoff.handoffId, waiting.handoffId);
+  assert.equal(refreshedHandoff.manualHandoff.inputVersion, `sha256:${sha256(buildReviewPrompt("# 更新后的正式周回顾提示词", week))}`);
+  assert.equal(await readFile(path.join(root, "03_input/weekly", week, "ai.generated.md")).catch(() => null), null);
 });
 
 test("unknown Bridge failure reasons are normalized before terminal and sidecar persistence", async (t) => {
@@ -192,37 +216,14 @@ test("unknown Bridge failure reasons are normalized before terminal and sidecar 
     `process.stdout.write(JSON.stringify({ status: "failed", reason: ${JSON.stringify(sentinel)} }) + "\\n");\n`,
     "utf8");
 
-  const result = await generateAiReview({ repoRoot: root, week, bridgePath, timeoutMs: 2_000 });
+  const result = await generateAiReview({ repoRoot: root, week, runBridge: async () => ({
+    result: { status: "failed", reason: sentinel }
+  }) });
   const sidecar = JSON.parse(await readFile(path.join(root, "03_input/weekly", week, "_ai-generated.json"), "utf8"));
   assert.equal(result.status, "failed");
   assert.equal(result.reason, "unknown");
   assert.equal(sidecar.reason, "unknown");
   assert.doesNotMatch(JSON.stringify(sidecar), new RegExp(sentinel));
-});
-
-test("Bridge timeout waits for a SIGTERM-delayed child close and records remote uncertainty", async (t) => {
-  const root = await fixture();
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const bridgePath = path.join(root, "bridge-term-delay.mjs");
-  const closedPath = path.join(root, "child-closed");
-  await writeFile(bridgePath, `process.on("SIGTERM", () => setTimeout(async () => { const { writeFile } = await import("node:fs/promises"); await writeFile(${JSON.stringify(closedPath)}, "closed"); process.exit(143); }, 50)); setInterval(() => {}, 1000);`, "utf8");
-  const result = await runBridgeCli("synthetic prompt", { bridgePath, timeoutMs: 2_000, termGraceMs: 250, killGraceMs: 100 });
-  assert.equal(result.exit.timedOut, true);
-  assert.equal(result.exit.localProcessExitConfirmed, true);
-  assert.equal(result.exit.remoteOutcomeUnknown, true);
-  assert.equal(await readFile(closedPath, "utf8"), "closed");
-});
-
-test("Bridge timeout escalates to SIGKILL and waits for close when a child ignores SIGTERM", async (t) => {
-  const root = await fixture();
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const bridgePath = path.join(root, "bridge-ignore-term.mjs");
-  await writeFile(bridgePath, `process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);`, "utf8");
-  const result = await runBridgeCli("synthetic prompt", { bridgePath, timeoutMs: 500, termGraceMs: 25, killGraceMs: 250 });
-  assert.equal(result.exit.timedOut, true);
-  assert.equal(result.exit.signal, "SIGKILL");
-  assert.equal(result.exit.localProcessExitConfirmed, true);
-  assert.equal(result.exit.remoteOutcomeUnknown, true);
 });
 
 test("manual fallback shell is stable and does not contain the prompt", () => {

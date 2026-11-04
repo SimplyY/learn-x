@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { readFile, link, mkdir, rename, stat, unlink, writeFile } from "node:fs/promises";
@@ -7,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { validateAiReview } from "../../learn-x-process/scripts/monthly-process-input.mjs";
 import { isoWeekRange } from "../../learn-x-process/scripts/collect-weekly-input.mjs";
 import { tryAcquireWeeklyAiLock, validateWeeklyAiLockToken } from "./lib/weekly-ai-lock.mjs";
+import { prepareLearnXHandoff, listLearnXCandidates, readLearnXCandidate } from "./manual-handoff-adapter.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const defaultRepoRoot = path.resolve(__dirname, "../../../..");
@@ -18,6 +18,13 @@ const uncertainAiResubmitAfterMs = 20 * 60_000;
 export const DEFAULT_BRIDGE_TIMEOUT_MS = 270_000;
 // Bridge image 模式（生图）观察预算为 600 秒（对齐 Voice-X / Read-X），适配器覆盖完整预算。
 export const IMAGE_BRIDGE_TIMEOUT_MS = 780_000;
+
+function eligibleManualCandidates(candidates, rejectedCandidateIds) {
+  const rejected = rejectedCandidateIds instanceof Set ? rejectedCandidateIds : new Set(rejectedCandidateIds || []);
+  return (Array.isArray(candidates) ? candidates : [])
+    .filter((item) => ["received", "duplicate"].includes(item.status))
+    .filter((item) => !rejected.has(item.candidateId) && !(item.duplicateOf && rejected.has(item.duplicateOf)));
+}
 
 export function normalizeWeek(value) {
   const match = String(value || "").match(/^(\d{4})-W?(\d{1,2})$/);
@@ -432,72 +439,62 @@ export function extractBridgePersistenceDiagnostics(stderr) {
 }
 
 export async function runBridgeCli(prompt, options = {}) {
-  const bridgePath = options.bridgePath || process.env.LEARN_X_CHATGPT_BRIDGE || defaultBridgePath;
-  const image = Boolean(options.image);
-  const timeoutMs = options.timeoutMs ?? (image ? IMAGE_BRIDGE_TIMEOUT_MS : DEFAULT_BRIDGE_TIMEOUT_MS);
-  const args = [bridgePath];
-  if (image) args.push("--image");
-  if (options.preallocatedRunId) args.push("--run-id", options.preallocatedRunId);
-  if (options.conversationUrl) args.push("--conversation-url", options.conversationUrl);
-  if (options.callerLabel || options.sourceId === "ai") args.push("--caller-label", options.callerLabel || "learn-x:weekly-ai");
-  if (options.contextPackDelivery !== undefined) args.push("--context-pack-delivery-json", JSON.stringify(options.contextPackDelivery));
-  const child = spawn(process.execPath, args, { stdio: ["pipe", "pipe", "pipe"] });
-  let stdout = "";
-  let stderr = "";
-  child.stdout.setEncoding("utf8");
-  child.stderr.setEncoding("utf8");
-  child.stdout.on("data", (chunk) => { stdout += chunk; });
-  child.stderr.on("data", (chunk) => { stderr += chunk; });
-  let processErrorCode;
-  child.once("error", (error) => {
-    processErrorCode = safeChildErrorCode(error);
-  });
-  child.stdin.on("error", (error) => {
-    processErrorCode ||= safeChildErrorCode(error);
-  });
-  try { child.stdin.end(prompt); }
-  catch (error) {
-    processErrorCode = safeChildErrorCode(error);
+  const handoffOptions = options.manualHandoff;
+  if (!handoffOptions || typeof handoffOptions !== "object") {
+    return { result: { status: "needs_review", reason: "manual-handoff-metadata-missing" }, exit: { code: 2, timedOut: false } };
   }
-
-  const exit = await new Promise((resolve) => {
-    const termGraceMs = Number.isSafeInteger(options.termGraceMs) ? Math.max(0, Math.min(options.termGraceMs, 30_000)) : 1_000;
-    const killGraceMs = Number.isSafeInteger(options.killGraceMs) ? Math.max(0, Math.min(options.killGraceMs, 30_000)) : 5_000;
-    let timedOut = false;
-    let settled = false;
-    let timeoutTimer;
-    let termTimer;
-    let killTimer;
-    const finish = (value) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeoutTimer);
-      clearTimeout(termTimer);
-      clearTimeout(killTimer);
-      resolve({ ...value, ...(processErrorCode ? { errorCode: processErrorCode } : {}) });
-    };
-    timeoutTimer = setTimeout(() => {
-      timedOut = true;
-      try { child.kill("SIGTERM"); } catch {}
-      termTimer = setTimeout(() => {
-        if (settled) return;
-        try { child.kill("SIGKILL"); } catch {}
-        killTimer = setTimeout(() => finish({
-          code: null, signal: null, timedOut: true, localProcessExitConfirmed: false, remoteOutcomeUnknown: true,
-        }), killGraceMs);
-      }, termGraceMs);
-    }, timeoutMs);
-    child.once("close", (code, signal) => {
-      finish({
-        code, signal, timedOut,
-        localProcessExitConfirmed: true,
-        ...(timedOut ? { remoteOutcomeUnknown: true } : {}),
-      });
-    });
-  });
-
-  const result = [...parseJsonLines(`${stdout}\n${stderr}`)].reverse().find((value) => typeof value.status === "string");
-  return { result, exit, persistenceDiagnostics: extractBridgePersistenceDiagnostics(stderr) };
+  try {
+    const prepared = await prepareLearnXHandoff({ ...handoffOptions, prompt: String(prompt || "") });
+    if (prepared.status !== "prepared") {
+      return { result: { status: "needs_review", reason: prepared.reason || prepared.status,
+        ...(prepared.missing ? { missing: prepared.missing } : {}) }, exit: { code: 2, timedOut: false } };
+    }
+    const state = await listLearnXCandidates({ repoRoot: handoffOptions.repoRoot, handoffId: prepared.handoffId });
+    const rejectedCandidateIds = new Set(Array.isArray(handoffOptions.rejectedCandidateIds)
+      ? handoffOptions.rejectedCandidateIds.filter((item) => typeof item === "string") : []);
+    const accepted = eligibleManualCandidates(state.record?.candidates, rejectedCandidateIds);
+    const canonical = accepted.filter((item) => !item.duplicateOf);
+    const roots = new Map(canonical.map((item) => [item.candidateId, item]));
+    const candidateOptions = [...roots.values()].map((item) => ({
+      candidateId: item.candidateId, rawSha256: item.rawSha256, evidenceLevel: item.evidenceLevel, receivedAt: item.receivedAt,
+    }));
+    const selectedCandidateId = handoffOptions.selectedCandidateId;
+    if (accepted.some((item) => item.duplicateOf && !roots.has(item.duplicateOf))) {
+      return { result: { status: "needs_review", reason: "manual-candidate-ledger-inconsistent",
+        candidateOptions, runId: prepared.handoffId, handoffId: prepared.handoffId,
+        manualHandoff: { ...prepared.manualInstructions, privatePaths: prepared.privatePaths } }, exit: { code: 2, timedOut: false } };
+    }
+    if (selectedCandidateId && !roots.has(selectedCandidateId)) {
+      return { result: { status: "awaiting_manual", reason: "manual-candidate-selection-invalid",
+        candidateOptions, runId: prepared.handoffId, handoffId: prepared.handoffId,
+        manualHandoff: { ...prepared.manualInstructions, privatePaths: prepared.privatePaths } }, exit: { code: 75, timedOut: false } };
+    }
+    if (roots.size > 1 && (!selectedCandidateId || !roots.has(selectedCandidateId))) {
+      return { result: { status: "awaiting_manual",
+        reason: selectedCandidateId ? "manual-candidate-selection-invalid" : "manual-candidate-selection-required",
+        candidateOptions, runId: prepared.handoffId, handoffId: prepared.handoffId,
+        manualHandoff: { ...prepared.manualInstructions, privatePaths: prepared.privatePaths } }, exit: { code: 75, timedOut: false } };
+    }
+    if (roots.size === 1 || (selectedCandidateId && roots.has(selectedCandidateId))) {
+      const candidateId = selectedCandidateId && roots.has(selectedCandidateId) ? selectedCandidateId : roots.keys().next().value;
+      const candidate = await readLearnXCandidate({ repoRoot: handoffOptions.repoRoot,
+        handoffId: prepared.handoffId, candidateId });
+      return { result: { status: "candidate_received", runId: prepared.handoffId,
+        handoffId: prepared.handoffId, manualHandoff: { ...prepared.manualInstructions, privatePaths: prepared.privatePaths },
+        candidate: candidate.candidate, resultBytes: candidate.resultBytes, files: candidate.files },
+        exit: { code: 75, timedOut: false } };
+    }
+    return { result: { status: "awaiting_manual", reason: "manual-handoff-required", candidateOptions: [],
+      runId: prepared.handoffId, handoffId: prepared.handoffId,
+      manualHandoff: { ...prepared.manualInstructions, privatePaths: prepared.privatePaths,
+        promptSha256: prepared.promptSha256, inputVersion: prepared.record.inputVersion,
+        expiresAt: prepared.record.expiresAt, expectedOutputFormat: prepared.expectedOutputFormat,
+        historyDependency: prepared.historyDependency, fullFlow: prepared.fullFlow,
+        continuationChoice: prepared.continuationChoice } }, exit: { code: 75, timedOut: false } };
+  } catch (error) {
+    return { result: { status: "needs_review", reason: error?.message?.startsWith("learn-x-handoff-") ? error.message : "manual-handoff-unavailable" },
+      exit: { code: 2, timedOut: false } };
+  }
 }
 
 export async function observeBridgeCli(previous, options = {}) {
@@ -541,6 +538,93 @@ async function readJson(filePath) {
     if (error.code === "ENOENT") return null;
     throw error;
   }
+}
+
+function weeklyManualHandoffOptions(repoRoot, week, prompt, runId) {
+  const promptSha = sha256(prompt);
+  return {
+    repoRoot, callerLabel: "learn-x:weekly-ai",
+    taskId: `weekly-ai-review:${week}`, stage: "weekly-review", artifactId: "weekly-ai.md",
+    inputVersion: `sha256:${promptSha}`, originEventId: `learn-x-scheduled-weekly-ai:${week}`,
+    promptId: "learn-x.weekly-ai-review", promptRevision: promptSha,
+    historyDependency: { required: false, completenessVerified: true, items: [], scope: "本包内的 Learn-X 周度输入" },
+    expectedOutputFormat: "完整 UTF-8 Markdown，保留全部正式周度回顾章节",
+    fullFlow: ["验证周度回顾结构与来源", "保存候选输出", "按原 Learn-X 人工确认门禁定稿"],
+    continuationChoice: "continue-complete-workflow",
+    sourceRequirements: { targetWeek: week, localAttemptId: runId, inputSha256: promptSha },
+  };
+}
+
+async function continueWeeklyManualCandidate({ repoRoot, week, paths, prompt, previous, manualCandidateId }) {
+  if (previous?.status !== "awaiting_manual" || !previous.handoffId) return null;
+  const status = await listLearnXCandidates({ repoRoot, handoffId: previous.handoffId });
+  const currentPromptSha256 = sha256(prompt);
+  if (status.status !== "pending" || status.record?.promptSha256 !== previous.manualHandoff?.promptSha256
+    || status.record?.inputVersion !== previous.manualHandoff?.inputVersion
+    || status.record?.promptSha256 !== currentPromptSha256
+    || status.record?.inputVersion !== `sha256:${currentPromptSha256}`) {
+    const review = { ...previous, status: "needs_review", reason: status.status === "expired"
+      ? "manual-handoff-expired" : status.status === "superseded" ? "manual-input-version-superseded"
+        : status.record?.promptSha256 !== currentPromptSha256 ? "input-changed-after-manual-handoff"
+          : "manual-handoff-binding-unavailable",
+    updatedAt: new Date().toISOString() };
+    await writeAtomic(paths.sidecarPath, `${JSON.stringify(review, null, 2)}\n`, "status");
+    return { ...review, targetWeek: week };
+  }
+  const rejected = new Set(previous.rejectedCandidateIds || []);
+  const accepted = eligibleManualCandidates(status.record.candidates, rejected);
+  const canonical = accepted.filter((item) => !item.duplicateOf);
+  const candidates = new Map(canonical.map((item) => [item.candidateId, item]));
+  const candidateOptions = [...candidates.values()].map((item) => ({
+    candidateId: item.candidateId, rawSha256: item.rawSha256, evidenceLevel: item.evidenceLevel, receivedAt: item.receivedAt,
+  }));
+  if (accepted.some((item) => item.duplicateOf && !candidates.has(item.duplicateOf))) {
+    const review = { ...previous, status: "needs_review", candidateOptions,
+      reason: "manual-candidate-ledger-inconsistent", updatedAt: new Date().toISOString() };
+    await writeAtomic(paths.sidecarPath, `${JSON.stringify(review, null, 2)}\n`, "status");
+    return { ...review, targetWeek: week };
+  }
+  if (candidates.size > 1 && (!manualCandidateId || !candidates.has(manualCandidateId))) {
+    const waiting = { ...previous, status: "awaiting_manual", candidateOptions,
+      reason: manualCandidateId ? "manual-candidate-selection-invalid" : "manual-candidate-selection-required",
+      updatedAt: new Date().toISOString() };
+    await writeAtomic(paths.sidecarPath, `${JSON.stringify(waiting, null, 2)}\n`, "status");
+    return { ...waiting, targetWeek: week, manualPrompt: prompt };
+  }
+  if (candidates.size === 0) return { ...previous, status: "awaiting_manual", targetWeek: week };
+  if (manualCandidateId && !candidates.has(manualCandidateId)) {
+    const waiting = { ...previous, status: "awaiting_manual", candidateOptions,
+      reason: "manual-candidate-selection-invalid", updatedAt: new Date().toISOString() };
+    await writeAtomic(paths.sidecarPath, `${JSON.stringify(waiting, null, 2)}\n`, "status");
+    return { ...waiting, targetWeek: week, manualPrompt: prompt };
+  }
+  const candidateId = manualCandidateId || candidates.keys().next().value;
+  const candidate = await readLearnXCandidate({ repoRoot, handoffId: previous.handoffId, candidateId });
+  let rawText;
+  try { rawText = new TextDecoder("utf-8", { fatal: true }).decode(candidate.resultBytes); }
+  catch {
+    const review = { ...previous, status: "awaiting_manual", reason: "manual-result-not-utf8",
+      rejectedCandidateIds: [...rejected, candidateId], updatedAt: new Date().toISOString() };
+    await writeAtomic(paths.sidecarPath, `${JSON.stringify(review, null, 2)}\n`, "status");
+    return { ...review, targetWeek: week };
+  }
+  const normalized = normalizeAiReviewText(rawText);
+  const validation = validateAiReview(normalized);
+  if (!validation.valid || normalized.length > maxInputChars) {
+    const review = { ...previous, status: "awaiting_manual", reason: !validation.valid ? "invalid-manual-ai-review" : "manual-ai-review-too-large",
+      rejectedCandidateIds: [...rejected, candidateId], updatedAt: new Date().toISOString() };
+    await writeAtomic(paths.sidecarPath, `${JSON.stringify(review, null, 2)}\n`, "status");
+    return { ...review, targetWeek: week };
+  }
+  const generated = { ...previous, status: "generated", source: "manual-handoff",
+    completionSource: "user-asserted", evidenceLevel: candidate.candidate.evidenceLevel,
+    manualCandidateId: candidateId, rawSha256: candidate.candidate.rawSha256,
+    outputSha256: sha256(normalized), completedAt: new Date().toISOString(),
+    generatedPath: paths.generatedPath, manualValidatedAt: new Date().toISOString(),
+    reason: undefined };
+  await writeAtomic(paths.generatedPath, `${normalized}\n`, "draft");
+  await writeAtomic(paths.sidecarPath, `${JSON.stringify(generated, null, 2)}\n`, "status");
+  return await promoteGeneratedSafely(repoRoot, week, prompt);
 }
 
 async function ensureManualAiShell(paths, week) {
@@ -641,6 +725,10 @@ async function generateAiReviewUnlocked(options = {}) {
   let previous = await readJson(paths.sidecarPath);
   const template = await readFile(paths.templatePath, "utf8");
   const prompt = buildReviewPrompt(template, week);
+  if (previous?.status === "awaiting_manual") {
+    const resumed = await continueWeeklyManualCandidate({ repoRoot, week, paths, prompt, previous, manualCandidateId: options.manualCandidateId });
+    if (resumed) return resumed;
+  }
   if (previous?.status === "confirmed") {
     if (!await exists(paths.formalPath)) return { ...previous, status: "needs_review", targetWeek: week, reason: "confirmed-ai-md-missing", manualPrompt: previous.manualPrompt || prompt };
     const rawFormal = await readFile(paths.formalPath, "utf8");
@@ -727,7 +815,7 @@ async function generateAiReviewUnlocked(options = {}) {
     await ensureManualAiShell(paths, week);
     return { ...uncertain, targetWeek: week, manualPrompt: prompt, manualPath: paths.formalPath };
   }
-  const safeRetryReasons = new Set(["ego-bootstrap-permission", "ego-browser-unavailable", "local-rate-limit-cooldown", "login-required", "captcha-or-blocked", "composer-missing", "chat-mode-switch-failed", "empty-ai-review", "ai-review-too-large", "invalid-ai-review"]);
+  const safeRetryReasons = new Set(["ego-bootstrap-permission", "ego-browser-unavailable", "local-rate-limit-cooldown", "login-required", "captcha-or-blocked", "composer-missing", "chat-mode-switch-failed", "empty-ai-review", "ai-review-too-large", "invalid-ai-review", "input-changed-after-manual-handoff"]);
   if (previous?.status === "needs_review" && options.observeUncertain) {
     if (await exists(paths.formalPath) && isSubstantiveExisting(await readFile(paths.formalPath, "utf8"))) {
       return { ...previous, targetWeek: week, reason: "substantive-ai-md-exists" };
@@ -819,6 +907,32 @@ async function generateAiReviewUnlocked(options = {}) {
 
   if (!bridge) {
     const runner = options.runBridge || runBridgeCli;
+    if (runner === runBridgeCli) {
+      const attemptId = randomUUID();
+      const manualOptions = { ...weeklyManualHandoffOptions(repoRoot, week, prompt, attemptId),
+        selectedCandidateId: options.manualCandidateId };
+      const prepared = await runBridgeCli(prompt, { manualHandoff: manualOptions });
+      const manualResult = prepared?.result;
+      if (manualResult?.status === "awaiting_manual" || manualResult?.status === "candidate_received") {
+        const awaiting = { ...resultBase(week, prompt, startedAt), source: "manual-handoff",
+          status: "awaiting_manual", handoffId: manualResult.handoffId,
+          attemptId, reason: manualResult.reason,
+          ...(manualResult.candidateOptions ? { candidateOptions: manualResult.candidateOptions } : {}),
+          manualHandoff: manualResult.manualHandoff, dispatchState: "not-started",
+          browserSubmitted: false, updatedAt: new Date().toISOString() };
+        await writeAtomic(paths.sidecarPath, `${JSON.stringify(awaiting, null, 2)}\n`, "status");
+        if (manualResult.status === "candidate_received") {
+          return await continueWeeklyManualCandidate({ repoRoot, week, paths, prompt, previous: awaiting });
+        }
+        return { ...awaiting, targetWeek: week, manualPrompt: prompt, manualPath: manualResult.manualHandoff?.privatePaths?.prompt };
+      }
+      const review = { ...resultBase(week, prompt, startedAt), source: "manual-handoff",
+        status: "needs_review", reason: manualResult?.reason || "manual-handoff-unavailable",
+        dispatchState: "not-started", browserSubmitted: false,
+        ...(manualResult?.missing ? { missing: manualResult.missing } : {}), updatedAt: new Date().toISOString() };
+      await writeAtomic(paths.sidecarPath, `${JSON.stringify(review, null, 2)}\n`, "status");
+      return { ...review, targetWeek: week, manualPath: paths.formalPath };
+    }
     const dispatchIntentAt = new Date().toISOString();
     const dispatchIntent = {
       ...resultBase(week, prompt, startedAt),
@@ -1287,6 +1401,7 @@ export function parseGenerateAiReviewArgs(argv) {
   const options = { confirm: false };
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === "--week") options.week = argv[++index];
+    else if (argv[index] === "--candidate-id") options.manualCandidateId = argv[++index];
     else if (argv[index] === "--diagnostic-status") options.diagnosticStatus = true;
     else if (argv[index] === "--promote") options.promote = true;
     else if (argv[index] === "--confirm-manual") options.confirmManual = true;

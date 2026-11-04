@@ -116,6 +116,11 @@ test("simulates the weekly workflow in a temporary repo, from cooldown rescue th
   const journal = await collectConfirmedWeeklyJournal({
     week,
     repoRoot: root,
+    requireCoreGate: async (weeks, options) => {
+      assert.deepEqual(weeks, [week]);
+      assert.equal(options.repoRoot, root);
+      return [{ week, docId: "synthetic-core-doc" }];
+    },
     fetchSection: async () => ({
       ok: true,
       identity: "bot",
@@ -197,14 +202,14 @@ test("simulates the weekly workflow in a temporary repo, from cooldown rescue th
   assert.match(weeklyAutomationSkill, /Process Pack 成功生成后，在同一条阶段 2 消息中同时交付 Pack 与“执行授权范围预览”/);
   assert.match(weeklyAutomationSkill, /不展示尚未生成的记忆内容，也不构成授权/);
   assert.match(weeklyAutomationSkill, /展示真实拟迁移内容并与第二步已预览的执行范围合并为一张最终确认卡/);
-  assert.match(weeklyAutomationSkill, /第二步预览必须一次列明本周 Memory 写入目标/);
-  assert.match(weeklyAutomationSkill, /weekly-core\.png/);
+  assert.match(weeklyAutomationSkill, /第二步预览必须一次列明本周期 Memory 写入目标/);
+  assert.doesNotMatch(weeklyAutomationSkill, /weekly-core\.png|image:weekly|图片提示词/);
   assert.match(weeklyAutomationSkill, /备份载荷.*01_core.*03_input.*04_output.*05_library/);
   assert.match(weeklyAutomationSkill, /Learn-X 专用飞书云盘 \/ `Snapshots`/);
   assert.match(weeklyAutomationSkill, /YW Next 刷新范围/);
   assert.match(weeklyAutomationSkill, /Flomo 载荷（`weekly\.md` 与季度 Memory）及目的地/);
   assert.match(weeklyAutomationSkill, /留存清理和读回校验/);
-  assert.match(weeklyAutomationSkill, /图片生成和其他写入都必须等阶段 3 这一次确认/);
+  assert.doesNotMatch(weeklyAutomationSkill, /图片生成和其他写入都必须等阶段 3 这一次确认/);
   assert.match(weeklyAutomationSkill, /memory:weekly -- --week YYYY-Www --bind-approval/);
   assert.match(weeklyAutomationSkill, /memory:weekly -- --week YYYY-Www --verify-approval/);
   assert.match(weeklyAutomationSkill, /确认词只需指向这张最终确认卡及其指纹/);

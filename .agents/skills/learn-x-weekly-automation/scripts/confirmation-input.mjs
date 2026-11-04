@@ -44,7 +44,7 @@ export async function buildLearnXConfirmationInputs({ root, week, fingerprint, c
     part.id = id;
     return { id, domain: 'learn-x', source: 'human', locator: `${manifest.scope.memoryPath}#${week}/${id}`, originalValue: '', value: part.text, targets: ['memory'] };
   });
-  const required = new Set(['image', 'backup', 'retention', 'ywnext', 'flomo']);
+  const required = new Set(['backup', 'ywnext', 'flomo']);
   const ids = new Set();
   const closeoutItems = closeoutEntries.map(entry => {
     if (!entry || !required.has(entry.id) || ids.has(entry.id) || typeof entry.action !== 'string' || !entry.action.trim() || typeof entry.destination !== 'string' || !entry.destination.trim()) throw new Error('invalid closeout entry');
@@ -56,8 +56,9 @@ export async function buildLearnXConfirmationInputs({ root, week, fingerprint, c
   const allowed = manifest.scope;
   const find = id => closeoutEntries.find(e => e.id === id).destination;
   const flomo = closeoutEntries.find(e => e.id === 'flomo');
-  if (find('image') !== allowed.imagePath || find('backup') !== allowed.backupDestination || find('retention') !== allowed.backupDestination || find('ywnext') !== allowed.ywnext || !Array.isArray(flomo.sources) || JSON.stringify(flomo.sources) !== JSON.stringify(allowed.flomo) || !/^Flomo\/.+/.test(flomo.destination)) throw new Error('closeout destination differs from bound scope');
+  if (find('backup') !== allowed.backupDestination || find('ywnext') !== allowed.ywnext || !Array.isArray(flomo.sources) || JSON.stringify(flomo.sources) !== JSON.stringify(allowed.flomo) || !/^Flomo\/.+/.test(flomo.destination)) throw new Error('closeout destination differs from bound scope');
   if (!allowed.backupRoots.every(root => closeoutEntries.find(e => e.id === 'backup').action.includes(root))) throw new Error('backup scope incomplete');
+  if (!/留存|清理/.test(closeoutEntries.find(e => e.id === 'backup').action)) throw new Error('backup action must include its existing retention behavior');
   closeoutItems.find(e => e.id === 'closeout-flomo').value += `；来源：${flomo.sources.join('、')}`;
   return { week, fingerprint, proposalHash: hash(proposal), parts, items: [...memoryItems, ...closeoutItems], scope: allowed };
 }
@@ -80,6 +81,8 @@ export async function stageLearnXCard({ root, week, fingerprint, selectedIds, ed
     const initial = await buildLearnXConfirmationInputs({ root, week, fingerprint, closeoutEntries });
     if (!Array.isArray(selectedIds) || new Set(selectedIds).size !== selectedIds.length || selectedIds.some(id => !initial.items.some(item => item.id === id)) || Object.keys(edits).some(id => !selectedIds.includes(id) || !initial.items.some(item => item.id === id && item.targets.includes('memory')))) throw new Error('invalid selected items');
     const memory = initial.items.filter(item => item.targets.includes('memory'));
+    const selectedCloseout = new Set(selectedIds.filter(id => id.startsWith('closeout-')));
+    if (selectedCloseout.has('closeout-flomo') && (!selectedCloseout.has('closeout-backup') || !selectedCloseout.has('closeout-ywnext'))) throw new Error('Flomo requires the selected backup and YW Next steps');
     const approved = {};
     for (const item of memory) if (selectedIds.includes(item.id)) approved[item.id] = Object.hasOwn(edits, item.id) ? edits[item.id] : item.value;
     const nextProposal = reconstructApprovedMemory({ parts: initial.parts, approved });
@@ -102,7 +105,7 @@ export async function stageLearnXCard({ root, week, fingerprint, selectedIds, ed
       newFingerprint = (await bindWeeklyMemoryApproval({ week, repoRoot: root })).fingerprint;
     }
     const next = await buildLearnXConfirmationInputs({ root, week, fingerprint: newFingerprint, closeoutEntries });
-    const chosenCloseout = new Set(selectedIds.filter(id => id.startsWith('closeout-')));
+    const chosenCloseout = selectedCloseout;
     const finalItems = next.items.filter(item => item.targets.includes('memory') || chosenCloseout.has(item.id));
     const excludedItems = initial.items.filter(item => !selectedIds.includes(item.id)).map(item => ({ ...item, id: `excluded-${item.id}` }));
     return { ...next, items: finalItems, excludedItems, staged: nextProposal !== current };
