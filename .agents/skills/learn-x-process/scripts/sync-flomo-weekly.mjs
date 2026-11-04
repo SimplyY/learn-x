@@ -1,9 +1,8 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { digest, loadManifestSpecs, loadSpecs, normalizeMemoText, reconcile } from "./flomo-sync-core.mjs";
+import { digest, flomoComparableText, loadManifestSpecs, loadSpecs, normalizeMemoText, reconcile } from "./flomo-sync-core.mjs";
 import { runEgoBatch } from "./flomo-sync-ego-batch.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -14,10 +13,11 @@ export async function syncFlomoWeekly(options = {}) {
   let batchTaskSpaceAttempted = false;
   let operationError;
   let operationFailed = false;
+  let operationSucceeded = false;
   let syncResult;
   const taskSpaceIds = new Set();
   const closedTaskSpaceIds = [];
-  const taskSpaceName = `learn-x-v2-flomo-sync-${randomUUID()}`;
+  const taskSpaceName = options.taskName || `learn-x-v2-flomo-sync-${randomUUID()}`;
   // Keep one Ego Lite task space across preflight and per-memo read/write checkpoints.
   const runBatch = async (...args) => {
     batchTaskSpaceAttempted = true;
@@ -36,18 +36,19 @@ export async function syncFlomoWeekly(options = {}) {
   };
   try {
     syncResult = await syncFlomoWeeklyImpl(options, runBatch);
+    operationSucceeded = true;
     return syncResult;
   } catch (error) {
     operationFailed = true;
     operationError = error;
     throw error;
   } finally {
-    if (batchTaskSpaceAttempted) {
+    if (batchTaskSpaceAttempted && operationSucceeded) {
       const taskIdsToClose = taskSpaceIds.size ? [...taskSpaceIds] : [null];
       const closeErrors = [];
       for (const taskId of taskIdsToClose) {
         try {
-          const closed = await runEgoBatch("close", taskId ? { taskId } : {});
+          const closed = await runEgoBatch("close", taskId ? { taskId } : {}, { taskName: taskSpaceName });
           if (closed.closedTaskId) closedTaskSpaceIds.push(closed.closedTaskId);
         } catch (closeError) {
           closeErrors.push(closeError);
@@ -74,11 +75,11 @@ export async function syncFlomoWeekly(options = {}) {
   }
 }
 
-async function syncFlomoWeeklyImpl({ week, manifestPath, dryRun = false, only, skipKeys = [], overwriteConflicts = false, overwriteKeys = [], browser } = {}, runBatch = runEgoBatch) {
-  if (!week && !manifestPath) throw new Error("Use --week YYYY-Www or --manifest path.");
+async function syncFlomoWeeklyImpl({ week, period, manifestPath, dryRun = false, only, skipKeys = [], overwriteConflicts = false, overwriteKeys = [], browser } = {}, runBatch = runEgoBatch) {
+  if ([week, period, manifestPath].filter(Boolean).length !== 1) throw new Error("Choose exactly one of --week, --period, or --manifest.");
   if (only && !["weekly", "monthly", "memory"].includes(only)) throw new Error("Use --only weekly|monthly|memory.");
   if (overwriteConflicts && (!manifestPath || !overwriteKeys.length)) throw new Error("Conflict overwrite requires --manifest and --overwrite-key.");
-  const input = manifestPath ? await loadManifestSpecs(repoRoot, path.resolve(manifestPath)) : await loadSpecs(repoRoot, week);
+  const input = manifestPath ? await loadManifestSpecs(repoRoot, path.resolve(manifestPath)) : await loadSpecs(repoRoot, period || week);
   const skipSet = new Set(skipKeys);
   const selectedInput = only ? input.specs.filter((spec) => spec.kind === only) : input.specs;
   const missingOverwriteKeys = overwriteConflicts ? overwriteKeys.filter((key) => !selectedInput.some((spec) => spec.key === key)) : [];
@@ -90,11 +91,11 @@ async function syncFlomoWeeklyImpl({ week, manifestPath, dryRun = false, only, s
     ...input.specs.filter((spec) => skipSet.has(spec.key)).map((spec) => ({ kind: spec.kind, id: spec.id, key: spec.key, reason: "batch-skipped", filePath: spec.filePath }))
   ];
   const state = await readState();
-  const client = browser || (dryRun ? dryRunClient : createEgoClient());
+  const client = browser || dryRunClient;
   const results = [];
   const plans = [];
   const preflightErrors = [];
-  // ponytail: reuse the deterministic editor path for every real sync; keep the legacy client only for injected tests.
+  // ponytail: one Ego Lite batch owns the real browser path; injected clients are test-only.
   const useBatch = Boolean(!dryRun && !browser);
   const batchPreflight = useBatch
     ? new Map((await runBatch("preflight", { allowLegacy: overwriteConflicts, compactResult: overwriteConflicts, specs: specs.map(({ key, title, tag }) => ({ key, title, tag })) })).completed.map((item) => [item.key, item]))
@@ -116,7 +117,9 @@ async function syncFlomoWeeklyImpl({ week, manifestPath, dryRun = false, only, s
       const local = normalizeMemoText(spec.content);
       const remoteContent = typeof remote.content === "string" ? normalizeMemoText(remote.content) : null;
       if (overwriteConflicts) {
-        const remoteMatches = remoteContent !== null ? local === remoteContent : digest(local) === remote.hash;
+        const remoteMatches = remoteContent !== null
+          ? flomoComparableText(local) === flomoComparableText(remoteContent)
+          : digest(local) === remote.hash;
         plans.push({ spec, previous, found, content, remoteReadBack, needsRemoteWrite: !remoteMatches, overwrite: true });
         continue;
       }
@@ -124,20 +127,31 @@ async function syncFlomoWeeklyImpl({ week, manifestPath, dryRun = false, only, s
         preflightErrors.push(`${spec.key}: tagged Flomo memo identity differs from local sync state.`);
         continue;
       }
-      if (useBatch && !previous && !remoteContent.includes(spec.verification)) {
+      if (useBatch && !previous && (!remoteContent || !remoteContent.includes(spec.verification))) {
         preflightErrors.push(`${spec.key}: tagged Flomo memo has no matching verification marker or local sync state.`);
         continue;
       }
       if (!previous) {
-        if (!remoteContent.includes(spec.verification)) {
+        if (!remoteContent || !remoteContent.includes(spec.verification)) {
           if (useBatch) {
             preflightErrors.push(`${spec.key}: tagged Flomo memo has no matching verification marker or local sync state.`);
             continue;
           }
           throw new Error(`${spec.key}: tagged Flomo memo has no matching verification marker or local sync state.`);
         }
+        if (flomoComparableText(remoteContent) !== flomoComparableText(local)) {
+          preflightErrors.push(`${spec.key}: memo exists without local state but its full body differs from the prepared source.`);
+          continue;
+        }
       } else {
-        const merged = reconcile({ base: previous.baseContent, local, remote: remoteContent });
+        if (remoteContent === null) {
+          preflightErrors.push(`${spec.key}: Flomo returned no full memo body for reconciliation.`);
+          continue;
+        }
+        const remoteForReconcile = flomoComparableText(remoteContent) === flomoComparableText(previous.baseContent)
+          ? previous.baseContent
+          : remoteContent;
+        const merged = reconcile({ base: previous.baseContent, local, remote: remoteForReconcile });
         if (merged.stop) {
           if (useBatch) {
             preflightErrors.push(`${spec.key}: ${merged.stop} (${merged.magnitude ?? 0}).`);
@@ -146,7 +160,7 @@ async function syncFlomoWeeklyImpl({ week, manifestPath, dryRun = false, only, s
           throw new Error(`${spec.key}: ${merged.stop} (${merged.magnitude ?? 0}).`);
         }
         content = merged.content;
-        needsRemoteWrite = normalizeMemoText(content) !== remoteContent;
+        needsRemoteWrite = flomoComparableText(content) !== flomoComparableText(remoteContent);
         if (merged.writeBack && merged.writeBack !== spec.content && !dryRun) await writeFile(spec.filePath, merged.writeBack, "utf8");
       }
     }
@@ -182,8 +196,10 @@ async function syncFlomoWeeklyImpl({ week, manifestPath, dryRun = false, only, s
       const canonicalContent = normalizeMemoText(plan.content);
       const readBackContent = typeof readBack.content === "string" ? normalizeMemoText(readBack.content) : null;
       const readBackMatches = plan.overwrite
-        ? (readBackContent !== null ? readBackContent === canonicalContent : readBack.hash === digest(canonicalContent))
-        : readBackContent?.includes(plan.spec.verification);
+        ? (readBackContent !== null
+          ? flomoComparableText(readBackContent) === flomoComparableText(canonicalContent)
+          : readBack.hash === digest(canonicalContent))
+        : (readBackContent !== null && flomoComparableText(readBackContent) === flomoComparableText(canonicalContent));
       if (!readBackMatches) {
         throw new Error(`${item.key}: Flomo readback does not match the prepared local source.`);
       }
@@ -222,7 +238,7 @@ async function syncFlomoWeeklyImpl({ week, manifestPath, dryRun = false, only, s
       const readBack = remoteReadBack && !previous && !overwriteConflicts ? remoteReadBack : await client.read(memo, spec.title);
       const canonicalContent = normalizeMemoText(content);
       const readBackContent = normalizeMemoText(readBack.content);
-      if (overwriteConflicts ? readBackContent !== canonicalContent : !readBackContent.includes(spec.verification)) throw new Error(`${spec.key}: Flomo readback does not match the prepared local source.`);
+      if (flomoComparableText(readBackContent) !== flomoComparableText(canonicalContent)) throw new Error(`${spec.key}: Flomo readback does not match the prepared local source.`);
       state.memos[spec.key] = { memoId: memo.memoId, baseContent: canonicalContent, hash: digest(canonicalContent), syncedAt: new Date().toISOString() };
       await writeState(state);
       results.push({ key: spec.key, action: found.matches.length ? (overwriteConflicts ? (needsRemoteWrite ? "updated" : "unchanged") : (previous ? (needsRemoteWrite ? "updated" : "unchanged") : "adopted")) : "created", memoId: memo.memoId });
@@ -260,112 +276,6 @@ async function writeOverwriteAudit(plans) {
 
 const dryRunClient = { find: async () => ({ matches: [], legacy: false }) };
 
-function createEgoClient() {
-  return {
-    find: (spec) => runEgo("find", spec),
-    read: (memo, title) => runEgo("read", { ...memo, title }),
-    create: (content) => runEgo("create", { content }),
-    update: (memo, content, title) => runEgo("update", { ...memo, content, title })
-  };
-}
-
-async function runEgo(action, payload) {
-  const taskName = `learn-x-v2-flomo-sync-${randomUUID()}`;
-  const script = `
-const task = await useOrCreateTaskSpace(${JSON.stringify(taskName)});
-try {
-await openOrReuseTab('https://v.flomoapp.com/mine', { wait: true, timeout: 20 });
-const action = ${JSON.stringify(action)};
-const payload = ${JSON.stringify(payload)};
-const search = async (query) => {
-  await gotoAndWait('https://v.flomoapp.com/mine?source=search&query=' + encodeURIComponent(query), { timeout: 20 });
-  await wait(1);
-  return await js(String.raw\`(() => [...document.querySelectorAll('div.memo')].map(card => {
-    const text = card.innerText.trim();
-    const href = card.querySelector('a[href*="memo_id="]')?.href;
-    const memoId = new URL(href || location.href).searchParams.get('memo_id');
-    return { text, memoId };
-  }).filter(item => item.memoId))()\`);
-};
-const contentFromCard = (memoId, title) => js("(() => { const memoId = " + JSON.stringify(memoId) + "; const title = " + JSON.stringify(title) + "; const anchor = [...document.querySelectorAll('a[href*=\\\"memo_id=\\\"]')].find(item => item.href.includes(memoId)); const card = anchor?.closest('div.memo'); const text = card?.innerText || ''; const start = text.indexOf(title); if (start < 0) throw new Error('Flomo memo body is not fully readable.'); return text.slice(start).trim(); })()");
-  if (action === 'find') {
-  const titleMatches = (await search(payload.title)).filter(item => item.text.includes(payload.title));
-  const tagged = titleMatches.filter(item => item.text.includes(payload.tag));
-  cliLog(JSON.stringify({ matches: tagged, legacy: titleMatches.some(item => !item.text.includes(payload.tag)) }));
-} else if (action === 'read') {
-  await gotoAndWait('https://v.flomoapp.com/mine?source=search&query=' + encodeURIComponent(payload.title), { timeout: 20 });
-  await wait(1);
-  await js("(() => { const anchor = [...document.querySelectorAll('a[href*=\\\"memo_id=\\\"]')].find(item => item.href.includes(" + JSON.stringify(payload.memoId) + ")); const card = anchor?.closest('div.memo'); const expander = [...(card?.querySelectorAll('*') || [])].find(item => item.innerText?.trim() === '展开'); expander?.click(); })()");
-  await wait(1);
-  let content = await contentFromCard(payload.memoId, payload.title);
-  if (content.endsWith('展开')) content = content.slice(0, -2).trim();
-  cliLog(JSON.stringify({ memoId: payload.memoId, content }));
-} else {
-  const editor = 'div.tiptap.ProseMirror';
-  if (action === 'update') {
-    const cards = await search(payload.title);
-    const memo = cards.find(item => item.memoId === payload.memoId);
-    if (!memo) throw new Error('Flomo memo not found for update.');
-    const displayPoint = await js("(() => { const memoId = " + JSON.stringify(payload.memoId) + "; const memo = [...document.querySelectorAll('div.memo')].find(item => item.dataset.slug === memoId); const rect = memo?.querySelector('.display')?.getBoundingClientRect(); if (!rect) throw new Error('Flomo memo display is not visible.'); return [rect.left + rect.width / 2, rect.top + rect.height / 2]; })()");
-    await doubleClick(displayPoint);
-    await wait(2);
-    const editorReady = await js("Boolean(document.querySelector('div.tiptap.ProseMirror'))");
-    if (!editorReady) {
-      const contentPoint = await js("(() => { const memoId = " + JSON.stringify(payload.memoId) + "; const memo = [...document.querySelectorAll('div.memo')].find(item => item.dataset.slug === memoId); const rect = memo?.querySelector('.mainContent')?.getBoundingClientRect(); if (!rect) throw new Error('Flomo memo content is not visible.'); return [rect.left + rect.width / 2, rect.top + rect.height / 2]; })()");
-      await doubleClick(contentPoint);
-      await wait(2);
-      await doubleClick(displayPoint);
-      await wait(2);
-    }
-  }
-  await js("document.querySelector('div.tiptap.ProseMirror')?.focus()");
-  await typeText('__learn_x_probe__');
-  const probeVisible = await js("document.querySelector('.tiptap.ProseMirror')?.innerText.includes('__learn_x_probe__')");
-  if (!probeVisible) throw new Error('Flomo editor probe failed.');
-  await js("(() => { const editor = document.querySelector('div.tiptap.ProseMirror'); editor.focus(); editor.innerHTML = '<p><br></p>'; editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward', data: null })); editor.focus(); })()");
-  // ponytail: 100-character chunks avoid Ego Lite paste truncation; keep the readback gate before changing this ceiling.
-  for (let index = 0; index < payload.content.length; index += 100) {
-    await typeText(payload.content.slice(index, index + 100));
-    await wait(1);
-  }
-  const rendered = await js("document.querySelector('.tiptap.ProseMirror')?.innerText");
-  const title = payload.content.split(String.fromCharCode(10))[0];
-  const tag = payload.content.split(String.fromCharCode(10)).findLast(line => line.startsWith('#learn-x/'));
-  if (!rendered?.startsWith(title) || !tag || !rendered.includes(tag) || rendered.length < payload.content.length * 0.9) throw new Error('Flomo editor did not retain the prepared content.');
-  await wait(2);
-  await js("(() => { const button = [...document.querySelectorAll('svg.saveBtn')].find(item => item.getBoundingClientRect().width > 0); button?.scrollIntoView({ block: 'center', inline: 'nearest' }); })()");
-  await wait(1);
-  const savePoint = await js("(() => { const button = [...document.querySelectorAll('svg.saveBtn')].find(item => { const rect = item.getBoundingClientRect(); return rect.width > 0 && rect.height > 0; }); if (!button) throw new Error('Flomo save button is not visible.'); const rect = button.getBoundingClientRect(); return [rect.left + rect.width / 2, rect.top + rect.height / 2]; })()");
-  await click(savePoint, { label: '发布 Learn-X 同步' });
-  await wait(10);
-  const cards = await search(payload.content.match(/#learn-x\\/(?:weekly|memory)\\/[^\\s]+/)?.[0]);
-  const memo = cards.find(item => item.text.includes(payload.content.split('\\n')[0]));
-  if (!memo) throw new Error('Flomo did not expose the written memo for readback.');
-  cliLog(JSON.stringify({ memoId: memo.memoId }));
-}
-} finally {
-await completeTaskSpace(task.id, { keep: false });
-}
-`;
-  const output = await runCommand("ego-browser", ["nodejs"], script);
-  const line = `${output.stdout}\n${output.stderr}`.trim().split("\n").findLast((item) => item.trim().startsWith("{"));
-  if (!line) throw new Error(`ego-browser returned no result: ${output.stderr}`);
-  return JSON.parse(line);
-}
-
-function runCommand(command, args, input) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk; });
-    child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.on("error", reject);
-    child.on("close", (code) => code === 0 ? resolve({ stdout, stderr }) : reject(new Error(`ego-browser failed (${code}): ${stderr}`)));
-    child.stdin.end(input);
-  });
-}
-
 async function readState() {
   try { return JSON.parse(await readFile(statePath, "utf8")); }
   catch (error) { if (error.code === "ENOENT") return { version: 1, memos: {} }; throw error; }
@@ -382,17 +292,19 @@ function parseArgs(argv) {
   const options = { dryRun: false };
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === "--week") options.week = argv[++index];
+    if (argv[index] === "--period") options.period = argv[++index];
     if (argv[index] === "--manifest") options.manifestPath = argv[++index];
     if (argv[index] === "--skip-key") options.skipKeys = argv[++index].split(",").map((value) => value.trim()).filter(Boolean);
     if (argv[index] === "--overwrite-conflicts") options.overwriteConflicts = true;
     if (argv[index] === "--overwrite-key") options.overwriteKeys = argv[++index].split(",").map((value) => value.trim()).filter(Boolean);
     if (argv[index] === "--dry-run") options.dryRun = true;
     if (argv[index] === "--only") options.only = argv[++index];
+    if (argv[index] === "--task-name") options.taskName = argv[++index];
   }
   return options;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const result = await syncFlomoWeekly(parseArgs(process.argv.slice(2)));
-  console.log(JSON.stringify({ week: result.week, manifestPath: result.manifestPath, skipped: result.skipped, results: result.results, taskSpace: result.taskSpace }, null, 2));
+  console.log(JSON.stringify({ period: result.period || result.week, manifestPath: result.manifestPath, skipped: result.skipped, results: result.results, taskSpace: result.taskSpace }, null, 2));
 }

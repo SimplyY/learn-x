@@ -3,7 +3,10 @@ import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { fileExists, readWeeklySourceStatus, updateWeeklySourceStatus } from "./lib/source-status.mjs";
+const execFileAsync = promisify(execFile);
 
 test("source status merges sources atomically and reads back", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-source-status-"));
@@ -84,6 +87,13 @@ test("jingdu registers as a weekly source with fail-closed ready and fileless em
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("source-status CLI refuses new retired Jingdu registrations", async () => {
+  const script = new URL("./update-weekly-source-status.mjs", import.meta.url).pathname;
+  await assert.rejects(execFileAsync(process.execPath, [script,
+    "--week", "2026-W42", "--source", "jingdu", "--status", "empty", "--file", "jingdu.md", "--count", "0", "--summary", "skip"
+  ]), (error) => /jingdu-source-retired/.test(error.stderr));
 });
 
 test("source status redacts URLs, credentials, and technical identifiers", async () => {

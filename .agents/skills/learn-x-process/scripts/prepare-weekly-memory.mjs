@@ -114,10 +114,83 @@ export async function verifyWeeklyMemoryApproval({ week, fingerprint, repoRoot: 
   return { verified: true, week: normalizedWeek, fingerprint: storedFingerprint, manifestPath };
 }
 
+// Recovery after a confirmed Memory write validates immutable proposal inputs
+// separately from the target's pre-write hash, which is expected to change.
+// The caller must also prove the exact approved items are present in the target.
+export async function verifyWeeklyMemoryApprovalSources({ week, fingerprint, repoRoot: root = repoRoot } = {}) {
+  const normalizedWeek = normalizeWeekId(week);
+  const directory = path.join(root, '04_output/_dist/weekly', distWeekId(normalizedWeek));
+  const manifestPath = path.join(directory, '_memory-approval.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  const { fingerprint: storedFingerprint, ...payload } = manifest;
+  if (manifest.schemaVersion !== 1 || manifest.week !== normalizedWeek
+    || storedFingerprint !== fingerprint || sha256(JSON.stringify(payload)) !== storedFingerprint) throw new Error('memory-approval-fingerprint-mismatch');
+  const expectedScope = memoryApprovalScope(normalizedWeek, quarterFromIsoWeek(normalizedWeek));
+  if (JSON.stringify(manifest.scope) !== JSON.stringify(expectedScope)) throw new Error('memory-approval-scope-mismatch');
+  const files = {
+    weeklyOutput: path.join(root, '04_output/weekly', `${outputWeekFileId(normalizedWeek)}.md`),
+    candidates: path.join(directory, 'memory-candidates.md'),
+    proposal: path.join(directory, 'memory-proposed.md')
+  };
+  let sourceHashes;
+  try { sourceHashes = Object.fromEntries(await Promise.all(Object.entries(files).map(async ([key, file]) => [key, sha256(await readFile(file, 'utf8'))]))); }
+  catch { throw new Error('memory-approval-stale: approved source or proposal is missing'); }
+  if (Object.entries(sourceHashes).some(([key, value]) => manifest.hashes?.[key] !== value)
+    || !(manifest.hashes?.currentMemoryTarget == null || /^[a-f0-9]{64}$/.test(manifest.hashes.currentMemoryTarget))) {
+    throw new Error('memory-approval-stale: weekly output, candidates, or proposed memory changed');
+  }
+  return {
+    verified: true,
+    week: normalizedWeek,
+    fingerprint: storedFingerprint,
+    manifestPath,
+    targetBaselineSha256: manifest.hashes.currentMemoryTarget
+  };
+}
+
+export async function verifyConfirmedWeeklyMemoryWrite({ batch, repoRoot: root = repoRoot } = {}) {
+  if (!batch || !/^\d{4}-W(?:0[1-9]|[1-4]\d|5[0-3])$/.test(batch.reviewWeek || '')
+    || !/^[a-f0-9]{64}$/.test(batch.sourceBindings?.learnxMemoryFingerprint || '')) return { ok: false, status: 'unknown' };
+  const items = batch.items?.filter(item => item.domain === 'learn-x' && item.targets?.includes('memory')) ?? [];
+  if (!items.length) return { ok: true, status: 'verified', evidence: { week: batch.reviewWeek, itemIds: [], noMemoryWrite: true } };
+  const week = batch.reviewWeek;
+  const quarter = quarterFromIsoWeek(week);
+  const targetPath = `01_core/memory/${quarter}.memory.md`;
+  await verifyWeeklyMemoryApprovalSources({ week, fingerprint: batch.sourceBindings.learnxMemoryFingerprint, repoRoot: root });
+  const target = path.join(root, targetPath);
+  const content = await readFile(target, 'utf8');
+  const lines = content.split('\n');
+  const weekHeadings = lines.map((line, index) => line.trimEnd() === `## ${week}` ? index : -1).filter(index => index >= 0);
+  if (weekHeadings.length !== 1) return { ok: false, status: 'unknown' };
+  const start = weekHeadings[0] + 1;
+  let end = lines.findIndex((line, index) => index >= start && /^##\s/.test(line));
+  if (end < 0) end = lines.length;
+  const weekLines = lines.slice(start, end);
+  const memoryHeadings = weekLines.map((line, index) => line.trimEnd() === '### Memory' ? index : -1).filter(index => index >= 0);
+  if (memoryHeadings.length !== 1) return { ok: false, status: 'unknown' };
+  const memoryStart = memoryHeadings[0] + 1;
+  let memoryEnd = weekLines.findIndex((line, index) => index >= memoryStart && /^#{1,3}\s/.test(line));
+  if (memoryEnd < 0) memoryEnd = weekLines.length;
+  const memoryText = weekLines.slice(memoryStart, memoryEnd).join('\n');
+  const seen = new Set();
+  for (const item of items) {
+    const expectedLocator = `${targetPath}#${week}/${item.id}`;
+    if (item.source !== 'human' || item.locator !== expectedLocator || typeof item.value !== 'string'
+      || !/^[-*] /.test(item.value) || item.value.includes('\r') || seen.has(item.value)) return { ok: false, status: 'unknown' };
+    seen.add(item.value);
+    const exact = item.value.replace(/\n+$/, '');
+    if (!exact || memoryText.split(exact).length - 1 !== 1) return { ok: false, status: 'unknown' };
+  }
+  return {
+    ok: true,
+    status: 'verified',
+    evidence: { targetPath, week, itemIds: items.map(item => item.id), sha256: sha256(content) }
+  };
+}
+
 function memoryApprovalScope(week, quarter) {
   return {
     memoryPath: `01_core/memory/${quarter}.memory.md`,
-    imagePath: `04_output/_dist/weekly/${memoryWeekSectionId(week)}/weekly-core.png`,
     backupRoots: MEMORY_APPROVAL_BACKUP_ROOTS,
     backupDestination: "Learn-X Backups / Learn-X Backup Index / Snapshots",
     ywnext: "refresh from confirmed 01_core/memory/*.memory.md",
@@ -479,8 +552,8 @@ function parseArgs(argv) {
   return options;
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const options = parseArgs(process.argv.slice(2));
+if (globalThis.process?.argv?.[1] === fileURLToPath(import.meta.url)) {
+  const options = parseArgs(globalThis.process.argv.slice(2));
   if (options.bindApproval && options.verifyApproval) throw new Error("choose one approval operation");
   if (options.bindApproval) {
     const result = await bindWeeklyMemoryApproval(options);

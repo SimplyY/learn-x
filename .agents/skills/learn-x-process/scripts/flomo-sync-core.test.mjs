@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { changeMagnitude, isSubstantive, loadManifestSpecs, memoSpec, normalizeMemoText, quarterFromWeek, reconcile, sanitizeFlomoSource } from "./flomo-sync-core.mjs";
+import { changeMagnitude, digest, flomoComparableText, isSubstantive, loadManifestSpecs, loadSpecs, memoSpec, normalizeMemoText, normalizePeriod, quarterFromPeriod, quarterFromWeek, reconcile, sanitizeFlomoSource } from "./flomo-sync-core.mjs";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -15,6 +15,16 @@ test("renders stable weekly and quarterly Flomo identifiers", () => {
 test("assigns week-one Flomo memory to the quarter of its real Monday date", () => {
   assert.equal(quarterFromWeek("2026-W01"), "2025-Q4");
   assert.equal(quarterFromWeek("2026-W02"), "2026-Q1");
+});
+
+test("normalizes single, same-year, and cross-year Flomo periods up to four weeks", () => {
+  assert.equal(normalizePeriod("2026-W44"), "2026-W44");
+  assert.equal(normalizePeriod("2026-W43-W44"), "2026-W43-W44");
+  assert.equal(normalizePeriod("2026-W52-2027-W01"), "2026-W52-2027-W01");
+  assert.equal(quarterFromPeriod("2026-W52-2027-W01"), "2027-Q1");
+  assert.throws(() => normalizePeriod("2026-W43-W47"), /1–4 consecutive ISO weeks/);
+  assert.throws(() => normalizePeriod("2025-W53"), /Invalid ISO week/);
+  assert.throws(() => normalizePeriod("2026-W43-2026-W44"), /not canonical/);
 });
 
 test("removes local source metadata before preparing a Flomo memo", () => {
@@ -41,6 +51,43 @@ test("loads history weekly, monthly, and memory targets from one manifest", asyn
   }));
   const result = await loadManifestSpecs(root, manifestPath);
   assert.deepEqual(result.specs.map((spec) => spec.key), ["weekly:2025-W01", "monthly:2025-01", "memory:2025-Q1"]);
+});
+
+test("loads one verified combined weekly memo and quarter Memory for a confirmed range", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "learn-x-flomo-range-"));
+  const period = "2026-W43-W44";
+  const weeks = ["2026-W43", "2026-W44"];
+  const weeklyPath = "03_input/weekly/2026-W43-W44/weekly.md";
+  const memoryPath = "01_core/memory/2026-Q4.memory.md";
+  const weekly = "# W43–W44 周记\n\n连续两周周记正文";
+  const memory = "# 2026-Q4 Memory\n\n已确认的季度上下文";
+  await mkdir(path.dirname(path.join(root, weeklyPath)), { recursive: true });
+  await mkdir(path.dirname(path.join(root, memoryPath)), { recursive: true });
+  await mkdir(path.join(root, "04_output/_dist/weekly", period), { recursive: true });
+  await writeFile(path.join(root, weeklyPath), weekly);
+  await writeFile(path.join(root, memoryPath), memory);
+  await writeFile(path.join(root, weeklyPath.replace("weekly.md", "_range-manifest.json")), JSON.stringify({
+    schemaVersion: 1,
+    period: { id: period, weeks, start: "2026-10-19", endInclusive: "2026-11-01", writeDate: "2026-11-02" },
+    journal: { status: "confirmed-readback", readBackVerified: true, weeklyPath, weeklySha256: digest(weekly) },
+    processPack: { periodId: period, status: "readback-verified" },
+  }));
+  await writeFile(path.join(root, "04_output/_dist/weekly", period, "_range-memory-write-receipt.json"), JSON.stringify({
+    schemaVersion: 1, periodId: period, fingerprint: "range-fingerprint", target: memoryPath,
+    targetSha256: digest(memory), authorizationMessageId: "message-id", authorizationMessageSha256: "message-hash",
+  }));
+  await writeFile(path.join(root, "04_output/_dist/weekly", period, "_range-memory-proposal.json"), JSON.stringify({
+    periodId: period, quarter: "2026-Q4", fingerprint: "range-fingerprint",
+  }));
+
+  const result = await loadSpecs(root, period);
+  assert.equal(result.period, period);
+  assert.deepEqual(result.specs.map((spec) => spec.key), [`weekly:${period}`, "memory:2026-Q4"]);
+  assert.match(result.specs[0].title, /Learn-X 周记｜2026-W43-W44/);
+  assert.equal(result.specs[0].hash, digest(result.specs[0].content));
+
+  await writeFile(path.join(root, weeklyPath), `${weekly}\n修改`);
+  await assert.rejects(loadSpecs(root, period), /Range journal is not confirmed or its Flomo source changed/);
 });
 
 test("keeps local additions while applying a small remote edit", () => {
@@ -77,4 +124,11 @@ test("normalizes Flomo blank lines between adjacent list items", () => {
 
 test("normalizes Flomo blank line before the sync tag", () => {
   assert.equal(normalizeMemoText("正文\n\n#learn-x/sync #learn-x/memory/2026-Q3"), "正文\n#learn-x/sync #learn-x/memory/2026-Q3");
+});
+
+test("compares Flomo-visible Markdown formatting without losing memo text or sync tags", () => {
+  const source = "Title\n\n# Heading\n\n- item one\n- 1. item two\n\n1. item three\n\n**bold** `code`\n\n#learn-x/sync #learn-x/memory/2026-Q4";
+  const visible = "Title\nHeading\n• item one\n• item two\n• item three\nbold code\n#learn-x/sync #learn-x/memory/2026-Q4";
+  assert.equal(flomoComparableText(source), "Title Heading item one item two item three bold code #learn-x/sync #learn-x/memory/2026-Q4");
+  assert.equal(flomoComparableText(source), flomoComparableText(visible));
 });

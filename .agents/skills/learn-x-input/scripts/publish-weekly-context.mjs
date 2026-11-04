@@ -94,6 +94,182 @@ export async function publishConfirmedWeeklyContext({ week, repoRoot: root = rep
   return { planWeek, sourceWeek, currentPath, versionPath, version: relativeVersionPath, sourceHash, artifactSha256, unchanged, publishedAt: version.publishedAt };
 }
 
+export async function publishConfirmedWeeklyRangeContext({ periodId, repoRoot: root = repoRoot, now = () => new Date(), renameFile = rename }) {
+  const rangeDir = path.join(root, "03_input/weekly", periodId);
+  const manifest = await readOptionalJson(path.join(rangeDir, "_range-manifest.json"));
+  if (!manifest || manifest.period?.id !== periodId) throw new Error("weekly-context-range-source-invalid: range manifest is missing or mismatched");
+  const range = normalizeRange(periodId, manifest.period.weeks);
+  if (manifest.period.start !== range.coverage.start || manifest.period.endInclusive !== range.coverage.end
+    || manifest.period.timezone !== "Asia/Shanghai") {
+    throw new Error("weekly-context-range-source-invalid: manifest period dates or timezone mismatch");
+  }
+  const sourcePath = path.join(rangeDir, "weekly.md");
+  const sourceBytes = await readFile(sourcePath);
+  const sourceText = sourceBytes.toString("utf8");
+  const sourceHash = createHash("sha256").update(sourceBytes).digest("hex");
+  const journal = manifest.journal || {};
+  if (journal.status !== "confirmed-readback" || journal.readBackVerified !== true
+    || journal.weeklySha256 !== sourceHash || !journal.targetBlockId || !journal.documentId
+    || !Number.isFinite(Date.parse(journal.confirmedAt))) {
+    throw new Error("weekly-context-range-source-invalid: confirmed range journal hash or anchor evidence is missing");
+  }
+  const parsed = parseConfirmedWeeklyRangeJournal(sourceText, periodId, range, journal);
+  const planWeek = isoWeekForDate(addDays(parsed.coverage.end, 1));
+  const publishedAt = now().toISOString();
+  if (!Number.isFinite(Date.parse(publishedAt))) throw new Error("weekly-context-publish-time-invalid");
+
+  const outputDir = path.join(root, OUTPUT_RELATIVE);
+  const currentPath = path.join(outputDir, "current.json");
+  const current = await readCurrentPointer(currentPath, outputDir);
+  if (current && compareWeeks(planWeek, current.pointer.planWeek) < 0) {
+    throw new Error(`weekly-context-stale-week: ${planWeek} is older than current ${current.pointer.planWeek}`);
+  }
+
+  const relativeVersionPath = `weekly/${planWeek}/${sourceHash}.json`;
+  const versionPath = path.join(outputDir, relativeVersionPath);
+  const candidate = {
+    schemaVersion: "shared-context/v1",
+    producer: "learn-x",
+    planWeek,
+    sourceWeek: range.weeks.at(-1),
+    sourcePeriod: periodId,
+    sourceWeeks: range.weeks,
+    coverage: parsed.coverage,
+    publishedAt,
+    confirmationEvidence: {
+      stage: "stage-2",
+      status: "complete",
+      confirmationStatus: "confirmed",
+      confirmedAt: journal.confirmedAt,
+      confirmedAtStatus: "verified",
+      evidence: "Confirmed range journal hash and latest bot readback anchor verified in the range manifest."
+    },
+    source: {
+      url: parsed.sourceUrl,
+      revision: parsed.sourceRevision,
+      sha256: sourceHash,
+      missing: parsed.missingSourceFields
+    },
+    payload: { planTableRow: parsed.planTableRow }
+  };
+
+  await mkdir(path.dirname(versionPath), { recursive: true });
+  const existingVersion = await readOptionalJson(versionPath);
+  let version = candidate;
+  if (existingVersion) version = assertSameVersion(existingVersion, candidate);
+  else {
+    const racedVersion = await writeImmutableJson(versionPath, candidate);
+    if (racedVersion) version = assertSameVersion(racedVersion, candidate);
+  }
+  const versionBytes = await readFile(versionPath);
+  version = assertSameVersion(JSON.parse(versionBytes.toString("utf8")), candidate);
+  const artifactSha256 = createHash("sha256").update(versionBytes).digest("hex");
+  const pointer = {
+    schemaVersion: "shared-context-pointer/v1",
+    producer: "learn-x",
+    planWeek,
+    sourceWeek: range.weeks.at(-1),
+    sourcePeriod: periodId,
+    sourceWeeks: range.weeks,
+    versionPath: relativeVersionPath,
+    sha256: sourceHash,
+    artifactSha256,
+    publishedAt: version.publishedAt
+  };
+  const unchanged = await withPointerLock(`${currentPath}.lock`, async () => {
+    const latest = await readCurrentPointer(currentPath, outputDir);
+    if (latest && compareWeeks(planWeek, latest.pointer.planWeek) < 0) {
+      throw new Error(`weekly-context-stale-week: ${planWeek} is older than current ${latest.pointer.planWeek}`);
+    }
+    if (latest?.pointer.versionPath === pointer.versionPath && latest.pointer.planWeek === planWeek) return true;
+    await atomicReplaceJson(currentPath, pointer, renameFile);
+    return false;
+  });
+  const currentReadBack = await readCurrentPointer(currentPath, outputDir);
+  if (!currentReadBack || currentReadBack.pointer.versionPath !== relativeVersionPath
+    || currentReadBack.version.sourcePeriod !== periodId || currentReadBack.version.source?.sha256 !== sourceHash) {
+    throw new Error("weekly-context-range-readback-mismatch");
+  }
+  return { planWeek, sourceWeek: range.weeks.at(-1), sourcePeriod: periodId, sourceWeeks: range.weeks,
+    coverage: parsed.coverage, currentPath, versionPath, version: relativeVersionPath, sourceHash, artifactSha256, unchanged, publishedAt: version.publishedAt };
+}
+
+export function parseConfirmedWeeklyRangeJournal(sourceText, periodId, range, journal) {
+  const text = String(sourceText).replace(/^\uFEFF/, "");
+  const lines = text.split(/\r?\n/);
+  if (lines[0] !== `# Confirmed weekly journal input｜${periodId}`) {
+    throw new Error("weekly-context-range-source-invalid: confirmed range title is missing or mismatched");
+  }
+  const metadata = new Map();
+  for (const line of lines.slice(1)) {
+    if (line.startsWith("## ")) break;
+    const match = line.match(/^- ([^：]+)：(.*)$/);
+    if (match) metadata.set(match[1], match[2].trim());
+  }
+  if (metadata.get("目标周期") !== periodId
+    || metadata.get("目标覆盖范围") !== `${range.coverage.start} 至 ${range.coverage.end}`
+    || metadata.get("来源 revision") !== String(journal.revisionId)
+    || metadata.get("定位依据") !== `已确认标题 block ${journal.targetBlockId}`) {
+    throw new Error("weekly-context-range-source-invalid: journal period, coverage, or readback anchor metadata mismatches");
+  }
+  const title = metadata.get("周记写作日标题");
+  const expectedTitleDate = `${new Date(`${addDays(range.coverage.end, 1)}T00:00:00.000Z`).getUTCMonth() + 1}.${new Date(`${addDays(range.coverage.end, 1)}T00:00:00.000Z`).getUTCDate()}`;
+  if (!title || !title.includes(rangeTitleLabel(range.weeks)) || !hasExpectedDate(title, expectedTitleDate)) {
+    throw new Error("weekly-context-range-source-invalid: journal title does not match range end date");
+  }
+  const capturedAt = metadata.get("采集时间");
+  if (!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/.test(capturedAt || "") || !Number.isFinite(Date.parse(capturedAt))) {
+    throw new Error("weekly-context-range-source-invalid: captured_at must be a UTC ISO timestamp");
+  }
+  const sourceUrlValue = metadata.get("来源 URL");
+  let sourceUrl = null;
+  if (sourceUrlValue && sourceUrlValue !== "unknown") {
+    let parsedUrl;
+    try { parsedUrl = new URL(sourceUrlValue); }
+    catch { throw new Error("weekly-context-range-source-invalid: source URL is malformed"); }
+    if (!["https:", "http:"].includes(parsedUrl.protocol) || parsedUrl.username || parsedUrl.password || parsedUrl.search || parsedUrl.hash) {
+      throw new Error("weekly-context-range-source-invalid: source URL must be safe HTTP(S)");
+    }
+    sourceUrl = sourceUrlValue;
+  }
+  const revisionValue = metadata.get("来源 revision");
+  if (revisionValue && revisionValue !== "unknown" && !/^\d{1,32}$/.test(revisionValue)) {
+    throw new Error("weekly-context-range-source-invalid: source revision is malformed");
+  }
+  const missingSourceFields = [];
+  if (!sourceUrl) missingSourceFields.push("url");
+  if (!revisionValue || revisionValue === "unknown") missingSourceFields.push("revision");
+  return { coverage: range.coverage, sourceUrl, sourceRevision: revisionValue === "unknown" ? null : revisionValue,
+    missingSourceFields, planTableRow: extractPlanTableRow(text) };
+}
+
+function extractPlanTableRow(body) {
+  const rendered = MARKDOWN.render(body);
+  const dom = new JSDOM(rendered);
+  const matches = [...dom.window.document.querySelectorAll("table tr")]
+    .map((row) => ({ row, cells: [...row.children].filter((child) => child.tagName === "TD" || child.tagName === "TH") }))
+    .filter(({ cells }) => cells.length >= 2 && normalizeCellText(cells[0].textContent) === "新周计划");
+  if (matches.length !== 1) {
+    throw new Error(`weekly-context-plan-row-invalid: expected one 新周计划 table row, found ${matches.length}`);
+  }
+  const [{ row, cells }] = matches;
+  const sanitizedRow = sanitizeTableRow(dom.window.document, row);
+  const sanitizedDocument = new JSDOM(sanitizedRow);
+  const sanitizedCells = [...sanitizedDocument.window.document.querySelectorAll("tr")][0]
+    ? [...sanitizedDocument.window.document.querySelectorAll("tr")][0].children
+    : [];
+  const planTableRow = {
+    label: "新周计划",
+    html: sanitizedRow,
+    text: row.textContent.replace(/\s+/g, " ").trim(),
+    markdown: markdownForPlanRow(sanitizedDocument.window.document, [...sanitizedCells])
+  };
+  if (cells.slice(1).every((cell) => !cell.textContent.trim())) {
+    throw new Error("weekly-context-plan-row-invalid: 新周计划 row has no content");
+  }
+  return planTableRow;
+}
+
 export function parseConfirmedWeeklyJournal(sourceText, sourceWeek) {
   const normalizedWeek = normalizeWeek(sourceWeek);
   const { metadata, body } = parseWeeklyFile(sourceText, normalizedWeek);
@@ -440,6 +616,7 @@ async function readCurrentPointer(currentPath, outputDir) {
     || current.producer !== "learn-x"
     || !isWeek(current.planWeek)
     || !isWeek(current.sourceWeek)
+    || (current.sourcePeriod !== undefined) !== Array.isArray(current.sourceWeeks)
     || typeof current.sha256 !== "string"
     || !/^[0-9a-f]{64}$/.test(current.sha256)
     || typeof current.artifactSha256 !== "string"
@@ -454,6 +631,12 @@ async function readCurrentPointer(currentPath, outputDir) {
   } catch {
     throw new Error("weekly-context-current-invalid: current.json contains an invalid ISO week");
   }
+  let expectedCoverage;
+  if (current.sourcePeriod !== undefined) {
+    const range = normalizeRange(current.sourcePeriod, current.sourceWeeks);
+    if (current.sourceWeek !== range.weeks.at(-1)) throw new Error("weekly-context-current-invalid: range sourceWeek must be the final component week");
+    expectedCoverage = range.coverage;
+  } else expectedCoverage = coverageForWeek(current.sourceWeek);
   const versionPath = path.join(outputDir, current.versionPath);
   let versionBytes;
   try { versionBytes = await readFile(versionPath); }
@@ -468,10 +651,11 @@ async function readCurrentPointer(currentPath, outputDir) {
   let version;
   try { version = JSON.parse(versionBytes.toString("utf8")); }
   catch { throw new Error("weekly-context-current-invalid: pointed version JSON is invalid"); }
-  const expectedCoverage = coverageForWeek(current.sourceWeek);
   const expectedPlanWeek = isoWeekForDate(addDays(expectedCoverage.end, 1));
   if (!version || version.schemaVersion !== "shared-context/v1"
     || version.planWeek !== current.planWeek || version.sourceWeek !== current.sourceWeek
+    || version.sourcePeriod !== current.sourcePeriod
+    || JSON.stringify(version.sourceWeeks ?? null) !== JSON.stringify(current.sourceWeeks ?? null)
     || version.source?.sha256 !== current.sha256
     || version.coverage?.start !== expectedCoverage.start || version.coverage?.end !== expectedCoverage.end
     || current.planWeek !== expectedPlanWeek
@@ -513,6 +697,8 @@ function assertSameVersion(existing, candidate) {
     || existing.producer !== candidate.producer
     || existing.planWeek !== candidate.planWeek
     || existing.sourceWeek !== candidate.sourceWeek
+    || existing.sourcePeriod !== candidate.sourcePeriod
+    || JSON.stringify(existing.sourceWeeks ?? null) !== JSON.stringify(candidate.sourceWeeks ?? null)
     || JSON.stringify(existing.coverage) !== JSON.stringify(candidate.coverage)
     || existing.source?.url !== candidate.source?.url
     || existing.source?.revision !== candidate.source?.revision
@@ -578,6 +764,33 @@ function coverageForWeek(week) {
   return { start, end };
 }
 
+function normalizeRange(periodId, weeks) {
+  if (!Array.isArray(weeks) || weeks.length < 1 || weeks.length > 4) {
+    throw new Error("weekly-context-period-invalid: expected one to four weeks");
+  }
+  const normalizedWeeks = weeks.map(normalizeWeek);
+  for (let index = 1; index < normalizedWeeks.length; index += 1) {
+    const nextMonday = addDays(coverageForWeek(normalizedWeeks[index - 1]).end, 1);
+    if (isoWeekForDate(nextMonday) !== normalizedWeeks[index]) {
+      throw new Error("weekly-context-period-invalid: weeks are not contiguous");
+    }
+  }
+  const first = normalizedWeeks[0];
+  const last = normalizedWeeks.at(-1);
+  const expectedId = normalizedWeeks.length === 1
+    ? first
+    : first.slice(0, 4) === last.slice(0, 4) ? `${first}-${last.slice(-3)}` : `${first}-${last}`;
+  if (periodId !== expectedId) throw new Error("weekly-context-period-invalid: period ID does not match component weeks");
+  return { weeks: normalizedWeeks, coverage: { start: coverageForWeek(first).start, end: coverageForWeek(last).end } };
+}
+
+function rangeTitleLabel(weeks) {
+  const first = weeks[0];
+  const last = weeks.at(-1);
+  if (weeks.length === 1) return first;
+  return first.slice(0, 4) === last.slice(0, 4) ? `${first}—${last.slice(-3)}` : `${first}—${last}`;
+}
+
 function isoWeekForDate(value) {
   const date = new Date(`${value}T00:00:00.000Z`);
   if (!Number.isFinite(date.getTime())) throw new Error(`weekly-context-date-invalid: ${value}`);
@@ -606,15 +819,20 @@ function compareWeeks(left, right) {
 
 function parseArgs(argv) {
   let week = null;
+  let periodId = null;
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === "--week") week = argv[++index] || null;
+    else if (argv[index] === "--period") periodId = argv[++index] || null;
     else throw new Error(`weekly-context-argument-invalid: ${argv[index]}`);
   }
-  if (!week) throw new Error("weekly-context-argument-invalid: pass --week YYYY-Www");
-  return { week };
+  if (Boolean(week) === Boolean(periodId)) throw new Error("weekly-context-argument-invalid: pass exactly one of --week YYYY-Www or --period <period-id>");
+  return week ? { week } : { periodId };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const result = await publishConfirmedWeeklyContext(parseArgs(process.argv.slice(2)));
+  const args = parseArgs(process.argv.slice(2));
+  const result = args.periodId
+    ? await publishConfirmedWeeklyRangeContext(args)
+    : await publishConfirmedWeeklyContext(args);
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }

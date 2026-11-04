@@ -452,34 +452,34 @@ test("audit table has no Action Feedback row after retirement and keeps input to
   assert.doesNotMatch(table, /Action Feedback/);
   assert.doesNotMatch(table, /独立产物/);
   assert.doesNotMatch(table, /action-feedback\.md/);
-  assert.equal(buildInputAuditRows(payload, [], []).length, 15);
+  assert.equal(buildInputAuditRows(payload, [], []).length, 14);
 });
 
-test("fixed weekly input order places jingdu after the other P1 inputs as a 精读 source row", () => {
+test("retired Jingdu stays out of weekly input rows even when stale status and file summaries are present", () => {
   const payload = {
     week: "2026-W39",
+    range: { start: "2026-09-21T00:00:00Z", end: "2026-09-28T00:00:00Z" },
     selection: { path: "03_input/weekly/2026-W39" },
+    generatedAt: "2026-09-28T00:00:00Z",
+    stats: { fileCount: 2, itemCount: 2, uniqueItemCount: 2, duplicateCount: 0, excludedFileCount: 0 },
     sourceStatuses: {
       weread: { status: "ready", file: "weread.md", count: 3, summary: "本周划线" },
       jingdu: { status: "ready", file: "jingdu.md", count: 2, summary: "本周精读加工" }
     },
-    excludedFiles: []
+    excludedFiles: [],
+    files: [],
+    items: []
   };
   const files = [
-    { path: "03_input/weekly/2026-W39/weread.md", source: "weread", itemCount: 3, rawChars: 300, effectiveChars: 300, processChars: 300 },
-    { path: "03_input/weekly/2026-W39/jingdu.md", source: "jingdu", itemCount: 2, rawChars: 200, effectiveChars: 200, processChars: 200 }
+    { path: "03_input/weekly/2026-W39/weread.md", source: "weread", itemCount: 3, rawChars: 300, effectiveChars: 300, processChars: 300 }
   ];
   const rows = buildInputAuditRows(payload, files, { files: [] });
-  const wereadIndex = rows.findIndex((row) => row.file === "weread.md");
-  const calendarIndex = rows.findIndex((row) => row.file === "calendar.md");
-  const wisdomIndex = rows.findIndex((row) => row.file === "wisdom.md");
-  const jingduIndex = rows.findIndex((row) => row.file === "jingdu.md");
-  assert.ok(wereadIndex >= 0 && calendarIndex === wereadIndex + 1 && wisdomIndex === calendarIndex + 1 && jingduIndex === wisdomIndex + 1);
-  assert.equal(rows[jingduIndex].type, "输入");
-  assert.equal(rows[jingduIndex].source, "精读");
-  assert.equal(rows[jingduIndex].status, "ready");
+  assert.ok(rows.some((row) => row.file === "weread.md"));
+  assert.equal(rows.some((row) => row.file === "jingdu.md"), false);
   const table = renderInputAuditTable(payload, files, { files: [] });
-  assert.match(table, /\| 输入 \| 精读 \| \[jingdu\.md\]/);
+  assert.doesNotMatch(table, /jingdu\.md|本周精读加工/);
+  const pack = renderProcessPack(payload, [], files, [], { sourceCount: 0, files: [] });
+  assert.doesNotMatch(pack, /jingdu\.md|本周精读加工/);
 });
 
 test("Stage 2 delivers an execution-scope preview without exposing not-yet-generated Memory", async () => {
@@ -530,7 +530,7 @@ test("weekly automation no longer creates Action Feedback at Stage 1 (retired)",
   assert.match(stage2, /「重要来源」和「可选来源」两张表/);
 });
 
-test("Stage 3 prepares candidates before one confirmation and generates the image after Memory", async () => {
+test("Stage 3 prepares candidates before one confirmation and has no image action", async () => {
   const skill = await readFile(new URL("../../learn-x-weekly-automation/SKILL.md", import.meta.url), "utf8");
   const stage2 = skill.slice(skill.indexOf("## 阶段 2："), skill.indexOf("## 阶段 3："));
   const stage3 = skill.slice(skill.indexOf("## 阶段 3："), skill.indexOf("## 边界"));
@@ -540,26 +540,22 @@ test("Stage 3 prepares candidates before one confirmation and generates the imag
   const failClosedIndex = stage3.indexOf("任一检查失败都报告具体缺项并停在阶段 2，不生成确认卡");
   const fingerprintVerifyIndex = stage3.indexOf("npm run memory:weekly -- --week YYYY-Www --verify-approval");
   const memoryIndex = stage3.indexOf("将获准条目写入正确的季度 Memory 目标");
-  const imageIndex = stage3.indexOf("npm run image:weekly -- --week YYYY-Www");
+  const backupIndex = stage3.indexOf("npm run backup:weekly -- --period <period-id>");
+  const ywnextIndex = stage3.indexOf("$ywnext 更新索引 YYYY-Www");
+  const flomoIndex = stage3.indexOf("npm run sync:flomo -- --period <period-id>");
 
-  assert.match(stage2, /图片不再是阶段 3 的人工前置步骤/);
-  assert.doesNotMatch(stage2, /使用.*核心内容生成一张.*图片/);
+  assert.doesNotMatch(stage2, /weekly-core\.png|image:weekly|图片提示词/);
   assert.ok(finalizedContentIndex >= 0 && finalizedContentIndex < candidateIndex);
   assert.ok(failClosedIndex >= finalizedContentIndex && failClosedIndex < candidateIndex);
   assert.ok(candidateIndex >= 0 && candidateIndex < confirmationIndex);
   assert.ok(confirmationIndex >= 0 && confirmationIndex < memoryIndex);
   assert.ok(fingerprintVerifyIndex >= 0 && fingerprintVerifyIndex < memoryIndex);
-  assert.ok(memoryIndex >= 0 && memoryIndex < imageIndex);
-  assert.match(skill, /图片只生成到确认卡列出的本地目标路径/);
-  assert.match(stage3, /ChatGPT Bridge 的 image 模式/);
-  assert.match(stage3, /04_output\/_dist\/weekly\/YYYY-Www\/weekly-core\.png/);
-  assert.match(stage3, /不使用 `imagegen`/);
-  assert.match(stage3, /不得上传或发布公众号/);
+  assert.ok(memoryIndex >= 0 && memoryIndex < backupIndex);
+  assert.ok(backupIndex >= 0 && backupIndex < ywnextIndex);
+  assert.ok(ywnextIndex >= 0 && ywnextIndex < flomoIndex);
+  assert.doesNotMatch(stage3, /weekly-core\.png|image:weekly|图片提示词|generate-weekly-image/);
   assert.match(stage3, /Overall: partial/);
-  assert.match(stage3, /Image: failed/);
-  assert.match(stage3, /already-success/);
-  assert.match(stage3, /版本化文件名/);
-  assert.match(stage3, /needs_review.*不得自动重发/);
+  assert.match(skill, /缺少 Bridge 原 run 标识时，只保留 `needs_review`，不猜测原任务归属、不观察不明会话、不重发/);
   assert.match(stage3, /验证文件目标周与本轮一致.*空壳\/模板.*必需章节完整且实质正文有效.*无占位文本/);
   assert.match(stage3, /任一检查失败都报告具体缺项并停在阶段 2，不生成确认卡/);
   assert.match(stage3, /长期候选为 0 个仍展示完整确认卡/);
@@ -568,21 +564,21 @@ test("Stage 3 prepares candidates before one confirmation and generates the imag
   assert.doesNotMatch(stage3, /说明 Chat Pack 已完成的单条消息/);
   assert.doesNotMatch(skill, /ljg-card/);
   assert.doesNotMatch(skill, /~\/Downloads\/Learn-X-周报/);
-  assert.match(stage2, /确认卡缺少图片路径、备份目的地或 Flomo 目的地时，不得请求确认或执行任何写入/);
+  assert.doesNotMatch(stage2, /图片路径|weekly-core\.png|image:weekly/);
   assert.match(stage2, /备份载荷（`01_core\/`、`03_input\/`、`04_output\/`、`05_library\/`(?:，不含图像文件)?）/);
 });
 
 test("complete Weekly Output prompt defines facts, memory candidates, comparison and machine contracts", async () => {
   const prompt = await readFile(new URL("../../../../02_prompts/chatpack/reflective-decision/weekly-output.md", import.meta.url), "utf8");
-  assert.match(prompt, /^# Weekly Output 核心输出要求/m);
+  assert.match(prompt, /^# Learn-X Weekly Output 生成规范/m);
   assert.match(prompt, /Weekly Output 是 Learn-X 的\*\*周度记忆层\*\*/);
-  assert.match(prompt, /本周事实必须来自当前 Process Pack/);
+  assert.match(prompt, /本周事实以：[\s\S]*`04_output\/_dist\/weekly\/YYYY-Www\/process-pack\.md`[\s\S]*为准/);
   assert.match(prompt, /## 9\. 值得长期保留/);
-  assert.match(prompt, /最多 600 字/);
-  assert.match(prompt, /必须提出\*\*恰好 3 个\*\*/);
-  assert.match(prompt, /## 11\. 全文核心重点纪要/);
-  assert.match(prompt, /## 12\. 芒格之魂的洞察/);
-  assert.match(prompt, /## 13\. 本周最值得思考的 3 个问题与回答/);
+  assert.match(prompt, /本节最多 300 字/);
+  assert.match(prompt, /恰好提出 3 个值得用户本人回答的问题/);
+  assert.match(prompt, /## 11\. 本周最值得思考的 3 个问题与回答/);
+  assert.match(prompt, /## 12\. 全文核心重点纪要/);
+  assert.match(prompt, /## 13\. 芒格之魂的洞察/);
   assert.doesNotMatch(prompt, /请查看.*weekly-output-rules/);
 });
 

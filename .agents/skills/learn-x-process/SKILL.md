@@ -41,7 +41,7 @@ Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 刷新 YW Next �
 
 - 可以读取 `03_input/weekly/YYYY-Www/` 和 `03_input/monthly/YYYY-M/` 下的手动导入材料，支持 `.md`、`.txt`、`.json`、`.html`、`.htm`。
 - Weekly Process 只读取指定周目录，不读取其它周目录，不按 mtime 推断范围。
-- Monthly Process 读取目标月相交的周目录和指定月目录；前者提供周度原始证据，后者提供月记等月度独有输入。两者都不按 mtime 推断范围。
+- Monthly Process 读取目标月相交的单周目录和指定月目录；前者提供周度原始证据，后者提供月记等月度独有输入。另读取覆盖目标月的合并周目录中由 `_range-manifest.json` 明确标记为用户提供的 `双周ai.md`，不重复纳入该目录的其他单周采集来源；AI 事件仍须按目标月日期压缩。所有范围均不按 mtime 推断。
 - 可以在 `04_output/weekly/YYYY-WW.md` 不存在或为空时创建最小壳；如果已有内容，不覆盖、不改写。
 - 可以生成中间材料 `04_output/_dist/weekly/YYYY-Www/input.json` 和 `04_output/_dist/weekly/YYYY-Www/process-pack.md`。
 - 可以生成 metadata-only 的 `04_output/_dist/monthly/YYYY-MM/input.json`、压缩请求和自包含的 `process-pack.md`。

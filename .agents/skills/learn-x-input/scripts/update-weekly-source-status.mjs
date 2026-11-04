@@ -7,6 +7,7 @@ async function main() {
   for (const name of ["week", "source", "status", "file", "count", "summary"]) {
     if (!(name in args)) throw new Error(`缺少参数：--${name}`);
   }
+  if (args.source === "jingdu") throw new Error("jingdu-source-retired: 旧精读来源已停止登记；历史侧车仅供回溯。");
   if (SOURCE_FILES[args.source] !== args.file) throw new Error(`来源文件名与来源不匹配：${args.source}`);
   const weekRoot = path.join(repoRoot, "03_input", "weekly", args.week);
   const document = await updateWeeklySourceStatus({

@@ -12,7 +12,6 @@ export const WEEKLY_SOURCE_CONFIG = Object.freeze([
   { id: "calendar", file: SOURCE_FILES.calendar, type: "计划", source: "Time-X 日历", group: "optional", priority: 1, blocksPack: false, retries: 1, queue: "cli", collector: "input:calendar" },
   // Wisdom Gate Base collection is independent; its optional Flomo review import shares the browser lane.
   { id: "wisdom", file: SOURCE_FILES.wisdom, type: "输入", source: "智慧之门", group: "optional", priority: 1, blocksPack: false, retries: 1, queue: "cli", collector: "input:wisdom" },
-  { id: "jingdu", file: SOURCE_FILES.jingdu, type: "输入", source: "精读", group: "optional", priority: 1, blocksPack: false, retries: 2, queue: "manual", collector: null },
   { id: "coach", file: SOURCE_FILES.coach, type: "行动", source: "AI Coach", group: "optional", priority: 2, blocksPack: false, retries: 1, queue: "cli", collector: "input:coach" },
   { id: "build", file: SOURCE_FILES.build, type: "复盘", source: "Codex / Code X Build", group: "optional", priority: 2, blocksPack: false, retries: 0, queue: "external", collector: null },
   { id: "build-bot", file: SOURCE_FILES["build-bot"], type: "复盘", source: "飞书机器人 Build", group: "optional", priority: 2, blocksPack: false, retries: 0, queue: "external", collector: null },

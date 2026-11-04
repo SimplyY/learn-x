@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { assertMonthlyProcessPackSize, classifyPreviousMonthlyOutput, demoteEmbeddedHeadings, previousMonthId, readPreviousMonthlyOutput, renderProcessPack, validateCompressionDocument } from "./generate-monthly-process-pack.mjs";
-import { datedSections, extractWeeklyConfirmedSections, filterBoundaryContent, isPlaceholder, isValidAiReview, monthlyCompressionPolicies, monthlyCompressionRatioRules, monthlyVoiceMaxChars, monthlyVoiceMaxRatio, monthlyVoiceMinRatio, requiresCompressionReview, reviewMonthlyTypes, wereadMatchesDeclaredWeek, weeksIntersectingMonth } from "./monthly-process-input.mjs";
+import { collectMonthlyProcessInput, datedSections, extractWeeklyConfirmedSections, filterBoundaryContent, isPlaceholder, isValidAiReview, monthlyCompressionPolicies, monthlyCompressionRatioRules, monthlyVoiceMaxChars, monthlyVoiceMaxRatio, monthlyVoiceMinRatio, requiresCompressionReview, reviewMonthlyTypes, wereadMatchesDeclaredWeek, weeksIntersectingMonth } from "./monthly-process-input.mjs";
 
 test("selects all ISO weeks intersecting a month", () => {
   assert.deepEqual(weeksIntersectingMonth("2026-06"), ["2026-W23", "2026-W24", "2026-W25", "2026-W26", "2026-W27"]);
@@ -13,6 +13,21 @@ test("selects all ISO weeks intersecting a month", () => {
 test("selects the previous calendar month, including year rollover", () => {
   assert.equal(previousMonthId("2026-01"), "2025-12");
   assert.equal(previousMonthId("2026-06"), "2026-05");
+});
+
+test("monthly aggregation excludes retired jingdu.md from monthly inputs", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-monthly-retired-jingdu-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const monthlyDir = path.join(root, "03_input/monthly/2026-11");
+  await mkdir(monthlyDir, { recursive: true });
+  await writeFile(path.join(monthlyDir, "jingdu.md"), "RETIRED_JINGDU_SENTINEL", "utf8");
+  await writeFile(path.join(monthlyDir, "reading.md"), "Current monthly reading material", "utf8");
+
+  const result = await collectMonthlyProcessInput("2026-11", { root });
+  const sourcePaths = result.sources.map((source) => source.path);
+  assert.ok(sourcePaths.includes("03_input/monthly/2026-11/reading.md"));
+  assert.ok(!sourcePaths.includes("03_input/monthly/2026-11/jingdu.md"));
+  assert.doesNotMatch(JSON.stringify(result), /RETIRED_JINGDU_SENTINEL/);
 });
 
 test("classifies prior Monthly Output as missing, empty, shell, or full text", () => {

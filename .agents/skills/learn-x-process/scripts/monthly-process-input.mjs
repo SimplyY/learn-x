@@ -8,7 +8,7 @@ import { readWeeklySourceStatus } from "../../learn-x-input/scripts/lib/source-s
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
 const supportedExtensions = new Set([".md", ".txt", ".json", ".html", ".htm"]);
-const ignoredNames = new Set(["README.md", ".gitkeep", "weekly-inputs.md"]);
+const ignoredNames = new Set(["README.md", ".gitkeep", "weekly-inputs.md", "jingdu.md"]);
 const compressedSources = new Set(["ai", "research", "weread", "build", "build-bot", "coach", "podcast", "voice", "calendar"]);
 const preservedTypes = new Set(["monthly-journal", "weekly", "daily", "flomo", "health", "time", "weekly-core", "weekly-munger"]);
 const typeReviewThresholdBytes = 10 * 1024;
@@ -32,7 +32,8 @@ export const monthlyCompressionRatioRules = Object.freeze({
   "build-bot": Object.freeze({ min: 0.02, max: 0.08 })
 });
 
-export async function collectMonthlyProcessInput(monthId) {
+export async function collectMonthlyProcessInput(monthId, { root = repoRoot } = {}) {
+  const projectRoot = path.resolve(root);
   const month = normalizeMonthId(monthId);
   const monthDir = inputMonthDirName(month);
   const files = [];
@@ -41,16 +42,18 @@ export async function collectMonthlyProcessInput(monthId) {
   const weeklySourceStatuses = {};
 
   for (const week of weeksIntersectingMonth(month)) {
-    const weekDir = path.join(repoRoot, "03_input/weekly", week);
+    const weekDir = path.join(projectRoot, "03_input/weekly", week);
     const status = await readWeeklySourceStatus(weekDir, week);
-    weeklySourceStatuses[week] = status.sources;
-    const allWeekFiles = await collectFiles(weekDir, { origin: "weekly", week });
-    const weekFiles = allWeekFiles.filter((file) => Object.values(status.sources).every((entry) => entry.file !== path.basename(file.relativePath) || entry.status === "ready"));
+    const { jingdu: _retiredJingdu, ...activeSourceStatuses } = status.sources;
+    weeklySourceStatuses[week] = activeSourceStatuses;
+    const allWeekFiles = await collectFiles(weekDir, { origin: "weekly", week }, projectRoot);
+    const weekFiles = allWeekFiles.filter((file) => Object.values(activeSourceStatuses).every((entry) => entry.file !== path.basename(file.relativePath) || entry.status === "ready"));
     const relativeWeekPath = `03_input/weekly/${week}`;
     (weekFiles.length ? weeklyPaths : missingWeeklyPaths).push(relativeWeekPath);
     files.push(...weekFiles);
   }
-  files.push(...await collectFiles(path.join(repoRoot, "03_input/monthly", monthDir), { origin: "monthly" }));
+  files.push(...await collectConfirmedRangeAi(month, projectRoot));
+  files.push(...await collectFiles(path.join(projectRoot, "03_input/monthly", monthDir), { origin: "monthly" }, projectRoot));
 
   const sources = [];
   const dailySections = [];
@@ -62,7 +65,9 @@ export async function collectMonthlyProcessInput(monthId) {
     const buffer = await readFile(file.absolutePath);
     const info = await stat(file.absolutePath);
     const content = buffer.toString("utf8").replace(/\u0000/g, "");
-    const kind = file.origin === "weekly"
+    const kind = file.sourceOverride
+      ? { category: "inbox", source: file.sourceOverride }
+      : file.origin === "weekly"
       ? inputKindFromRelativePath(file.relativePath)
       : inputKindFromMonthlyPath(file.shortPath);
     const sourceName = baseSource(kind.source);
@@ -155,7 +160,7 @@ export async function collectMonthlyProcessInput(monthId) {
   const deterministicItems = [
     renderDailyTimeline(month, dailySections, sources),
     renderFlomoTimeline(month, flomoSections, sources),
-    ...await collectWeeklyConfirmedOutput(month, sources),
+    ...await collectWeeklyConfirmedOutput(month, sources, projectRoot),
     ...dedupeFullItems(fullItems, sources)
   ].filter(Boolean);
   const typeReview = reviewMonthlyTypes(deterministicItems);
@@ -194,10 +199,10 @@ export async function collectMonthlyProcessInput(monthId) {
   };
 }
 
-async function collectWeeklyConfirmedOutput(month, sources) {
+async function collectWeeklyConfirmedOutput(month, sources, projectRoot = repoRoot) {
   const items = [];
   for (const week of weeksIntersectingMonth(month)) {
-    const outputPath = path.join(repoRoot, "04_output/weekly", `${week.replace("-W", "-")}.md`);
+    const outputPath = path.join(projectRoot, "04_output/weekly", `${week.replace("-W", "-")}.md`);
     let buffer;
     let info;
     try {
@@ -208,7 +213,7 @@ async function collectWeeklyConfirmedOutput(month, sources) {
     }
     const sections = extractWeeklyConfirmedSections(buffer.toString("utf8"));
     if (!sections.length) continue;
-    const relativePath = toWebPath(path.relative(repoRoot, outputPath));
+    const relativePath = toWebPath(path.relative(projectRoot, outputPath));
     const source = {
       id: `S${String(sources.length + 1).padStart(3, "0")}`,
       path: relativePath,
@@ -263,7 +268,54 @@ export function extractWeeklyConfirmedSections(content) {
   });
 }
 
-async function collectFiles(dir, context) {
+async function collectConfirmedRangeAi(month, projectRoot = repoRoot) {
+  const weeklyRoot = path.join(projectRoot, "03_input/weekly");
+  let entries;
+  try {
+    entries = await readdir(weeklyRoot, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+  const files = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^\d{4}-W\d{2}-W\d{2}$/.test(entry.name)) continue;
+    const rangeDir = path.join(weeklyRoot, entry.name);
+    let manifest;
+    try {
+      manifest = JSON.parse(await readFile(path.join(rangeDir, "_range-manifest.json"), "utf8"));
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      throw new Error(`Invalid range manifest ${entry.name}: ${error.message}`);
+    }
+    const weeks = Array.isArray(manifest.period?.weeks) ? manifest.period.weeks : [];
+    if (!weeks.some((week) => weeksIntersectingMonth(month).includes(week))) continue;
+    if (manifest.ai?.suppliedByUser !== true) continue;
+    const sourcePath = String(manifest.ai.path || "");
+    const expectedPath = `03_input/weekly/${entry.name}/双周ai.md`;
+    if (sourcePath !== expectedPath) throw new Error(`Unexpected range AI path in ${entry.name}: ${sourcePath}`);
+    const absolutePath = path.join(projectRoot, sourcePath);
+    let info;
+    try {
+      info = await stat(absolutePath);
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      throw error;
+    }
+    if (!info.isFile()) continue;
+    files.push({
+      absolutePath,
+      relativePath: sourcePath,
+      shortPath: "双周ai.md",
+      origin: "weekly",
+      week: entry.name,
+      sourceOverride: "ai"
+    });
+  }
+  return files;
+}
+
+async function collectFiles(dir, context, projectRoot = repoRoot) {
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
@@ -275,7 +327,7 @@ async function collectFiles(dir, context) {
   for (const entry of entries) {
     const absolutePath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      files.push(...await collectFiles(absolutePath, context));
+      files.push(...await collectFiles(absolutePath, context, projectRoot));
       continue;
     }
     if (!entry.isFile() || entry.name.startsWith("_") || ignoredNames.has(entry.name)) continue;
@@ -283,17 +335,17 @@ async function collectFiles(dir, context) {
     if (!supportedExtensions.has(path.extname(entry.name).toLowerCase())) continue;
     files.push({
       absolutePath,
-      relativePath: toWebPath(path.relative(repoRoot, absolutePath)),
-      shortPath: toWebPath(path.relative(dirForContext(context), absolutePath)),
+      relativePath: toWebPath(path.relative(projectRoot, absolutePath)),
+      shortPath: toWebPath(path.relative(dirForContext(context, projectRoot), absolutePath)),
       ...context
     });
   }
   return files.sort((a, b) => a.relativePath.localeCompare(b.relativePath, "zh-Hans-CN"));
 }
 
-function dirForContext(context) {
-  if (context.origin === "weekly") return path.join(repoRoot, "03_input/weekly", context.week);
-  return path.join(repoRoot, "03_input/monthly");
+function dirForContext(context, projectRoot = repoRoot) {
+  if (context.origin === "weekly") return path.join(projectRoot, "03_input/weekly", context.week);
+  return path.join(projectRoot, "03_input/monthly");
 }
 
 function inputKindFromMonthlyPath(shortPath) {
@@ -540,6 +592,7 @@ function rangeIntersectsMonth(range, month) {
 }
 
 function weekFullyInsideMonth(week, month) {
+  if (!/^\d{4}-W\d{2}$/.test(String(week || ""))) return false;
   const range = isoWeekRange(week);
   const start = range.start.toISOString().slice(0, 7);
   const end = new Date(range.end.getTime() - 1).toISOString().slice(0, 7);

@@ -3,11 +3,41 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { bindWeeklyMemoryApproval, extractRequiredSections, prepareWeeklyMemory, quarterFromIsoWeek, verifyWeeklyMemoryApproval } from "./prepare-weekly-memory.mjs";
+import { bindWeeklyMemoryApproval, extractRequiredSections, prepareWeeklyMemory, quarterFromIsoWeek, verifyConfirmedWeeklyMemoryWrite, verifyWeeklyMemoryApproval, verifyWeeklyMemoryApprovalSources } from "./prepare-weekly-memory.mjs";
 
 test("assigns an ISO week to the quarter of its real Monday date", () => {
   assert.equal(quarterFromIsoWeek("2026-W01"), "2025-Q4");
   assert.equal(quarterFromIsoWeek("2026-W02"), "2026-Q1");
+});
+
+test("post-write recovery verifies the frozen proposal and exact approved Memory items without relying on the pre-write target hash", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-memory-recovery-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const proposalRoot = path.join(root, "04_output/_dist/weekly/2026-W40");
+  await mkdir(proposalRoot, { recursive: true });
+  await mkdir(path.join(root, "04_output/weekly"), { recursive: true });
+  await mkdir(path.join(root, "01_core/memory"), { recursive: true });
+  await writeFile(path.join(root, "04_output/weekly/2026-40.md"), weeklyOutput("2026-40"));
+  await prepareWeeklyMemory({ week: "2026-W40", repoRoot: root });
+  await writeFile(path.join(proposalRoot, "memory-proposed.md"), "## 2026-W40\n\n- Exact approved memory payload\n");
+  const targetPath = path.join(root, "01_core/memory/2026-Q3.memory.md");
+  await writeFile(targetPath, "# Learn-X Memory\n");
+  const binding = await bindWeeklyMemoryApproval({ week: "2026-W40", repoRoot: root });
+  const batch = {
+    reviewWeek: "2026-W40",
+    sourceBindings: { learnxMemoryFingerprint: binding.fingerprint },
+    items: [{ id: "memory-1", domain: "learn-x", source: "human", locator: `${binding.scope.memoryPath}#2026-W40/memory-1`, value: "- Exact approved memory payload\n", targets: ["memory"] }]
+  };
+  assert.equal((await verifyWeeklyMemoryApprovalSources({ week: batch.reviewWeek, fingerprint: binding.fingerprint, repoRoot: root })).verified, true);
+  await writeFile(targetPath, "# Learn-X Memory\n\n## 2026-W40\n\n### Memory\n\n- Exact approved memory payload\n\n### 继续追踪\n\n");
+  await assert.rejects(verifyWeeklyMemoryApproval({ week: batch.reviewWeek, fingerprint: binding.fingerprint, repoRoot: root }), /memory-approval-stale/);
+  const verified = await verifyConfirmedWeeklyMemoryWrite({ batch, repoRoot: root });
+  assert.equal(verified.ok, true);
+  assert.equal(verified.status, "verified");
+  assert.deepEqual(verified.evidence.itemIds, ["memory-1"]);
+  assert.match(verified.evidence.sha256, /^[a-f0-9]{64}$/);
+  await writeFile(targetPath, "# Learn-X Memory\n\n## 2026-W40\n\n### Memory\n\n- Different item\n\n### 继续追踪\n\n");
+  assert.deepEqual(await verifyConfirmedWeeklyMemoryWrite({ batch, repoRoot: root }), { ok: false, status: "unknown" });
 });
 
 test("binds one approval fingerprint to the source, exact proposed content, and fixed destinations", async (t) => {
@@ -35,7 +65,7 @@ test("binds one approval fingerprint to the source, exact proposed content, and 
   const binding = await bindWeeklyMemoryApproval({ week: "2026-W40", repoRoot: root });
   assert.match(binding.fingerprint, /^[a-f0-9]{64}$/);
   assert.equal(binding.scope.memoryPath, "01_core/memory/2026-Q3.memory.md");
-  assert.equal(binding.scope.imagePath, "04_output/_dist/weekly/2026-W40/weekly-core.png");
+  assert.equal(Object.hasOwn(binding.scope, "imagePath"), false);
   assert.deepEqual(binding.scope.backupRoots, ["01_core", "03_input", "04_output", "05_library"]);
   assert.deepEqual(binding.scope.flomo, ["03_input/weekly/2026-W40/weekly.md", "01_core/memory/2026-Q3.memory.md"]);
   assert.equal((await verifyWeeklyMemoryApproval({ week: "2026-W40", fingerprint: binding.fingerprint, repoRoot: root })).verified, true);

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { copyFile, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +14,8 @@ export const BACKUP_ROOTS = ["01_core", "03_input", "04_output", "05_library"];
 export const DRIVE_FOLDER_NAME = "Learn-X Backups";
 export const BASE_NAME = "Learn-X Backup Index";
 export const TABLE_NAME = "Snapshots";
+export const MAX_ARCHIVE_BYTES = 10_000_000;
+const FLOMO_ONLINE_ROOT = "04_output/_dist/flomo-review/online-full";
 export const EXCLUDED_FILE_REASONS = [
   { reason: "macOS metadata", test: (name) => name === ".DS_Store" },
   { reason: "credential-like filename", test: (name) => /(^|\.)env($|\.)|token|secret|credential|password|cookie|session|wallet/i.test(name) },
@@ -51,8 +53,68 @@ export function normalizeWeek(value) {
   return `${match[1]}-W${String(week).padStart(2, "0")}`;
 }
 
+export function normalizePeriod(value) {
+  const input = String(value || "");
+  const range = /^(\d{4})-W(\d{2})-(?:(\d{4})-)?W(\d{2})$/.exec(input);
+  const weeks = range
+    ? [`${range[1]}-W${range[2]}`, `${range[3] || range[1]}-W${range[4]}`]
+    : [normalizeWeek(input)];
+  const periodId = range ? input : weeks[0];
+  const parsed = weeks.map(parseIsoWeek);
+  const start = parsed[0];
+  const end = parsed.at(-1);
+  const count = weekDistance(start, end) + 1;
+  if (count < 1 || count > 4) throw new Error(`周期范围必须包含 1–4 个连续 ISO 周：${input}`);
+  const expanded = Array.from({ length: count }, (_, index) => isoWeekId(addDays(start.monday, index * 7)));
+  if (expanded.at(-1) !== weeks.at(-1) || periodId !== formatPeriod(expanded)) {
+    throw new Error(`无效或不连续的 ISO 周范围：${input}`);
+  }
+  return periodId;
+}
+
+function parseIsoWeek(value) {
+  const match = /^(\d{4})-W(\d{2})$/.exec(value);
+  if (!match) throw new Error(`无效 ISO 周：${value}。`);
+  const year = Number(match[1]);
+  const week = Number(match[2]);
+  const jan4 = new Date(Date.UTC(year, 0, 4));
+  const weekday = jan4.getUTCDay() || 7;
+  const monday = new Date(jan4);
+  monday.setUTCDate(jan4.getUTCDate() - weekday + 1 + (week - 1) * 7);
+  if (isoWeekId(monday) !== value) throw new Error(`无效 ISO 周：${value}。`);
+  return { year, week, monday };
+}
+
+function isoWeekId(date) {
+  const thursday = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  thursday.setUTCDate(thursday.getUTCDate() + 4 - (thursday.getUTCDay() || 7));
+  const year = thursday.getUTCFullYear();
+  const week = Math.ceil((((thursday - Date.UTC(year, 0, 1)) / 86_400_000) + 1) / 7);
+  return `${year}-W${String(week).padStart(2, "0")}`;
+}
+
+function addDays(date, count) {
+  const next = new Date(date);
+  next.setUTCDate(next.getUTCDate() + count);
+  return next;
+}
+
+function weekDistance(start, end) {
+  return Math.round((end.monday - start.monday) / 604_800_000);
+}
+
+function formatPeriod(weeks) {
+  if (weeks.length === 1) return weeks[0];
+  const first = weeks[0];
+  const last = weeks.at(-1);
+  return first.slice(0, 4) === last.slice(0, 4) ? `${first}-${last.slice(5)}` : `${first}-${last}`;
+}
+
 export function snapshotYear(snapshotId) {
-  return Number(normalizeWeek(snapshotId).slice(0, 4));
+  const periodId = normalizePeriod(snapshotId);
+  const range = /^(\d{4})-W\d{2}-(?:(\d{4})-)?W(\d{2})$/.exec(periodId);
+  const endWeek = range ? `${range[2] || range[1]}-W${range[3]}` : periodId;
+  return parseIsoWeek(endWeek).year;
 }
 
 export function formatFeishuDatetime(date = new Date()) {
@@ -77,6 +139,95 @@ function sha256Text(value) {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+async function lstatWithinRoot(rootDirectory, relativePath) {
+  const parts = String(relativePath).split(/[\\/]+/).filter(Boolean);
+  if (!parts.length || path.isAbsolute(relativePath) || parts.some((part) => part === "." || part === "..")) {
+    throw new Error(`备份路径无效：${relativePath}`);
+  }
+  let current = rootDirectory;
+  const rootInfo = await lstat(rootDirectory);
+  if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) throw new Error("备份工作区根目录不是普通目录。");
+  for (let index = 0; index < parts.length; index += 1) {
+    current = path.join(current, parts[index]);
+    const info = await lstat(current).catch((error) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+    if (!info) return null;
+    if (info.isSymbolicLink()) throw new Error(`Flomo 备份必要路径包含符号链接：${path.relative(rootDirectory, current)}`);
+    if (index < parts.length - 1 && !info.isDirectory()) {
+      throw new Error(`Flomo 备份必要路径不是普通目录：${path.relative(rootDirectory, current)}`);
+    }
+  }
+  return await lstat(current);
+}
+
+async function flomoBackupPolicy(rootDirectory) {
+  const onlineRoot = path.join(rootDirectory, FLOMO_ONLINE_ROOT);
+  const onlineRootStat = await lstatWithinRoot(rootDirectory, FLOMO_ONLINE_ROOT);
+  if (!onlineRootStat) return null;
+  if (!onlineRootStat.isDirectory()) throw new Error("Flomo 在线全量目录不是普通目录，拒绝生成不完整备份。");
+  const statePath = path.join(onlineRoot, "storage-mode.json");
+  const stateStat = await lstatWithinRoot(rootDirectory, `${FLOMO_ONLINE_ROOT}/storage-mode.json`);
+  if (!stateStat) throw new Error("Flomo 在线全量目录存在但 storage-mode.json 缺失，拒绝生成不完整备份。");
+  if (!stateStat.isFile() || stateStat.isSymbolicLink()) throw new Error("Flomo storage-mode.json 不是普通文件，拒绝生成不完整备份。");
+
+  let state;
+  try { state = JSON.parse(await readFile(statePath, "utf8")); }
+  catch { throw new Error("Flomo storage-mode.json 无法解析，拒绝生成不完整备份。"); }
+  const snapshotId = String(state.activeSnapshotId || "");
+  if (state.schemaVersion !== 1 || state.sourceMode !== "flomo-online-full" || !/^[A-Za-z0-9_-]+$/.test(snapshotId)) {
+    throw new Error("Flomo 活动快照状态无效，拒绝生成不完整备份。");
+  }
+
+  const activeSnapshotPath = state.activeSnapshotPath;
+  const activeCatalogPath = state.activeCatalogPath || "catalog.json";
+  const activeLedgerPath = state.activeLedgerPath || "ledger.json";
+  if (activeSnapshotPath !== `snapshots/${snapshotId}.json` ||
+      !["catalog.json", `snapshots/${snapshotId}.catalog.json`].includes(activeCatalogPath) ||
+      !["ledger.json", `snapshots/${snapshotId}.ledger.json`].includes(activeLedgerPath)) {
+    throw new Error("Flomo 活动快照路径无效，拒绝生成不完整备份。");
+  }
+
+  const backupPath = state.backupPath;
+  if (typeof backupPath !== "string" || !path.isAbsolute(backupPath)) throw new Error("Flomo 回滚快照路径无效，拒绝生成不完整备份。");
+  const backupsRoot = path.resolve(onlineRoot, "backups");
+  const backupAbsolutePath = path.resolve(backupPath);
+  const backupRelativePath = path.relative(backupsRoot, backupAbsolutePath);
+  if (!backupRelativePath || backupRelativePath === ".." || backupRelativePath.startsWith(`..${path.sep}`) || path.isAbsolute(backupRelativePath)) {
+    throw new Error("Flomo 回滚快照路径越界，拒绝生成不完整备份。");
+  }
+  const backupRelativeFromRoot = path.relative(rootDirectory, backupAbsolutePath);
+  const backupStat = await lstatWithinRoot(rootDirectory, backupRelativeFromRoot);
+  if (!backupStat?.isDirectory() || backupStat.isSymbolicLink()) throw new Error("Flomo 当前回滚快照目录缺失或不是普通目录，拒绝生成不完整备份。");
+
+  const keep = new Set(["storage-mode.json", activeSnapshotPath, activeCatalogPath, activeLedgerPath]);
+  for (const relative of keep) {
+    const info = await lstatWithinRoot(rootDirectory, `${FLOMO_ONLINE_ROOT}/${relative}`);
+    if (!info?.isFile() || info.isSymbolicLink()) throw new Error(`Flomo 活动快照文件缺失或不是普通文件：${relative}`);
+  }
+  return { keep, rollbackPrefix: path.relative(onlineRoot, backupAbsolutePath).split(path.sep).join("/") };
+}
+
+function flomoPathExclusion(filePath, policy) {
+  const prefix = `${FLOMO_ONLINE_ROOT}/`;
+  if (!policy || !filePath.startsWith(prefix)) return null;
+  const relative = filePath.slice(prefix.length);
+  if (policy.keep.has(relative) || relative.startsWith(`${policy.rollbackPrefix}/`)) return null;
+  if (relative.startsWith("snapshots/")) return "historical Flomo snapshots (active snapshot retained)";
+  if (relative.startsWith("staged/")) return "unactivated Flomo staging snapshot";
+  if (relative.startsWith("backups/")) return "superseded Flomo migration backup (active rollback retained)";
+  return null;
+}
+
+export function assertArchiveSizeWithinLimit(archiveBytes, files = []) {
+  if (!Number.isSafeInteger(archiveBytes) || archiveBytes < 0) throw new Error("备份压缩包大小无效，拒绝上传。");
+  if (archiveBytes <= MAX_ARCHIVE_BYTES) return { archiveBytes, limitBytes: MAX_ARCHIVE_BYTES };
+  const largest = [...files].sort((a, b) => b.bytes - a.bytes).slice(0, 5)
+    .map((file) => `${file.path}=${file.bytes}B`).join(", ");
+  throw new Error(`backup-archive-over-10MB: ${archiveBytes}B > ${MAX_ARCHIVE_BYTES}B; largest files: ${largest || "none"}`);
+}
+
 async function walk(root, current = root, entries = [], excluded = [], options = {}) {
   for (const child of await readdir(current, { withFileTypes: true })) {
     const absolute = path.join(current, child.name);
@@ -94,6 +245,11 @@ async function walk(root, current = root, entries = [], excluded = [], options =
       excluded.push({ path: relative, reason: "unsupported filesystem entry" });
       continue;
     }
+    const pathExclusion = options.pathExclusion?.(relative);
+    if (pathExclusion) {
+      excluded.push({ path: relative, reason: pathExclusion });
+      continue;
+    }
     const fileStat = await stat(absolute);
     entries.push({ absolute, relative, bytes: fileStat.size, sha256: await hashFile(absolute) });
   }
@@ -103,22 +259,37 @@ async function walk(root, current = root, entries = [], excluded = [], options =
 export async function collectBackupFiles(rootDirectory = repoRoot, roots = BACKUP_ROOTS, options = {}) {
   const files = [];
   const excluded = [];
+  const flomoPolicy = options.excludeHistoricalFlomo === false || !roots.includes("04_output")
+    ? null
+    : await flomoBackupPolicy(rootDirectory);
   for (const rootName of roots) {
     const root = path.join(rootDirectory, rootName);
     const rootStat = await lstat(root).catch(() => null);
     if (!rootStat?.isDirectory()) throw new Error(`备份目录不存在：${rootName}`);
-    const result = await walk(root, root, [], [], options);
+    const result = await walk(root, root, [], [], {
+      ...options,
+      pathExclusion: (relative) => options.pathExclusion?.(`${rootName}/${relative}`) || flomoPathExclusion(`${rootName}/${relative}`, flomoPolicy),
+    });
     files.push(...result.entries.map((entry) => ({ ...entry, path: `${rootName}/${entry.relative}` })));
     excluded.push(...result.excluded.map((entry) => ({ ...entry, path: `${rootName}/${entry.path}` })));
   }
   files.sort((a, b) => a.path.localeCompare(b.path));
   excluded.sort((a, b) => a.path.localeCompare(b.path));
+  if (flomoPolicy) {
+    const included = new Set(files.map((file) => file.path));
+    for (const relative of flomoPolicy.keep) {
+      const requiredPath = `${FLOMO_ONLINE_ROOT}/${relative}`;
+      if (!included.has(requiredPath)) throw new Error(`Flomo 活动文件未进入备份清单：${requiredPath}`);
+    }
+    const rollbackPath = `${FLOMO_ONLINE_ROOT}/${flomoPolicy.rollbackPrefix}/`;
+    if (!files.some((file) => file.path.startsWith(rollbackPath))) throw new Error("Flomo 当前回滚包没有可备份文件，拒绝生成不完整备份。");
+  }
   return { files, excluded };
 }
 
 export function createManifest(snapshotId, files, excluded, createdAt = new Date().toISOString()) {
   const core = {
-    snapshotId: normalizeWeek(snapshotId), roots: [...BACKUP_ROOTS], fileCount: files.length,
+    snapshotId: normalizePeriod(snapshotId), roots: [...BACKUP_ROOTS], fileCount: files.length,
     totalBytes: files.reduce((sum, file) => sum + file.bytes, 0),
     files: files.map(({ path: filePath, bytes, sha256 }) => ({ path: filePath, bytes, sha256 })),
     excludedFiles: excluded,
@@ -127,10 +298,18 @@ export function createManifest(snapshotId, files, excluded, createdAt = new Date
 }
 
 export function canSkipSuccessfulSnapshot(existing, currentManifest, refresh = false) {
+  const values = existing?.values || {};
+  const archiveName = currentManifest?.snapshotId && currentManifest?.manifestSha256
+    ? `learn-x-backup-${currentManifest.snapshotId}-${currentManifest.manifestSha256.slice(0, 8)}.tar.gz`
+    : "";
   return !refresh
-    && String(existing?.values?.Status || "") === "success"
-    && Boolean(existing.values["Manifest SHA-256"])
-    && existing.values["Manifest SHA-256"] === currentManifest?.manifestSha256;
+    && String(values.Status || "") === "success"
+    && Boolean(values["Drive File Token"])
+    && Boolean(values["Archive SHA-256"])
+    && values["Archive Name"] === archiveName
+    && Number(values["File Count"]) === Number(currentManifest?.fileCount)
+    && Number(values["Total Bytes"]) === Number(currentManifest?.totalBytes)
+    && values["Manifest SHA-256"] === currentManifest?.manifestSha256;
 }
 
 export function parseDateValue(value) {
@@ -176,29 +355,37 @@ async function copySelectedFiles(rootDirectory, stageDirectory, files) {
   }
 }
 
-export async function createArchive(rootDirectory, week, manifest, files) {
-  const tempRoot = await mkdtemp(path.join(rootDirectory, ".learn-x-backup-"));
-  const stage = path.join(tempRoot, "stage");
-  await mkdir(stage, { recursive: true });
-  for (const root of BACKUP_ROOTS) await mkdir(path.join(stage, root), { recursive: true });
-  await copySelectedFiles(rootDirectory, stage, files);
-  await writeFile(path.join(stage, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-  const archiveName = `learn-x-backup-${week}-${manifest.manifestSha256.slice(0, 8)}.tar.gz`;
-  const archivePath = path.join(tempRoot, archiveName);
-  const zopfliAvailable = await execFileAsync("python3", ["-c", "import zopfli.gzip"], { cwd: repoRoot, maxBuffer: 1024 * 1024 }).then(() => true, () => false);
-  if (zopfliAvailable) {
-    const tarPath = path.join(tempRoot, `${archiveName}.raw`);
-    try {
-      await execFileAsync("tar", ["-cf", tarPath, "-C", stage, ...BACKUP_ROOTS, "manifest.json"], { cwd: repoRoot });
-      await execFileAsync("python3", ["-c", "import sys; from zopfli import gzip; data=open(sys.argv[1], 'rb').read(); open(sys.argv[2], 'wb').write(gzip.compress(data, numiterations=15))", tarPath, archivePath], { cwd: repoRoot, maxBuffer: 1024 * 1024 });
-      await execFileAsync("gzip", ["-t", archivePath], { cwd: repoRoot, maxBuffer: 1024 * 1024 });
-    } finally {
-      await rm(tarPath, { force: true });
+async function assertStagedFilesMatchManifest(stageDirectory, expectedFiles) {
+  const actual = await collectBackupFiles(stageDirectory, BACKUP_ROOTS, { excludeImages: false, excludeHistoricalFlomo: false });
+  if (actual.excluded.length) throw new Error(`备份暂存目录包含意外文件系统项：${actual.excluded[0].path}`);
+  const expectedByPath = new Map(expectedFiles.map((file) => [file.path, file]));
+  if (actual.files.length !== expectedByPath.size) throw new Error("备份暂存文件数量与 manifest 不一致，拒绝上传。");
+  for (const file of actual.files) {
+    const expected = expectedByPath.get(file.path);
+    if (!expected || expected.bytes !== file.bytes || expected.sha256 !== file.sha256) {
+      throw new Error(`备份源在扫描后发生变化，暂存文件与 manifest 不一致：${file.path}`);
     }
-  } else {
-    await execFileAsync("tar", ["-czf", archivePath, "-C", stage, ...BACKUP_ROOTS, "manifest.json"], { cwd: repoRoot });
   }
-  return { tempRoot, archivePath, archiveName, archiveSha256: await hashFile(archivePath) };
+}
+
+export async function createArchive(rootDirectory, periodId, manifest, files) {
+  const tempRoot = await mkdtemp(path.join(rootDirectory, ".learn-x-backup-"));
+  try {
+    const stage = path.join(tempRoot, "stage");
+    await mkdir(stage, { recursive: true });
+    for (const root of BACKUP_ROOTS) await mkdir(path.join(stage, root), { recursive: true });
+    await copySelectedFiles(rootDirectory, stage, files);
+    await assertStagedFilesMatchManifest(stage, files);
+    await writeFile(path.join(stage, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    const archiveName = `learn-x-backup-${periodId}-${manifest.manifestSha256.slice(0, 8)}.tar.gz`;
+    const archivePath = path.join(tempRoot, archiveName);
+    await execFileAsync("tar", ["-czf", archivePath, "-C", stage, ...BACKUP_ROOTS, "manifest.json"], { cwd: repoRoot });
+    const archiveBytes = (await stat(archivePath)).size;
+    return { tempRoot, archivePath, archiveName, archiveBytes, archiveSha256: await hashFile(archivePath) };
+  } catch (error) {
+    await rm(tempRoot, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
 }
 
 function envOrArg(value, name) {
@@ -316,12 +503,29 @@ async function upsertSnapshot(config, fields, recordId) {
   if (recordId) args.push("--record-id", recordId);
   await runLarkCli(args);
   const snapshotId = String(fields["Snapshot ID"] || "");
+  let lastMismatches = [];
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const found = exactSnapshot(await listSnapshotRecords(config), snapshotId);
-    if (found) return found;
+    if (found) {
+      lastMismatches = snapshotReadbackMismatches(fields, found);
+      if (!lastMismatches.length) return found;
+    }
     await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
   }
+  if (lastMismatches.length) throw new Error(`Base 写入后 Snapshot 字段读回不一致：${lastMismatches.join("、")}`);
   throw new Error(`Base 写入后未读回 Snapshot ID：${snapshotId}`);
+}
+
+export function snapshotReadbackMismatches(expectedFields, record) {
+  const actual = record?.values || {};
+  return Object.entries(expectedFields).filter(([field, expected]) => {
+    if (field === "Created At") {
+      const expectedTime = parseDateValue(expected);
+      const actualTime = parseDateValue(actual[field]);
+      return !Number.isFinite(expectedTime) || !Number.isFinite(actualTime) || Math.abs(expectedTime - actualTime) > 1000;
+    }
+    return cellText(actual[field]) !== cellText(expected);
+  }).map(([field]) => field);
 }
 
 function extractToken(data) {
@@ -436,6 +640,13 @@ async function uploadArchive(config, archivePath, archiveName, existingToken = "
   return token;
 }
 
+async function downloadAndVerifyDriveArchive(config, tempRoot, fileToken, expectedArchiveBytes, expectedArchiveSha256, expectedManifestSha256) {
+  const archivePath = path.join(tempRoot, "remote-readback.tar.gz");
+  await runLarkCli(["drive", "+download", "--file-token", fileToken, "--output", path.relative(repoRoot, archivePath)]);
+  await chmod(archivePath, 0o600);
+  return validateArchiveFile(archivePath, expectedArchiveBytes, expectedArchiveSha256, expectedManifestSha256);
+}
+
 async function deleteDriveFile(fileToken) {
   await runLarkCli(["drive", "+delete", "--file-token", fileToken, "--type", "file", "--yes"]);
 }
@@ -490,30 +701,49 @@ async function runRetention(config) {
 }
 
 async function backup(args) {
-  const week = normalizeWeek(args.week);
-  const config = await ensureResources(configFromArgs(args, { requireFolder: true }));
-  await loadBaseFields(config);
-  const existing = exactSnapshot(await listSnapshotRecords(config), week);
+  const periodId = normalizePeriod(args.period || args.week);
   const { files, excluded } = await collectBackupFiles(repoRoot);
-  const manifest = createManifest(week, files, excluded);
-  if (canSkipSuccessfulSnapshot(existing, manifest, args.refresh)) {
-    return { snapshotId: week, status: "already-success", fileCount: manifest.fileCount, totalBytes: manifest.totalBytes, retention: await runRetention(config) };
-  }
-  const archive = await createArchive(repoRoot, week, manifest, files);
+  const manifest = createManifest(periodId, files, excluded);
+  const archive = await createArchive(repoRoot, periodId, manifest, files);
+  let existing = null;
+  let uploadCompleted = false;
   try {
+    assertArchiveSizeWithinLimit(archive.archiveBytes, files);
+    const config = await ensureResources(configFromArgs(args, { requireFolder: true }));
+    await loadBaseFields(config);
+    existing = exactSnapshot(await listSnapshotRecords(config), periodId);
+    if (canSkipSuccessfulSnapshot(existing, manifest, args.refresh)) {
+      const remoteReadback = await downloadAndVerifyDriveArchive(config, archive.tempRoot,
+        String(existing.values["Drive File Token"]), null,
+        String(existing.values["Archive SHA-256"]), manifest.manifestSha256);
+      if (remoteReadback.fileCount !== manifest.fileCount || remoteReadback.totalBytes !== manifest.totalBytes) {
+        throw new Error("现存云端快照与当前 manifest 的文件数或总字节数不一致。");
+      }
+      return { snapshotId: periodId, status: "already-success", fileCount: manifest.fileCount, totalBytes: manifest.totalBytes,
+        archiveBytes: remoteReadback.archiveBytes, archiveLimitBytes: MAX_ARCHIVE_BYTES, excludedCount: excluded.length, remoteReadback,
+        retention: await runRetention(config) };
+    }
     const existingToken = String(existing?.values?.["Drive File Token"] || "") || await findDriveFileByName(config.folderToken, archive.archiveName);
     const driveFileToken = await uploadArchive(config, archive.archivePath, archive.archiveName, existingToken);
+    uploadCompleted = true;
+    const remoteReadback = await downloadAndVerifyDriveArchive(config, archive.tempRoot, driveFileToken,
+      archive.archiveBytes, archive.archiveSha256, manifest.manifestSha256);
     const values = {
-      "Snapshot ID": week, Week: week, "Created At": formatFeishuDatetime(), "Archive Name": archive.archiveName,
+      "Snapshot ID": periodId, Week: periodId, "Created At": formatFeishuDatetime(), "Archive Name": archive.archiveName,
       "Drive File Token": driveFileToken, "Manifest SHA-256": manifest.manifestSha256, "Archive SHA-256": archive.archiveSha256,
       "File Count": manifest.fileCount, "Total Bytes": manifest.totalBytes, "Retention Class": "recent+annual",
-      "Snapshot Year": snapshotYear(week), Status: "success", Error: "",
+      "Snapshot Year": snapshotYear(periodId), Status: "success", Error: "",
     };
     await upsertSnapshot(config, values, existing?.id);
-    return { snapshotId: week, status: "success", fileCount: manifest.fileCount, totalBytes: manifest.totalBytes, manifestSha256: manifest.manifestSha256, archiveSha256: archive.archiveSha256, excludedCount: excluded.length, retention: await runRetention(config) };
+    return { snapshotId: periodId, status: "success", fileCount: manifest.fileCount, totalBytes: manifest.totalBytes,
+      archiveBytes: archive.archiveBytes, archiveLimitBytes: MAX_ARCHIVE_BYTES, manifestSha256: manifest.manifestSha256,
+      archiveSha256: archive.archiveSha256, excludedCount: excluded.length, remoteReadback, retention: await runRetention(config) };
   } catch (error) {
-    if (existing) {
-      try { await updateRecordStatus(config, existing, "failed", error instanceof Error ? error.message : String(error)); } catch { /* preserve original failure */ }
+    if (uploadCompleted) {
+      try {
+        const snapshot = existing || exactSnapshot(await listSnapshotRecords(config), periodId);
+        if (snapshot) await updateRecordStatus(config, snapshot, "failed", error instanceof Error ? error.message : String(error));
+      } catch { /* preserve original failure */ }
     }
     throw error;
   } finally {
@@ -528,7 +758,7 @@ export async function validateManifest(extractedRoot, expectedManifestSha256) {
   if (!Array.isArray(manifest.roots) || manifest.roots.some((root) => !BACKUP_ROOTS.includes(root))) throw new Error("manifest 备份根目录不匹配。");
   if (manifestSha256 !== sha256Text(JSON.stringify(core)) || (expectedManifestSha256 && manifestSha256 !== expectedManifestSha256)) throw new Error("manifest SHA-256 校验失败。");
   // 老快照可能包含图片；校验按快照实际清单进行，保持旧归档可恢复。
-  const files = await collectBackupFiles(extractedRoot, manifest.roots, { excludeImages: false });
+  const files = await collectBackupFiles(extractedRoot, manifest.roots, { excludeImages: false, excludeHistoricalFlomo: false });
   if (files.excluded.length) throw new Error(`恢复目录包含不允许的文件系统项：${files.excluded[0].path}`);
   if (files.files.length !== manifest.fileCount || files.files.reduce((sum, file) => sum + file.bytes, 0) !== manifest.totalBytes) throw new Error("恢复文件数量或总大小与 manifest 不一致。");
   const expected = new Map(manifest.files.map((file) => [file.path, file]));
@@ -548,8 +778,33 @@ export function validateArchiveEntries(listing) {
   }
 }
 
+export async function validateArchiveFile(archivePath, expectedArchiveBytes, expectedArchiveSha256, expectedManifestSha256) {
+  const archiveBytes = (await stat(archivePath)).size;
+  if (archiveBytes > MAX_ARCHIVE_BYTES) throw new Error(`远端压缩包超出 10 MB 上限：${archiveBytes}B`);
+  if (expectedArchiveBytes != null && archiveBytes !== Number(expectedArchiveBytes)) throw new Error("远端压缩包字节数与上传结果不一致。");
+  const archiveSha256 = await hashFile(archivePath);
+  if (expectedArchiveSha256 && archiveSha256 !== expectedArchiveSha256) throw new Error("远端压缩包 SHA-256 与上传结果不一致。");
+  const listing = await execFileAsync("tar", ["-tzf", archivePath], { cwd: repoRoot });
+  validateArchiveEntries(listing.stdout);
+  const verifyRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-backup-readback-"));
+  try {
+    await chmod(verifyRoot, 0o700);
+    const extractedRoot = path.join(verifyRoot, "extracted");
+    await mkdir(extractedRoot, { recursive: true, mode: 0o700 });
+    await execFileAsync("tar", ["-xzf", archivePath, "-C", extractedRoot], { cwd: repoRoot });
+    const manifest = await validateManifest(extractedRoot, expectedManifestSha256);
+    return {
+      archiveBytes, archiveSha256, manifestSha256: manifest.manifestSha256,
+      fileCount: manifest.fileCount, totalBytes: manifest.totalBytes,
+      tarEntries: listing.stdout.split(/\r?\n/).filter(Boolean).length,
+    };
+  } finally {
+    await rm(verifyRoot, { recursive: true, force: true });
+  }
+}
+
 async function restore(args) {
-  const week = normalizeWeek(args.week);
+  const periodId = normalizePeriod(args.period || args.week);
   if (!args.target) throw new Error("恢复必须提供 --target，默认不覆盖现有工作区。");
   const config = configFromArgs(args);
   if (!config.folderToken && !config.baseToken && !config.tableId) {
@@ -558,10 +813,10 @@ async function restore(args) {
   config.tableId = await resolveOrCreateTable(config);
   await loadBaseFields(config);
   const records = await listSnapshotRecords(config);
-  const candidates = records.filter((record) => String(record.values?.["Snapshot ID"] || "") === week && String(record.values?.Status || "") === "success");
+  const candidates = records.filter((record) => String(record.values?.["Snapshot ID"] || "") === periodId && String(record.values?.Status || "") === "success");
   candidates.sort((a, b) => parseDateValue(b.values["Created At"]) - parseDateValue(a.values["Created At"]));
   const record = candidates[0];
-  if (!record) throw new Error(`Base 中找不到可恢复的成功快照：${week}`);
+  if (!record) throw new Error(`Base 中找不到可恢复的成功快照：${periodId}`);
   const target = path.resolve(repoRoot, args.target);
   const targetInfo = await lstat(target).catch(() => null);
   if (targetInfo?.isSymbolicLink() || (targetInfo && !targetInfo.isDirectory())) throw new Error(`恢复目标不是普通目录，拒绝写入：${target}`);
@@ -579,15 +834,15 @@ async function restore(args) {
     const manifest = await validateManifest(extractedRoot, String(record.values["Manifest SHA-256"] || ""));
     await mkdir(target, { recursive: true });
     for (const entry of await readdir(extractedRoot)) await rename(path.join(extractedRoot, entry), path.join(target, entry));
-    await upsertSnapshot(config, { "Snapshot ID": week, "Restored At": formatFeishuDatetime() }, record.id);
-    return { snapshotId: week, status: "restored", target, fileCount: manifest.fileCount, totalBytes: manifest.totalBytes };
+    await upsertSnapshot(config, { "Snapshot ID": periodId, "Restored At": formatFeishuDatetime() }, record.id);
+    return { snapshotId: periodId, status: "restored", target, fileCount: manifest.fileCount, totalBytes: manifest.totalBytes };
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }
 }
 
 function printHelp() {
-  console.log(`用法：\n  npm run backup:weekly -- --week YYYY-Www [--refresh]\n  npm run restore:weekly -- --week YYYY-Www --target /path/to/new-directory\n\n默认行为：\n  自动查找或创建 Learn-X Backups、Learn-X Backup Index 和 Snapshots。\n  --refresh：替换并读回同一 Snapshot ID 的已有快照。\n\n可选 token 覆盖：\n  LEARN_X_BACKUP_DRIVE_FOLDER_TOKEN\n  LEARN_X_BACKUP_BASE_TOKEN\n  LEARN_X_BACKUP_TABLE_ID`);
+  console.log(`用法：\n  npm run backup:weekly -- --week YYYY-Www [--refresh]\n  npm run backup:weekly -- --period YYYY-Www[-Www] [--refresh]\n  npm run restore:weekly -- --period YYYY-Www[-Www] --target /path/to/new-directory\n\n范围须为 1–4 个连续 ISO 周；Snapshot ID 和 Week 字段保留完整周期标识。\n默认行为：自动查找或创建 Learn-X Backups、Learn-X Backup Index 和 Snapshots。\n--refresh：替换并读回同一 Snapshot ID 的已有快照。\n\n可选 token 覆盖：\n  LEARN_X_BACKUP_DRIVE_FOLDER_TOKEN\n  LEARN_X_BACKUP_BASE_TOKEN\n  LEARN_X_BACKUP_TABLE_ID`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

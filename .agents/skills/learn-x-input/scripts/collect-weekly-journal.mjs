@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { countInputChars } from "./lib/input-limits.mjs";
 import { defaultWeeklyReviewWeek, isoWeekRange } from "../../learn-x-process/scripts/collect-weekly-input.mjs";
 import { publishConfirmedWeeklyContext } from "./publish-weekly-context.mjs";
+import { requireCoreWeeklyGate } from "../../learn-x-process/scripts/lib/core-weekly-gate.mjs";
 
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -69,7 +70,7 @@ function assertSameAnchorTarget(current, requested) {
   }
 }
 
-export async function collectConfirmedWeeklyJournal({ week, repoRoot: root = repoRoot, fetchSection = fetchWeeklyJournalSection }) {
+export async function collectConfirmedWeeklyJournal({ week, repoRoot: root = repoRoot, fetchSection = fetchWeeklyJournalSection, requireCoreGate = requireCoreWeeklyGate }) {
   const normalizedWeek = normalizeWeek(week || defaultWeeklyReviewWeek());
   const weekDir = path.join(root, "03_input/weekly", normalizedWeek);
   const anchorPath = path.join(weekDir, WEEKLY_JOURNAL_ANCHOR_FILE);
@@ -80,6 +81,7 @@ export async function collectConfirmedWeeklyJournal({ week, repoRoot: root = rep
     throw new Error("weekly-journal-anchor-invalid: anchor JSON cannot be read");
   }
   validateAnchor(anchor, normalizedWeek);
+  await requireCoreGate([normalizedWeek], { repoRoot: root });
 
   const response = await fetchSection({
     docUrl: WEEKLY_JOURNAL_DOCUMENT_URL,
@@ -157,9 +159,9 @@ export async function fetchWeeklyJournalSection({ docUrl, blockId, timeoutMs = 6
   catch { throw new Error("weekly-journal-fetch-failed: CLI response was not valid JSON"); }
 }
 
-export function validateAnchor(anchor, week) {
+export function validateAnchor(anchor, week, documentUrl = WEEKLY_JOURNAL_DOCUMENT_URL) {
   const expected = expectedJournalDates(week);
-  if (!anchor || anchor.schemaVersion !== 1 || anchor.week !== week || anchor.documentUrl !== WEEKLY_JOURNAL_DOCUMENT_URL
+  if (!anchor || anchor.schemaVersion !== 1 || anchor.week !== week || anchor.documentUrl !== documentUrl
     || typeof anchor.documentId !== "string" || typeof anchor.targetBlockId !== "string"
     || !anchor.coverage || anchor.coverage.start !== expected.start || anchor.coverage.end !== expected.end
     || anchor.writeDate !== expected.writeDate || typeof anchor.targetTitle !== "string" || !hasExpectedJournalDate(anchor.targetTitle, expected.shortTitle)) {
@@ -226,8 +228,17 @@ function parseArgs(argv) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const options = parseArgs(process.argv.slice(2));
-  const result = options.recordAnchor
-    ? await recordWeeklyJournalAnchor(options)
-    : await collectAndPublishConfirmedWeeklyJournal(options);
-  process.stdout.write(`${JSON.stringify({ ...result, anchor: result.anchor && { ...result.anchor, documentUrl: WEEKLY_JOURNAL_DOCUMENT_URL } })}\n`);
+  try {
+    const result = options.recordAnchor
+      ? await recordWeeklyJournalAnchor(options)
+      : await collectAndPublishConfirmedWeeklyJournal(options);
+    process.stdout.write(`${JSON.stringify({ ...result, anchor: result.anchor && { ...result.anchor, documentUrl: WEEKLY_JOURNAL_DOCUMENT_URL } })}\n`);
+  } catch (error) {
+    if (!options.recordAnchor && error?.message?.startsWith("weekly-process-blocked-core")) {
+      console.error(error.message);
+      process.exitCode = 3;
+    } else {
+      throw error;
+    }
+  }
 }

@@ -25,6 +25,28 @@ test("keeps source classification for weekly input files", () => {
     category: "inbox",
     source: "jingdu"
   });
+  assert.equal(isIgnoredWeeklyInputFile("jingdu.md"), true, "legacy Jingdu files remain classifiable but are retired from active aggregation");
+});
+
+test("excludes a historical ready Jingdu file from weekly Process input", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-retired-jingdu-week-"));
+  const weekRoot = path.join(root, "03_input/weekly/2026-W29");
+  await mkdir(weekRoot, { recursive: true });
+  await writeFile(path.join(weekRoot, "jingdu.md"), "# 旧精读\n\n应保留的历史材料。\n", "utf8");
+  const updatedAt = new Date().toISOString();
+  await writeFile(path.join(weekRoot, "_source-status.json"), JSON.stringify({
+    version: 1, week: "2026-W29", updatedAt,
+    sources: { jingdu: { status: "ready", file: "jingdu.md", count: 1, summary: "legacy ready fixture", updatedAt, preservedStaleFile: false } }
+  }), "utf8");
+  try {
+    const result = await collectWeeklyInput({ repoRoot: root, week: "2026-W29" });
+    assert.equal(result.files.some((file) => file.path.endsWith("/jingdu.md")), false);
+    assert.equal(result.sourceStatuses.jingdu, undefined);
+    assert.equal(result.excludedSources.jingdu, undefined);
+    assert.equal(result.excludedFiles.some((file) => file.file === "jingdu.md"), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("keeps Time-X summaries as ordinary input", () => {

@@ -716,6 +716,31 @@ test("full browser scan preserves text nodes created by flattened lists", async 
   assert.doesNotThrow(() => validateFullFlomoScan(result));
 });
 
+test("full browser scan preserves nested list markers and hierarchy", async (t) => {
+  const bodyText = [
+    "健康读书记录：",
+    "1. 人体简史",
+    "  1. 现代健康问题",
+    "    1. 包括饮食",
+    "    2. 让健康行为嵌入生活",
+    "  2. 生命是历史妥协的产物",
+    "2. 超越百岁",
+  ].join("\n");
+  const memo = sourceRecord("memo-nested-list", bodyText, {
+    bodyMarkup: `健康读书记录：<ol><li>人体简史<ol><li>现代健康问题<ol><li>包括饮食</li><li>让健康行为嵌入生活</li></ol></li><li>生命是历史妥协的产物</li></ol></li><li>超越百岁</li></ol>`,
+  });
+  const { result } = await runBrowserScan(t, {
+    initialRecords: [memo],
+    libraryCount: 1,
+    detailRecord: memo,
+    detailEditorText: bodyText,
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.records[0].bodyText, bodyText);
+  assert.equal(result.detailVerification.bodyHash, flomoBodyHash(bodyText));
+  assert.doesNotThrow(() => validateFullFlomoScan(result));
+});
+
 test("full browser scan restores inline link URLs and ignores editor-only layout whitespace", async (t) => {
   const opening = `链接前的完整正文。${"内容段落。".repeat(30)}`;
   const url = "https://example.com/source-note";

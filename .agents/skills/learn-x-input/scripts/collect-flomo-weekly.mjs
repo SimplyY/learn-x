@@ -792,6 +792,25 @@ export function buildEgoFullScanScript({ taskName, taskSpaceId, taskSpaceName, r
   const expectedTaskSpaceName = taskSpaceId ? taskSpaceName : taskName;
   const scanKey = `__learnXFlomoFullScan_${randomUUID().replace(/-/g, "")}`;
   const extractFlomoTextHelper = [
+  "  const flattenFlomoLists = (root) => {",
+  "    const flattenList = (list, depth) => {",
+  "      const items = [...list.children].filter((item) => item.tagName === 'LI');",
+  "      const start = list.tagName === 'OL' ? Number(list.getAttribute('start') || 1) : null;",
+  "      const indent = '  '.repeat(depth);",
+  "      const lines = items.map((item, index) => {",
+  "        [...item.querySelectorAll(':scope ol, :scope ul')].forEach((nested) => flattenList(nested, depth + 1));",
+  "        const marker = list.tagName === 'OL' ? String(start + index) + '. ' : '- ';",
+  "        return item.innerText.trim().split(String.fromCharCode(10)).map((line, lineIndex) => {",
+  "          const content = line.replace(/[ \\t]+$/u, '');",
+  "          return lineIndex ? content : indent + marker + content;",
+  "        }).join(String.fromCharCode(10));",
+  "      });",
+  "      list.replaceWith(document.createTextNode(String.fromCharCode(10) + lines.join(String.fromCharCode(10))));",
+  "    };",
+  "    [...root.querySelectorAll('ol,ul')].forEach((list) => {",
+  "      if (!list.parentElement?.closest('ol,ul')) flattenList(list, 0);",
+  "    });",
+  "  };",
     "const extractFlomoText = (node) => {",
     "  if (!node) return '';",
     "  const hasTextNodes = [...node.childNodes].some((child) => child.nodeType === 3 && (child.textContent || '').trim());",
@@ -809,8 +828,8 @@ export function buildEgoFullScanScript({ taskName, taskSpaceId, taskSpaceName, r
     "      return blocks.map((child) => extractFlomoText(child)).join(String.fromCharCode(10));",
     "    }",
     "    return node.innerText || node.textContent || '';",
-    "  }",
-    "  return node.innerText || node.textContent || '';",
+  "  }",
+  "  return node.innerText || node.textContent || '';",
     "};",
   ].join("\n");
   return `
@@ -1045,18 +1064,7 @@ const state = async () => {
       const body = card.querySelector('.richText, .content.copy-allowed, .content');
       const isPinned = /^置顶[・·]/.test(link.timeText);
       const bodyCopy = body?.cloneNode(true);
-      const flattenLists = (node) => {
-        for (const list of [...node.querySelectorAll('ol,ul')]) {
-          const items = [...list.children].filter((item) => item.tagName === 'LI');
-          const start = list.tagName === 'OL' ? Number(list.getAttribute('start') || 1) : null;
-          const lines = items.map((item, index) => {
-            const marker = list.tagName === 'OL' ? String(start + index) + '. ' : '- ';
-            return marker + item.innerText.trim();
-          });
-          list.replaceWith(document.createTextNode(lines.join(String.fromCharCode(10))));
-        }
-      };
-      if (bodyCopy) flattenLists(bodyCopy);
+      if (bodyCopy) flattenFlomoLists(bodyCopy);
       for (const inlineLink of bodyCopy?.querySelectorAll('a[href]') || []) {
         const href = inlineLink.href;
         if (href) inlineLink.replaceWith(document.createTextNode(href));
@@ -1399,15 +1407,7 @@ try {
       window.__learnXFlomoExtractDetailBody = (node) => {
         if (!node) return { text: '', source: '' };
         const copy = node.cloneNode(true);
-        for (const list of [...copy.querySelectorAll('ol,ul')]) {
-          const items = [...list.children].filter((item) => item.tagName === 'LI');
-          const start = list.tagName === 'OL' ? Number(list.getAttribute('start') || 1) : null;
-          const lines = items.map((item, index) => {
-            const marker = list.tagName === 'OL' ? String(start + index) + '. ' : '- ';
-            return marker + item.innerText.trim();
-          });
-          list.replaceWith(document.createTextNode(lines.join(String.fromCharCode(10))));
-        }
+        flattenFlomoLists(copy);
         for (const link of copy.querySelectorAll('a[href]')) {
           if (link.href) link.replaceWith(document.createTextNode(link.href));
         }

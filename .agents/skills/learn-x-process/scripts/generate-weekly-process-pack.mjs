@@ -10,9 +10,11 @@ import { MAX_ACCEPTED_MISSING_RECORDS } from "../../learn-x-input/scripts/lib/fl
 import { defaultWeeklyReviewWeek, isoWeekRange, collectWeeklyInput } from "./collect-weekly-input.mjs";
 import { validateAiReview } from "./monthly-process-input.mjs";
 import { loadWeeklyPreparation, prepareWeeklyProcessInputs } from "./weekly-preprocessing.mjs";
+import { requireCoreWeeklyGate } from "./lib/core-weekly-gate.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
+const activeWeeklySourceIds = new Set(WEEKLY_SOURCE_CONFIG.map((source) => source.id));
 const JOURNAL_INPUT = { file: "weekly.md", type: "日志", source: "飞书周记", mode: "manual", group: "stage", priority: null, blocksPack: true, note: "阶段前提：已确认目标周周记" };
 const FIXED_WEEKLY_INPUTS = [
   { ...WEEKLY_SOURCE_CONFIG[0], statusSource: WEEKLY_SOURCE_CONFIG[0].id },
@@ -72,14 +74,14 @@ export async function generateWeeklyProcessPack(options = {}) {
 }
 
 export function getWeeklyPackDeliveryStatus(payload) {
-  const hasUnverifiedSource = Object.values(payload.sourceStatuses || {}).some((entry) =>
-    ["failed", "unavailable", "needs_review"].includes(entry.status) || entry.preservedStaleFile)
-    || Object.keys(payload.excludedSources || {}).length > 0
+  const hasUnverifiedSource = Object.entries(payload.sourceStatuses || {}).some(([source, entry]) =>
+    activeWeeklySourceIds.has(source) && (["failed", "unavailable", "needs_review", "partial"].includes(entry.status) || entry.preservedStaleFile))
+    || Object.keys(payload.excludedSources || {}).some((source) => activeWeeklySourceIds.has(source))
     || (payload.preprocessing?.exclusions || []).length > 0;
   return hasUnverifiedSource ? "有缺口已生成" : "完整生成";
 }
 
-export async function validateWeeklyProcessInputs({ week, repoRoot: root = repoRoot, payload, allowPartial = false }) {
+export async function validateWeeklyProcessInputs({ week, repoRoot: root = repoRoot, payload, allowPartial = false, requireJournal = true }) {
   const byFile = new Map(payload.files.map((file) => [path.basename(file.path), file]));
   const status = payload.sourceStatuses || {};
   const issues = [];
@@ -151,15 +153,17 @@ export async function validateWeeklyProcessInputs({ week, repoRoot: root = repoR
     else issues.push(...aiIssues);
   }
 
-  const weeklyFile = byFile.get("weekly.md");
-  if (!weeklyFile) {
-    issues.push("已确认的目标周周记 weekly.md 缺失");
-  } else {
-    const text = await readFile(path.join(root, weeklyFile.path), "utf8");
-    const weekTag = text.match(/(?:目标周|覆盖周|目标覆盖周)[：:]\s*(\d{4}-W\d{2})/i)?.[1];
-    if (text.includes("【待优化】AI 基础草稿")) issues.push("weekly.md 仍带有未确认草稿标记");
-    if (weekTag !== targetWeek) issues.push(`weekly.md 目标周标记缺失或不匹配（应为 ${targetWeek}）`);
-    if (!hasSubstantiveWeeklyJournal(text)) issues.push("weekly.md 只有模板、占位或空内容，不能作为已确认周记");
+  if (requireJournal) {
+    const weeklyFile = byFile.get("weekly.md");
+    if (!weeklyFile) {
+      issues.push("已确认的目标周周记 weekly.md 缺失");
+    } else {
+      const text = await readFile(path.join(root, weeklyFile.path), "utf8");
+      const weekTag = text.match(/(?:目标周|覆盖周|目标覆盖周)[：:]\s*(\d{4}-W\d{2})/i)?.[1];
+      if (text.includes("【待优化】AI 基础草稿")) issues.push("weekly.md 仍带有未确认草稿标记");
+      if (weekTag !== targetWeek) issues.push(`weekly.md 目标周标记缺失或不匹配（应为 ${targetWeek}）`);
+      if (!hasSubstantiveWeeklyJournal(text)) issues.push("weekly.md 只有模板、占位或空内容，不能作为已确认周记");
+    }
   }
 
   if (allowPartial) {
@@ -280,7 +284,7 @@ function hasSubstantiveWeeklyJournal(content) {
   return lines.some((line) => countInputChars(line.replace(/[`*_>#|]/g, "").trim()) >= 12);
 }
 
-function applyWeeklyPreparation(payload, manifest) {
+export function applyWeeklyPreparation(payload, manifest) {
   const exclusions = new Map((manifest.exclusions || []).map((item) => [item.sourcePath, item.reason]));
   const preparedByItem = new Map((manifest.preparedItems || []).filter((item) => item.itemId).map((item) => [item.itemId, item]));
   const preparedByPath = new Map((manifest.preparedItems || []).filter((item) => !item.itemId).map((item) => [item.path, item]));
@@ -376,6 +380,9 @@ async function atomicWrite(filePath, content) {
 
 export function renderProcessPack(payload, sourceSummaries, fileSummaries, items, compression, previousOutput = {}) {
   const metrics = measureProcessPackMetrics(items, fileSummaries, payload.preprocessing, previousOutput);
+  const outputPath = payload.selection?.mode === "period-range"
+    ? `04_output/weekly/${payload.week}.md`
+    : `04_output/weekly/${outputWeekId(payload.week)}.md`;
   const pack = [
     `# Learn-X Process Pack｜${payload.week}`,
     "",
@@ -386,8 +393,8 @@ export function renderProcessPack(payload, sourceSummaries, fileSummaries, items
     "## 0. 使用方式",
     "",
     "1. 第 9 节若含上周 Output，只能用于跨周对照；本周事实以本文件第 1–7 节为准。使用本文件和完整受治理 Weekly Output 主提示词生成最终 Weekly Output；`input.json` 是脚本中间态，仅在排错或核查来源时使用。",
-    "2. Codex / 脚本只生成 `_dist` 和 `04_output/weekly/YYYY-WW.md` 最小壳；如果 Output 文件已有内容，不覆盖。",
-    "3. 人再决定是否把正文写入 `04_output/weekly/YYYY-WW.md`，以及是否进入 Memory、正式 `道/`、`法/`、`术`、Prompt 或 Skill。",
+    `2. Codex / 脚本只生成 \`_dist\` 和 \`${outputPath}\` 最小壳；如果 Output 文件已有内容，不覆盖。`,
+    `3. 人再决定是否把正文写入 \`${outputPath}\`，以及是否进入 Memory、正式 \`道/\`、\`法/\`、\`术\`、Prompt 或 Skill。`,
     "",
     "## 1. 处理信息",
     "",
@@ -526,17 +533,22 @@ export function buildInputAuditRows(payload, fileSummaries, compression) {
   const summariesByFile = new Map(fileSummaries.map((file) => [path.basename(file.path), file]));
   const statusesByFile = new Map(Object.entries(payload.sourceStatuses || {}).map(([source, entry]) => [entry.file, { source, entry }]));
   const fixedFiles = new Set(FIXED_WEEKLY_INPUTS.map((definition) => definition.file));
+  const rangeAiFile = payload.schemaVersion === "weekly-process-range/v1" && payload.sourceStatuses?.ai?.status === "ready"
+    ? summariesByFile.get(payload.sourceStatuses.ai.file)
+    : null;
+  if (rangeAiFile) fixedFiles.add(path.basename(rangeAiFile.path));
   const rows = FIXED_WEEKLY_INPUTS
     .filter((definition) => !payload.omittedSources?.includes(definition.statusSource))
     .map((definition) => buildInputAuditRow({
     payload,
     definition,
-    fileSummary: summariesByFile.get(definition.file),
-    statusInfo: definition.statusSource ? statusesByFile.get(definition.file) : undefined
+    fileSummary: summariesByFile.get(definition.file) || (definition.statusSource === "ai" ? rangeAiFile : undefined),
+    statusInfo: definition.statusSource ? statusesByFile.get(definition.file) || (definition.statusSource === "ai" && rangeAiFile ? { source: "ai", entry: payload.sourceStatuses.ai } : undefined) : undefined
   }));
 
   for (const fileSummary of fileSummaries) {
     const fileName = path.basename(fileSummary.path);
+    if (fileName === "jingdu.md") continue;
     if (fixedFiles.has(fileName)) continue;
     rows.push({
       ...buildInputAuditRow({ payload, definition: { file: fileName, type: "其他", source: fileSummary.source || "未命名来源", mode: "extra" }, fileSummary }),
@@ -553,17 +565,19 @@ function buildInputAuditRow({ payload, definition, fileSummary, statusInfo }) {
   const excluded = payload.excludedSources?.[definition.statusSource];
   const isManual = definition.mode === "manual";
   const hasMaterial = Boolean(fileSummary);
-  const isReady = entry?.status === "ready" || (!entry && hasMaterial);
+  const isReady = entry?.status === "ready" || (entry?.status === "partial" && hasMaterial) || (!entry && hasMaterial);
   const status = excluded?.status || entry?.status || (hasMaterial ? (isManual ? "ready（人工）" : "ready（兼容）") : "未发现");
   const stale = entry?.preservedStaleFile ? "；旧文件保留但过期、不计入" : "";
   const present = hasMaterial || Boolean(excluded) || Boolean(payload.excludedFiles?.some((file) => file.file === definition.file && file.present));
   const filePath = fileSummary?.path || `03_input/weekly/${distWeekId(payload.week)}/${definition.file}`;
-  const link = present ? localFileLink(filePath, definition.file) : "—";
+  const link = present ? localFileLink(filePath, fileSummary?.shortPath || definition.file) : "—";
 
   let result;
   const preparedExclusion = payload.preprocessing?.exclusions?.find((item) => item.sourcePath === fileSummary?.path);
   if (excluded) {
     result = `排除：来源核验失败（${excluded.reason}）`;
+  } else if (entry?.status === "partial" && hasMaterial) {
+    result = `部分覆盖；仅纳入已验证组成周${stale}`;
   } else if (entry && entry.status !== "ready") {
     result = `排除：${entry.summary || entry.status}${stale}`;
   } else if (preparedExclusion) {
@@ -642,6 +656,7 @@ function renderStatusLabel(status) {
     failed: "🔴 **失败**",
     unavailable: "🟠 不可用",
     needs_review: "🔴 **未验收**",
+    partial: "🟠 部分覆盖",
     running: "⏳ 执行中",
     pending: "⏳ 待执行",
     "recheck-only": "🔎 仅复核",
@@ -727,10 +742,11 @@ function renderCompressionSummary(compression, fileSummaries = []) {
 
 function renderSourceStatuses(payload) {
   const rows = Object.entries(payload.sourceStatuses || {})
+    .filter(([source]) => activeWeeklySourceIds.has(source))
     .filter(([source]) => !payload.omittedSources?.includes(source))
     .sort(([left], [right]) => (weeklySourceForId(left)?.order ?? Number.MAX_SAFE_INTEGER) - (weeklySourceForId(right)?.order ?? Number.MAX_SAFE_INTEGER))
     .map(([source, entry]) => {
-    const usable = entry.status === "ready" ? "计入" : "排除";
+    const usable = entry.status === "ready" ? "计入" : entry.status === "partial" ? "部分计入" : "排除";
     const stale = entry.preservedStaleFile ? "旧文件已保留但过期" : "无旧文件";
     const present = payload.files.some((file) => file.path.endsWith(`/${entry.file}`))
       || payload.excludedFiles.some((file) => file.file === entry.file && file.present);
@@ -957,7 +973,13 @@ function parseArgs(argv) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const result = await generateWeeklyProcessPack(parseArgs(process.argv.slice(2)));
+  const options = parseArgs(process.argv.slice(2));
+  const week = options.week || defaultWeeklyReviewWeek();
+  if (!options.prepare) {
+    try { await requireCoreWeeklyGate([week]); }
+    catch (error) { console.error(error.message); process.exit(3); }
+  }
+  const result = await generateWeeklyProcessPack(options);
 
   if (result.prepared) {
     console.log(`Weekly preprocessing manifest: ${path.relative(repoRoot, result.preparation.manifestPath)}`);

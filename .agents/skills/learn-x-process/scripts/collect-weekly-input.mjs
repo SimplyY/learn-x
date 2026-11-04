@@ -9,7 +9,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
 const supportedExtensions = new Set([".md", ".txt", ".json", ".html", ".htm"]);
 // Retired-source reports remain on disk for history, but stay out of Process.
-const ignoredFileNames = new Set(["README.md", ".gitkeep", "ai.generated.md", "feishu-docs.md"]);
+const ignoredFileNames = new Set(["README.md", ".gitkeep", "ai.generated.md", "feishu-docs.md", "jingdu.md"]);
 
 export async function collectWeeklyInput(options = {}) {
   const week = options.week || defaultWeeklyReviewWeek();
@@ -21,8 +21,9 @@ export async function collectWeeklyInput(options = {}) {
   const range = isoWeekRange(week);
   const allFiles = await collectInputFiles(weekInputRoot, root);
   const sourceStatus = await readWeeklySourceStatus(weekInputRoot, week);
-  const statusEntries = Object.entries(sourceStatus.sources);
-  let files = filterFilesBySourceStatus(allFiles, sourceStatus.sources);
+  const { jingdu: _retiredJingdu, ...activeSourceStatuses } = sourceStatus.sources;
+  const statusEntries = Object.entries(activeSourceStatuses);
+  let files = filterFilesBySourceStatus(allFiles, activeSourceStatuses);
   const excludedFiles = statusEntries
     .filter(([, entry]) => entry.status !== "ready")
     .map(([source, entry]) => ({ source, file: entry.file, status: entry.status, count: entry.count, summary: entry.summary, preservedStaleFile: entry.preservedStaleFile, present: allFiles.some((file) => path.basename(file.relativePath) === entry.file) }));
@@ -107,7 +108,7 @@ export async function collectWeeklyInput(options = {}) {
       ...file
     })),
     items: uniqueItems,
-    sourceStatuses: sourceStatus.sources,
+    sourceStatuses: activeSourceStatuses,
     excludedSources,
     excludedFiles,
     stats: {
@@ -427,8 +428,8 @@ function parseArgs(argv) {
   return options;
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const { payload, outputPath } = await writeWeeklyInput(parseArgs(process.argv.slice(2)));
+if (globalThis.process?.argv?.[1] === fileURLToPath(import.meta.url)) {
+  const { payload, outputPath } = await writeWeeklyInput(parseArgs(globalThis.process.argv.slice(2)));
   console.log(`Collected ${payload.stats.uniqueItemCount} unique items from ${payload.stats.fileCount} files.`);
   console.log(`Input written: ${path.relative(repoRoot, outputPath)}`);
 }
