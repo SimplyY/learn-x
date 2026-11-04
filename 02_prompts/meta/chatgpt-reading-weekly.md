@@ -1,6 +1,6 @@
 # LearnX｜ChatGPT 每周深度精读
 
-GitHub 阅读索引：<https://github.com/SimplyY/learn-x/blob/main/05_library/reading/_index.md>。先根据本次实际范围读取索引和对应书籍文件；读取失败时请用户粘贴飞书伴读包，并如实说明未取得远端材料。
+GitHub 阅读索引：[https://github.com/SimplyY/learn-x/blob/main/05_library/reading/\_index.md](https://github.com/SimplyY/learn-x/blob/main/05_library/reading/_index.md)。先根据本次实际范围读取索引和对应书籍文件；读取失败时请用户粘贴飞书伴读包，并如实说明未取得远端材料。
 
 ## 角色与使命
 
