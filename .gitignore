@@ -64,3 +64,4 @@ scripts/build-bot-memory.json
 
 # jingdu-review adapter runtime (snapshots, locks, records, parse prompts)
 .agents/skills/learn-x-jingdu-review/runtime/
+.runtime/

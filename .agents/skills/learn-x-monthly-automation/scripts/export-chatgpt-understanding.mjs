@@ -7,7 +7,7 @@ import { runBridgeCli } from "../../learn-x-weekly-automation/scripts/generate-a
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const defaultRepoRoot = path.resolve(__dirname, "../../../..");
 const maxChars = { self: 2250, memory: 4500 };
-// 两次月度请求间隔对齐 Bridge 默认成功冷却（60 秒）；失败重试等待仍以 Bridge 返回的 retryAfterSeconds 为准。
+// Legacy Bridge 结果之间保留原冷却；人工结果由用户分阶段提交，不需要再等待浏览器冷却。
 export const DEFAULT_BRIDGE_GAP_MS = 60_000;
 const defaultBridgeTimeoutMs = 270_000;
 const safeRetryReasons = new Set([
@@ -22,7 +22,8 @@ const safeRetryReasons = new Set([
   "assistant-selector-missing",
   "chatgpt-rate-limited",
   "invalid-output",
-  "previous-run-uncertain"
+  "previous-run-uncertain",
+  "history-materials-unverified"
 ]);
 
 export function normalizeMonth(value) {
@@ -212,6 +213,16 @@ async function currentFiles(repoRoot, month) {
   };
 }
 
+function runMetadata(result) {
+  if (result?.source === "manual-handoff") return {
+    source: "manual-handoff", handoffId: result.handoffId,
+    candidateId: result.candidate?.candidateId, evidenceLevel: result.candidate?.evidenceLevel,
+    rawSha256: result.candidate?.rawSha256, outputSha256: sha256(result.text || ""),
+  };
+  return { runId: result?.runId, conversationUrl: result?.conversationUrl,
+    ...(result?.contextPack ? { contextPack: result.contextPack } : {}) };
+}
+
 export async function exportChatgptUnderstanding(options = {}) {
   const repoRoot = options.repoRoot || defaultRepoRoot;
   const month = normalizeMonth(options.month);
@@ -226,6 +237,11 @@ export async function exportChatgptUnderstanding(options = {}) {
     self: buildPrompt(selfTemplate, "self"),
     memory: buildPrompt(memoryTemplate, "memory")
   };
+  if (previousState?.status === "awaiting_manual"
+    && (previousState.promptSha256?.self !== sha256(prompts.self)
+      || previousState.promptSha256?.memory !== sha256(prompts.memory)) && !options.retry) {
+    return { status: "needs_review", reason: "input-changed-after-manual-handoff", month, files: current.files };
+  }
   if (previousState?.status === "succeeded") {
     const unchanged = previousState.outputSha256?.self === sha256(current.self.trim())
       && previousState.outputSha256?.memory === sha256(current.memory.trim());
@@ -273,17 +289,49 @@ export async function exportChatgptUnderstanding(options = {}) {
   const runner = options.runBridge || runBridgeCli;
   const runOne = async (part, prompt) => {
     try {
-      return await runner(prompt, {
+      const historyDependency = options.historyDependency?.[part] || options.historyDependency || {
+        required: true, completenessVerified: false, items: [],
+        missing: ["当前 ChatGPT 账号 Memory 的实际内容及完整性尚未核验"],
+      };
+      const bridge = await runner(prompt, {
         ...options,
         timeoutMs: options.bridgeTimeoutMs ?? options.timeoutMs ?? defaultBridgeTimeoutMs,
         callerLabel: "learn-x:monthly-understanding",
-        understandingPart: part
+        understandingPart: part,
+        manualHandoff: {
+          repoRoot, callerLabel: "learn-x:monthly-understanding",
+          taskId: `monthly-understanding:${month}:${part}`, stage: part,
+          artifactId: part === "self" ? "chatgpt-self-reading.md" : "chatgpt-ai-memory.md",
+          inputVersion: `sha256:${sha256(prompt)}`,
+          originEventId: `learn-x-monthly-understanding:${month}:${part}`,
+          promptId: part === "self" ? "learn-x.chatgpt-self-reading" : "learn-x.chatgpt-ai-memory",
+          promptRevision: sha256(prompt), historyDependency,
+          expectedOutputFormat: part === "self" ? "完整 Markdown 自我阅读正文；可包含 <SELF_READING> 标记" : "完整 Markdown AI 记忆正文；可包含 <AI_MEMORY> 标记",
+          fullFlow: ["提取对应结果正文", "脱敏并验证长度和内容", "两份结果均通过后成对更新正式文件并写入差异记录"],
+          continuationChoice: "continue-complete-workflow",
+          sourceRequirements: { month, part, currentOutputSha256: sha256(part === "self" ? current.self : current.memory),
+            historyScope: "仅依赖当前 ChatGPT 账号 Memory；不读取本地文件" },
+        },
       });
+      const result = bridge?.result || bridge;
+      if (result?.status !== "candidate_received") return bridge;
+      let text;
+      try { text = new TextDecoder("utf-8", { fatal: true }).decode(result.resultBytes); }
+      catch { return { ...bridge, result: { ...result, status: "needs_review", reason: "manual-result-not-utf8" } }; }
+      return { ...bridge, result: { ...result, status: "succeeded", text, source: "manual-handoff" } };
     }
     catch (error) { return { result: null, exit: { error: String(error?.message || error) } }; }
   };
   const selfBridge = await runOne("self", prompts.self);
   const selfResult = selfBridge?.result;
+  if (selfResult?.status === "awaiting_manual") {
+    const waiting = { schemaVersion: 1, month, status: "awaiting_manual", source: "manual-handoff",
+      promptSha256: { self: sha256(prompts.self), memory: sha256(prompts.memory) },
+      runs: { self: { handoffId: selfResult.handoffId, manualHandoff: selfResult.manualHandoff } },
+      reason: selfResult.reason || "manual-handoff-required", updatedAt: new Date().toISOString() };
+    await writeJsonAtomic(statePath, waiting);
+    return { ...waiting, files: current.files };
+  }
   if (selfResult?.status !== "succeeded") {
     const failure = {
       schemaVersion: 1, month, status: selfResult?.status === "needs_review" ? "needs_review" : "failed",
@@ -299,11 +347,23 @@ export async function exportChatgptUnderstanding(options = {}) {
   }
 
   const bridgeGapMs = options.bridgeGapMs ?? DEFAULT_BRIDGE_GAP_MS;
-  if (bridgeGapMs > 0) {
+  if (selfResult.source !== "manual-handoff" && bridgeGapMs > 0) {
     await (options.sleep || ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))))(bridgeGapMs);
   }
   const memoryBridge = await runOne("memory", prompts.memory);
   const memoryResult = memoryBridge?.result;
+  if (memoryResult?.status === "awaiting_manual") {
+    const waiting = { schemaVersion: 1, month, status: "awaiting_manual", source: "manual-handoff",
+      promptSha256: { self: sha256(prompts.self), memory: sha256(prompts.memory) },
+      runs: {
+        self: { source: selfResult.source || "unknown", handoffId: selfResult.handoffId,
+          candidateId: selfResult.candidate?.candidateId, evidenceLevel: selfResult.candidate?.evidenceLevel,
+          rawSha256: selfResult.candidate?.rawSha256, runId: selfResult.runId, conversationUrl: selfResult.conversationUrl },
+        memory: { handoffId: memoryResult.handoffId, manualHandoff: memoryResult.manualHandoff },
+      }, reason: memoryResult.reason || "manual-handoff-required", updatedAt: new Date().toISOString() };
+    await writeJsonAtomic(statePath, waiting);
+    return { ...waiting, files: current.files };
+  }
   if (memoryResult?.status !== "succeeded") {
     const failure = {
       schemaVersion: 1, month, status: memoryResult?.status === "needs_review" ? "needs_review" : "failed",
@@ -346,10 +406,8 @@ export async function exportChatgptUnderstanding(options = {}) {
     schemaVersion: 1, month, status: "validated",
     promptSha256: { self: sha256(prompts.self), memory: sha256(prompts.memory) },
     outputSha256: hashes,
-    runs: {
-      self: { runId: selfResult.runId, conversationUrl: selfResult.conversationUrl, ...(selfResult.contextPack ? { contextPack: selfResult.contextPack } : {}) },
-      memory: { runId: memoryResult.runId, conversationUrl: memoryResult.conversationUrl, ...(memoryResult.contextPack ? { contextPack: memoryResult.contextPack } : {}) }
-    },
+    runs: { self: runMetadata(selfResult), memory: runMetadata(memoryResult) },
+    completionSource: selfResult.source === "manual-handoff" || memoryResult.source === "manual-handoff" ? "user-asserted" : "chatgpt-bridge",
     completedAt: new Date().toISOString()
   });
   try {
@@ -383,10 +441,8 @@ export async function exportChatgptUnderstanding(options = {}) {
     schemaVersion: 1, month, status: "succeeded",
     promptSha256: { self: sha256(prompts.self), memory: sha256(prompts.memory) },
     outputSha256: hashes,
-    runs: {
-      self: { runId: selfResult.runId, conversationUrl: selfResult.conversationUrl, ...(selfResult.contextPack ? { contextPack: selfResult.contextPack } : {}) },
-      memory: { runId: memoryResult.runId, conversationUrl: memoryResult.conversationUrl, ...(memoryResult.contextPack ? { contextPack: memoryResult.contextPack } : {}) }
-    },
+    runs: { self: runMetadata(selfResult), memory: runMetadata(memoryResult) },
+    completionSource: selfResult.source === "manual-handoff" || memoryResult.source === "manual-handoff" ? "user-asserted" : "chatgpt-bridge",
     completedAt: new Date().toISOString()
   });
   return {
@@ -410,6 +466,6 @@ function parseArgs(argv) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const result = await exportChatgptUnderstanding(parseArgs(process.argv.slice(2)));
   process.stdout.write(`${JSON.stringify(result)}\n`);
-  // Best-effort by contract: a handled Bridge failure must not abort monthly Stage 1.
-  process.exitCode = ["succeeded", "skipped", "needs_review", "failed"].includes(result.status) ? 0 : 1;
+  // Awaiting manual releases this run with a dedicated non-success exit code; other handled states remain reportable so deterministic Stage 1 can continue.
+  process.exitCode = result.status === "awaiting_manual" ? 75 : ["succeeded", "skipped", "needs_review", "failed"].includes(result.status) ? 0 : 1;
 }

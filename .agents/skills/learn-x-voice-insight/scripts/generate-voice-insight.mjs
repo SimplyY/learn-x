@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { defaultWeeklyReviewWeek, isoWeekRangeShanghai, normalizeWeek } from "../../learn-x-input/scripts/collect-weread-weekly.mjs";
 import { writeVoiceWeekly } from "../../learn-x-input/scripts/collect-voice-weekly.mjs";
 import { safeBusinessOutcomeReason, writeBridgeBusinessOutcome } from "../../../lib/bridge-business-outcome.mjs";
+import { runBridgeCli as runManualHandoffCli } from "../../learn-x-weekly-automation/scripts/generate-ai-review.mjs";
 
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -44,7 +45,7 @@ async function recordVoiceBusinessOutcome(state, options = {}) {
   if (!state?.attemptId) return;
   const status = state.status === "completed" ? "succeeded"
     : state.status === "failed" ? "failed"
-      : state.status === "generated" || state.status === "submitted" ? "pending" : "needs_review";
+      : state.status === "generated" || state.status === "submitted" || state.status === "awaiting_manual" ? "pending" : "needs_review";
   const stage = state.status === "archive_pending" ? "delivery"
     : state.status === "needs_review" && String(state.reason || "").startsWith("invalid-output:") ? "validation"
       : state.status === "needs_review" || state.status === "failed" ? "submit" : undefined;
@@ -54,12 +55,13 @@ async function recordVoiceBusinessOutcome(state, options = {}) {
     ...(typeof state.runId === "string" ? { runId: state.runId } : {}),
     status, deliveryStatus: status,
     businessValidationStatus: ["completed", "generated"].includes(state.status) ? "succeeded"
-      : state.status === "submitted" ? "pending" : "needs_review",
+      : state.status === "submitted" || state.status === "awaiting_manual" ? "pending" : "needs_review",
     promotionStatus: state.status === "completed" ? "succeeded"
-      : state.status === "generated" || state.status === "submitted" ? "pending" : "needs_review",
+      : state.status === "generated" || state.status === "submitted" || state.status === "awaiting_manual" ? "pending" : "needs_review",
     readbackStatus: state.status === "completed" ? "succeeded"
-      : state.status === "generated" || state.status === "submitted" ? "pending" : "needs_review",
-    completionSource: state.status === "completed" || state.status === "generated" ? "ai-generated" : "unknown",
+      : state.status === "generated" || state.status === "submitted" || state.status === "awaiting_manual" ? "pending" : "needs_review",
+    completionSource: state.source === "manual-handoff" ? "user-asserted"
+      : state.status === "completed" || state.status === "generated" ? "ai-generated" : "unknown",
     ...(stage ? { failureStage: stage } : {}),
     ...(status === "succeeded" ? {} : { reason: await safeBusinessOutcomeReason(state, { bridgePath: options.bridgePath || defaultBridgePath }) }),
   };
@@ -100,7 +102,8 @@ async function runVoiceInsightInternal(options = {}) {
     blocks = parseBatchOutput(generatedText, candidates.map((record) => record.id));
   } else {
     const prompt = buildBatchPrompt(await readFile(voicePromptPath, "utf8"), week, context, candidates);
-    if (previous?.status === "submitted" || previous?.status === "needs_review") return { ...previous, paths };
+    if (["submitted", "needs_review"].includes(previous?.status)) return { ...previous, paths };
+    if (previous?.status === "awaiting_manual" && (!options.send || !options.confirm)) return { ...previous, paths };
     const explicitlyAuthorizedMigration = options.migrateLegacy && options.confirm;
     if (!options.send && !explicitlyAuthorizedMigration) {
       const preview = { schemaVersion: 1, targetWeek: week, status: "preview", promptSha256: sha256(prompt), counts: countStatuses(classified), records: states, manualPrompt: prompt, generatedAt: new Date().toISOString() };
@@ -108,21 +111,74 @@ async function runVoiceInsightInternal(options = {}) {
       return { ...preview, paths };
     }
     if (!options.confirm) throw new Error("send-requires-confirm");
-    const attemptId = randomUUID();
+    const attemptId = previous?.status === "awaiting_manual" && previous.attemptId ? previous.attemptId : randomUUID();
     const callerLabel = "learn-x:voice-insight";
-    const submitted = { schemaVersion: 1, targetWeek: week, status: "submitted", attemptId, promptSha256: sha256(prompt), counts: countStatuses(classified), records: states, submittedAt: new Date().toISOString() };
+    const promptSha256 = sha256(prompt);
+    const manualHandoff = {
+      repoRoot, callerLabel, taskId: `voice-insight:${week}`, stage: "voice-batch-insight",
+      artifactId: "voice-insights.md", inputVersion: `sha256:${promptSha256}`,
+      originEventId: `learn-x-voice-insight:${week}`, promptId: "learn-x.voice-insight.batch",
+      promptRevision: sha256(await readFile(voicePromptPath, "utf8")),
+      historyDependency: { required: false, completenessVerified: true, items: [], scope: "交接 Prompt 中冻结的周度 Voice-X 原文" },
+      expectedOutputFormat: "UTF-8 Markdown；每条记录恰好一个匹配标识区块，内部遵循 Voice-X 两段结构",
+      fullFlow: ["逐条验证标识与 Voice-X 两段结构", "归档到对应 Voice-X 记录并读回", "刷新 Learn-X 周度 Voice 输入"],
+      continuationChoice: "continue-complete-workflow",
+      selectedCandidateId: options.manualCandidateId,
+      rejectedCandidateIds: previous?.status === "awaiting_manual" && Array.isArray(previous.rejectedCandidateIds)
+        ? previous.rejectedCandidateIds : [],
+      sourceRequirements: { targetWeek: week, recordIds: candidates.map((record) => record.id),
+        contextSha256: sha256(context), materialStatus: "verified" },
+    };
+    const submitted = { schemaVersion: 1, targetWeek: week, status: "submitted", attemptId, promptSha256,
+      ...(previous?.status === "awaiting_manual" ? { handoffId: previous.handoffId, manualHandoff: previous.manualHandoff } : {}),
+      counts: countStatuses(classified), records: states, submittedAt: new Date().toISOString() };
     await writeAtomic(paths.status, `${JSON.stringify(submitted, null, 2)}\n`);
-    const bridge = await (options.runBridge || runBridgeCli)(prompt, { ...options, callerLabel, preallocatedRunId: attemptId });
+    const bridge = await (options.runBridge || runManualHandoffCli)(prompt, { ...options, callerLabel,
+      preallocatedRunId: attemptId, manualHandoff });
     const bridgeResult = bridge?.result || bridge;
-    if (bridgeResult?.status !== "succeeded") {
+    if (bridgeResult?.status === "awaiting_manual") {
+      const waiting = { ...submitted, status: "awaiting_manual", source: "manual-handoff",
+        handoffId: bridgeResult.handoffId, manualHandoff: bridgeResult.manualHandoff,
+        reason: bridgeResult.reason || "manual-handoff-required",
+        ...(Array.isArray(bridgeResult.candidateOptions) ? { candidateOptions: bridgeResult.candidateOptions } : {}),
+        rejectedCandidateIds: manualHandoff.rejectedCandidateIds,
+        updatedAt: new Date().toISOString() };
+      await writeAtomic(paths.status, `${JSON.stringify(waiting, null, 2)}\n`);
+      return { ...waiting, paths };
+    }
+    const manualCandidate = bridgeResult?.status === "candidate_received";
+    let returnedText = bridgeResult?.text;
+    if (manualCandidate) {
+      try { returnedText = new TextDecoder("utf-8", { fatal: true }).decode(bridgeResult.resultBytes); }
+      catch {
+        const rejectedCandidateIds = [...new Set([...(manualHandoff.rejectedCandidateIds || []), bridgeResult.candidate?.candidateId].filter(Boolean))];
+        const review = { ...submitted, status: "awaiting_manual", source: "manual-handoff",
+          handoffId: bridgeResult.handoffId, manualHandoff: bridgeResult.manualHandoff,
+          candidateId: bridgeResult.candidate?.candidateId, rejectedCandidateIds,
+          reason: "manual-result-not-utf8", reviewedAt: new Date().toISOString() };
+        await writeAtomic(paths.status, `${JSON.stringify(review, null, 2)}\n`);
+        return { ...review, paths };
+      }
+    }
+    if (!manualCandidate && bridgeResult?.status !== "succeeded") {
       const review = { ...submitted, ...(bridgeResult?.contextPack ? { contextPack: bridgeResult.contextPack } : {}), status: "needs_review", runId: bridgeResult?.runId, conversationUrl: bridgeResult?.conversationUrl, reason: bridgeResult?.reason || bridge?.exit?.error || "bridge-result-missing", retryAfterSeconds: bridgeResult?.retryAfterSeconds, outputSha256: bridgeResult?.text ? sha256(bridgeResult.text) : undefined, reviewedAt: new Date().toISOString() };
       await writeAtomic(paths.status, `${JSON.stringify(review, null, 2)}\n`);
       return { ...review, paths };
     }
-    bridgeMeta = { attemptId: submitted.attemptId, runId: bridgeResult.runId, conversationUrl: bridgeResult.conversationUrl, outputSha256: sha256(bridgeResult.text || ""), ...(bridgeResult.contextPack ? { contextPack: bridgeResult.contextPack } : {}) };
-    try { blocks = parseBatchOutput(bridgeResult.text, candidates.map((record) => record.id)); }
+    bridgeMeta = manualCandidate
+      ? { attemptId: submitted.attemptId, source: "manual-handoff", handoffId: bridgeResult.handoffId,
+        manualCandidateId: bridgeResult.candidate?.candidateId, evidenceLevel: bridgeResult.candidate?.evidenceLevel,
+        rawSha256: bridgeResult.candidate?.rawSha256, outputSha256: sha256(returnedText || "") }
+      : { attemptId: submitted.attemptId, runId: bridgeResult.runId, conversationUrl: bridgeResult.conversationUrl,
+        outputSha256: sha256(returnedText || ""), ...(bridgeResult.contextPack ? { contextPack: bridgeResult.contextPack } : {}) };
+    try { blocks = parseBatchOutput(returnedText, candidates.map((record) => record.id)); }
     catch (error) {
-      const review = { ...submitted, ...bridgeMeta, status: "needs_review", reason: `invalid-output:${error.message}`, reviewedAt: new Date().toISOString() };
+      const review = manualCandidate
+        ? { ...submitted, ...bridgeMeta, status: "awaiting_manual", handoffId: bridgeResult.handoffId,
+          manualHandoff: bridgeResult.manualHandoff,
+          rejectedCandidateIds: [...new Set([...(manualHandoff.rejectedCandidateIds || []), bridgeResult.candidate?.candidateId].filter(Boolean))],
+          reason: `invalid-output:${error.message}`, reviewedAt: new Date().toISOString() }
+        : { ...submitted, ...bridgeMeta, status: "needs_review", reason: `invalid-output:${error.message}`, reviewedAt: new Date().toISOString() };
       await writeAtomic(paths.status, `${JSON.stringify(review, null, 2)}\n`);
       return { ...review, paths };
     }
@@ -284,16 +340,7 @@ async function archiveWithVoiceX(record, content, { legacy = false } = {}) {
   return JSON.parse(line);
 }
 
-export async function runBridgeCli(prompt, options = {}) {
-  const bridgePath = options.bridgePath || process.env.LEARN_X_CHATGPT_BRIDGE || defaultBridgePath;
-  const args = [bridgePath];
-  if (options.callerLabel) args.push("--caller-label", options.callerLabel);
-  if (options.preallocatedRunId) args.push("--run-id", options.preallocatedRunId);
-  if (options.contextPackDelivery !== undefined) args.push("--context-pack-delivery-json", JSON.stringify(options.contextPackDelivery));
-  const result = await runProcess(process.execPath, args, prompt, options.timeoutMs ?? 180_000);
-  const parsed = result.stdout.split(/\r?\n/).concat(result.stderr.split(/\r?\n/)).map((line) => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean).reverse().find((value) => typeof value.status === "string");
-  return { result: parsed, exit: result };
-}
+export const runBridgeCli = runManualHandoffCli;
 
 function runProcess(command, args, input, timeoutMs = 150_000) {
   return new Promise((resolve, reject) => {
@@ -308,7 +355,7 @@ function runProcess(command, args, input, timeoutMs = 150_000) {
 function formatShanghaiIso(epochSeconds) { return `${formatShanghai(epochSeconds).replace(" ", "T")}+08:00`; }
 function formatShanghai(epochSeconds) { const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(new Date(epochSeconds * 1000)); const values = Object.fromEntries(parts.map((part) => [part.type, part.value])); return `${values.year}-${values.month}-${values.day} ${values.hour}:${values.minute}:${values.second}`; }
 
-function parseArgs(argv) { const options = {}; for (let index = 0; index < argv.length; index += 1) { if (argv[index] === "--week") options.week = argv[++index]; else if (argv[index] === "--send") options.send = true; else if (argv[index] === "--confirm") options.confirm = true; else if (argv[index] === "--migrate-legacy") options.migrateLegacy = true; } return options; }
+function parseArgs(argv) { const options = {}; for (let index = 0; index < argv.length; index += 1) { if (argv[index] === "--week") options.week = argv[++index]; else if (argv[index] === "--candidate-id") options.manualCandidateId = argv[++index]; else if (argv[index] === "--send") options.send = true; else if (argv[index] === "--confirm") options.confirm = true; else if (argv[index] === "--migrate-legacy") options.migrateLegacy = true; } return options; }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const result = await runVoiceInsight(parseArgs(process.argv.slice(2)));

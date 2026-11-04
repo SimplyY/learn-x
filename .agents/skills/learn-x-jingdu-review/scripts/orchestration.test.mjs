@@ -217,6 +217,11 @@ test("CLI smoke: adapter.mjs runs against the fake shared lib via JINGDU_SHARED_
   const parsed = JSON.parse(unknown.stdout);
   assert.ok(parsed.usage);
 
+  const retired = await runCli(["prepare", "--week", WEEK, "--json"]);
+  assert.equal(retired.code, 3);
+  assert.equal(JSON.parse(retired.stdout).status, "retired");
+  assert.match(JSON.parse(retired.stdout).reason, /历史 jingdu\.md 仅保留查阅/);
+
   const missingLib = await runCli(["status", "--week", WEEK, "--json"]);
   assert.ok(missingLib.stdout.length > 0);
   // 真实仓库只读 status：无 locator 时 exit 0，state 如实报告。

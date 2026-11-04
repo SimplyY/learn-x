@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, readFile, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -12,6 +12,7 @@ import {
   sha256,
   validateOutputs
 } from "./export-chatgpt-understanding.mjs";
+import { importLearnXCandidate } from "../../learn-x-weekly-automation/scripts/manual-handoff-adapter.mjs";
 
 async function fixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-monthly-understanding-"));
@@ -47,6 +48,54 @@ test("monthly caller keeps private context-pack receipts and does not expand an 
     assert.equal(seen[0].prompt, buildPrompt("自我提示词", "self"));
     assert.deepEqual(output.runs.self.contextPack, pack);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("unverified account Memory blocks a manual handoff before any browser submission", async () => {
+  const root = await fixture();
+  try {
+    const result = await exportChatgptUnderstanding({ repoRoot: root, month: "2026-08", bridgeGapMs: 0 });
+    assert.equal(result.status, "needs_review");
+    assert.equal(result.reason, "history-materials-unverified");
+    assert.equal(await readFile(path.join(root, "01_core/ChatGPT-自我阅读版.md"), "utf8").catch(() => null), null);
+    assert.equal(await stat(path.join(root, ".runtime/manual-handoffs")).then(() => true, () => false), false);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("monthly understanding resumes sequential manual candidates through the shared Learn-X handoff", async (t) => {
+  const root = await fixture();
+  const waits = [];
+  const options = {
+    repoRoot: root, month: "2026-08", sleep: async (milliseconds) => { waits.push(milliseconds); },
+    historyDependency: { required: true, completenessVerified: true,
+      items: [{ id: "synthetic-account-memory-export", sha256: "a".repeat(64), scope: "test fixture" }] },
+  };
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const first = await exportChatgptUnderstanding(options);
+  assert.equal(first.status, "awaiting_manual");
+  assert.ok(first.runs.self.handoffId);
+  assert.equal(first.runs.memory, undefined);
+
+  const self = await importLearnXCandidate({ repoRoot: root, handoffId: first.runs.self.handoffId,
+    eventId: "codex-test:self-result", sourceClaim: "synthetic test result", resultBytes: Buffer.from("自我阅读结果") });
+  assert.equal(self.status, "received");
+  const second = await exportChatgptUnderstanding(options);
+  assert.equal(second.status, "awaiting_manual");
+  assert.equal(second.runs.self.candidateId, self.candidate.candidateId);
+  assert.ok(second.runs.memory.handoffId);
+
+  const memory = await importLearnXCandidate({ repoRoot: root, handoffId: second.runs.memory.handoffId,
+    eventId: "codex-test:memory-result", sourceClaim: "synthetic test result", resultBytes: Buffer.from("AI 记忆结果") });
+  assert.equal(memory.status, "received");
+  const completed = await exportChatgptUnderstanding(options);
+  assert.equal(completed.status, "succeeded");
+  const state = JSON.parse(await readFile(path.join(root, "04_output/_dist/monthly/2026-08/chatgpt-understanding.json"), "utf8"));
+  assert.equal(state.completionSource, "user-asserted");
+  assert.equal(state.runs.self.candidateId, self.candidate.candidateId);
+  assert.equal(state.runs.memory.candidateId, memory.candidate.candidateId);
+  assert.deepEqual(waits, []);
+  assert.match(await readFile(path.join(root, "01_core/ChatGPT-自我阅读版.md"), "utf8"), /自我阅读结果/);
+  assert.match(await readFile(path.join(root, "01_core/memory/ChatGPT-AI记忆版.md"), "utf8"), /AI 记忆结果/);
 });
 
 test("uses a one-minute gap between independent bridge prompts", async () => {

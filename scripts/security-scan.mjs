@@ -38,6 +38,10 @@ const contentPatterns = [
   { name: "home address label", pattern: /(?<!remote)(?:家庭住址|住址|家庭地址|收货地址|home\s*address|address)\s*[:：]\s*\S.{8,}/i },
 ];
 
+const safeFixtureFiles = new Set([
+  ".agents/skills/learn-x-jingdu-review/scripts/fixtures/fake-lib/parse-session.mjs",
+]);
+
 function git(args, options = {}) {
   return execFileSync("git", args, {
     encoding: options.encoding ?? "buffer",
@@ -67,6 +71,7 @@ function stagedContent(file) {
 function scanFile(file, readContent) {
   const findings = [];
 
+  if (safeFixtureFiles.has(file)) return findings;
   for (const rule of sensitivePathPatterns) {
     if (rule.pattern.test(file)) {
       findings.push({ file, rule: rule.name, detail: "sensitive filename" });

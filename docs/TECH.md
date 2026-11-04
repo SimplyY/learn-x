@@ -50,7 +50,7 @@
 
 构建分为两个明确目标：
 
-- `npm run build:local`：供 `npm run dev` 使用，保留本地 Input、Process Skill 和 `_dist` 上下文，并启用桌面端 Chat Pack 编辑器。
+- `npm run build:local`：生成到 Git 忽略的 `app/code/.local/site/`，供 `npm run dev` 使用；保留本地 Input、Process Skill 和 `_dist` 上下文，并启用桌面端 Chat Pack 编辑器。开发服务固定读取此目录，公开构建写入 `dist/` 不会覆盖本地运行图。
 - `npm run build:public`：供 GitHub Pages 和 release 使用，在生成图数据时排除 `03_input/`、`.agents/skills/learn-x-process/`、`04_output/_dist/` 及周期 Output 入口；`05_library/`（微信读书划线等私有阅读数据）同属公开构建排除的私有目录；构建产物出现这些路径时直接失败。
 - `npm run build:public:no-context`：同一 Pages 构建中的轻量公开版，输出到 `dist/no-context/`；通过 `LEARN_X_CHATPACK_CONTEXT=off` 在构建时移除 Chat Pack 的上下文选择与上下文装配，保留提示词、当前问题和生成能力。
 
@@ -78,7 +78,7 @@ Chat Pack 编辑器只在本地桌面端显示。排序、大类增删改、子�
 - `PUT /api/chatpack/editor`：仅本地回环地址和同源页面可用，校验并保存 Chat Pack 排序、文案、推荐上下文及单个 Prompt，然后重建本地静态数据。
 - `GET/POST /api/chatpack/usage`：仅本地回环地址和同源页面可用；读取本机统计视图或以幂等事件记录当前月份的使用次数。公开 Pages 不提供该接口。
 - `GET /api/chatpack/cache/status`：仅本地回环地址和同源页面可用；返回 Prompt 与 Core《道》《法》的逐项状态、revision、成功读取时间、缓存年龄、刷新进度、恢复等待、错误与冷却时间；失败或部分失败后不显示成功节流倒计时；不返回正文。前端将响应正文解析一起纳入 8 秒期限，并对在途状态查询合并请求。
-- `POST /api/chatpack/cache/refresh`：仅本地回环地址和同源页面可用；请求全量后台刷新，可带当前必需 Prompt/Core ID 提升队列优先级；共享缓存目录的当前服务进程通过原子文件锁合并刷新。成功全量刷新后适用 60 秒节流；全失败或部分失败后，下一次请求可立即重试，运行中的请求仍合并，失败后不自动循环重试。优先级队列最多两个资源读取并发。无法确认刷新锁 owner 时，状态显示恢复等待；超过恢复窗口仍无法安全取得锁则返回 HTTP 503。页面手动刷新请求最多等待 10 秒；未收到响应时显示结果未知并恢复按钮。
+- `POST /api/chatpack/cache/refresh`：仅本地回环地址和同源页面可用；请求全量后台刷新，可带当前必需 Prompt/Core ID 提升队列优先级；共享缓存目录的当前服务进程通过原子文件锁合并刷新。若服务配置了 HTTP 代理，会在 Learn-X 服务进程内移除 Feishu 域名的 `NO_PROXY` 旁路项，让受治理 Prompt 和 Core 读取走已配置代理；其他旁路项保留。若存在用户配置的 `~/.local/bin/lark-cli` shim，服务会将其目录置于 PATH 首位，使 Prompt 与 Core 后台读取沿用同一身份和认证上下文；不会关闭或绕过 TLS 校验。成功全量刷新后适用 60 秒节流；全失败或部分失败后，下一次请求可立即重试，运行中的请求仍合并，失败后不自动循环重试。优先级队列最多两个资源读取并发。无法确认刷新锁 owner 时，状态显示恢复等待；超过恢复窗口仍无法安全取得锁则返回 HTTP 503。页面手动刷新请求最多等待 10 秒；未收到响应时显示结果未知并恢复按钮。
 - `POST /api/chatpack/cache/read`：仅本地回环地址和同源页面可用；仅当请求中的全部 Prompt/Core 项身份、正文 hash 和 14 天有效期校验通过时返回正文，否则返回具体缺失项，不返回半包。
 - Chat Pack 专用缓存写入 Git 忽略的 `app/code/.local/chatpack-cache/cache.json`，文件权限为 0600、目录为 0700，`.local` 缓存根和叶目录拒绝符号链接，并使用串行原子替换；在真实成功读取时计算 14 天有效期，不因服务重启续期。启动、每日、生成和手动刷新共用同一刷新调度。公开构建不读取或包含此缓存。
 - PM2 开发服务监听 `app/code/` 源码时排除 `app/code/.local/` 运行数据，避免缓存原子写入触发服务重启。

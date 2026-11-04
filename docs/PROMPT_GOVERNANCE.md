@@ -2,9 +2,13 @@
 
 ## 真源与运行规则
 
-飞书是受治理 Prompt 正文唯一人工真源。用户只在飞书维护正文；实时消费者下一次运行直接读取当前 latest。Chat Pack 本地应用按专用 14 天缓存契约使用最近一次验证成功的正文，并在后台刷新。Prompt 正文不需要发布、同步或确认生效。
+飞书是受治理 Prompt 正文唯一人工真源。用户只在飞书维护正文；实时消费者下一次运行直接读取当前 latest。Chat Pack 本地应用按专用 14 天缓存契约使用最近一次验证成功的正文，并在后台刷新。更新仓库 Git 备份是云端读取需要的独立维护步骤，不改变飞书 latest 的运行时生效方式，也不进入 Chat Pack 缓存。
 
 `00_config/prompt-assets.json` 登记稳定 `prompt_id`、优先级、兼容文件路径、派生关系和最近一次记录的 revision/hash。它是消费者与飞书文档之间的技术映射，不是第二份正文真源。revision、hash 与读取时间只作运行证据。
+
+本仓全部 18 个 Learn-X Prompt 的 Git 备份位置和维护步骤见 [`PROMPTS.md`](../PROMPTS.md)。`prompt-backups.json` 独立记录仓库副本路径和同步 revision/hash，不被 Chat Pack 缓存读取。全局 Prompt 与其他项目的路径见 `skills/prompt-governance/references/prompt-backups.md`。
+
+修改受治理 Prompt 时默认只做微调：保持既有结构、标题和字段；除非用户明确要求重构，不做整段重写。
 
 ```mermaid
 flowchart LR
@@ -38,8 +42,8 @@ flowchart LR
 
 ## 登记与维护
 
-普通 Prompt 可以先作为非治理文件试用。`discover`、`adopt` 用于治理资产的发现和登记。治理维护、状态诊断与兼容副本修复工具仍可显式使用，但 `status --live`、`sync`、`publish` 不再是日常 Prompt 使用步骤，也不改变“飞书保存后下一次调用生效”的语义。
+普通 Prompt 可以先作为非治理文件试用。`discover`、`adopt` 用于治理资产的发现和登记。治理维护、状态诊断与运行时专用兼容副本修复工具仍可显式使用；`status --live`、`sync`、`publish` 不属于日常运行时生效步骤。
 
-本地编辑器不直接改写受治理正文。受治理正文在飞书修改并保存后，所有实时消费者在下一次调用自动读取；用户无需关注本地兼容副本是否同步。P0 表示核心工作流、高频长期使用或出错影响明显；P1 表示已有重复使用且大概率继续维护。
+本地编辑器不直接改写受治理正文。人工在飞书修改并保存后，所有实时消费者在下一次调用自动读取；随后还须用中央 `sync-backups.mjs` 更新 Git 仓库副本，默认先预览，加 `--confirm` 才写入。机器经 `publish-prompt.mjs` 写入飞书并通过写后读回后，会自动同步该 ID；备份失败会在发布收据中标明并以非零状态退出。同步入口不提交或推送 Git。P0 表示核心工作流、高频长期使用或出错影响明显；P1 表示已有重复使用且大概率继续维护。
 
 Governance 负责 Prompt 身份映射、latest 读取和运行证据；Chat Pack 负责组装，自动化负责执行，`learn-x-prompt-review` 负责内容契约与评测。Prompt 不自动写入 Memory、Core 正式道法或 Flomo。

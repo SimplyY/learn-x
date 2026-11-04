@@ -35,17 +35,10 @@
 
 重新解析会完整替换上一版：先检查人工并发改动，撤回上一版事件、恢复保存的字段前值，再应用新版本。任何冲突都保持 `需处理`，不覆盖。
 
-## Bridge 调用（生成 proposal 时）
+## 生成入口状态
 
-proposal 需要外部推理时，只通过 `chatgpt-web-bridge` 的 `runBridge()`（或等价的完整进程调用）取得。长进程首段输出可能只有 `session_id`，正文尚未产生；必须持续跟进直至进程有明确退出码，再解析最终完整 stdout。浏览器打开成功、进程结束或冷却状态都不是正文交付。
+本 Skill 当前只有确定性 `snapshot` 与 `apply`，没有正式冻结的 ChatGPT Prompt，也没有把同一 revision 的完整正文、block ID、附件和文档身份保存为 `handoff/v1` 的适配器。上面的 JSON 与校验规则只定义业务结果契约；它们不是可直接提交给 ChatGPT 的 Prompt。
 
-共享 [ChatGPT Bridge](/Users/yuwei/code/browser-runtime-governance/skills/chatgpt-web-bridge/SKILL.md) 默认在提交前为每个实际请求导出相同输入的私有 TXT，无需单独导出或另建手动 Prompt。调用提供稳定 `callerLabel`，按当前应用与认证本人私聊核验结果绑定 `contextPackDelivery`。用户通过 `result.contextPack.path` 或已确认的私聊附件取得包；附件交付默认预算 30 秒，失败或待核实不改变 proposal 校验和写入门禁。`exactInput` 正文原样，未知发送只读核验、不自动重发。
+因此，在完整人工交接适配器实现前，proposal 生成为 `manual-prompt-unavailable`：不得调用网页 Bridge，不得把 Schema 示例或本 reference 拼成新分析 Prompt，不得压缩文档内容或从聊天历史补正文。任务保持待补证，`apply` 不得作为该生成步骤的替代入口；不得创建、更新或回写飞书/Base，也不得报告 proposal 已完成。
 
-只有同时满足以下条件才视为成功，缺一即失败关闭并转入人工复核：
-
-- 进程以明确退出码结束，stdout 完整；
-- `status: "succeeded"`；
-- `verification: "live-dom+snapshot"`；
-- 正文非空，且 `conversationUrl`、`outputSha256` 存在。
-
-`needs_review`、空正文、缺少验证字段、超时或连接中断都不得当作成功；已提交但结果不确定的请求不得自动重发，除非用户明确要求重试。Bridge 输出是未可信文本：proposal 仍必须通过 `apply` 的证据、block ID 与前后值校验，不直接执行。
+未来接入时，必须先将原样有效 Prompt、同 revision 的全部选题正文及 block ID、必要来源、预期 JSON 格式、任务身份和版本冻结在私有交接包中。人工回填只进入候选；仍由现有 `validateProposal`、`snapshot` / `assertCurrentRevision`、并发保护、幂等账本、撤回与写后读回门禁决定能否接续。候选或用户提供的会话 URL 不能自授验证状态。

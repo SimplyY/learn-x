@@ -12,7 +12,7 @@ description: 为 Learn-X 运行月度议题研究工作台：推荐、用户选�
 - 启动或重新推荐：运行 `recommend --month YYYY-MM`；只有用户明确要求重新推荐且尚未创建文档时才加 `--refresh`。
 - 用户选择可以是候选序号（`123`、`1、3、5`、`前三个`、`都研究`、`按默认`）或议题标题。用 `select --month YYYY-MM --input '123'` 解析并先向用户回显映射；用户未回复不得创建文档。
 - 创建：将最终稳定 record ID 数组传给 `create --month YYYY-MM --selection-json -`。新文档创建为「人生核心议题/细项研究」Wiki 子节点并返回 Wiki 链接；历史 Base Docx 账本仍可读，文档已存在时只返回原链接，绝不覆盖用户内容。
-- 提交：先 `snapshot`，使用同一 revision 的所有选题小节形成 proposal；需要外部推理时按[提交契约](references/submission-contract.md)的 Bridge 调用规则取得完整正文。脚本 `apply --proposal-json -` 会拒绝没有原文证据、block ID、Schema 一致性或状态快照的写入。
+- 提交：先 `snapshot`，使用同一 revision 的所有选题小节形成 proposal。当前仓库没有可核验的正式 ChatGPT Prompt，也没有能把完整、同 revision 文档正文冻结成 `handoff/v1` 的适配器；[提交契约](references/submission-contract.md)定义的是结果 Schema 和业务门禁，不是完整可直接提交的 Prompt。此缺口补齐前，不调用网页 Bridge、不自行拼装或压缩 Prompt；把任务标记为 `manual-prompt-unavailable` 并停在待补证，不能调用 `apply` 或声称提案已完成。`apply --proposal-json -` 仍会校验原文证据、block ID、Schema 和状态快照，但这些校验不替代交接输入完整性。
 - 只提取明确变化。议题周期、优先级、研究状态、阶段、未知和下一步本身不是事件；无进展时事件数组必须为空。判断更新必须有与字段前后值一致的对应事件。
 - 纠错只能是用户编辑文档后重解析，或运行 `rollback` 撤回上一版。不要从聊天口述直接修改 Base。
 - Base 写入使用用户身份，读后校验；任何结构漂移、并发修改、分页异常或证据不一致都停止，不降级到旧 Skill 或缓存。

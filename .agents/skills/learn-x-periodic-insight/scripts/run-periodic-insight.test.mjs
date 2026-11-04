@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { exitCodeForResult, runPeriodicInsight as runPeriodicInsightImpl, setupWiki, validateGeneratedOutput } from "./run-periodic-insight.mjs";
+import { importLearnXCandidate } from "../../learn-x-weekly-automation/scripts/manual-handoff-adapter.mjs";
 
 const sha256 = (value) => createHash("sha256").update(String(value), "utf8").digest("hex");
 const bridgeSuccess = (text, extra = {}) => ({ result: { status: "succeeded", runId: "run-generated", conversationUrl: "https://chatgpt.com/c/generated", text, format: "markdown", verification: "live-dom+snapshot", outputSha256: sha256(text), ...extra } });
@@ -59,6 +60,86 @@ test("飞书 latest 读取失败时不启动 Bridge，下一次调用会重新�
   assert.equal(fail.status, "needs_review"); assert.match(fail.reason, /latest-prompt-read-failed: 飞书权限失败/); assert.equal(bridgeCalls, 0);
   const retry = await runPeriodicInsight({ repoRoot: root, taskId: "munger-soul", target: "2026-08", fetchLatestPromptAssets: async (args) => { reads += 1; return defaultLatestPromptAssets(args); } });
   assert.equal(retry.status, "preview"); assert.equal(reads, 2); assert.equal(bridgeCalls, 0);
+});
+
+test("manual handoff imports a validated candidate and resumes without browser submission", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-periodic-manual-handoff-")); t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, "00_config"), { recursive: true }); await mkdir(path.join(root, "04_output/monthly"), { recursive: true });
+  await mkdir(path.join(root, "02_prompts/chatpack/insight"), { recursive: true });
+  await writeFile(path.join(root, "00_config/periodic-insights.json"), JSON.stringify({ schemaVersion: 2,
+    contextPolicies: { "periodic-v1": { defaultRange: "1y", maxContextChars: 100000, maxPromptChars: 120000,
+      timezone: "Asia/Shanghai", defaultMaterialTypes: ["life-core", "target-journal", "history-backbone", "flomo"] } },
+    tasks: [{ id: "munger-soul", name: "芒格之魂", prompt: { productionReady: true, defaultEnhancerIds: [] },
+      target: { preferred: "month" }, contextPolicyId: "periodic-v1" }] }));
+  await writeFile(path.join(root, "04_output/monthly/2026-08.md"), `# 月报\n\n${"有效材料 ".repeat(100)}`);
+  await writeFile(path.join(root, "02_prompts/chatpack/insight/munger-soul.md"), "正式洞察 Prompt 占位文件");
+  await mkdir(path.join(root, "04_output/_dist/periodic-insights"), { recursive: true });
+  await writeFile(path.join(root, "04_output/_dist/periodic-insights/wiki.json"), JSON.stringify({
+    name: "Learn-X 周期洞察", spaceId: "private-space", visibility: "private", openSharing: "closed",
+  }));
+
+  const larkCalls = []; let publishedContent, expectedReadback;
+  const runLark = async (args) => {
+    larkCalls.push(args);
+    if (args[1] === "+node-list" && !args.includes("--parent-node-token")) return { data: { nodes: [{ title: "2026", node_token: "year-node" }] } };
+    if (args[1] === "+node-list") return { data: { nodes: [] } };
+    if (args[1] === "+node-create") return { data: { node_token: "insight-node", obj_token: "insight-doc" } };
+    if (args[1] === "+fetch") return { data: { document: { content: publishedContent } } };
+    throw new Error(`unexpected-lark-call:${args.join(" ")}`);
+  };
+  const publishDoc = async ({ identity, xml }) => {
+    assert.equal(identity, "bot"); assert.ok(xml.length > 0); publishedContent = expectedReadback;
+    return { status: "published", business_key: "learn-x-periodic-insight-munger-soul-2026-08" };
+  };
+
+  const options = { repoRoot: root, taskId: "munger-soul", target: "2026-08", send: true, archive: true, confirm: true, runLark, publishDoc };
+  const waiting = await runPeriodicInsight(options);
+  assert.equal(waiting.status, "awaiting_manual"); assert.equal(waiting.source, "manual-handoff");
+  assert.equal(waiting.handoffId, waiting.manualHandoff.handoffId);
+  assert.equal(waiting.businessCompleted, undefined);
+  const promptBytes = await readFile(waiting.manualHandoff.privatePaths.prompt);
+  assert.ok(promptBytes.length > 0);
+  assert.equal(JSON.parse(await readFile(waiting.paths.state, "utf8")).status, "awaiting_manual");
+
+  const evidence = "来源材料已核实。".repeat(30);
+  const candidateText = `2026-08 候选洞察 ${evidence}\n## 底层\n依据\n## 第二层\n依据\n## 第三层\n依据\n## 第四层\n依据\n## 第五层\n依据\n## 顶层\n依据`;
+  expectedReadback = `# 芒格之魂｜2026-08\n\n- 目标周期：2026-08\n- 运行键：munger-soul:month:2026-08\n- 运行结果：候选洞察\n\n${candidateText}`;
+  const rejected = await importLearnXCandidate({ repoRoot: root, handoffId: waiting.handoffId,
+    eventId: "codex-task:periodic-insight-invalid-reply", sourceClaim: "用户声明此结果来自 ChatGPT",
+    resultBytes: Buffer.from("缺少六层结构的候选", "utf8") });
+  const needsCorrection = await runPeriodicInsight(options);
+  assert.equal(needsCorrection.status, "awaiting_manual");
+  assert.deepEqual(needsCorrection.rejectedCandidateIds, [rejected.candidate.candidateId]);
+  assert.equal(await readFile(needsCorrection.paths.generated).catch(() => null), null);
+  assert.equal(needsCorrection.reason.startsWith("invalid-output:"), true);
+
+  const candidateA = await importLearnXCandidate({ repoRoot: root, handoffId: waiting.handoffId,
+    eventId: "codex-task:periodic-insight-reply-a", sourceClaim: "用户声明此结果来自 ChatGPT",
+    resultBytes: Buffer.from(candidateText, "utf8") });
+  const candidateBText = candidateText.replace("候选洞察", "另一份候选洞察");
+  const candidateB = await importLearnXCandidate({ repoRoot: root, handoffId: waiting.handoffId,
+    eventId: "codex-task:periodic-insight-reply-b", sourceClaim: "用户声明此结果来自 ChatGPT",
+    resultBytes: Buffer.from(candidateBText, "utf8") });
+  expectedReadback = expectedReadback.replace(candidateText, candidateBText);
+  const ambiguous = await runPeriodicInsight(options);
+  assert.equal(ambiguous.status, "awaiting_manual");
+  assert.equal(ambiguous.reason, "manual-candidate-selection-required");
+  assert.deepEqual(ambiguous.candidateOptions.map((item) => item.candidateId).sort(),
+    [candidateA.candidate.candidateId, candidateB.candidate.candidateId].sort());
+  assert.equal(await readFile(ambiguous.paths.generated).catch(() => null), null);
+
+  const imported = candidateB;
+  const selectedOptions = { ...options, manualCandidateId: imported.candidate.candidateId };
+  const resumed = await runPeriodicInsight(selectedOptions);
+  assert.equal(imported.status, "received"); assert.equal(imported.candidate.evidenceLevel, "user-asserted");
+  assert.equal(resumed.status, "completed", resumed.reason); assert.equal(resumed.source, "manual-handoff");
+  assert.equal(resumed.manualCandidateId, imported.candidate.candidateId);
+  assert.equal(resumed.evidenceLevel, "user-asserted"); assert.equal(resumed.rawSha256, imported.candidate.rawSha256);
+  assert.match(await readFile(resumed.paths.generated, "utf8"), /2026-08 另一份候选洞察/);
+  assert.equal(JSON.parse(await readFile(resumed.paths.state, "utf8")).status, "completed");
+  assert.equal(resumed.archive.documentToken, "insight-doc"); assert.equal(resumed.archive.published.status, "published");
+  assert.ok(larkCalls.some((args) => args[1] === "+fetch"), "archive must read the created business document back");
+  assert.equal("conversationUrl" in resumed, false);
 });
 
 test("Bridge 返回 needs_review 时只记录一次提交", async (t) => {

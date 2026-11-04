@@ -195,14 +195,72 @@ flowchart LR
 
 ## Execution Handoff
 ### 用户已确认的关键决定
-见 [Requirement 的用户追加确认](../../requirements/2026-10-weekly-core-review.md)。
+见 [Requirement 的用户追加确认](../../requirements/2026-10-weekly-core-review.md)：周记自动化 Docx/Wiki 写入统一 bot；允许本方案范围内创建或复用同周 Core 文档，并在周记安全位置写入链接。
 ### 重要背景与限制
-见方案原文；用户追加确认将周记身份统一 bot，实施前仍需核实权限。
+实现已落入 Core 与 Learn-X 两仓。真实 bot 已创建 W43 Core 文档并写入隔离周记链接，独立读回成功；Ego Lite 点击隔离周记链接后显示完整 Core 正文。bot Wiki 读取因 OAuth token API `Forbidden` 失败，因此没有更新 Usage Truth 或切换 user。Learn-X W43 daily 缺失且 Flomo failed，真实周记、确认卡及正式同步不能实走。05:00/07:00 调度保持原样。
 ### 关键假设与尚存未知
-见方案原文；真实 bot 权限与真实周体验尚待验证。
+完整真实周流程、年度周报/总览真实同步与恢复、bot Usage Truth 读写恢复及真实节时尚未验证。隔离页面呈现与 mock 证据不替代这些结果。
 ### 已完成调查或 Spike 的结果及证据
-见方案原文，生产读写及恢复未验证。
+Core 预建档/补齐与跨年目标解析，Learn-X 入口/链接/统一确认/候选隔离/多批次回流已实现。Learn-X 收尾现在按不可变批次逐动作持久保存；Learn-X-only 批次进入既有恢复扫描，Memory 已写回后的中断可只读核验已认可条目再续接；未知写入先核查，只有能证明未落地且基线未变才重试。最新验证：Learn-X 全量 795/795，Core 全量 213/213，完整跨仓旅程 3/3，Memory/确认/收尾/恢复定向 48/48，周记链接专项 11/11；weekly automation Skill quick-validate 通过。真实写入证据和剩余验收见 [Acceptance](acceptance.md)。
 ### 相关文件、模块、接口和外部资料
-见方案原文的引用与实施计划。
+主要实现：Learn-X `.agents/skills/learn-x-weekly-automation/`、`.agents/skills/learn-x-weekly-journal/`、`.agents/skills/learn-x-input/scripts/collect-core-weekly.mjs`；Core `.agents/skills/core-weekly/scripts/weekly-review-lib/` 与 `config/core.json`。主 Case 为 `docs/cases/2026-10-weekly-core-review/`。
 ### 执行中容易误解的重要信息
-用户确认的是方案范围，不代表认可任何未来 AI 候选或扩大目标权限。
+用户确认的是方案和允许的文档入口写入范围，不代表认可任何未来 AI 候选，也不允许改用其他身份、扩大目标权限或自动执行尚未确认的内容。整体验收仍为 PARTIAL。
+
+## 2026-11-03 执行增补方案
+
+- 状态：已确认（用户于 2026-11-03 要求实施本方案）
+- 来源：本会话用户消息 `Implement the proposed plan.`，确认紧邻的完整方案。
+- 替代关系：保留本文件原有方案及历史证据；仅以本增补替代“Core 可暂缓且不阻塞 Learn-X 主流程”的旧门禁，以及单周假设对范围入口的限制。既有单卡确认、认可批次、回流、同步与恢复方案继续有效。
+
+# 周记与 Core 合并为一个有门禁的周流程
+
+## 现状与根因
+
+- 第一性原理：每个复盘周都要有一个用户能找到、能填写的 Core 文档；周记与 Core 的本人思考都确认后，主流程才能进入 Process Pack。
+- 目前单周 Core 链接是“尽力接入”；Core 不可用时周记仍可继续。双周范围又走另一条采集链路，没有调用建档和补链，因此流程按现有规则运行了，却没有满足“周记和 Core 一起完成、Core 未完成不放行”。
+- 本地运行记录里已有 W43、W44 两份 Core 骨架。范围周记锚点没有记录 Core 链接；范围清单也把 Core 输入记为 unavailable。本轮没有读取线上周记正文，实施时需先只读核实链接和安全插入位置。
+- 周一 05:00 和 07:30 自动化配置均为 ACTIVE，且都以 Learn-X 周自动化 Skill 为流程来源；目前没有独立的 Core 周复盘定时任务。因此优先修正现有流程定义与范围接线，不新增调度。
+
+## 推荐流程
+
+```mermaid
+flowchart LR
+  A["采集周材料"] --> B["每个 ISO 周建档/复用 Core"]
+  B --> C["周记链接到每个 Core"]
+  C --> D["本人确认周记并填写 Core 思考"]
+  D -->|两者都完整| E["生成一次范围 Process Pack"]
+  D -->|任一未完成| F["列出缺失周/字段并停在这里"]
+  E --> G["AI 挑战"]
+  G --> H["Learn-X / Core 分项确认卡"]
+  H --> I["现有回流、同步与恢复"]
+```
+
+- 单周仍对应一篇周记和一份 Core；范围周记则在同一篇周记中列出范围内每周的 Core 链接。
+- 用户填完后用现有“继续”推进。自动化回读周记和全部 Core 文档；任一周的 Core 未完成，都不采回 `weekly.md`、不生成 Process Pack，并逐周说明缺哪一栏。
+- 门禁只检查本人先思考：五项 Core 的每项都填写“本周行动、现实反馈、本周思考和预判、下周行动”；无内容时可明确填“无 / 不适用 / 未观察到”。AI 挑战和最终取舍仍在 Process Pack 后进行。
+- 范围 Process Pack 仍只生成一份；Core 后续按周使用其中对应日期的事实，不生成伪单周 Pack，也不把一周的事实带入另一周。
+
+## 实施变化与接口
+
+- 复用现有建档和链接逻辑：周记链接器增加 `--period <period-id>`，按范围锚点逐周解析 Core 绑定并安全写入、读回核验；保留现有 `--week` 单周行为。重复运行复用现有链接和文档，遇到不唯一或未知结果时只读核查，不重建。
+- Core 增加 `weekly-review.mjs gate --period <period-id> --json`：逐周读取绑定文档，校验本人填写完整性，并把读回 revision 与内容指纹记入 Core 现有绑定状态。文档改动后重新核验，旧门禁结果不再有效。
+- 范围准备器将合并 Pack 按 ISO 周拆出内存中的事实视图，供各周 Core 准备使用；不另存多份 Process Pack。保留本人填写的表格，AI 挑战作为单独标注的候选交给现有分项确认卡，不覆盖本人内容、不自动采纳。
+- 复用原有确认、回流和恢复能力；不改 ToDo / Base，不新增自动化任务。将现有 Requirement 中“Core 暂缓不阻塞 Learn-X”的规则作为旧决定保留，并由本次用户决定明确替代其与新门禁冲突的部分。
+
+## 实施顺序与验收
+
+1. **M0 文档基线：** 复用 `2026-10-weekly-core-review` Case；追加本次用户裁决，保留旧需求和旧方案原文，并记录新方案替代关系。核对两仓已有改动，不覆盖脏工作区。
+2. **M1 当前范围修复：** 对 W43–W44 只读核验已绑定 Core 文档和现有周记位置；仅在能证明安全的位置补两条链接，逐条读回。复用既有文档，不重建周记或 Core。当前 Process Pack 已生成，不能追溯阻止；不删除或重写现有产物，只对尚未完成的后续步骤应用新门禁。
+3. **M2 流程接线：** 将范围建档、逐周链接、本人思考门禁接入 05:00 主流程和 07:30 恢复流程；后者只补缺失周，不重复建档。
+4. **M3 验收：** 覆盖单周兼容、双周两条链接、重复运行、缺一周或缺字段时阻止 Process Pack、显式“无”通过、文档修改使门禁失效、Core 写入结果未知时不重复创建，以及范围事实不串周。最后以真实周记入口验证用户能打开并填写每周 Core，再验证门禁确实阻止或放行后续阶段。
+
+**落盘定位：** 目标仓库 `/Users/yuwei/code/learn-x`；复用本 Requirement、当前 Execution Plan 和 [Case](case.md)，不另建平行 Case。主要改造范围为 `.agents/skills/learn-x-weekly-automation/`、`.agents/skills/learn-x-input/scripts/collect-weekly-range-journal.mjs`、`.agents/skills/learn-x-weekly-journal/scripts/link-core.mjs` 及 Core `.agents/skills/core-weekly/scripts/weekly-review-lib/`。
+
+## 2026-11-03 实施状态
+
+- **M0：完成。** Requirement 与本 Execution Plan 已追加用户裁决和本方案；原方案及脏工作区保留。
+- **M1：完成。** W43、W44 已有 Core 文档只补齐五行空白本人表单；范围周记标题后写入两条 Core 直达链接并完成线上读回。未创建重复文档、未触碰周记正文与表格。
+- **M2：完成。** 正常周 Skill 调用 `skeleton → form → 周记链接`；阶段 2 的 Process Pack CLI 先校验锚点链接收据和 Core 文档。Core gate 按每个 `--week` 逐次读取最新文档；范围入口从清单取所有组成周并汇总缺项。调度仍使用既有 05:00 / 07:30 自动化，没有增加任务。
+- **M3：部分完成。** Core 57/57、Learn-X 链接与门禁 17/17、三个 Skill quick validation、两仓 `git diff --check` 通过。真实 W43/W44 链接与表单写入并读回通过；实时门禁正确显示每周 20 项未填，范围 Process Pack 在生成前停止。用户完成填写后的真实放行与后续 AI 挑战/确认尚未验收。
+- 实现使用 Core `gate --week` 循环，而不是单独 `gate --period`；每次主流程都直接读回文档，不缓存旧门禁结果，因此文档一旦变化会在下一次执行时重新检查。范围缺项会汇总显示所有组成周。

@@ -145,6 +145,24 @@
         "sha256": "6e7277dd9cae71c41730a8aaf2a1d898da242f4e614c725eb3bde39f9d7f18fe",
         "at": "2026-10-02T13:19:35.631Z"
       }
+    },
+    "learn-x.reading-weekly": {
+      "local_path": "02_prompts/meta/chatgpt-reading-weekly.md",
+      "synced": {
+        "document_id": "XJPudJuBWoCkNHxKotgc8Jaintg",
+        "revision": 3,
+        "sha256": "8b52eef6d627e4e11fb0a0fb38b7c0dfef87f65d162a061625bd3111219d5214",
+        "at": "2026-11-04T01:48:35.667Z"
+      }
+    },
+    "learn-x.reading-daily": {
+      "local_path": "02_prompts/meta/chatgpt-reading-daily.md",
+      "synced": {
+        "document_id": "T1TYd15wXodwBIxSb5Icr3rXnNb",
+        "revision": 11,
+        "sha256": "d68893967cb48307f86f9c7ae9851d80e71bff807530ca0d44d6af156f164e4a",
+        "at": "2026-11-04T03:22:05.067Z"
+      }
     }
   }
 }

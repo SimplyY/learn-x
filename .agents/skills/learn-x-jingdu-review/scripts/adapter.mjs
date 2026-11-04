@@ -7,7 +7,20 @@ import { runCommand } from "./lib/commands.mjs";
 
 const argv = process.argv.slice(2);
 const wantsJson = argv.includes("--json");
-const { exitCode, result } = await runCommand(argv);
+const retiredWriteCommands = new Set(["prepare", "notify", "snapshot", "explain", "validate", "apply", "verify-recover", "run"]);
+const command = argv.find((item) => retiredWriteCommands.has(item)) || argv.find((item) => !item.startsWith("--"));
+const outcome = retiredWriteCommands.has(command)
+  ? {
+      exitCode: 3,
+      result: {
+        ok: false,
+        status: "retired",
+        command,
+        reason: "旧微信读书精读流程已退役。请使用 learn-x-reading 整理新的阅读上下文；历史 jingdu.md 仅保留查阅。"
+      }
+    }
+  : await runCommand(argv);
+const { exitCode, result } = outcome;
 
 if (wantsJson) {
   console.log(JSON.stringify(result, null, 2));

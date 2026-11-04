@@ -31,7 +31,7 @@ export async function runPeriodicInsight(options = {}) {
     const runKey = `${task.id}:${context.target.kind}:${context.target.id}`;
     if (options.force && (!options.send || !options.confirm)) throw new Error("force-requires-send-confirm");
     const previous = await readJson(paths.state);
-    if (previous && !new Set(["preview", "submitted", "generated", "archive_pending", "completed", "needs_review", "skipped"]).has(previous.status)) throw new Error("unknown-periodic-insight-state");
+    if (previous && !new Set(["preview", "submitted", "awaiting_manual", "generated", "archive_pending", "completed", "needs_review", "skipped"]).has(previous.status)) throw new Error("unknown-periodic-insight-state");
     if (previous?.status === "completed" && !options.force) {
       let generatedText;
       try { generatedText = await readFile(paths.generated, "utf8"); }
@@ -80,6 +80,10 @@ export async function runPeriodicInsight(options = {}) {
       prompt_fetched_at: asset.prompt_fetched_at
     }));
     const inputChanged = previous && (previous.contextSha256 !== context.sha256 || previous.promptSha256 !== sha256(prompt));
+    if (previous?.status === "awaiting_manual" && inputChanged && !options.force) {
+      const review = { ...previous, status: "needs_review", reason: "input-changed-after-manual-handoff", updatedAt: new Date().toISOString() };
+      await writeJson(paths.state, review); return { ...review, paths };
+    }
     if (["completed", "generated", "archive_pending"].includes(previous?.status) && inputChanged && !options.force) {
       const review = { ...previous, status: "needs_review", reason: "input-changed-after-completion", updatedAt: new Date().toISOString() }; await writeJson(paths.state, review); return { ...review, paths };
     }
@@ -88,13 +92,66 @@ export async function runPeriodicInsight(options = {}) {
       if (await exists(paths.generated)) return options.archive ? archiveIfRequested({ ...options, repoRoot, task, context, paths, state: previous }) : { ...previous, paths };
       if (!options.force) { const review = { ...previous, status: "needs_review", reason: "generated-output-missing", updatedAt: new Date().toISOString() }; await writeJson(paths.state, review); return { ...review, paths }; }
     }
+    if (previous?.status === "awaiting_manual" && (!options.send || !options.confirm) && !options.force) return { ...previous, paths };
     if (!task.prompt.productionReady || !options.send) { const preview = { schemaVersion: 1, taskId, runKey, target: context.target, status: "preview", contextSha256: context.sha256, promptSha256: sha256(prompt), prompt_assets, updatedAt: new Date().toISOString(), ...(task.prompt.productionReady ? {} : { reason: "production-not-ready" }) }; await writeJson(paths.state, preview); return { ...preview, paths }; }
     if (!options.confirm) throw new Error("send-requires-confirm");
-    const attemptId = randomUUID();
+    const attemptId = previous?.status === "awaiting_manual" && previous.attemptId ? previous.attemptId : randomUUID();
     const submitted = { schemaVersion: 1, taskId, runKey, target: context.target, status: "submitted", attemptId, contextSha256: context.sha256, promptSha256: sha256(prompt), prompt_assets, submittedAt: new Date().toISOString() }; await writeJson(paths.state, submitted);
     let bridge;
-    try { bridge = await (options.runBridge || runBridgeCli)(prompt, { ...options, bridgePath: options.bridgePath || defaultBridge, callerLabel: "learn-x:periodic-insight", preallocatedRunId: attemptId }); } catch (error) { const review = { ...submitted, status: "needs_review", reason: String(error?.message || error), updatedAt: new Date().toISOString() }; await writeJson(paths.state, review); await recordPeriodicBusinessOutcome(review, options); return { ...review, paths }; }
+    const manualHandoff = {
+      repoRoot, callerLabel: "learn-x:periodic-insight", taskId: runKey,
+      stage: "periodic-insight", artifactId: "insight.md", inputVersion: `sha256:${sha256(prompt)}`,
+      originEventId: `learn-x-periodic-insight:${taskId}:${context.target.kind}:${context.target.id}`,
+      promptId: `learn-x.periodic-insight.${taskId}`, promptRevision: sha256(prompt), promptAssets,
+      historyDependency: { required: false, completenessVerified: true, items: [], scope: "本交接包中的 Learn-X 来源材料" },
+      expectedOutputFormat: "完整 UTF-8 Markdown 候选洞察，符合当前任务结构",
+      fullFlow: ["运行周期洞察格式和来源校验", "仅归档到原 Learn-X 周期洞察知识库", "写后读回并反馈归档链接"],
+      continuationChoice: options.archive ? "continue-complete-workflow" : "current-stage-only",
+      selectedCandidateId: options.manualCandidateId,
+      rejectedCandidateIds: previous?.status === "awaiting_manual" && Array.isArray(previous.rejectedCandidateIds)
+        ? previous.rejectedCandidateIds : [],
+      sourceRequirements: { contextSha256: context.sha256, runKey, target: context.target, materialStatus: "verified" },
+    };
+    try { bridge = await (options.runBridge || runBridgeCli)(prompt, { ...options, bridgePath: options.bridgePath || defaultBridge,
+      callerLabel: "learn-x:periodic-insight", preallocatedRunId: attemptId, manualHandoff }); }
+    catch (error) { const review = { ...submitted, status: "needs_review", reason: String(error?.message || error), updatedAt: new Date().toISOString() }; await writeJson(paths.state, review); await recordPeriodicBusinessOutcome(review, options); return { ...review, paths }; }
     const result = bridge?.result || bridge;
+    if (result?.status === "awaiting_manual") {
+      const waiting = { ...submitted, status: "awaiting_manual", source: "manual-handoff",
+        handoffId: result.handoffId, manualHandoff: result.manualHandoff,
+        reason: result.reason || "manual-handoff-required",
+        ...(Array.isArray(result.candidateOptions) ? { candidateOptions: result.candidateOptions } : {}),
+        ...(manualHandoff.rejectedCandidateIds.length ? { rejectedCandidateIds: manualHandoff.rejectedCandidateIds } : {}),
+        updatedAt: new Date().toISOString() };
+      await writeJson(paths.state, waiting); await recordPeriodicBusinessOutcome(waiting, options); return { ...waiting, paths };
+    }
+    if (result?.status === "candidate_received") {
+      let returnedText;
+      try { returnedText = new TextDecoder("utf-8", { fatal: true }).decode(result.resultBytes); }
+      catch { const rejectedCandidateIds = [...new Set([...(manualHandoff.rejectedCandidateIds || []), result.candidate?.candidateId].filter(Boolean))];
+        const waiting = { ...submitted, status: "awaiting_manual", source: "manual-handoff", handoffId: result.handoffId,
+          manualHandoff: result.manualHandoff, candidateId: result.candidate?.candidateId, rejectedCandidateIds,
+          reason: "manual-result-not-utf8", updatedAt: new Date().toISOString() };
+        await writeJson(paths.state, waiting); await recordPeriodicBusinessOutcome(waiting, options); return { ...waiting, paths }; }
+      try { validateGeneratedOutput(returnedText, task, context.target); }
+      catch (error) { await writeFile(paths.unvalidated, returnedText, "utf8");
+        const rejectedCandidateIds = [...new Set([...(manualHandoff.rejectedCandidateIds || []), result.candidate?.candidateId].filter(Boolean))];
+        const waiting = { ...submitted, status: "awaiting_manual", source: "manual-handoff", handoffId: result.handoffId,
+          manualHandoff: result.manualHandoff, candidateId: result.candidate?.candidateId,
+          evidenceLevel: result.candidate?.evidenceLevel, rejectedCandidateIds,
+          outputSha256: sha256(returnedText), unvalidatedPath: paths.unvalidated,
+          reason: `invalid-output:${error.message}`, updatedAt: new Date().toISOString() };
+        await writeJson(paths.state, waiting); await recordPeriodicBusinessOutcome(waiting, options); return { ...waiting, paths }; }
+      const generatedText = renderGenerated(returnedText, task, context.target, undefined);
+      await writeFile(paths.generated, generatedText, "utf8");
+      const generated = { ...submitted, status: "generated", source: "manual-handoff", handoffId: result.handoffId,
+        manualCandidateId: result.candidate?.candidateId, evidenceLevel: result.candidate?.evidenceLevel,
+        rawSha256: result.candidate?.rawSha256, outputSha256: sha256(generatedText),
+        completionSource: "user-asserted", generatedAt: new Date().toISOString() };
+      await writeJson(paths.state, generated);
+      const finalResult = await archiveIfRequested({ ...options, repoRoot, task, context, paths, state: generated });
+      await recordPeriodicBusinessOutcome(finalResult, options); return finalResult;
+    }
     const contextPack = result?.contextPack ? { contextPack: result.contextPack } : {};
     const bridgeExitFailure = bridge?.exit && (bridge.exit.timedOut || bridge.exit.error || bridge.exit.code !== 0);
     const bridgeReason = result?.reason || (bridgeExitFailure ? (bridge.exit.timedOut ? "bridge-timeout" : bridge.exit.error ? "bridge-process-error" : "bridge-exit-nonzero") : bridge?.exit?.error || (!result?.conversationUrl ? "missing-conversation-url" : "bridge-result-invalid"));
@@ -113,7 +170,7 @@ async function recordPeriodicBusinessOutcome(state, options = {}) {
   if (!state?.attemptId) return;
   const status = state.status === "completed" ? "succeeded"
     : state.status === "failed" ? "failed"
-      : state.status === "generated" || state.status === "submitted" ? "pending" : "needs_review";
+      : state.status === "generated" || state.status === "submitted" || state.status === "awaiting_manual" ? "pending" : "needs_review";
   const stage = state.status === "archive_pending" ? "delivery"
     : state.status === "needs_review" && String(state.reason || "").startsWith("invalid-output:") ? "validation"
       : state.status === "needs_review" ? "submit" : undefined;
@@ -123,12 +180,13 @@ async function recordPeriodicBusinessOutcome(state, options = {}) {
     ...(typeof state.runId === "string" ? { runId: state.runId } : {}),
     status, deliveryStatus: status,
     businessValidationStatus: state.status === "completed" || state.status === "generated" ? "succeeded"
-      : state.status === "submitted" ? "pending" : "needs_review",
+      : state.status === "submitted" || state.status === "awaiting_manual" ? "pending" : "needs_review",
     promotionStatus: state.status === "completed" ? "succeeded"
-      : state.status === "generated" || state.status === "submitted" ? "pending" : "needs_review",
+      : state.status === "generated" || state.status === "submitted" || state.status === "awaiting_manual" ? "pending" : "needs_review",
     readbackStatus: state.status === "completed" ? "succeeded"
-      : state.status === "generated" || state.status === "submitted" ? "pending" : "needs_review",
-    completionSource: state.status === "completed" || state.status === "generated" ? "ai-generated" : "unknown",
+      : state.status === "generated" || state.status === "submitted" || state.status === "awaiting_manual" ? "pending" : "needs_review",
+    completionSource: state.source === "manual-handoff" ? "user-asserted"
+      : state.status === "completed" || state.status === "generated" ? "ai-generated" : "unknown",
     ...(stage ? { failureStage: stage } : {}),
     ...(status === "succeeded" ? {} : { reason: await safeBusinessOutcomeReason(state, { bridgePath: options.bridgePath || defaultBridge }) }),
   };
@@ -202,5 +260,5 @@ async function findPreservableState(repoRoot, taskId, targetId) { const taskRoot
 async function exists(filePath) { try { await stat(filePath); return true; } catch (error) { if (error.code === "ENOENT") return false; throw error; } }
 function sha256(value) { return createHash("sha256").update(String(value || ""), "utf8").digest("hex"); }
 function normalizeMarkdown(value) { return String(value || "").replace(/^<title>[^<]*<\/title>/i, "").replace(/&nbsp;/g, " ").replace(/[\s`*_>#\-~]+/g, "").trim(); }
-function parseArgs(argv) { const options = { command: argv[0] || "preview" }; if (!["preview", "run", "setup-wiki"].includes(options.command)) throw new Error(`未知命令：${options.command}`); const value = (arg, index) => { const next = argv[index + 1]; if (!next || next.startsWith("--")) throw new Error(`参数 ${arg} 需要值`); return next; }; for (let index = 1; index < argv.length; index += 1) { const arg = argv[index]; if (arg === "--task") { options.taskId = value(arg, index); index += 1; } else if (arg === "--target") { options.target = value(arg, index); index += 1; } else if (arg === "--range") { options.range = value(arg, index); index += 1; } else if (arg === "--from") { options.from = value(arg, index); index += 1; } else if (arg === "--to") { options.to = value(arg, index); index += 1; } else if (arg === "--send") options.send = true; else if (arg === "--archive") options.archive = true; else if (arg === "--confirm") options.confirm = true; else if (arg === "--force") options.force = true; else throw new Error(`未知参数：${arg}`); } return options; }
+function parseArgs(argv) { const options = { command: argv[0] || "preview" }; if (!["preview", "run", "setup-wiki"].includes(options.command)) throw new Error(`未知命令：${options.command}`); const value = (arg, index) => { const next = argv[index + 1]; if (!next || next.startsWith("--")) throw new Error(`参数 ${arg} 需要值`); return next; }; for (let index = 1; index < argv.length; index += 1) { const arg = argv[index]; if (arg === "--task") { options.taskId = value(arg, index); index += 1; } else if (arg === "--target") { options.target = value(arg, index); index += 1; } else if (arg === "--range") { options.range = value(arg, index); index += 1; } else if (arg === "--from") { options.from = value(arg, index); index += 1; } else if (arg === "--to") { options.to = value(arg, index); index += 1; } else if (arg === "--candidate-id") { options.manualCandidateId = value(arg, index); index += 1; } else if (arg === "--send") options.send = true; else if (arg === "--archive") options.archive = true; else if (arg === "--confirm") options.confirm = true; else if (arg === "--force") options.force = true; else throw new Error(`未知参数：${arg}`); } return options; }
 if (process.argv[1] === fileURLToPath(import.meta.url)) { const options = parseArgs(process.argv.slice(2)); const result = options.command === "setup-wiki" ? await setupWiki(options) : await runPeriodicInsight(options); process.stdout.write(`${JSON.stringify(result)}\n`); process.exitCode = exitCodeForResult(options.command, result); }

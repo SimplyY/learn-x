@@ -370,14 +370,15 @@ function cardBody(note) {
         if (pendingBreaks) appendParagraphBreaks();
         else append('\n');
       }
+      const indent = rawLine.slice(0, rawLine.length - rawLine.trimStart().length);
       const marker = /^\d/.test(list[1]) ? `${list[1].replace(/[、)]$/, '.')} ` : '- ';
-      append(`${marker}${list[2].trim()}`);
+      append(`${indent}${marker}${list[2].trim()}`);
       inList = true;
       pendingBreaks = 0;
     } else {
       if (parts.length) {
         if (pendingBreaks) appendParagraphBreaks();
-        else append(inList ? '\n' : '<br>');
+        else append(inList ? '\n' : '<br>', true);
       }
       append(text);
       inList = false;

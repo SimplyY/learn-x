@@ -20,6 +20,12 @@
 - 在 `learn-x` 群（`oc_846411e4168e681d7f7b491c837163fd`）收到单条原始消息，且 Bridge 上下文确认 `senderType=user`、发送者是当前已验证用户时，检查正文是否包含 `flomo 每日回顾`。通过后路由到 `.agents/skills/learn-x-flomo-review/SKILL.md`。
 - 执行前读取该 Skill；完整资格、去重、隐私和发送规则以 Skill 为准。机器人、引用、附件或身份不明的同文消息不构成触发。
 
+## Learn-X WeRead 阅读路由
+
+- 在同一 `learn-x` 群收到单条原始文本消息，且 Bridge 上下文确认 `senderType=user`、发送者是当前已验证用户时，用户明确要求整理微信读书划线或想法、指定 WeRead 日期范围、获取 WeRead 伴读包，或使用 `修改 <recordId>` / `撤销 <recordId>` 处理阅读记录，则读取并执行 `.agents/skills/learn-x-reading/SKILL.md`。
+- 机器人消息、引用消息、图片/附件消息或身份不明内容不触发。实体书照片与视觉标记识别按用户指示暂缓；若用户要求处理书页照片，说明该部分尚未启用，不把 OCR 文本当作已采集标记。
+- 完整采集、公开、去重、保存和失败处理规则以该 Skill 为准；不得调用旧 `jingdu` 流程。
+
 ## Harness 接入
 
 - Learn-X 是个人上下文的唯一确认入口；只有人工确认后的 Memory 才能触发 YWNext 刷新。
@@ -37,7 +43,7 @@
 | --- | --- | --- |
 | 本地应用、静态构建、API、验证 | `docs/TECH.md` | 修改 `app/code/`、构建脚本、前端或接口 |
 | Chat Pack | `docs/CHAT_PACK.md` | 修改对话类型、Prompt 组合、Context、编辑器或发布边界 |
-| Prompt 治理 | `docs/PROMPT_GOVERNANCE.md`、全局 `prompt-governance` Skill | 受治理 Prompt 的身份、飞书真源、本地副本、纳入、同步和使用证据 |
+| Prompt 治理与仓库备份 | `docs/PROMPT_GOVERNANCE.md`、`PROMPTS.md`、全局 `prompt-governance` Skill | 受治理 Prompt 的身份、飞书真源、运行时缓存边界及 Git 备份同步 |
 | Prompt 使用统计 | `docs/CHAT_PACK.md`、`.agents/skills/learn-x-prompt-usage/` | 合并或校验两端 Chat Pack 使用记录 |
 | Process / Output / Memory | `docs/LEARN_X_PROCESS.md`、`.agents/skills/learn-x-process/` | 处理周/月/年 Output、Process Pack、Memory 候选 |
 | ~~行动反馈周报 / Action Feedback Base~~（已退役） | `docs/ACTION_FEEDBACK.md`（仅历史留档） | Action Feedback 已于 2026-10 退役，由 Core V1（`/Users/yuwei/code/core`）接管；勿调用 `action:feedback` |

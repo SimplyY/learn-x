@@ -368,6 +368,16 @@ assert.match(content, /定义一\n2\. 定义二&nbsp;<br>&nbsp;<br>如何逍遥�
 assert.match(content, /#记录\/读书笔记&nbsp;<br>&nbsp;<br>庄子逍遥游&nbsp;<br>&nbsp;<br>什么是逍遥游\？/);
 });
 
+test('card body preserves nested list hierarchy', () => {
+  const note = { noteKey: 'nested-list', createdAt: '2026-10-31T14:49:00+08:00',
+    body: '健康读书记录：\n\n1. 人体简史\n  1. 现代健康问题\n    1. 包括饮食\n    2. 让健康行为嵌入生活\n2. 超越百岁', bodyHash: 'nested-list-hash',
+    source: { path: 'flomo.md', line: 1, url: 'https://v.flomoapp.com/mine/?memo_id=nested-list' }, quality: { score: 3 } };
+  const decision = { date, countDeviationReason: '嵌套列表测试', items: [{ noteKey: note.noteKey, bodyHash: note.bodyHash, relevance: 'strong', reason: '检查层级' }] };
+  const result = renderReview(decision, [note]);
+  const content = result.card.body.elements.find(element => element.tag === 'markdown' && element.content.includes('人体简史')).content;
+  assert.match(content, /1\. 人体简史\n  1\. 现代健康问题\n    1\. 包括饮食\n    2\. 让健康行为嵌入生活\n2\. 超越百岁/);
+});
+
 test('capacity report supports seven and twenty-eight days without exposing note identities', async (t) => {
   const { root } = await fixture(t);
   for (const days of [7, 28]) {

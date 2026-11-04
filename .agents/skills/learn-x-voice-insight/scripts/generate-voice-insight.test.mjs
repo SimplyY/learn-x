@@ -50,7 +50,7 @@ test("preview writes private context and does not call the bridge", async (t) =>
   assert.match(result.manualPrompt, /Voice-X/);
 });
 
-test("submits one batch, validates every block, archives, and refreshes voice input", async (t) => {
+test("manual batch handoff waits, validates a returned candidate, archives, and refreshes voice input", async (t) => {
   const outputRoot = await mkdtemp(path.join(os.tmpdir(), "voice-insight-batch-"));
   t.after(() => rm(outputRoot, { recursive: true, force: true }));
   const records = [makeRecord("rec1", "placeholder:rec1"), makeRecord("rec2", "placeholder:rec2")];
@@ -59,17 +59,50 @@ test("submits one batch, validates every block, archives, and refreshes voice in
   const archived = [];
   const statusTrail = [];
   let refreshed = 0;
-  const result = await runVoiceInsight({ outputRoot, week: "2026-W24", send: true, confirm: true, transport: new FakeTransport(records),
-    runBridge: async (_prompt, options) => { bridgeCalls += 1; bridgeOptions = options; return { result: { status: "succeeded", runId: "run1", conversationUrl: "https://chat.invalid/1", text: batch(records) } }; },
+  const runOptions = { outputRoot, week: "2026-W24", send: true, confirm: true, transport: new FakeTransport(records),
+    runBridge: async (_prompt, options) => { bridgeCalls += 1; bridgeOptions = options;
+      if (bridgeCalls === 1) return { result: { status: "awaiting_manual", handoffId: "handoff-week-24",
+        manualHandoff: { handoffId: "handoff-week-24", privatePaths: { prompt: "/private/mock/prompt.txt" } } } };
+      if (bridgeCalls === 3) return { result: { status: "awaiting_manual", handoffId: "handoff-week-24",
+        reason: "manual-candidate-selection-required",
+        candidateOptions: [{ candidateId: "candidate-week-24-3" }, { candidateId: "candidate-week-24-4" }],
+        manualHandoff: { handoffId: "handoff-week-24", privatePaths: { prompt: "/private/mock/prompt.txt" } } } };
+      return { result: { status: "candidate_received", handoffId: "handoff-week-24",
+        manualHandoff: { handoffId: "handoff-week-24", privatePaths: { prompt: "/private/mock/prompt.txt" } },
+        candidate: { candidateId: `candidate-week-24-${bridgeCalls}`, evidenceLevel: "user-asserted", rawSha256: String(bridgeCalls).repeat(64) },
+        resultBytes: Buffer.from(bridgeCalls === 2 ? "invalid candidate" : batch(records), "utf8") } };
+    },
     recordBusinessOutcome: async (event) => { outcomes.push(event); return { status: "recorded" }; },
-    archive: async (record) => { statusTrail.push(JSON.parse(await readFile(path.join(outputRoot, "_voice-insight-status.json"))).status); archived.push(record.id); return { insightUrl: `insight:${record.id}` }; }, refreshVoice: async () => { refreshed += 1; } });
+    archive: async (record) => { statusTrail.push(JSON.parse(await readFile(path.join(outputRoot, "_voice-insight-status.json"))).status); archived.push(record.id); return { insightUrl: `insight:${record.id}` }; }, refreshVoice: async () => { refreshed += 1; } };
+  const waiting = await runVoiceInsight(runOptions);
+  assert.equal(waiting.status, "awaiting_manual"); assert.equal(waiting.handoffId, "handoff-week-24");
+  assert.deepEqual(archived, []); assert.equal(refreshed, 0);
+  const rejected = await runVoiceInsight(runOptions);
+  assert.equal(rejected.status, "awaiting_manual"); assert.deepEqual(rejected.rejectedCandidateIds, ["candidate-week-24-2"]);
+  assert.deepEqual(archived, []); assert.equal(refreshed, 0);
+  const ambiguous = await runVoiceInsight(runOptions);
+  assert.equal(ambiguous.status, "awaiting_manual");
+  assert.equal(ambiguous.reason, "manual-candidate-selection-required");
+  assert.deepEqual(ambiguous.candidateOptions.map((item) => item.candidateId),
+    ["candidate-week-24-3", "candidate-week-24-4"]);
+  assert.deepEqual(archived, []); assert.equal(refreshed, 0);
+  const result = await runVoiceInsight({ ...runOptions, manualCandidateId: "candidate-week-24-4" });
   assert.equal(result.status, "completed");
-  assert.equal(bridgeCalls, 1);
+  assert.equal(bridgeCalls, 4);
   assert.equal(bridgeOptions.callerLabel, "learn-x:voice-insight");
   assert.equal(bridgeOptions.preallocatedRunId, result.attemptId);
-  assert.equal(outcomes.length, 1); assert.equal(outcomes[0].caller, "learn-x:voice-insight");
-  assert.equal(outcomes[0].attemptId, result.attemptId); assert.equal(outcomes[0].deliveryStatus, "succeeded");
-  assert.equal("prompt" in outcomes[0], false); assert.equal("reply" in outcomes[0], false); assert.equal("conversationUrl" in outcomes[0], false);
+  assert.equal(bridgeOptions.manualHandoff.taskId, "voice-insight:2026-W24");
+  assert.deepEqual(bridgeOptions.manualHandoff.rejectedCandidateIds, ["candidate-week-24-2"]);
+  assert.equal(bridgeOptions.manualHandoff.selectedCandidateId, "candidate-week-24-4");
+  assert.equal(result.source, "manual-handoff"); assert.equal(result.manualCandidateId, "candidate-week-24-4");
+  assert.equal(result.evidenceLevel, "user-asserted"); assert.equal("conversationUrl" in result, false);
+  assert.equal(outcomes.length, 4); assert.equal(outcomes[0].caller, "learn-x:voice-insight");
+  assert.equal(outcomes[0].attemptId, result.attemptId); assert.equal(outcomes[0].status, "pending");
+  assert.equal(outcomes[1].attemptId, result.attemptId); assert.equal(outcomes[1].status, "pending");
+  assert.equal(outcomes[2].attemptId, result.attemptId); assert.equal(outcomes[2].status, "pending");
+  assert.equal(outcomes[3].attemptId, result.attemptId); assert.equal(outcomes[3].deliveryStatus, "succeeded");
+  assert.equal(outcomes[3].completionSource, "user-asserted");
+  assert.ok(outcomes.every((event) => !("prompt" in event) && !("reply" in event) && !("conversationUrl" in event)));
   assert.deepEqual(archived, ["rec1", "rec2"]);
   assert.equal(refreshed, 1);
   assert.deepEqual(statusTrail, ["archive_pending", "archive_pending"]);
