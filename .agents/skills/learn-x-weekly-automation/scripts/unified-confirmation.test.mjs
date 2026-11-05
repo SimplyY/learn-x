@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { prepareWeeklyMemory, bindWeeklyMemoryApproval } from '../../learn-x-process/scripts/prepare-weekly-memory.mjs';
-import { executeConfirmedLearnXCloseout, prepareUnifiedPreview, validateUnifiedBaselines } from './unified-confirmation.mjs';
+import { executeConfirmedLearnXCloseout, mirrorCoreOverviewToYWContext, prepareUnifiedPreview, validateUnifiedBaselines } from './unified-confirmation.mjs';
 import { recordDisplayedCard, confirmDisplayedCard } from '../../../../../core/.agents/skills/core-weekly/scripts/weekly-review-lib/confirmation-session.mjs';
 
 async function fixture(t) {
@@ -94,6 +94,21 @@ test('Core 同步抛错不撤销已保存认可，也不阻塞 Learn-X 收尾',a
  assert.match(accepted.coreSync.error,/mock target unavailable/);
  assert.match(accepted.file,/confirmations/);
  assert.equal(JSON.parse(await readFile(accepted.file,'utf8')).batchId,accepted.batch.batchId);
+});
+
+test('Core 总览镜像只在已确认目标读回后运行，且失败状态与 Core 确认分离',async t=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),'yw-context-mirror-hook-')); t.after(()=>rm(root,{recursive:true,force:true}));
+ const contextRoot=path.join(root,'yw-context'); const script=path.join(contextRoot,'scripts/sync-core-personal-docs.mjs');
+ await mkdir(path.dirname(script),{recursive:true}); await writeFile(script,'// fixture\n');
+ const batch={items:[{id:'core-overview',domain:'core',targets:['overview']}]};
+ let calls=0;
+ const blocked=await mirrorCoreOverviewToYWContext({coreRoot:path.join(root,'core'),batch,coreSync:{targets:{'core-overview:overview':{result:'unknown'}}},env:{...process.env,YW_CONTEXT_ROOT:contextRoot},run:async()=>{calls++;throw new Error('must not run');}});
+ assert.equal(blocked.status,'awaiting_core_readback'); assert.equal(calls,0);
+ const mirror=await mirrorCoreOverviewToYWContext({coreRoot:path.join(root,'core'),batch,coreSync:{targets:{'core-overview:overview':{result:'verified'}}},env:{...process.env,YW_CONTEXT_ROOT:contextRoot},run:async(_exe,args,options)=>{calls++;assert.deepEqual(args,[script,'--repo-root',contextRoot,'--apply']);assert.equal(options.cwd,contextRoot);return {stdout:JSON.stringify({status:'awaiting_acc07',source_revision:'rev-2',record_count:1,commit:null,acceptance_probe:false})};}});
+ assert.equal(mirror.status,'awaiting_acc07'); assert.equal(mirror.source_revision,'rev-2'); assert.equal(mirror.record_count,1); assert.equal(calls,1);
+ assert.equal('content' in mirror,false);
+ const noOverview=await mirrorCoreOverviewToYWContext({batch:{items:[{id:'core-weekly',domain:'core',targets:['annual']}]},coreSync:{targets:{}},run:async()=>assert.fail('no overview target must not invoke mirror')});
+ assert.equal(noOverview.status,'not-applicable');
 });
 
 test('后续 Core 预览跳过已明确认可的内容，只为变化后的候选生成新批次',async t=>{

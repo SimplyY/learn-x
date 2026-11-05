@@ -1,6 +1,9 @@
 // Preparation only. The actual confirmation must be read from the trusted
 // conversation host; CLI arguments or local JSON are never approval evidence.
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { existsSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, open, readFile, link, unlink, readdir, lstat } from 'node:fs/promises';
@@ -10,6 +13,7 @@ import { verifyConfirmedWeeklyMemoryWrite, verifyWeeklyMemoryApproval, verifyWee
 const here = path.dirname(fileURLToPath(import.meta.url));
 const defaultLearnXRoot = path.resolve(here, '../../../..');
 const defaultCoreRoot = path.resolve(defaultLearnXRoot, '../core');
+const execFileAsync = promisify(execFile);
 
 const hash = value => createHash('sha256').update(value, 'utf8').digest('hex');
 const canonicalWeek = value => {
@@ -445,7 +449,50 @@ export async function syncCodexConfirmedBatch({ coreRoot = defaultCoreRoot, batc
   const adapter = createCoreFeishuAdapter(ctx);
   const batch = await readConfirmedBatch(batchFile);
   const verifyConfirmation = current => verifyCodexConfirmationBatch({ coreRoot, batch: current, host });
-  return syncConfirmedBatch({ root: coreRoot, batchFile, ...adapter, verifyConfirmation, feishuUrl });
+  const coreSync = await syncConfirmedBatch({ root: coreRoot, batchFile, ...adapter, verifyConfirmation, feishuUrl });
+  const ywContextMirror = await mirrorCoreOverviewToYWContext({ coreRoot, batch, coreSync });
+  return { ...coreSync, ywContextMirror };
+}
+
+// Core remains the authority. Mirror only after the exact confirmed overview
+// targets have passed their own target readback; an unrelated failed target
+// must not erase verified overview evidence or undo the Core confirmation.
+export async function mirrorCoreOverviewToYWContext({ coreRoot = defaultCoreRoot, batch, coreSync, env = process.env, run = execFileAsync } = {}) {
+  const overviewItems = batch?.items?.filter(item => item.domain === 'core' && item.targets?.includes('overview')) ?? [];
+  if (!overviewItems.length) return { status: 'not-applicable' };
+  const targets = coreSync?.targets ?? {};
+  if (!overviewItems.every(item => targets[`${item.id}:overview`]?.result === 'verified')) {
+    return { status: 'awaiting_core_readback', error_code: 'confirmed_overview_not_verified' };
+  }
+  const contextRoot = path.resolve(env.YW_CONTEXT_ROOT || path.resolve(coreRoot, '../yw-context'));
+  const script = path.join(contextRoot, 'scripts/sync-core-personal-docs.mjs');
+  if (!existsSync(script)) return { status: 'unavailable', error_code: 'yw_context_sync_entrypoint_not_found' };
+  let stdout;
+  try {
+    ({ stdout } = await run(process.execPath, [script, '--repo-root', contextRoot, '--apply'], {
+      cwd: contextRoot,
+      env: { ...env, GIT_TERMINAL_PROMPT: '0' },
+      encoding: 'utf8',
+      timeout: 10 * 60_000,
+      maxBuffer: 4 * 1024 * 1024,
+      windowsHide: true
+    }));
+  } catch {
+    return { status: 'failed', error_code: 'yw_context_sync_failed' };
+  }
+  try {
+    const receipt = JSON.parse(stdout);
+    return {
+      status: receipt.status || 'unknown',
+      error_code: receipt.error_code,
+      source_revision: receipt.source_revision,
+      record_count: receipt.record_count,
+      commit: receipt.commit || null,
+      acceptance_probe: receipt.acceptance_probe === true
+    };
+  } catch {
+    return { status: 'failed', error_code: 'yw_context_receipt_invalid' };
+  }
 }
 
 // One host call completes the recognition boundary and then hands the immutable
