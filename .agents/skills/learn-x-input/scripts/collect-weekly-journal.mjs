@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { existsSync } from "node:fs";
 import { link, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -136,11 +137,45 @@ export async function collectConfirmedWeeklyJournal({ week, repoRoot: root = rep
 
 export async function collectAndPublishConfirmedWeeklyJournal(options = {}) {
   const collected = await collectConfirmedWeeklyJournal(options);
+  const root = options.repoRoot ?? repoRoot;
   const sharedContext = await publishConfirmedWeeklyContext({
     week: collected.week,
-    repoRoot: options.repoRoot ?? repoRoot
+    repoRoot: root
   });
-  return { ...collected, sharedContext };
+  const ywContextMirror = await (options.mirrorToYWContext || mirrorLearnXPersonalFilesToYWContext)(root, options.mirrorOptions || {});
+  return { ...collected, sharedContext, ywContextMirror };
+}
+
+export async function mirrorLearnXPersonalFilesToYWContext(learnXRoot, { env = process.env, run = execFileAsync } = {}) {
+  const contextRoot = path.resolve(env.YW_CONTEXT_ROOT || path.resolve(learnXRoot, "../yw-context"));
+  const script = path.join(contextRoot, "scripts/sync-learn-x-personal-files.mjs");
+  if (!existsSync(script)) return { status: "unavailable", error_code: "yw_context_sync_entrypoint_not_found" };
+  let stdout;
+  try {
+    ({ stdout } = await run(process.execPath, [script, "--learn-x-root", path.resolve(learnXRoot), "--repo-root", contextRoot, "--apply"], {
+      cwd: contextRoot,
+      env: { ...env, GIT_TERMINAL_PROMPT: "0" },
+      encoding: "utf8",
+      timeout: 10 * 60_000,
+      maxBuffer: 4 * 1024 * 1024,
+      windowsHide: true
+    }));
+  } catch {
+    return { status: "failed", error_code: "yw_context_sync_failed" };
+  }
+  try {
+    const receipt = JSON.parse(stdout);
+    return {
+      status: receipt.status || "unknown",
+      error_code: receipt.error_code,
+      source_revision: receipt.source_revision,
+      record_count: receipt.record_count,
+      levels: receipt.levels,
+      commit: receipt.commit || null
+    };
+  } catch {
+    return { status: "failed", error_code: "yw_context_receipt_invalid" };
+  }
 }
 
 export async function fetchWeeklyJournalSection({ docUrl, blockId, timeoutMs = 60_000 }) {

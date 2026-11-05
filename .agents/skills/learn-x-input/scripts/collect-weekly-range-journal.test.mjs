@@ -88,4 +88,5 @@ test("range journal collects only after all Core weeks pass the live gate", asyn
   assert.match(await readFile(path.join(files.directory, "weekly.md"), "utf8"), /目标周期：2026-W43-W44/);
   const manifest = JSON.parse(await readFile(files.manifestPath, "utf8"));
   assert.equal(manifest.journal.status, "confirmed-readback");
+  assert.equal(result.ywContextMirror.status, "unavailable");
 });

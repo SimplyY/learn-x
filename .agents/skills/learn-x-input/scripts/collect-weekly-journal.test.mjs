@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { collectAndPublishConfirmedWeeklyJournal, collectConfirmedWeeklyJournal, recordWeeklyJournalAnchor, WEEKLY_JOURNAL_DOCUMENT_URL } from "./collect-weekly-journal.mjs";
+import { collectAndPublishConfirmedWeeklyJournal, collectConfirmedWeeklyJournal, mirrorLearnXPersonalFilesToYWContext, recordWeeklyJournalAnchor, WEEKLY_JOURNAL_DOCUMENT_URL } from "./collect-weekly-journal.mjs";
 
 const allowCoreGate = async () => [];
 
@@ -152,10 +152,16 @@ test("publishes the shared plan only after Stage 2 journal collection succeeds",
     targetBlockId: "blkTarget2026W40", documentId: "docWeeklyJournal01", repoRoot: root
   });
   const section = `## 10.5\n\n已确认周记正文，包含足够的经历事实和个人判断。\n\n| 项目 | 内容 |\n| --- | --- |\n| 新周计划 | 1. 完成计划核对 [链接](https://example.com/plan) |`;
+  let mirrorCalled = false;
   const result = await collectAndPublishConfirmedWeeklyJournal({
     week: "2026-W40",
     repoRoot: root,
     requireCoreGate: allowCoreGate,
+    mirrorToYWContext: async (learnXRoot) => {
+      mirrorCalled = true;
+      assert.equal(learnXRoot, root);
+      return { status: "idempotent", record_count: 482 };
+    },
     fetchSection: async () => ({
       ok: true,
       identity: "bot",
@@ -164,6 +170,8 @@ test("publishes the shared plan only after Stage 2 journal collection succeeds",
   });
 
   assert.equal(result.sharedContext.planWeek, "2026-W41");
+  assert.equal(mirrorCalled, true);
+  assert.equal(result.ywContextMirror.status, "idempotent");
   const saved = await readFile(result.outputPath, "utf8");
   assert.match(saved, /来源 revision：72/);
   const current = JSON.parse(await readFile(result.sharedContext.currentPath, "utf8"));
@@ -191,4 +199,29 @@ test("atomically preserves one target when conflicting anchor writes race", asyn
     week: "2026-W40", writeDate: "2026-10-05", targetTitle: "110.50",
     targetBlockId: "blkTargetSubstring", documentId: "docWeeklyJournal01", repoRoot: root
   }), /target title must include/);
+});
+
+test("YW-Context mirror reuses the confirmed weekly completion point and returns only a safe receipt", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-yw-context-sync-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const contextRoot = path.join(root, "yw-context");
+  const syncScript = path.join(contextRoot, "scripts", "sync-learn-x-personal-files.mjs");
+  await mkdir(path.dirname(syncScript), { recursive: true });
+  await writeFile(syncScript, "// test fixture\n");
+
+  let captured;
+  const result = await mirrorLearnXPersonalFilesToYWContext(root, {
+    env: { YW_CONTEXT_ROOT: contextRoot },
+    run: async (command, args, options) => {
+      captured = { command, args, cwd: options.cwd };
+      return { stdout: JSON.stringify({ status: "idempotent", source_revision: "fixture-revision", record_count: 482, levels: { P2: 117, P3: 365 }, commit: "abc123" }) };
+    }
+  });
+  assert.equal(result.status, "idempotent");
+  assert.equal(result.record_count, 482);
+  assert.equal(captured.args.at(-1), "--apply");
+  assert.equal(captured.cwd, contextRoot);
+
+  const unavailable = await mirrorLearnXPersonalFilesToYWContext(root, { env: { YW_CONTEXT_ROOT: path.join(root, "missing") } });
+  assert.deepEqual(unavailable, { status: "unavailable", error_code: "yw_context_sync_entrypoint_not_found" });
 });

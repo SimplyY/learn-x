@@ -3,7 +3,7 @@ import { link, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promis
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { countInputChars } from "./lib/input-limits.mjs";
-import { fetchWeeklyJournalSection, hasExpectedJournalDate, WEEKLY_JOURNAL_DOCUMENT_URL } from "./collect-weekly-journal.mjs";
+import { fetchWeeklyJournalSection, hasExpectedJournalDate, mirrorLearnXPersonalFilesToYWContext, WEEKLY_JOURNAL_DOCUMENT_URL } from "./collect-weekly-journal.mjs";
 import { requireCoreWeeklyGate } from "../../learn-x-process/scripts/lib/core-weekly-gate.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../");
@@ -87,6 +87,7 @@ export async function collectConfirmedWeeklyRangeJournal({ periodId, repoRoot: r
     weeklySha256: sha256(saved)
   };
   await atomicReplace(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  const ywContextMirror = await mirrorLearnXPersonalFilesToYWContext(root);
   return {
     periodId,
     weeks,
@@ -98,7 +99,8 @@ export async function collectConfirmedWeeklyRangeJournal({ periodId, repoRoot: r
     revisionId: document.revision_id ?? null,
     targetTitle: liveTitle,
     targetBlockId: anchor.targetBlockId,
-    capturedAt
+    capturedAt,
+    ywContextMirror
   };
 }
 
