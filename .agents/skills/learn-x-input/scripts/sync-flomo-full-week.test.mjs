@@ -65,6 +65,25 @@ test("full-week sync activates one validated snapshot and renders weekly input f
   assert.equal(status.sources.flomo.count, 1);
 });
 
+test("YW-Context mirror runs after activation and its failure does not change Learn-X Flomo success", async (t) => {
+  const { root, weekRoot, attemptToken } = await fixture(t);
+  let observedActiveSnapshot = null;
+  const result = await syncFlomoFullWeek({
+    week,
+    attemptToken,
+    repoRoot: root,
+    collect: stagedCollector(root, fullScan([record("memo-mirror", "镜像失败不能回滚来源快照。")])),
+    mirrorToYWContext: async (learnXRoot) => {
+      observedActiveSnapshot = (await readJson(paths(learnXRoot).storageModePath)).activeSnapshotId;
+      return { status: "failed", error_code: "test_mirror_failure" };
+    },
+  });
+  assert.equal(observedActiveSnapshot, result.snapshotId);
+  assert.equal(result.status, "ready");
+  assert.equal(result.ywContextMirror.status, "failed");
+  assert.equal((await readWeeklySourceStatus(weekRoot, week)).sources.flomo.status, "ready");
+});
+
 test("a handwritten weekly file blocks snapshot activation before it can diverge from the active snapshot", async (t) => {
   const { root, weekRoot, attemptToken } = await fixture(t);
   const first = await syncFlomoFullWeek({ week, attemptToken, repoRoot: root,

@@ -1,4 +1,6 @@
+import { existsSync } from "node:fs";
 import { open, readFile, rename, unlink } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -61,7 +63,8 @@ export async function readFlomoAttemptToken(weekRoot, expectedToken) {
 }
 
 export async function syncFlomoFullWeek({ week, attemptToken, invocationId = randomUUID(), repoRoot = defaultRepoRoot, storageRoot,
-  collect = collectFlomoFullSnapshot, activate = activateOnlineSnapshot, publish = publishFlomoSnapshotWeek } = {}) {
+  collect = collectFlomoFullSnapshot, activate = activateOnlineSnapshot, publish = publishFlomoSnapshotWeek,
+  mirrorToYWContext = runYWContextFlomoSync } = {}) {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(invocationId || ""))) {
     throw new Error("flomo-invocation-id-required");
   }
@@ -102,8 +105,11 @@ export async function syncFlomoFullWeek({ week, attemptToken, invocationId = ran
         file: "flomo.md", count: weekly.count, summary: weekly.summary,
         preservedStaleFile: !weekly.count && await fileExists(notesPath) });
     }
+    let ywContextMirror;
+    try { ywContextMirror = await mirrorToYWContext(repoRoot); }
+    catch { ywContextMirror = { status: "failed", error_code: "yw_context_sync_failed" }; }
     return { ...weekly, activation: activation.status, snapshotId: snapshot.snapshotId, capturedAt: snapshot.capturedAt,
-      coverage: snapshot.coverage, termination: snapshot.termination };
+      coverage: snapshot.coverage, termination: snapshot.termination, ywContextMirror };
   } catch (error) {
     let reportedError = error;
     if (snapshot && publishedWeeklyContent !== undefined) {
@@ -125,6 +131,30 @@ export async function syncFlomoFullWeek({ week, attemptToken, invocationId = ran
           : `Flomo 全量快照同步失败（${errorCode}${stage}）：${reason}；保留最近成功快照和已有周输入`, preservedStaleFile: await fileExists(notesPath) });
     }
     throw reportedError;
+  }
+}
+
+export function runYWContextFlomoSync(learnXRoot, { env = process.env, spawn = spawnSync } = {}) {
+  const contextRoot = path.resolve(env.YW_CONTEXT_ROOT || path.resolve(learnXRoot, "../yw-context"));
+  const script = path.join(contextRoot, "scripts/sync-flomo-snapshot.mjs");
+  if (!existsSync(script)) return { status: "unavailable", error_code: "yw_context_repository_not_found" };
+  const result = spawn(process.execPath, [script, "--learn-x-root", path.resolve(learnXRoot), "--repo-root", contextRoot, "--apply"], {
+    cwd: contextRoot,
+    encoding: "utf8",
+    env: { ...env, GIT_TERMINAL_PROMPT: "0" },
+    maxBuffer: 4 * 1024 * 1024,
+  });
+  if (result.error || result.status !== 0) return { status: "failed", error_code: "yw_context_sync_failed" };
+  try {
+    const receipt = JSON.parse(result.stdout);
+    return {
+      status: receipt.status || "unknown",
+      error_code: receipt.status_report?.status === "failed" ? "source_update_requires_acceptance" : undefined,
+      source_revision: receipt.source_revision,
+      commit: receipt.commit || receipt.status_report?.commit || null,
+    };
+  } catch {
+    return { status: "failed", error_code: "yw_context_receipt_invalid" };
   }
 }
 
