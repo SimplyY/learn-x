@@ -20,7 +20,7 @@ const COACH_TABLES = [
   { name: "项目", fields: ["项目名", "状态", "项目类型", "创建时间", "更新时间", "备注", "产出链接", "阻塞与风险", "当前阶段", "优先级", "下一步", "当前方案"], filterField: "创建时间" },
 ];
 
-export async function collectDailyCoachWeekly({ week, outputRoot = path.join(repoRoot, "03_input/weekly", week), runCli = run, sources = ["daily", "coach"] }) {
+export async function collectDailyCoachWeekly({ week, outputRoot = path.join(repoRoot, "03_input/weekly", week), runCli = run, sources = ["daily", "coach"], syncDiaryToYWContext = null }) {
   const requested = new Set(sources);
   if (!requested.size || [...requested].some((source) => !["daily", "coach"].includes(source))) {
     throw new Error("sources must contain daily and/or coach");
@@ -32,10 +32,12 @@ export async function collectDailyCoachWeekly({ week, outputRoot = path.join(rep
   let daily = null;
   let coach = null;
   let coachFileWritten = false;
+  let dailyBaseCoordinates = null;
+  let ywContextDiarySync = null;
   await mkdir(outputRoot, { recursive: true });
 
   if (requested.has("daily")) try {
-    daily = await collectDaily(range, runCli);
+    daily = await collectDaily(range, runCli, (coordinates) => { dailyBaseCoordinates = coordinates; });
     const content = renderDaily(week, range, daily);
     const ready = daily.records.length > 0;
     if (ready) await atomicWrite(dailyPath, content);
@@ -43,6 +45,14 @@ export async function collectDailyCoachWeekly({ week, outputRoot = path.join(rep
   } catch (error) {
     failures.push({ source: "daily", error });
     await updateWeeklySourceStatus({ weekRoot: outputRoot, week, source: "daily", status: "failed", file: "daily.md", count: 0, summary: safeFailureSummary(error), preservedStaleFile: await fileExists(dailyPath) });
+  }
+
+  if (daily && dailyBaseCoordinates && typeof syncDiaryToYWContext === "function") {
+    try {
+      ywContextDiarySync = await syncDiaryToYWContext(dailyBaseCoordinates);
+    } catch {
+      ywContextDiarySync = { status: "failed", error_code: "yw_context_sync_failed" };
+    }
   }
 
   if (requested.has("coach")) try {
@@ -61,7 +71,7 @@ export async function collectDailyCoachWeekly({ week, outputRoot = path.join(rep
     const summary = failures.map(({ source, error }) => `${source}:${failureDetail(error)}`).join("; ");
     throw new Error(`日记/Coach 部分采集失败：${summary}`, { cause: failures.map(({ source, error }) => ({ source, error })) });
   }
-  return { daily, coach, coachFileWritten };
+  return { daily, coach, coachFileWritten, ywContextDiarySync };
 }
 
 function failureDetail(error) {
@@ -82,7 +92,7 @@ export function shouldWriteCoachFile(data) {
   return Object.values(data.tables).some((table) => table.records.length > 0);
 }
 
-async function collectDaily(range, runCli) {
+async function collectDaily(range, runCli, onCompleteRead = null) {
   const base = await resolve(DAILY_URL, runCli);
   const blocks = await runCli(["base", "+base-block-list", "--base-token", base, "--as", "bot", "--format", "json"]);
   const table = (blocks.data?.blocks || []).find((item) => item.name === DAILY_TABLE);
@@ -92,6 +102,7 @@ async function collectDaily(range, runCli) {
   const result = await listRecords(base, tableId, fields, [
     [DAILY_DATE_FIELD, ">", `ExactDate(${range.startExclusive})`], [DAILY_DATE_FIELD, "<", `ExactDate(${range.end})`]
   ], runCli);
+  if (typeof onCompleteRead === "function") onCompleteRead({ baseToken: base, tableId });
   return { baseUrl: DAILY_URL, table: DAILY_TABLE, fields, dateField: DAILY_DATE_FIELD, ...result, records: inRange(result.records, DAILY_DATE_FIELD, range) };
 }
 
@@ -202,7 +213,44 @@ function renderCoach(week, range, data) {
 
 function weekRange(week) { const match = /^(\d{4})-W(\d{2})$/.exec(week); if (!match) throw new Error(`无效周：${week}`); const jan4 = new Date(Date.UTC(Number(match[1]), 0, 4)); const monday = new Date(jan4); monday.setUTCDate(jan4.getUTCDate() - ((jan4.getUTCDay() + 6) % 7) + (Number(match[2]) - 1) * 7); const date = (value) => value.toISOString().slice(0, 10); const start = date(monday); const endDate = new Date(monday); endDate.setUTCDate(monday.getUTCDate() + 7); const startExclusive = new Date(monday); startExclusive.setUTCSeconds(-1); return { start: `${start}T00:00:00+08:00`, startExclusive: `${date(startExclusive)}T23:59:59+08:00`, end: `${date(endDate)}T00:00:00+08:00` }; }
 async function atomicWrite(file, content) { const temp = `${file}.${process.pid}.tmp`; await writeFile(temp, content, "utf8"); await rename(temp, file); }
-async function run(args) { const { stdout } = await execFileAsync("lark-cli", args, { env: { ...process.env, LARKSUITE_CLI_NO_UPDATE_NOTIFIER: "1", LARKSUITE_CLI_NO_SKILLS_NOTIFIER: "1" }, maxBuffer: 16 * 1024 * 1024 }); const result = JSON.parse(stdout); if (result.ok !== true) throw new Error(result.error?.message || "lark-cli 返回失败"); return result; }
+function normalizeYWContextSyncReport(stdout) {
+  try {
+    const report = JSON.parse(String(stdout || ""));
+    const result = {};
+    for (const key of ["status", "source_id", "batch_id", "source_revision", "records", "remote_commit", "acceptance_probe", "error_code"]) {
+      if (report[key] !== undefined) result[key] = report[key];
+    }
+    return result.status ? result : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function syncDiaryBaseToYWContext({ baseToken, tableId }) {
+  const contextRoot = path.resolve(process.env.YW_CONTEXT_ROOT || path.join(repoRoot, "../yw-context"));
+  const scriptPath = path.join(contextRoot, "scripts/sync-diary-base.mjs");
+  try {
+    const { stdout } = await execFileAsync(process.execPath, [scriptPath, "--apply"], {
+      cwd: contextRoot,
+      env: {
+        ...process.env,
+        YW_CONTEXT_DIARY_BASE_TOKEN: baseToken,
+        YW_CONTEXT_DIARY_TABLE_ID: tableId,
+      },
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    return normalizeYWContextSyncReport(stdout) || { status: "failed", error_code: "yw_context_sync_receipt_invalid" };
+  } catch (error) {
+    return normalizeYWContextSyncReport(error?.stdout) || { status: "failed", error_code: "yw_context_sync_failed" };
+  }
+}
+
+export async function run(args) {
+  const { stdout } = await execFileAsync("lark-cli", args, { env: { ...process.env, LARKSUITE_CLI_NO_UPDATE_NOTIFIER: "1", LARKSUITE_CLI_NO_SKILLS_NOTIFIER: "1" }, maxBuffer: 16 * 1024 * 1024 });
+  const result = JSON.parse(stdout);
+  if (result.ok !== true) throw new Error(result.error?.message || "lark-cli 返回失败");
+  return result;
+}
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
@@ -210,9 +258,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const sourceIndex = args.indexOf("--source");
   const source = sourceIndex < 0 ? "both" : args[sourceIndex + 1];
   const sources = source === "both" ? ["daily", "coach"] : [source];
-  const result = await collectDailyCoachWeekly({ week, sources });
+  const result = await collectDailyCoachWeekly({ week, sources, syncDiaryToYWContext: syncDiaryBaseToYWContext });
   const dailyCount = result.daily?.records.length;
   const coachCount = result.coach ? Object.values(result.coach.tables).reduce((sum, table) => sum + table.records.length, 0) : undefined;
   const excludedReviewCount = result.coach ? Object.values(result.coach.tables).reduce((sum, table) => sum + table.excludedReviewCount, 0) : undefined;
-  console.log(JSON.stringify({ week, sources, dailyCount, coachCount, coachFileWritten: result.coachFileWritten, excludedReviewCount }));
+  console.log(JSON.stringify({ week, sources, dailyCount, coachCount, coachFileWritten: result.coachFileWritten, excludedReviewCount, ywContextDiarySync: result.ywContextDiarySync || { status: "not_run" } }));
 }

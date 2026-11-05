@@ -69,6 +69,38 @@ test("daily and Coach collector failures preserve old files and mark both failed
   assert.equal(status.sources.coach.status, "failed");
 });
 
+test("YW-Context mirror runs only after a complete daily read and fails independently", async (t) => {
+  const outputRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-diary-mirror-"));
+  t.after(() => rm(outputRoot, { recursive: true, force: true }));
+  let sourceCoordinates = null;
+  const result = await collectDailyCoachWeekly({
+    week: "2026-W24",
+    outputRoot,
+    sources: ["daily"],
+    runCli: createFakeRun({ dailyRecords: [{ 日期: "2026-06-08 09:00:00", "核心事项（语音输入，写清楚时间、地点、人）": "合成日记" }], coachRecords: [] }),
+    syncDiaryToYWContext: async (coordinates) => {
+      sourceCoordinates = coordinates;
+      return { status: "probe_changed_requires_acceptance" };
+    },
+  });
+  assert.deepEqual(sourceCoordinates, { baseToken: "daily-base", tableId: "daily-table" });
+  assert.equal(result.ywContextDiarySync.status, "probe_changed_requires_acceptance");
+  assert.equal(result.daily.records.length, 1);
+  const status = JSON.parse(await readFile(path.join(outputRoot, "_source-status.json"), "utf8"));
+  assert.equal(status.sources.daily.status, "ready");
+
+  const failedMirror = await collectDailyCoachWeekly({
+    week: "2026-W24",
+    outputRoot,
+    sources: ["daily"],
+    runCli: createFakeRun({ dailyRecords: [{ 日期: "2026-06-08 09:00:00", "核心事项（语音输入，写清楚时间、地点、人）": "合成日记" }], coachRecords: [] }),
+    syncDiaryToYWContext: async () => { throw new Error("private sync details must not escape"); },
+  });
+  assert.deepEqual(failedMirror.ywContextDiarySync, { status: "failed", error_code: "yw_context_sync_failed" });
+  const failedMirrorStatus = JSON.parse(await readFile(path.join(outputRoot, "_source-status.json"), "utf8"));
+  assert.equal(failedMirrorStatus.sources.daily.status, "ready");
+});
+
 function createFakeRun({ dailyRecords, coachRecords }) {
   return async (args) => {
     if (args[1] === "+url-resolve") return { ok: true, data: { base_token: args[3].includes("WPZR") ? "daily-base" : "coach-base" } };

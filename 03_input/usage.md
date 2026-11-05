@@ -12,7 +12,7 @@ Feishu Docs 每周输入采集已暂时停用。历史 `feishu-docs.md` 报告�
 
 | 来源 | 文件 | 方式 |
 | --- | --- | --- |
-| 飞书日记 | `daily.md` | `npm run input:daily-coach -- --week YYYY-Www` |
+| 飞书日记 | `daily.md` | `npm run input:daily-coach -- --week YYYY-Www`；成功完整读取后单独触发 YW-Context 全量镜像，结果见命令回执 |
 | 飞书周记 / 周复盘 | `weekly.md` | 自动生成草稿、用户确认后由阶段 2 采集定稿 |
 | Flomo | `flomo.md` | `npm run input:flomo`；从线上完整扫描快照提取目标周，稳定到底且身份、时间、正文校验通过、全库漏项不超过10条时可发布，并标明预期数、观察数、遗漏数与覆盖率 |
 | 微信读书 | `weread.md` | `npm run input:weread -- --week YYYY-Www` |

@@ -61,7 +61,7 @@ Weekly 输入由周目录决定，不依赖 weekly index 或文件修改时间�
 
 ## 常用文件
 
-- `daily.md`：日记、自我状态与每日反馈。
+- `daily.md`：日记、自我状态与每日反馈。`input:daily` 成功完整读取后会单独尝试同步日记 Base 全量快照至私有 YW-Context；镜像状态不改变周输入状态。
 - `core.md`：Core V1（`/Users/yuwei/code/core`）确认复盘回流，`npm run input:core` 从 Core 确认导出生成。在目标周上海窗口内取 `frozenAt` 最新的一份，注明确认时间、覆盖周与来源哈希；无导出报缺失（可选来源，不阻断），不回退更早版本。Core 回流是历史认知背景，与底层经历同源，不构成第二份独立现实证据。
 - `weekly.md`：回复“周记已确认”后由阶段 2 从飞书采回的周记、周复盘；草稿事实来自同周已落盘输入，不以线上周记反向补证。采回成功后，仅“新周计划”表格行会进入 `04_output/_dist/shared-context/current.json` 供下游只读消费，版本文件位于同目录的 `weekly/` 下。
 - 历史 `feishu-docs.md` 周报保留在原目录，但该输入源已暂时停用且不会进入 Process。
