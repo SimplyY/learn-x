@@ -542,7 +542,6 @@ test("Stage 3 prepares candidates before one confirmation and has no image actio
   const memoryIndex = stage3.indexOf("将获准条目写入正确的季度 Memory 目标");
   const backupIndex = stage3.indexOf("npm run backup:weekly -- --period <period-id>");
   const ywnextIndex = stage3.indexOf("$ywnext 更新索引 YYYY-Www");
-  const flomoIndex = stage3.indexOf("npm run sync:flomo -- --period <period-id>");
 
   assert.doesNotMatch(stage2, /weekly-core\.png|image:weekly|图片提示词/);
   assert.ok(finalizedContentIndex >= 0 && finalizedContentIndex < candidateIndex);
@@ -552,7 +551,7 @@ test("Stage 3 prepares candidates before one confirmation and has no image actio
   assert.ok(fingerprintVerifyIndex >= 0 && fingerprintVerifyIndex < memoryIndex);
   assert.ok(memoryIndex >= 0 && memoryIndex < backupIndex);
   assert.ok(backupIndex >= 0 && backupIndex < ywnextIndex);
-  assert.ok(ywnextIndex >= 0 && ywnextIndex < flomoIndex);
+  assert.doesNotMatch(stage3, /npm run sync:flomo/);
   assert.doesNotMatch(stage3, /weekly-core\.png|image:weekly|图片提示词|generate-weekly-image/);
   assert.match(stage3, /Overall: partial/);
   assert.match(skill, /缺少 Bridge 原 run 标识时，只保留 `needs_review`，不猜测原任务归属、不观察不明会话、不重发/);
@@ -566,6 +565,18 @@ test("Stage 3 prepares candidates before one confirmation and has no image actio
   assert.doesNotMatch(skill, /~\/Downloads\/Learn-X-周报/);
   assert.doesNotMatch(stage2, /图片路径|weekly-core\.png|image:weekly/);
   assert.match(stage2, /备份载荷（`01_core\/`、`03_input\/`、`04_output\/`、`05_library\/`(?:，不含图像文件)?）/);
+});
+
+test("weekly automation does not auto reverse-sync to Flomo", async () => {
+  const skill = await readFile(new URL("../../learn-x-weekly-automation/SKILL.md", import.meta.url), "utf8");
+  const stage2 = skill.slice(skill.indexOf("## 阶段 2："), skill.indexOf("## 阶段 3："));
+  const stage3 = skill.slice(skill.indexOf("## 阶段 3："), skill.indexOf("## 边界"));
+
+  assert.match(skill, /Flomo 反向同步已停用/);
+  assert.doesNotMatch(stage2, /npm run sync:flomo|Flomo 同步对象|Flomo 载荷/);
+  assert.doesNotMatch(stage3, /npm run sync:flomo/);
+  assert.match(stage3, /不得把 `sync:flomo` 作为阶段收尾触发/);
+  assert.match(stage3, /Flomo 反向同步状态：已停用，未执行/);
 });
 
 test("complete Weekly Output prompt defines facts, memory candidates, comparison and machine contracts", async () => {
