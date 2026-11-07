@@ -35,6 +35,7 @@ export async function buildLearnXConfirmationInputs({ root, week, fingerprint, c
   await verifyWeeklyMemoryApproval({ week, fingerprint, repoRoot: root });
   const dir = path.join(root, '04_output/_dist/weekly', week);
   const manifest = JSON.parse(await readFile(path.join(dir, '_memory-approval.json'), 'utf8'));
+  if (manifest.schemaVersion !== 2 || !manifest.scope?.ywcontext) throw new Error('legacy memory approval is read-only; create a new confirmation card');
   const proposal = await readFile(path.join(dir, 'memory-proposed.md'), 'utf8');
   if (manifest.fingerprint !== fingerprint || manifest.hashes.proposal !== hash(proposal)) throw new Error('proposal fingerprint mismatch');
   const parts = parseMemoryProposal(proposal);
@@ -44,7 +45,7 @@ export async function buildLearnXConfirmationInputs({ root, week, fingerprint, c
     part.id = id;
     return { id, domain: 'learn-x', source: 'human', locator: `${manifest.scope.memoryPath}#${week}/${id}`, originalValue: '', value: part.text, targets: ['memory'] };
   });
-  const required = new Set(['backup', 'ywnext', 'flomo']);
+  const required = new Set(['backup', 'flomo']);
   const ids = new Set();
   const closeoutItems = closeoutEntries.map(entry => {
     if (!entry || !required.has(entry.id) || ids.has(entry.id) || typeof entry.action !== 'string' || !entry.action.trim() || typeof entry.destination !== 'string' || !entry.destination.trim()) throw new Error('invalid closeout entry');
@@ -56,7 +57,7 @@ export async function buildLearnXConfirmationInputs({ root, week, fingerprint, c
   const allowed = manifest.scope;
   const find = id => closeoutEntries.find(e => e.id === id).destination;
   const flomo = closeoutEntries.find(e => e.id === 'flomo');
-  if (find('backup') !== allowed.backupDestination || find('ywnext') !== allowed.ywnext || !Array.isArray(flomo.sources) || JSON.stringify(flomo.sources) !== JSON.stringify(allowed.flomo) || !/^Flomo\/.+/.test(flomo.destination)) throw new Error('closeout destination differs from bound scope');
+  if (find('backup') !== allowed.backupDestination || !Array.isArray(flomo.sources) || JSON.stringify(flomo.sources) !== JSON.stringify(allowed.flomo) || !/^Flomo\/.+/.test(flomo.destination)) throw new Error('closeout destination differs from bound scope');
   if (!allowed.backupRoots.every(root => closeoutEntries.find(e => e.id === 'backup').action.includes(root))) throw new Error('backup scope incomplete');
   if (!/留存|清理/.test(closeoutEntries.find(e => e.id === 'backup').action)) throw new Error('backup action must include its existing retention behavior');
   closeoutItems.find(e => e.id === 'closeout-flomo').value += `；来源：${flomo.sources.join('、')}`;
@@ -82,7 +83,7 @@ export async function stageLearnXCard({ root, week, fingerprint, selectedIds, ed
     if (!Array.isArray(selectedIds) || new Set(selectedIds).size !== selectedIds.length || selectedIds.some(id => !initial.items.some(item => item.id === id)) || Object.keys(edits).some(id => !selectedIds.includes(id) || !initial.items.some(item => item.id === id && item.targets.includes('memory')))) throw new Error('invalid selected items');
     const memory = initial.items.filter(item => item.targets.includes('memory'));
     const selectedCloseout = new Set(selectedIds.filter(id => id.startsWith('closeout-')));
-    if (selectedCloseout.has('closeout-flomo') && (!selectedCloseout.has('closeout-backup') || !selectedCloseout.has('closeout-ywnext'))) throw new Error('Flomo requires the selected backup and YW Next steps');
+    if (selectedCloseout.has('closeout-flomo') && !selectedCloseout.has('closeout-backup')) throw new Error('Flomo requires the selected backup step');
     const approved = {};
     for (const item of memory) if (selectedIds.includes(item.id)) approved[item.id] = Object.hasOwn(edits, item.id) ? edits[item.id] : item.value;
     const nextProposal = reconstructApprovedMemory({ parts: initial.parts, approved });

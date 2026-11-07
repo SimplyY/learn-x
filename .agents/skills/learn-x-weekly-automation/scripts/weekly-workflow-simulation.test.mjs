@@ -206,7 +206,8 @@ test("simulates the weekly workflow in a temporary repo, from cooldown rescue th
   assert.doesNotMatch(weeklyAutomationSkill, /weekly-core\.png|image:weekly|图片提示词/);
   assert.match(weeklyAutomationSkill, /备份载荷.*01_core.*03_input.*04_output.*05_library/);
   assert.match(weeklyAutomationSkill, /Learn-X 专用飞书云盘 \/ `Snapshots`/);
-  assert.match(weeklyAutomationSkill, /YW Next 刷新范围/);
+  assert.match(weeklyAutomationSkill, /写后自动尝试的 YWContext P1 全文同步/);
+  assert.doesNotMatch(weeklyAutomationSkill, /\$ywnext|YW Next/);
   assert.doesNotMatch(weeklyAutomationSkill, /Flomo 载荷（`weekly\.md` 与季度 Memory）及目的地/);
   assert.match(weeklyAutomationSkill, /留存清理和读回校验/);
   assert.doesNotMatch(weeklyAutomationSkill, /图片生成和其他写入都必须等阶段 3 这一次确认/);

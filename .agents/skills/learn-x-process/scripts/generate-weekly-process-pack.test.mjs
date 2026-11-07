@@ -541,7 +541,7 @@ test("Stage 3 prepares candidates before one confirmation and has no image actio
   const fingerprintVerifyIndex = stage3.indexOf("npm run memory:weekly -- --week YYYY-Www --verify-approval");
   const memoryIndex = stage3.indexOf("将获准条目写入正确的季度 Memory 目标");
   const backupIndex = stage3.indexOf("npm run backup:weekly -- --period <period-id>");
-  const ywnextIndex = stage3.indexOf("$ywnext 更新索引 YYYY-Www");
+  const ywcontextIndex = stage3.indexOf("Memory 写入并完成本地权威目标读回后，自动派生 YWContext P1 完整内容同步");
 
   assert.doesNotMatch(stage2, /weekly-core\.png|image:weekly|图片提示词/);
   assert.ok(finalizedContentIndex >= 0 && finalizedContentIndex < candidateIndex);
@@ -550,7 +550,10 @@ test("Stage 3 prepares candidates before one confirmation and has no image actio
   assert.ok(confirmationIndex >= 0 && confirmationIndex < memoryIndex);
   assert.ok(fingerprintVerifyIndex >= 0 && fingerprintVerifyIndex < memoryIndex);
   assert.ok(memoryIndex >= 0 && memoryIndex < backupIndex);
-  assert.ok(backupIndex >= 0 && backupIndex < ywnextIndex);
+  assert.ok(backupIndex >= 0 && backupIndex < ywcontextIndex);
+  assert.doesNotMatch(stage3, /ywnext|YW Next/);
+  assert.match(stage3, /Flomo 只依赖本次确认的备份成功/);
+  assert.match(stage3, /dynamic_ywcontext_sync_unavailable/);
   assert.doesNotMatch(stage3, /npm run sync:flomo/);
   assert.doesNotMatch(stage3, /weekly-core\.png|image:weekly|图片提示词|generate-weekly-image/);
   assert.match(stage3, /Overall: partial/);

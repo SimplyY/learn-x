@@ -13,7 +13,8 @@ Learn-X 的 `Input -> Process Pack -> Output Shell` 工作流。
 
 本 Skill 从 `03_input/weekly/` 或 `03_input/monthly/` 读取手动导入材料，生成可追溯的 Input Pack 和 Process Pack，并创建 Output 最小壳。Output 正文由用户自己基于 AI Chat 生成和写入。人工审核后，Codex 可以调用内部脚本生成 Memory 候选，再由 Codex 按规则无损整理并写入 Memory。它不自动修改正式长期资产。
 
-Memory 成功写入后，调用 `$ywnext 更新索引 YYYY-Www` 刷新 YW Next 的证据索引、三档核心上下文、私有 `full-full` 摘要和滚动候选清单。上下文唯一语义源是已确认的 `01_core/memory/*.memory.md`：`full.md`、`weighted.md`、`core.md` 供消费者按相关性读取，`full-full.md` 只供 YW Next 生成候选清单，不对外提供。不存在六仓库切片、暂存目录或发布器；历史遗留目录不读取、不作为新鲜上下文。
+Memory 写入并完成目标文件读回后，自动尝试把已确认的完整 Memory 内容同步到 YWContext P1；不新增逐条确认。同步回执必须绑定目标路径、目标周、条目 ID、源文件 SHA-256，并证明发布提交与远端读回提交一致。缺少可安全覆盖新项的动态发布入口或远端读回证据时记录 `pending` / `unknown`，不得把旧快照或固定探针当作成功。
+只有 schemaVersion 2 的新确认范围会派生自动同步；schemaVersion 1 仅供既有批次只读核验，不得用于新确认或补发 YWContext。
 
 ## Skill 本质
 

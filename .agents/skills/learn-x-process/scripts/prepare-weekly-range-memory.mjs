@@ -72,7 +72,7 @@ export async function prepareWeeklyRangeMemory({ periodId, repoRoot = defaultRep
   const cardBody = renderRangeApprovalCard({ period, quarter, scope, candidates, sourceHashes, targetHash });
   const artifactHashes = { candidates: sha256(candidatePack), proposal: sha256(proposal), cardBody: sha256(cardBody) };
   const payload = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     periodId,
     weeks: period.weeks,
     coverage: { start: period.start, endInclusive: period.endInclusive },
@@ -103,7 +103,7 @@ export async function prepareWeeklyRangeMemory({ periodId, repoRoot = defaultRep
   };
   const fingerprint = sha256(JSON.stringify(payload));
   const approval = { ...payload, fingerprint };
-  const card = `${cardBody}\n\n## 本次授权记录\n\n- 指纹：\`${fingerprint}\`\n- 用户在本线程已授权本轮按 Skill 完整执行，除极高危操作外无需额外手动授权。\n- 官方用户消息：\`${authorizationEvidence.userMessageId}\`；SHA-256：\`${authorizationEvidence.userMessageSha256}\`\n- 本卡一次覆盖上列 Memory、备份及留存、YW Next、Flomo。\n`;
+  const card = `${cardBody}\n\n## 本次授权记录\n\n- 指纹：\`${fingerprint}\`\n- 用户在本线程已授权本轮按 Skill 完整执行，除极高危操作外无需额外手动授权。\n- 官方用户消息：\`${authorizationEvidence.userMessageId}\`；SHA-256：\`${authorizationEvidence.userMessageSha256}\`\n- 本卡一次覆盖上列 Memory、备份及留存、自动 YWContext 同步尝试、Flomo。\n`;
 
   await mkdir(outputDir, { recursive: true, mode: 0o700 });
   const existing = await readOptional(approvalPath);
@@ -157,6 +157,10 @@ export async function applyWeeklyRangeMemory({ periodId, fingerprint, authorizat
   const { fingerprint: savedFingerprint, ...payload } = approval;
   if (approval.periodId !== periodId || savedFingerprint !== fingerprint || sha256(JSON.stringify(payload)) !== fingerprint) {
     throw new Error("weekly-range-memory-approval-fingerprint-mismatch");
+  }
+  if (approval.schemaVersion === 1) throw new Error("weekly-range-memory-legacy-scope-read-only");
+  if (approval.schemaVersion !== 2 || JSON.stringify(approval.scope) !== JSON.stringify(buildApprovalScope(periodId, approval.quarter))) {
+    throw new Error("weekly-range-memory-approval-scope-mismatch");
   }
   if (authorizationEvidence?.source !== "official-codex-read-thread"
     || authorizationEvidence.periodId !== periodId
@@ -234,7 +238,7 @@ export async function applyWeeklyRangeMemory({ periodId, fingerprint, authorizat
   }
   const receiptPath = path.join(outputDir, "_range-memory-write-receipt.json");
   const receiptValue = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     periodId,
     fingerprint,
     target: approval.paths.memoryTarget,
@@ -243,6 +247,13 @@ export async function applyWeeklyRangeMemory({ periodId, fingerprint, authorizat
     authorizationMessageId: authorizationEvidence.userMessageId,
     authorizationMessageSha256: authorizationEvidence.userMessageSha256,
     writtenAt: new Date().toISOString(),
+    ywcontextSync: {
+      status: "pending",
+      errorCode: "dynamic_ywcontext_sync_unavailable",
+      sourceId: "learn-x-memory-p1-content",
+      targetPath: approval.paths.memoryTarget,
+      sourceSha256: sha256(savedTarget)
+    },
     items: [
       { id: "range-core-summary", section: periodId + "/Memory", sha256: sha256(memoryText) },
       { id: "range-munger-insights", section: "芒格之魂手动洞察候选池", sha256: sha256(mungerText) }
@@ -266,12 +277,19 @@ function buildApprovalScope(periodId, quarter) {
       retention: "保留近 31 天成功快照和每自然年最后一个成功快照；按既有规则清理其他登记快照",
       excludes: "图像、.DS_Store 和凭据类文件"
     },
-    ywnext: "刷新 Memory 派生的离线索引；周期键 " + periodId + "；写入 runtime/evidence 和 runtime/core-context。",
+    ywcontext: {
+      sourceId: "learn-x-memory-p1-content",
+      level: "P1",
+      contentMode: "full",
+      trigger: "automatic after verified Memory writeback; no per-record confirmation",
+      receiptSchema: "yw-context-publish-receipt/v1",
+      unavailableStatus: "pending/unknown with dynamic_ywcontext_sync_unavailable"
+    },
     flomo: {
       destination: "Flomo（Ego Lite）",
       memos: ["Learn-X 周记｜" + periodId, "Learn-X 记忆｜" + quarter],
       sources: ["03_input/weekly/" + periodId + "/weekly.md", "01_core/memory/" + quarter + ".memory.md"],
-      order: "备份与 YW Next 均核验成功后执行；逐条搜索、写入、页面读回及状态落盘。"
+      order: "备份核验成功后执行；逐条搜索、写入、页面读回及状态落盘。"
     }
   };
 }
@@ -310,7 +328,7 @@ function renderRangeApprovalCard({ period, quarter, scope, candidates, sourceHas
     "## 同一次确认覆盖的收尾范围",
     "",
     "- 备份：" + scope.backup.roots.join("、") + " → " + scope.backup.destination + "；" + scope.backup.retention + "；" + scope.backup.excludes + "。",
-    "- YW Next：" + scope.ywnext,
+    "- YWContext：Memory 写后自动同步 P1 完整内容；动态发布入口或远端读回证据缺失时保留 pending/unknown，不阻塞 Memory 写回。",
     "- Flomo：" + scope.flomo.memos.join("；") + "；来源 " + scope.flomo.sources.join("；") + "；" + scope.flomo.order,
     "",
     "## 确认边界",
@@ -429,7 +447,7 @@ function renderCandidatePack({ period, quarter, weeklyPath, processPackPath, can
     "## 排除项",
     "",
     "- Weekly Output 的问题、背景和回答不迁移；未勾选内容不写入。",
-    "- 本候选包不写正式 Memory，不执行备份、YW Next 或 Flomo。"
+    "- 本候选包不写正式 Memory，不执行备份、YWContext 或 Flomo。"
   ].join("\n");
 }
 

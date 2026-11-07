@@ -13,7 +13,7 @@ async function fixture(t) {
  await writeFile(path.join(root,'04_output/weekly/2026-40.md'),'# Learn-X Weekly Output｜2026-40\n\n## 11. 全文核心重点纪要\n本周总结\n\n## 12. 芒格之魂的洞察\n本周洞察\n');
  await prepareWeeklyMemory({week:'2026-W40',repoRoot:root}); await writeFile(path.join(dir,'memory-proposed.md'),'## 2026-W40\n\n- 第一条\n- 第二条\n');
  const binding=await bindWeeklyMemoryApproval({week:'2026-W40',repoRoot:root}); const s=binding.scope;
- const closeoutEntries=[{id:'backup',action:`备份 ${s.backupRoots.join('、')} 并按既有规则清理留存`,destination:s.backupDestination},{id:'ywnext',action:'刷新',destination:s.ywnext},{id:'flomo',action:'同步周记和季度记忆',sources:s.flomo,destination:'Flomo/本人已验证账户/周记及季度记忆'}];
+ const closeoutEntries=[{id:'backup',action:`备份 ${s.backupRoots.join('、')} 并按既有规则清理留存`,destination:s.backupDestination},{id:'flomo',action:'同步周记和季度记忆',sources:s.flomo,destination:'Flomo/本人已验证账户/周记及季度记忆'}];
  return {root,binding,closeoutEntries};
 }
 const core = [{id:'core-human',domain:'core',source:'human',locator:'复盘/本周思考',originalValue:'',value:'本人思考',targets:['export']},{id:'core-ai',domain:'core',source:'ai',locator:'复盘/挑战',originalValue:'',value:'AI候选',targets:['export']}];
@@ -59,22 +59,51 @@ test('确认收尾入口绑定已认可批次，只在 Memory 读回成功后执
  const {root,binding,closeoutEntries}=await fixture(t);
  const closeout=closeoutEntries.find(entry=>entry.id==='backup');
  const batch={batchId:'test-closeout-batch',reviewWeek:'2026-W40',confirmedAt:'2026-10-30T10:00:00+08:00',sourceBindings:{learnxMemoryFingerprint:binding.fingerprint},items:[
-  {id:'memory-1',domain:'learn-x',targets:['memory']},
+  {id:'memory-1',domain:'learn-x',source:'human',targets:['memory'],locator:'01_core/memory/2026-Q3.memory.md#2026-W40/memory-1',value:'- 已确认条目\n'},
   {id:'closeout-backup',domain:'learn-x',targets:['weekly-closeout'],locator:closeout.destination,value:closeout.action}
  ]};
  let calls=0;
- const verifyMemoryApproval=async ({week,fingerprint,repoRoot})=>{assert.equal(week,'2026-W40');assert.equal(fingerprint,binding.fingerprint);assert.equal(repoRoot,root);return {verified:true,week,fingerprint};};
+ const verifyMemoryApproval=async ({week,fingerprint,repoRoot})=>{assert.equal(week,'2026-W40');assert.equal(fingerprint,binding.fingerprint);assert.equal(repoRoot,root);return {verified:true,week,fingerprint,schemaVersion:2};};
  const executors={backup:async()=>{calls+=1;return {ok:true,status:'verified',evidence:{snapshotId:'mock-snapshot',readback:true}};}};
  const pending=await executeConfirmedLearnXCloseout({batch,learnXRoot:root,stateRoot:root,verifyMemoryApproval,executors});
  assert.equal(pending.status,'pending-memory-readback');
  assert.equal(calls,0);
- const approvalEvidence={verified:true,week:'2026-W40',fingerprint:binding.fingerprint};
- const completed=await executeConfirmedLearnXCloseout({batch,learnXRoot:root,stateRoot:root,approvalEvidence,memoryWriteEvidence:{ok:true,status:'verified',evidence:{memoryReadback:true}},executors});
- assert.equal(completed.status,'completed');
+ const approvalEvidence={verified:true,week:'2026-W40',fingerprint:binding.fingerprint,schemaVersion:2};
+ const memoryWriteEvidence={ok:true,status:'verified',evidence:{targetPath:'01_core/memory/2026-Q3.memory.md',week:'2026-W40',itemIds:['memory-1'],sha256:'a'.repeat(64)}};
+ const completed=await executeConfirmedLearnXCloseout({batch,learnXRoot:root,stateRoot:root,approvalEvidence,memoryWriteEvidence,executors});
+ assert.equal(completed.status,'partial');
  assert.equal(completed.results.backup.status,'completed');
+ assert.equal(completed.results.ywcontext.status,'pending');
+ assert.equal(completed.results.ywcontext.reason,'yw_context_sync_entrypoint_unavailable');
  assert.equal(calls,1);
  const ledger=JSON.parse(await readFile(path.join(root,'runtime/weekly-review/2026-W40/closeout',`${batch.batchId}.json`),'utf8'));
- assert.deepEqual(Object.keys(ledger.memoryWriteEvidence.evidence),['sha256']);
+ assert.deepEqual(ledger.memoryWriteEvidence.evidence,{targetPath:'01_core/memory/2026-Q3.memory.md',week:'2026-W40',itemIds:['memory-1'],sha256:'a'.repeat(64)});
+});
+
+test('只确认 Memory 也自动派生 YWContext；无发布器时保留 pending', async t => {
+ const {root,binding}=await fixture(t);
+ const batch={batchId:'memory-only-closeout',reviewWeek:'2026-W40',confirmedAt:'2026-10-30T10:00:00+08:00',sourceBindings:{learnxMemoryFingerprint:binding.fingerprint},items:[
+  {id:'memory-1',domain:'learn-x',source:'human',targets:['memory'],locator:'01_core/memory/2026-Q3.memory.md#2026-W40/memory-1',value:'- 已确认条目\n'}
+ ]};
+ const approvalEvidence={verified:true,week:'2026-W40',fingerprint:binding.fingerprint,schemaVersion:2};
+ const memoryWriteEvidence={ok:true,status:'verified',evidence:{targetPath:'01_core/memory/2026-Q3.memory.md',week:'2026-W40',itemIds:['memory-1'],sha256:'a'.repeat(64)}};
+ const result=await executeConfirmedLearnXCloseout({batch,learnXRoot:root,stateRoot:root,approvalEvidence,memoryWriteEvidence,executors:{}});
+ assert.equal(result.status,'partial');
+ assert.equal(result.results.ywcontext.status,'pending');
+ assert.equal(result.results.ywcontext.reason,'yw_context_sync_entrypoint_unavailable');
+});
+
+test('legacy v1 Memory scope never creates a new automatic YWContext action', async t => {
+ const {root,binding}=await fixture(t);
+ const batch={batchId:'legacy-memory-only-closeout',reviewWeek:'2026-W40',confirmedAt:'2026-10-30T10:00:00+08:00',sourceBindings:{learnxMemoryFingerprint:binding.fingerprint},items:[
+  {id:'memory-1',domain:'learn-x',source:'human',targets:['memory'],locator:'01_core/memory/2026-Q3.memory.md#2026-W40/memory-1',value:'- 已确认条目\n'}
+ ]};
+ const memoryWriteEvidence={ok:true,status:'verified',evidence:{targetPath:'01_core/memory/2026-Q3.memory.md',week:'2026-W40',itemIds:['memory-1'],sha256:'a'.repeat(64)}};
+ let calls=0;
+ const result=await executeConfirmedLearnXCloseout({batch,learnXRoot:root,stateRoot:root,approvalEvidence:{verified:true,week:batch.reviewWeek,fingerprint:binding.fingerprint,schemaVersion:1},memoryWriteEvidence,executors:{ywcontext:async()=>{calls+=1;}}});
+ assert.equal(result.status,'not-applicable');
+ assert.equal(result.results.ywcontext,undefined);
+ assert.equal(calls,0);
 });
 
 test('Core 同步抛错不撤销已保存认可，也不阻塞 Learn-X 收尾',async t=>{

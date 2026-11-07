@@ -2,7 +2,7 @@
 // conversation host; CLI arguments or local JSON are never approval evidence.
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { existsSync } from 'node:fs';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -21,6 +21,64 @@ const canonicalWeek = value => {
   return match ? `${match[1]}-W${match[2]}` : null;
 };
 const pendingPath = (coreRoot, week, fingerprint) => path.join(coreRoot, 'runtime/weekly-review', week, 'cards', 'pending', `${fingerprint}.json`);
+
+async function runYwContextP1Sync({ contextRoot, learnXRoot, mode, batch, memoryWriteEvidence }) {
+  const syncEntrypoint = path.join(contextRoot, 'scripts/adapters/import-learn-x-memory-p1-content.mjs');
+  if (!existsSync(syncEntrypoint)) return { status: 'pending', error_code: 'yw_context_sync_entrypoint_unavailable' };
+  const modeFlag = mode === 'resolve' ? '--resolve' : '--apply';
+  const input = JSON.stringify({ batch, memoryWriteEvidence });
+  if (Buffer.byteLength(input, 'utf8') > 2 * 1024 * 1024) return { status: 'pending', error_code: 'yw_context_sync_input_too_large' };
+  return new Promise(resolve => {
+    const child = spawn(process.execPath, [syncEntrypoint, '--repo-root', contextRoot, '--learn-x-root', learnXRoot, modeFlag], {
+      cwd: contextRoot,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true
+    });
+    let stdout = '';
+    let outputTooLarge = false;
+    const timer = setTimeout(() => child.kill('SIGTERM'), 10 * 60_000);
+    child.stdout.setEncoding('utf8');
+    child.stderr.resume();
+    child.stdout.on('data', chunk => {
+      stdout += chunk;
+      if (Buffer.byteLength(stdout, 'utf8') > 1024 * 1024) {
+        outputTooLarge = true;
+        child.kill('SIGTERM');
+      }
+    });
+    child.on('error', () => {
+      clearTimeout(timer);
+      resolve({ status: 'unknown', error_code: 'yw_context_sync_process_error' });
+    });
+    child.on('close', code => {
+      clearTimeout(timer);
+      if (code !== 0 || outputTooLarge) return resolve({ status: 'unknown', error_code: 'yw_context_sync_process_failed' });
+      try { resolve(JSON.parse(stdout)); }
+      catch { resolve({ status: 'unknown', error_code: 'yw_context_sync_receipt_invalid' }); }
+    });
+    child.stdin.on('error', () => child.kill('SIGTERM'));
+    child.stdin.end(input);
+  });
+}
+
+export function createYwContextP1Executor({ contextRoot = null, learnXRoot = defaultLearnXRoot } = {}) {
+  const resolvedContextRoot = path.resolve(contextRoot || process.env.YW_CONTEXT_ROOT || path.resolve(learnXRoot, '../yw-context'));
+  return {
+    execute: async (_item, batch, memoryWriteEvidence) => {
+      const result = await runYwContextP1Sync({ contextRoot: resolvedContextRoot, learnXRoot, mode: 'apply', batch, memoryWriteEvidence });
+      if (result.status === 'published_and_read_back' && result.receipt) return { ok: true, status: 'verified', evidence: result.receipt };
+      return result;
+    },
+    resolve: async (_item, batch, _saved, memoryWriteEvidence) => {
+      const result = await runYwContextP1Sync({ contextRoot: resolvedContextRoot, learnXRoot, mode: 'resolve', batch, memoryWriteEvidence });
+      if (result.status === 'verified' && result.receipt) return { ok: true, status: 'verified', evidence: result.receipt };
+      if (result.status === 'not-applied') return { status: 'not-applied', baselineUnchanged: true, evidence: result };
+      if (result.status === 'p2-ready-for-p1') return { status: 'p2-ready-for-p1', evidence: result };
+      return result;
+    }
+  };
+}
 
 async function writeImmutable(file, value) {
   await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -292,7 +350,10 @@ export async function buildCoreConfirmationCandidates({ coreRoot = defaultCoreRo
 export async function validateUnifiedBaselines({ learnXRoot = defaultLearnXRoot, card, validateCore, confirmedAt }) {
   if (!card || typeof validateCore !== 'function') return { ok: false, reason: 'missing trusted Core validator' };
   if (card.sourceBindings?.learnxMemoryFingerprint) {
-    try { await verifyWeeklyMemoryApproval({ week: card.reviewWeek, fingerprint: card.sourceBindings.learnxMemoryFingerprint, repoRoot: learnXRoot }); }
+    try {
+      const approval = await verifyWeeklyMemoryApproval({ week: card.reviewWeek, fingerprint: card.sourceBindings.learnxMemoryFingerprint, repoRoot: learnXRoot });
+      if (approval.schemaVersion !== 2) return { ok: false, reason: 'legacy Learn-X Memory approval is read-only; prepare a new v2 confirmation card' };
+    }
     catch (error) { return { ok: false, reason: `Learn-X: ${error.message}` }; }
   }
   if (card.items.some(item => item.domain === 'core')) {
@@ -516,20 +577,30 @@ export async function confirmAndSyncCodexBatch({ coreRoot = defaultCoreRoot, lea
 export async function executeConfirmedLearnXCloseout({ batch, learnXRoot = defaultLearnXRoot, stateRoot = defaultCoreRoot, approvalEvidence = null, memoryWriteEvidence = null, verifyMemoryApproval = verifyWeeklyMemoryApproval, executors, recover = false }) {
   if (!batch || !Array.isArray(batch.items)) throw new Error('confirmed batch required');
   const closeoutItems = batch.items.filter(item => item.domain === 'learn-x' && item.targets.includes('weekly-closeout'));
-  if (!closeoutItems.length) return { status: 'not-applicable', results: {}, plan: { parallel: [], afterParallel: [] } };
+  const hasMemoryWrites = batch.items.some(item => item.domain === 'learn-x' && item.targets.includes('memory'));
+  if (!closeoutItems.length && !hasMemoryWrites) return { status: 'not-applicable', results: {}, plan: { parallel: [], afterParallel: [] } };
+  const { executeApprovedCloseout, recoverApprovedCloseout, hasVerifiedCloseoutEvidence } = await import('./closeout-actions.mjs');
   const fingerprint = batch.sourceBindings?.learnxMemoryFingerprint;
   if (!/^[a-f0-9]{64}$/.test(fingerprint || '')) throw new Error('Learn-X approval binding missing');
-  approvalEvidence ??= await verifyMemoryApproval({ week: batch.reviewWeek, fingerprint, repoRoot: learnXRoot });
+  const hasVerifiedMemoryWrite = hasVerifiedCloseoutEvidence(memoryWriteEvidence);
+  if (!approvalEvidence || ![1, 2].includes(approvalEvidence.schemaVersion)) {
+    const verifyApproval = hasMemoryWrites && hasVerifiedMemoryWrite ? verifyWeeklyMemoryApprovalSources : verifyMemoryApproval;
+    approvalEvidence = await verifyApproval({ week: batch.reviewWeek, fingerprint, repoRoot: learnXRoot });
+  }
   if (approvalEvidence?.verified !== true || canonicalWeek(approvalEvidence.week) !== canonicalWeek(batch.reviewWeek) || approvalEvidence.fingerprint !== fingerprint) throw new Error('Learn-X approval evidence does not match confirmed batch at closeout boundary');
+  if (![1, 2].includes(approvalEvidence.schemaVersion)) throw new Error('Learn-X approval scope version is unavailable');
   approvalEvidence = { ...approvalEvidence, week: batch.reviewWeek };
-  const hasMemoryWrites = batch.items.some(item => item.domain === 'learn-x' && item.targets.includes('memory'));
-  const { executeApprovedCloseout, recoverApprovedCloseout, hasVerifiedCloseoutEvidence } = await import('./closeout-actions.mjs');
   if (hasMemoryWrites && !hasVerifiedCloseoutEvidence(memoryWriteEvidence)) {
     return { status: 'pending-memory-readback', results: {}, plan: { parallel: [], afterParallel: [] } };
   }
   const execute = recover ? recoverApprovedCloseout : executeApprovedCloseout;
-  const outcome = await execute({ batch, executors, stateRoot, approvalEvidence, memoryWriteEvidence: hasMemoryWrites ? memoryWriteEvidence : null });
+  const effectiveExecutors = { ...(executors && typeof executors === 'object' ? executors : {}) };
+  if (hasMemoryWrites && !effectiveExecutors.ywcontext) {
+    effectiveExecutors.ywcontext = createYwContextP1Executor({ learnXRoot });
+  }
+  const outcome = await execute({ batch, executors: effectiveExecutors, stateRoot, approvalEvidence, memoryWriteEvidence: hasMemoryWrites ? memoryWriteEvidence : null, memoryApprovalSchemaVersion: approvalEvidence.schemaVersion });
   if (outcome.locked) return { ...outcome, status: 'busy' };
+  if (!Object.keys(outcome.results).length) return { ...outcome, status: 'not-applicable' };
   const complete = Object.values(outcome.results).every(result => result.status === 'completed');
   return { ...outcome, status: complete && Object.keys(outcome.results).length ? 'completed' : 'partial' };
 }
@@ -573,8 +644,16 @@ export async function recoverCodexConfirmedBatches({ coreRoot = defaultCoreRoot,
       }
       const coreItems = batch.items.filter(item => item.domain === 'core');
       const closeoutItems = batch.items.filter(item => item.domain === 'learn-x' && item.targets.includes('weekly-closeout'));
-      if (!coreItems.length && !closeoutItems.length) { results.skipped.push({ batchId: batch.batchId, status: 'no-recoverable-targets' }); continue; }
+      const memoryItems = batch.items.filter(item => item.domain === 'learn-x' && item.targets.includes('memory'));
+      if (!coreItems.length && !closeoutItems.length && !memoryItems.length) { results.skipped.push({ batchId: batch.batchId, status: 'no-recoverable-targets' }); continue; }
       results.considered += 1;
+      let memoryApprovalSchemaVersion = null;
+      if (memoryItems.length) {
+        try {
+          const memoryApproval = await verifyWeeklyMemoryApprovalSources({ week: batch.reviewWeek, fingerprint: batch.sourceBindings?.learnxMemoryFingerprint, repoRoot: learnXRoot });
+          memoryApprovalSchemaVersion = memoryApproval.schemaVersion;
+        } catch { /* No scope version means no YWContext action can be scheduled. */ }
+      }
       const expectedTargets = coreItems.flatMap(item => item.targets.filter(target => target === 'annual' || target === 'overview').map(target => ({ item, target })));
       const expectedKeys = expectedTargets.map(({ item, target }) => `${item.id}:${target}`).sort();
       const stateFile = path.join(runtimeRoot, batch.reviewWeek, 'sync', `${batch.batchId}.json`);
@@ -600,8 +679,8 @@ export async function recoverCodexConfirmedBatches({ coreRoot = defaultCoreRoot,
         } catch { exportComplete = false; }
       }
       let closeoutState = { complete: true, results: {}, stateFile: null };
-      if (closeoutItems.length) {
-        try { closeoutState = await inspectApprovedCloseout({ batch, stateRoot }); }
+      if (closeoutItems.length || memoryItems.length) {
+        try { closeoutState = await inspectApprovedCloseout({ batch, stateRoot, memoryApprovalSchemaVersion }); }
         catch (error) {
           closeoutState = { complete: false, results: {}, stateFile: null, error: `closeout recovery state invalid: ${error.message}` };
         }
@@ -628,9 +707,8 @@ export async function recoverCodexConfirmedBatches({ coreRoot = defaultCoreRoot,
         catch (error) { outcomes.core = { ok: false, status: 'pending', error: error?.message ?? String(error) }; }
         if (outcomes.core?.ok !== true) outcomes.core = { ...(outcomes.core && typeof outcomes.core === 'object' ? outcomes.core : {}), ok: false, syncStatus: outcomes.core?.status ?? null, status: 'pending' };
       }
-      if (closeoutItems.length && !closeoutState.complete) {
+      if ((closeoutItems.length || memoryItems.length) && !closeoutState.complete) {
         if (closeoutState.error) outcomes.learnXCloseout = { status: 'needs_review', reason: closeoutState.error };
-        else if (!closeoutExecutors) outcomes.learnXCloseout = { status: 'pending', reason: 'closeout executor adapter unavailable' };
         else {
           try {
             let memoryWriteEvidence = closeoutState.memoryWriteEvidence;
@@ -640,18 +718,18 @@ export async function recoverCodexConfirmedBatches({ coreRoot = defaultCoreRoot,
               memoryWriteEvidence = await verifyWrite({ batch, repoRoot: learnXRoot });
             }
             let approvalEvidence = closeoutState.approvalEvidence;
-            if (!approvalEvidence) {
+            if (!approvalEvidence || ![1, 2].includes(approvalEvidence.schemaVersion)) {
               const verification = hasMemoryWrites && memoryWriteEvidence?.ok === true && memoryWriteEvidence?.status === 'verified'
                 ? verifyWeeklyMemoryApprovalSources
                 : verifyMemoryApproval;
               approvalEvidence = await verification({ week: batch.reviewWeek, fingerprint: batch.sourceBindings?.learnxMemoryFingerprint, repoRoot: learnXRoot });
             }
-            outcomes.learnXCloseout = await executeConfirmedLearnXCloseout({ batch, learnXRoot, stateRoot, approvalEvidence, memoryWriteEvidence, verifyMemoryApproval, executors: closeoutExecutors, recover: true });
+            outcomes.learnXCloseout = await executeConfirmedLearnXCloseout({ batch, learnXRoot, stateRoot, approvalEvidence, memoryWriteEvidence, verifyMemoryApproval, executors: closeoutExecutors || {}, recover: true });
           } catch (error) { outcomes.learnXCloseout = { status: 'pending', reason: error?.message ?? String(error) }; }
         }
       }
       const coreDone = coreComplete || outcomes.core?.ok === true;
-      const closeoutDone = closeoutState.complete || outcomes.learnXCloseout?.status === 'completed';
+      const closeoutDone = closeoutState.complete || ['completed', 'not-applicable'].includes(outcomes.learnXCloseout?.status);
       if (coreDone && closeoutDone) results.completed.push({ batchId: batch.batchId, status: 'recovered', outcomes });
       else results.pending.push({ batchId: batch.batchId, status: 'pending_recovery', outcomes });
     }

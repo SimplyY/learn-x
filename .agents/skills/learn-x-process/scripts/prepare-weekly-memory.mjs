@@ -72,7 +72,7 @@ export async function bindWeeklyMemoryApproval({ week, repoRoot: root = repoRoot
     currentMemoryTarget: currentMemoryTargetHash
   };
   const payload = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     week: normalizedWeek,
     quarter,
     hashes,
@@ -91,11 +91,11 @@ export async function verifyWeeklyMemoryApproval({ week, fingerprint, repoRoot: 
   const manifestPath = path.join(directory, "_memory-approval.json");
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
   const { fingerprint: storedFingerprint, ...payload } = manifest;
-  if (manifest.schemaVersion !== 1 || manifest.week !== normalizedWeek
+  if (![1, 2].includes(manifest.schemaVersion) || manifest.week !== normalizedWeek
     || storedFingerprint !== fingerprint || sha256(JSON.stringify(payload)) !== storedFingerprint) {
     throw new Error("memory-approval-fingerprint-mismatch");
   }
-  const expectedScope = memoryApprovalScope(normalizedWeek, quarterFromIsoWeek(normalizedWeek));
+  const expectedScope = memoryApprovalScope(normalizedWeek, quarterFromIsoWeek(normalizedWeek), manifest.schemaVersion);
   if (JSON.stringify(manifest.scope) !== JSON.stringify(expectedScope)) throw new Error("memory-approval-scope-mismatch");
 
   const files = {
@@ -111,7 +111,7 @@ export async function verifyWeeklyMemoryApproval({ week, fingerprint, repoRoot: 
     throw new Error("memory-approval-stale: approved source or proposal is missing");
   }
   if (JSON.stringify(currentHashes) !== JSON.stringify(manifest.hashes)) throw new Error("memory-approval-stale: weekly output, candidates, or proposed memory changed");
-  return { verified: true, week: normalizedWeek, fingerprint: storedFingerprint, manifestPath };
+  return { verified: true, week: normalizedWeek, fingerprint: storedFingerprint, schemaVersion: manifest.schemaVersion, manifestPath };
 }
 
 // Recovery after a confirmed Memory write validates immutable proposal inputs
@@ -123,9 +123,9 @@ export async function verifyWeeklyMemoryApprovalSources({ week, fingerprint, rep
   const manifestPath = path.join(directory, '_memory-approval.json');
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
   const { fingerprint: storedFingerprint, ...payload } = manifest;
-  if (manifest.schemaVersion !== 1 || manifest.week !== normalizedWeek
+  if (![1, 2].includes(manifest.schemaVersion) || manifest.week !== normalizedWeek
     || storedFingerprint !== fingerprint || sha256(JSON.stringify(payload)) !== storedFingerprint) throw new Error('memory-approval-fingerprint-mismatch');
-  const expectedScope = memoryApprovalScope(normalizedWeek, quarterFromIsoWeek(normalizedWeek));
+  const expectedScope = memoryApprovalScope(normalizedWeek, quarterFromIsoWeek(normalizedWeek), manifest.schemaVersion);
   if (JSON.stringify(manifest.scope) !== JSON.stringify(expectedScope)) throw new Error('memory-approval-scope-mismatch');
   const files = {
     weeklyOutput: path.join(root, '04_output/weekly', `${outputWeekFileId(normalizedWeek)}.md`),
@@ -143,6 +143,7 @@ export async function verifyWeeklyMemoryApprovalSources({ week, fingerprint, rep
     verified: true,
     week: normalizedWeek,
     fingerprint: storedFingerprint,
+    schemaVersion: manifest.schemaVersion,
     manifestPath,
     targetBaselineSha256: manifest.hashes.currentMemoryTarget
   };
@@ -188,13 +189,31 @@ export async function verifyConfirmedWeeklyMemoryWrite({ batch, repoRoot: root =
   };
 }
 
-function memoryApprovalScope(week, quarter) {
-  return {
-    memoryPath: `01_core/memory/${quarter}.memory.md`,
-    backupRoots: MEMORY_APPROVAL_BACKUP_ROOTS,
-    backupDestination: "Learn-X Backups / Learn-X Backup Index / Snapshots",
+function memoryApprovalScope(week, quarter, schemaVersion = 2) {
+  const memoryPath = `01_core/memory/${quarter}.memory.md`;
+  const backupRoots = MEMORY_APPROVAL_BACKUP_ROOTS;
+  const backupDestination = "Learn-X Backups / Learn-X Backup Index / Snapshots";
+  const flomo = [`03_input/weekly/${memoryWeekSectionId(week)}/weekly.md`, memoryPath];
+  if (schemaVersion === 1) return {
+    memoryPath,
+    backupRoots,
+    backupDestination,
     ywnext: "refresh from confirmed 01_core/memory/*.memory.md",
-    flomo: [`03_input/weekly/${memoryWeekSectionId(week)}/weekly.md`, `01_core/memory/${quarter}.memory.md`]
+    flomo
+  };
+  if (schemaVersion !== 2) throw new Error("unsupported memory approval schema version");
+  return {
+    memoryPath,
+    backupRoots,
+    backupDestination,
+    flomo,
+    ywcontext: {
+      sourcePath: memoryPath,
+      categoryId: "learn-x-memory.confirmed",
+      level: "P1",
+      contentMode: "full",
+      trigger: "automatic after verified Memory writeback; no per-record confirmation"
+    }
   };
 }
 

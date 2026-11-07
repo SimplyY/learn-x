@@ -36,8 +36,6 @@ _dist/monthly/YYYY-MM/process-pack.md
 
 _dist/yearly/YYYY/process-pack.md
 
-/Users/yuwei/code/skills/ywnext/runtime/evidence/YYYY-Www.md
-/Users/yuwei/code/skills/ywnext/runtime/core-context/{full,weighted,core}.md
 ```
 
 ## 核心文件
@@ -45,7 +43,11 @@ _dist/yearly/YYYY/process-pack.md
 - `process-pack.md`：给 AI Chat 读取的材料包，保留来源索引和清洗后的正文；行动与反馈直接来自材料正文（原第 8 节 Action Feedback 快照已于 2026-10 退役）。
 - `input.json`：metadata-only 审计清单，记录来源路径、哈希、过滤、去重和压缩统计，不保存正文，也不放进 AI Chat。
 - `memory-candidates.md`：从 Output 的系统确认章节和已勾选“值得长期保留”内容中抽取的候选；周/月各 0–3 项，0 项合法，供用户决定是否进入 Memorize。
-- `ywnext/runtime/`：每周 Memory 完成后生成的可追溯证据索引与三档核心上下文。`evidence/YYYY-Www.md` 列出实际使用的 Memory 路径、范围、权重判断、全文阅读状态与缺口；`core-context/full.md`、`weighted.md`、`core.md` 是消费者按相关性读取的静态上下文。私有 `full-full.md` 只供 YW Next 生成滚动候选清单，不供其他仓库读取；不生成或读取 `current.md`，也不存在六仓库切片。
+- YWContext：确认写入并读回的 Learn-X P1 Memory 内容自动尝试同步为完整 P1 内容。跨系统消费者统一从 YWContext 路由读取 P0 精简版或 P1 完整版。当前若缺少动态发布入口或远端消费者读回，状态必须明确为 `pending` / `unknown`，不能依赖旧快照。
+
+### 已退役历史（只读）
+
+此前由 YWNext 生成的 `runtime/evidence/YYYY-Www.md`、`runtime/core-context/{full,weighted,core,full-full}.md` 和 `runtime/candidate-list.md` 仅保留作历史记录，已经退役；不再生成、刷新或作为消费入口。
 
 ## 边界
 

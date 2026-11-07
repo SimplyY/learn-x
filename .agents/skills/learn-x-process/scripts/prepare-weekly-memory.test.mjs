@@ -1,9 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { bindWeeklyMemoryApproval, extractRequiredSections, prepareWeeklyMemory, quarterFromIsoWeek, verifyConfirmedWeeklyMemoryWrite, verifyWeeklyMemoryApproval, verifyWeeklyMemoryApprovalSources } from "./prepare-weekly-memory.mjs";
+
+const sha256 = value => createHash("sha256").update(String(value), "utf8").digest("hex");
 
 test("assigns an ISO week to the quarter of its real Monday date", () => {
   assert.equal(quarterFromIsoWeek("2026-W01"), "2025-Q4");
@@ -65,6 +68,9 @@ test("binds one approval fingerprint to the source, exact proposed content, and 
   const binding = await bindWeeklyMemoryApproval({ week: "2026-W40", repoRoot: root });
   assert.match(binding.fingerprint, /^[a-f0-9]{64}$/);
   assert.equal(binding.scope.memoryPath, "01_core/memory/2026-Q3.memory.md");
+  assert.equal(binding.scope.ywcontext.level, "P1");
+  assert.equal(binding.scope.ywcontext.contentMode, "full");
+  assert.equal(binding.scope.ywcontext.trigger, "automatic after verified Memory writeback; no per-record confirmation");
   assert.equal(Object.hasOwn(binding.scope, "imagePath"), false);
   assert.deepEqual(binding.scope.backupRoots, ["01_core", "03_input", "04_output", "05_library"]);
   assert.deepEqual(binding.scope.flomo, ["03_input/weekly/2026-W40/weekly.md", "01_core/memory/2026-Q3.memory.md"]);
@@ -92,6 +98,42 @@ test("binds one approval fingerprint to the source, exact proposed content, and 
     verifyWeeklyMemoryApproval({ week: "2026-W40", fingerprint: rebound.fingerprint, repoRoot: root }),
     /memory-approval-stale/
   );
+});
+
+test("new approval binds automatic full-content YWContext sync while v1 scope remains read-only compatible", async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-memory-scope-v2-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const proposalRoot = path.join(root, "04_output/_dist/weekly", week);
+  await mkdir(proposalRoot, { recursive: true });
+  await mkdir(path.join(root, "04_output/weekly"), { recursive: true });
+  await mkdir(path.join(root, "01_core/memory"), { recursive: true });
+  await writeFile(path.join(root, "04_output/weekly/2026-40.md"), weeklyOutput("2026-40"));
+  await prepareWeeklyMemory({ week, repoRoot: root });
+  await writeFile(path.join(proposalRoot, "memory-proposed.md"), "## 2026-W40\n\n- Approved content\n");
+  await writeFile(path.join(root, "01_core/memory/2026-Q3.memory.md"), "# Memory\n");
+
+  const current = await bindWeeklyMemoryApproval({ week, repoRoot: root });
+  const manifestPath = path.join(proposalRoot, "_memory-approval.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  assert.equal(manifest.schemaVersion, 2);
+  assert.equal(manifest.scope.ywcontext.categoryId, "learn-x-memory.confirmed");
+
+  const { fingerprint: _discarded, ...legacy } = manifest;
+  legacy.schemaVersion = 1;
+  legacy.scope = {
+    memoryPath: "01_core/memory/2026-Q3.memory.md",
+    backupRoots: ["01_core", "03_input", "04_output", "05_library"],
+    backupDestination: "Learn-X Backups / Learn-X Backup Index / Snapshots",
+    ywnext: "refresh from confirmed 01_core/memory/*.memory.md",
+    flomo: ["03_input/weekly/2026-W40/weekly.md", "01_core/memory/2026-Q3.memory.md"]
+  };
+  const legacyFingerprint = sha256(JSON.stringify(legacy));
+  await writeFile(manifestPath, JSON.stringify({ ...legacy, fingerprint: legacyFingerprint }, null, 2) + "\n");
+  const verified = await verifyWeeklyMemoryApproval({ week, fingerprint: legacyFingerprint, repoRoot: root });
+  assert.equal(verified.verified, true);
+  assert.equal(verified.schemaVersion, 1);
+  assert.notEqual(current.fingerprint, legacyFingerprint);
 });
 
 test("preparation and approval binding reject wrong-week or incomplete Weekly Output", async (t) => {

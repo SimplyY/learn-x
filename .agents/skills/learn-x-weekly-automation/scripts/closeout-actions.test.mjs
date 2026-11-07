@@ -1,57 +1,153 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { approvedCloseoutPlan, executeApprovedCloseout, inspectApprovedCloseout, recoverApprovedCloseout } from './closeout-actions.mjs';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
 const item = action => ({ id: `closeout-${action}`, domain: 'learn-x', targets: ['weekly-closeout'], locator: `/target/${action}`, value: `approved ${action}` });
+const memoryItem = () => ({ id: 'memory-1', domain: 'learn-x', source: 'human', targets: ['memory'], locator: '01_core/memory/2026-Q3.memory.md#2026-W40/memory-1', value: '- confirmed full Memory text\n' });
+const memoryProof = (sha = 'a'.repeat(64)) => ({ ok: true, status: 'verified', evidence: { targetPath: '01_core/memory/2026-Q3.memory.md', week: '2026-W40', itemIds: ['memory-1'], sha256: sha } });
+const batchWithMemory = extraItems => ({ batchId: 'batch-ywcontext-test', reviewWeek: '2026-W40', confirmedAt: '2026-10-31T10:00:00+08:00', sourceBindings: { learnxMemoryFingerprint: 'f'.repeat(64) }, items: [memoryItem(), ...extraItems] });
+const expectedSourceRevision = proof => {
+  const week = '2026-W40';
+  const value = memoryItem().value.replace(/\n+$/u, '');
+  const bodySha256 = hash(value);
+  const rows = [{ logical_id: `${week}-memory-1`, source_version: `memory-item-v1:${week}:${bodySha256}`, sha256: bodySha256 }];
+  return `${week}:${proof.evidence.sha256}:${hash(canonical(rows))}`;
+};
+const ywcontextReceipt = proof => ({ ok: true, status: 'verified', evidence: {
+  schema: 'yw-context-p1-publish-receipt/v1', source_id: 'learn-x-memory-p1-content', source_revision: expectedSourceRevision(proof),
+  source_sha256: proof.evidence.sha256, p1_record_count: proof.evidence.itemIds.length,
+  p2_batch_id: 'learn-x-memory-abc123', p2_remote_commit: 'd'.repeat(40), batch_id: 'learn-x-memory-p1-content-abc123',
+  p1_records_sha256: 'b'.repeat(64), published_commit: 'c'.repeat(40), remote_readback_commit: 'c'.repeat(40),
+  p1_bundle_sha256: 'e'.repeat(64), targetPath: proof.evidence.targetPath, itemIds: proof.evidence.itemIds,
+  sourceSha256: proof.evidence.sha256
+} });
+const ywcontextResolution = (proof, stage = 'p2-ready-for-p1') => ({
+  schema: 'yw-context-p1-resolution/v1', source_id: 'learn-x-memory-p1-content',
+  p1_batch_id: 'learn-x-memory-p1-content-abc123', p2_batch_id: 'learn-x-memory-abc123',
+  source_revision: expectedSourceRevision(proof), record_count: proof.evidence.itemIds.length,
+  source_sha256: proof.evidence.sha256, targetPath: proof.evidence.targetPath, itemIds: proof.evidence.itemIds,
+  remote_commit: 'd'.repeat(40), catalog_sha256: 'e'.repeat(64),
+  p2_present: stage === 'p2-ready-for-p1', p1_present: false
+});
+const hash = value => createHash('sha256').update(value, 'utf8').digest('hex');
+const canonical = value => JSON.stringify(value, (_, v) => v && typeof v === 'object' && !Array.isArray(v)
+  ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b))) : v);
 
-test('only explicitly confirmed steps are scheduled; Flomo waits for selected backup and YW Next', async () => {
+test('v2 Memory writeback automatically schedules full-content YWContext', async () => {
   const calls = [];
-  const batch = { items: [item('backup'), item('ywnext'), item('flomo'), { id:'candidate', domain:'core', targets:['export'], locator:'x', value:'not a closeout' }] };
-  assert.deepEqual(approvedCloseoutPlan(batch).parallel.map(x => x.action), ['backup', 'ywnext']);
-  const result = await executeApprovedCloseout({ batch, executors: Object.fromEntries(['backup','ywnext','flomo'].map(action => [action, async () => { calls.push(action); return { ok: true, status: 'verified', evidence: { readback: `${action}-readback` } }; }])) });
-  assert.deepEqual(calls.sort(), ['backup','flomo','ywnext']);
-  assert.deepEqual(result.plan, { parallel:['backup','ywnext'], afterParallel:['flomo'] });
+  const batch = batchWithMemory([item('backup'), item('flomo'), { id:'candidate', domain:'core', targets:['export'], locator:'x', value:'not a closeout' }]);
+  assert.deepEqual(approvedCloseoutPlan(batch, { memoryApprovalSchemaVersion: 2 }).parallel.map(x => x.action), ['backup', 'ywcontext']);
+  const proof = memoryProof();
+  const result = await executeApprovedCloseout({ batch, memoryApprovalSchemaVersion: 2, memoryWriteEvidence: proof, executors: {
+    backup: async () => { calls.push('backup'); return { ok: true, status: 'verified', evidence: 'backup readback' }; },
+    ywnext: async () => { calls.push('ywnext'); return { ok: true, status: 'verified', evidence: 'must not run' }; },
+    ywcontext: async (_item, _batch, receivedProof) => { calls.push('ywcontext'); assert.deepEqual(receivedProof, proof); return ywcontextReceipt(proof); },
+    flomo: async () => { calls.push('flomo'); return { ok: true, status: 'verified', evidence: 'Flomo readback' }; }
+  } });
+  assert.deepEqual(calls.sort(), ['backup','flomo','ywcontext']);
+  assert.deepEqual(result.plan, { parallel:['backup','ywcontext'], afterParallel:['flomo'] });
+  assert.equal(result.results.ywcontext.status, 'completed');
 });
 
-test('excluded actions never run and failed prerequisite suppresses dependent Flomo', async () => {
+test('failed backup suppresses Flomo while independent automatic YWContext can proceed', async () => {
   const calls = [];
-  const batch = { items: [item('backup'), item('ywnext'), item('flomo')] };
-  const result = await executeApprovedCloseout({ batch, executors: {
+  const batch = batchWithMemory([item('backup'), item('flomo')]);
+  const proof = memoryProof();
+  const result = await executeApprovedCloseout({ batch, memoryApprovalSchemaVersion: 2, memoryWriteEvidence: proof, executors: {
     backup: async () => { calls.push('backup'); throw new Error('backup failed'); },
-    ywnext: async () => { calls.push('ywnext'); return { ok: true, status:'verified', evidence: 'YW Next output validation' }; },
+    ywcontext: async () => { calls.push('ywcontext'); return ywcontextReceipt(proof); },
     flomo: async () => calls.push('flomo'),
     image: async () => calls.push('unapproved-image')
   } });
-  assert.deepEqual(calls.sort(), ['backup','ywnext']);
+  assert.deepEqual(calls.sort(), ['backup','ywcontext']);
   assert.equal(result.results.flomo.status, 'pending');
   assert.equal(result.results.image, undefined);
 });
 
-test('executor return without positive readback evidence is not completed and blocks dependent Flomo', async () => {
+test('invalid YWContext receipt remains unknown and does not gate Flomo', async () => {
   const calls = [];
-  const batch = { items: [item('backup'), item('ywnext'), item('flomo')] };
-  const result = await executeApprovedCloseout({ batch, executors: {
-    backup: async () => ({ ok: false, status: 'failed' }),
-    ywnext: async () => ({ ok: true }),
-    flomo: async () => { calls.push('flomo'); return { ok: true, status: 'verified', evidence: 'should not run' }; }
+  const batch = batchWithMemory([item('backup'), item('flomo')]);
+  const proof = memoryProof();
+  const invalidReceipt = ywcontextReceipt(proof);
+  invalidReceipt.evidence.remote_readback_commit = 'e'.repeat(40);
+  const result = await executeApprovedCloseout({ batch, memoryApprovalSchemaVersion: 2, memoryWriteEvidence: proof, executors: {
+    backup: async () => ({ ok: true, status: 'verified', evidence: 'backup readback' }),
+    ywcontext: async () => invalidReceipt,
+    flomo: async () => { calls.push('flomo'); return { ok: true, status: 'verified', evidence: 'Flomo readback' }; }
   } });
-  assert.equal(result.results.backup.status, 'unknown');
-  assert.equal(result.results.ywnext.status, 'unknown');
-  assert.equal(result.results.flomo.status, 'pending');
-  assert.deepEqual(calls, []);
+  assert.equal(result.results.ywcontext.status, 'unknown');
+  assert.equal(result.results.flomo.status, 'completed');
+  assert.deepEqual(calls, ['flomo']);
 });
 
-test('unknown and partial executor results remain recoverable states', async () => {
-  const batch = { items: [item('backup'), item('ywnext')] };
-  const result = await executeApprovedCloseout({ batch, executors: {
-    backup: async () => ({ status: 'partial', evidence: 'uploaded but not read back' }),
-    ywnext: async () => ({ ok: true, status: 'verified', evidence: 'checked output files' })
-  } });
-  assert.equal(result.results.backup.status, 'partial');
-  assert.equal(result.results.ywnext.status, 'completed');
+test('missing dynamic publisher stays pending; mismatched Memory receipt blocks invocation', async () => {
+  const batch = batchWithMemory([]);
+  const pending = await executeApprovedCloseout({ batch, memoryApprovalSchemaVersion: 2, memoryWriteEvidence: memoryProof(), executors: {} });
+  assert.equal(pending.results.ywcontext.status, 'pending');
+  assert.equal(pending.results.ywcontext.reason, 'dynamic_ywcontext_sync_unavailable');
+  let calls = 0;
+  await assert.rejects(executeApprovedCloseout({ batch, memoryApprovalSchemaVersion: 2, memoryWriteEvidence: { ...memoryProof(), evidence: { ...memoryProof().evidence, itemIds: ['other-id'] } }, executors: { ywcontext: async () => { calls += 1; } } }), /does not match confirmed batch/);
+  assert.equal(calls, 0);
+});
+
+test('P2-only remote publication is verified before safely resuming the P1 publication stage', async t => {
+  const stateRoot = await mkdtemp(path.join(os.tmpdir(), 'closeout-ywcontext-recovery-'));
+  t.after(() => rm(stateRoot, { recursive: true, force: true }));
+  const batch = batchWithMemory([]);
+  const proof = memoryProof();
+  let calls = 0;
+  await executeApprovedCloseout({ batch, stateRoot, memoryApprovalSchemaVersion: 2, memoryWriteEvidence: proof,
+    executors: { ywcontext: async () => { calls += 1; return { status: 'unknown' }; } } });
+  const recovered = await recoverApprovedCloseout({ batch, stateRoot, memoryApprovalSchemaVersion: 2,
+    executors: { ywcontext: Object.assign(async () => { calls += 1; return ywcontextReceipt(proof); }, {
+      resolve: async () => ({ status: 'p2-ready-for-p1', evidence: ywcontextResolution(proof) })
+    }) } });
+  assert.equal(recovered.results.ywcontext.status, 'completed');
+  assert.equal(calls, 2);
+});
+
+test('P2-stage recovery requires the exact confirmed source revision and record count', async t => {
+  const stateRoot = await mkdtemp(path.join(os.tmpdir(), 'closeout-ywcontext-p2-binding-'));
+  t.after(() => rm(stateRoot, { recursive: true, force: true }));
+  const batch = batchWithMemory([]);
+  const proof = memoryProof();
+  for (const invalid of [
+    { source_revision: undefined, record_count: undefined },
+    { source_revision: 'other-revision', record_count: 1 },
+    { source_revision: expectedSourceRevision(proof), record_count: 2 },
+  ]) {
+    const scopedRoot = await mkdtemp(path.join(stateRoot, 'case-'));
+    let calls = 0;
+    await executeApprovedCloseout({ batch, stateRoot: scopedRoot, memoryApprovalSchemaVersion: 2, memoryWriteEvidence: proof,
+      executors: { ywcontext: async () => { calls += 1; return { status: 'unknown' }; } } });
+    const evidence = { ...ywcontextResolution(proof), ...invalid };
+    const recovered = await recoverApprovedCloseout({ batch, stateRoot: scopedRoot, memoryApprovalSchemaVersion: 2,
+      executors: { ywcontext: Object.assign(async () => { calls += 1; return ywcontextReceipt(proof); }, {
+        resolve: async () => ({ status: 'p2-ready-for-p1', evidence })
+      }) } });
+    assert.equal(recovered.results.ywcontext.status, 'unknown');
+    assert.equal(calls, 1);
+  }
+});
+
+test('unbound YWContext not-applied claims do not trigger an automatic retry', async t => {
+  const stateRoot = await mkdtemp(path.join(os.tmpdir(), 'closeout-ywcontext-unbound-'));
+  t.after(() => rm(stateRoot, { recursive: true, force: true }));
+  const batch = batchWithMemory([]);
+  const proof = memoryProof();
+  let calls = 0;
+  await executeApprovedCloseout({ batch, stateRoot, memoryApprovalSchemaVersion: 2, memoryWriteEvidence: proof,
+    executors: { ywcontext: async () => { calls += 1; return { status: 'unknown' }; } } });
+  const recovered = await recoverApprovedCloseout({ batch, stateRoot, memoryApprovalSchemaVersion: 2,
+    executors: { ywcontext: Object.assign(async () => { calls += 1; return ywcontextReceipt(proof); }, {
+      resolve: async () => ({ status: 'not-applied', baselineUnchanged: true, evidence: { statement: 'no write' } })
+    }) } });
+  assert.equal(recovered.results.ywcontext.status, 'unknown');
+  assert.equal(calls, 1);
 });
 
 test('empty evidence cannot be used as positive completion proof', async () => {
@@ -64,8 +160,9 @@ test('empty evidence cannot be used as positive completion proof', async () => {
 test('invalid or legacy closeout entries cannot authorize a hidden action', () => {
   assert.throws(() => approvedCloseoutPlan({ items:[item('retention')] }), /invalid/);
   assert.throws(() => approvedCloseoutPlan({ items:[item('image')] }), /invalid/);
-  assert.throws(() => approvedCloseoutPlan({ items:[item('flomo')] }), /requires confirmed/);
+  assert.throws(() => approvedCloseoutPlan({ items:[item('flomo')] }), /requires confirmed backup/);
   assert.throws(() => approvedCloseoutPlan({ items:[item('backup'), item('backup')] }), /invalid/);
+  assert.throws(() => approvedCloseoutPlan({ items:[item('ywnext')] }), /retired YWNext/);
 });
 
 test('逐动作状态落盘；未知结果先核查，只有证明未落地且基线未变才重试', async t => {
@@ -92,6 +189,58 @@ test('逐动作状态落盘；未知结果先核查，只有证明未落地且�
   assert.deepEqual(Object.keys(ledger.actions.backup.result.evidence), ['sha256']);
   assert.equal((await stat(recovered.stateFile)).mode & 0o777, 0o600);
   assert.equal((await stat(path.dirname(recovered.stateFile))).mode & 0o777, 0o700);
+});
+
+test('v1 YWNext closeout state migrates as retired and cannot satisfy automatic YWContext', async t => {
+  const stateRoot = await mkdtemp(path.join(os.tmpdir(), 'closeout-retire-ywnext-'));
+  t.after(() => rm(stateRoot, { recursive: true, force: true }));
+  const backup = item('backup');
+  const ywnext = item('ywnext');
+  const flomo = item('flomo');
+  const batch = batchWithMemory([backup, ywnext, flomo]);
+  const oldActions = [['backup', backup], ['ywnext', ywnext], ['flomo', flomo]];
+  const fingerprint = hash(canonical({
+    batchId: batch.batchId,
+    reviewWeek: batch.reviewWeek,
+    confirmedAt: batch.confirmedAt,
+    actions: oldActions.map(([action, actionItem]) => ({ action, itemId: actionItem.id, itemSha256: hash(canonical(actionItem)) }))
+  }));
+  const digest = value => ({ ok: true, status: 'verified', evidence: { sha256: hash(canonical(value)) } });
+  const state = {
+    schemaVersion: 1,
+    batchId: batch.batchId,
+    reviewWeek: batch.reviewWeek,
+    confirmedAt: batch.confirmedAt,
+    batchFingerprint: fingerprint,
+    memoryWriteEvidence: { ok: true, status: 'verified', evidence: { sha256: 'a'.repeat(64) } },
+    actions: Object.fromEntries(oldActions.map(([action, actionItem]) => [action, {
+      itemId: actionItem.id,
+      itemSha256: hash(canonical(actionItem)),
+      status: 'completed',
+      attempts: 1,
+      result: digest({ action })
+    }]))
+  };
+  const stateFile = path.join(stateRoot, 'runtime/weekly-review', batch.reviewWeek, 'closeout', `${batch.batchId}.json`);
+  await mkdir(path.dirname(stateFile), { recursive: true });
+  await writeFile(stateFile, JSON.stringify(state));
+  const calls = [];
+  const result = await recoverApprovedCloseout({ batch, stateRoot, memoryApprovalSchemaVersion: 1, executors: {
+    backup: async () => calls.push('backup'),
+    ywcontext: async () => calls.push('ywcontext'),
+    flomo: async () => calls.push('flomo')
+  } });
+  assert.deepEqual(calls, []);
+  assert.equal(result.results.ywcontext, undefined);
+  assert.equal(result.results.backup.status, 'completed');
+  assert.equal(result.results.flomo.status, 'completed');
+  const migrated = JSON.parse(await readFile(stateFile, 'utf8'));
+  assert.equal(migrated.schemaVersion, 2);
+  assert.equal(migrated.actions.ywnext, undefined);
+  assert.equal(migrated.actions.ywcontext, undefined);
+  assert.equal(migrated.retiredActions.ywnext.status, 'retired');
+  assert.equal(migrated.retiredActions.ywnext.legacyStatus, 'completed');
+  assert.equal(migrated.memoryWriteEvidence, null);
 });
 
 test('恢复读取已完成动作的回执，不重复执行；失配批次拒绝使用旧状态', async t => {

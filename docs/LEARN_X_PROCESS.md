@@ -15,7 +15,7 @@ Learn-X Process 是周期输入到人工审稿的处理流程。它把指定周�
   -> 周 / 月记草稿：仅以已落盘 Input 生成飞书草稿（Action Feedback 已退役，不再有配套草稿）
   -> 阶段 2：生成 input.json、process-pack.md 和 Output 最小壳
   -> AI Chat 生成并人工审核 Output
-  -> 阶段 3：校验 Memory 候选并展示唯一确认卡，确认后写入 Memory、图片、备份与 YW Next / Flomo（Action Feedback Base 已退役）
+  -> 阶段 3：校验 Memory 候选并展示唯一确认卡，确认后写入 Memory、图片、备份，并自动尝试 YWContext P1 全文同步；Flomo 保持独立动作（Action Feedback Base 已退役）
 ```
 
 | 阶段 | 主要输入 | 主要产物 | 责任主体 |
@@ -36,16 +36,15 @@ Learn-X Process 是周期输入到人工审稿的处理流程。它把指定周�
 
 目录和人工操作分别见 [03_input/README.md](../03_input/README.md)、[03_input/usage.md](../03_input/usage.md)、[04_output/README.md](../04_output/README.md) 和 [04_output/usage.md](../04_output/usage.md)。
 
-## YW Next 上下文管理
+## YWContext P0 / P1 上下文路由
 
-Memory 写入成功后，YW Next 只从已确认的 `01_core/memory/*.memory.md` 重建上下文：
+跨系统上下文消费统一通过 YWContext：P0 提供精简版，P1 提供完整版本。Learn-X 中已确认且写后读回的 Memory 属于 P1 来源，必须同步完整内容，不能只写索引。P0 正文由 YWContext 中用户确认的知识库维护。
 
-- `/Users/yuwei/code/skills/ywnext/runtime/evidence/YYYY-Www.md`：记录本轮实际读取的 Memory、范围、权重和缺口。
-- `runtime/core-context/full.md`、`weighted.md`、`core.md`：按任务相关性分别供消费者读取；只影响个性化判断，不改变事实、来源状态或写入门禁。
-- `runtime/core-context/full-full.md`：私有完整 Memory 输入，只供 YW Next 生成候选清单，其他仓库和消费者不得读取。
-- `runtime/candidate-list.md`：YW Next 的滚动候选清单，不是 Memory，也不保存周度副本。
+Memory 写入并读回后，自动尝试把完整 P1 内容同步到 YWContext。同步证据必须绑定 Learn-X 目标路径、目标周、批次条目 ID 和源文件 SHA-256，并证明正式发布提交与远端读回提交一致。当前缺少动态发布入口或消费者读回证据时，记录 `pending` / `unknown`；不得将固定探针、旧快照或本地成功读回当成 YWContext 发布成功。
 
-这里不再生成六仓库切片、`repo-context.staging` 或发布器。历史遗留目录即使仍在磁盘上，也不参与上下文管理和消费；不得以旧目录冒充本轮刷新结果。
+### 已退役历史（只读）
+
+此前由 YWNext 生成的 `/Users/yuwei/code/skills/ywnext/runtime/evidence/YYYY-Www.md`、`runtime/core-context/{full,weighted,core,full-full}.md` 和 `runtime/candidate-list.md` 已退役，不再生成、刷新或供消费者读取。历史目录仍在时只作为旧记录，不代表当前 YWContext 状态。
 
 ## 功能边界
 

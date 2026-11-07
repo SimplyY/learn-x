@@ -134,7 +134,7 @@ Deep Code X 另有一个独立的周日调度（`learn-x-voice-insight`，20:00�
 
 - `周记已确认` 后，一轮内完成阶段 2 的采回、校验、Process Pack、范围预览和汇报；随后用户完成 Chat Pack 人工工作，并将定稿内容交付当前流程。定稿内容就是交接材料，不另发状态消息。
 - 当前流程拿到 Chat Pack 定稿后，读回并通过目标周、完整性与占位文本校验，即在同一轮完成 Memory 候选准备、拟写内容和指纹绑定，并展示完整确认卡；不要求用户再说“继续”“已完成”或“给确认卡”。
-- 用户确认最终卡后，一轮内完成卡内所有已授权动作及读回，最后集中汇报；不得在备份、YW Next 或 Flomo 等子步骤之间再要“继续”。遇到硬门槛缺证或远端写入结果不明时，只暂停受影响路径，明确列出证据和恢复动作。
+- 用户确认最终卡后，一轮内完成卡内所有已授权动作及读回，最后集中汇报；不得在备份、YWContext 或 Flomo 等子步骤之间再要“继续”。遇到硬门槛缺证或远端写入结果不明时，只暂停受影响路径，明确列出证据和恢复动作。
 
 报告仍列全局位置与后续动作，但“再下一步”应说明由当前这条用户指令自动触发的工作，不得暗示用户还要再发一条指令。真实的周记审核、Chat Pack 人工工作和最终内容确认不得合并或代替；固定范围预览也不能替代真实内容确认。
 
@@ -305,10 +305,10 @@ node .agents/skills/learn-x-weekly-journal/scripts/link-core.mjs --period YYYY-W
    - 对自动空壳 Weekly Output，除可点击文件链接外，还要在阶段 2 回复中用代码块原样展示文件全文，让用户直接拿到空壳；若文件已有实质正文，只报告链接与状态，不把它称为空壳或重复全文。
    - `04_output/_dist/shared-context/weekly/current.json` 与对应不可变版本；说明 planWeek、sourceWeek、coverage，以及来源 URL/revision 缺失时的标记
    - 已完成来源、缺口、验证结果
-   - Process Pack 成功生成后，在同一条阶段 2 消息中同时交付 Pack 与“执行授权范围预览”，让用户第三步可直接复制复核：列出 Memory 写入目标、备份范围与目的地、YW Next 刷新、留存清理和读回校验。它只展示固定执行范围与目标，不展示尚未生成的记忆内容，也不构成授权；阶段 2 不执行任何收尾写入。记录 `authorization_card` 阶段耗时。
+   - Process Pack 成功生成后，在同一条阶段 2 消息中同时交付 Pack 与“执行授权范围预览”，让用户第三步可直接复制复核：列出 Memory 写入目标、备份范围与目的地、写后自动尝试的 YWContext P1 全文同步、留存清理和读回校验。它只展示固定执行范围与目标，不展示尚未生成的记忆内容，也不构成授权；阶段 2 不执行任何收尾写入。记录 `authorization_card` 阶段耗时。
 10. 等待 Chat Pack 的真实人工定稿内容，不要求用户另发完成/继续状态消息：在 Chat Pack 中选择 Weekly Output，由生成入口实时读取飞书最新 `chatpack.weekly-output` 并注入本次内容；基于已共同审核的 `process-pack.md` 生成并审核周度记忆（保留具体经历、重要输入、思考、状态与变化；增加不超过 600 字的本周与上周对照）。在同一次操作中启用 `芒格之魂` 生成独立洞察，补充 `芒格之魂的洞察 & 全文核心重点纪要`，并由 AI 提出恰好 3 个问题供用户回答；未回答问题不迁移。审核 0–3 个“值得长期保留”候选，0 个合法。必要时读取 `layer-rules.md`。若从 Chat Pack 外生成，先运行 `node /Users/yuwei/code/skills/prompt-governance/scripts/fetch-prompt.mjs chatpack.weekly-output` 并遵循返回的 `content`；读取失败即停止，不用本地副本，除非用户明确授权本次降级。公众号发布仍由用户人工完成。Chat Pack 在当前流程内定稿后，立即保存并读回 `04_output/weekly/YYYY-WW.md`，验证文件目标周、必需内容（「全文核心重点纪要」「芒格之魂的洞察」）及完整性，不得包含未替换占位文本。若内容由用户在另一界面制作，需把定稿内容带回当前流程；内容交付本身作为交接，不追问状态或口令。有效内容通过后，当前回复立即继续阶段 3 并展示最终确认卡。当前流程无法读取到最终内容、目标周不符、必需内容缺失或占位文本未清理时，报告具体问题并停在阶段 2；不生成确认卡，不以文件存在或 mtime 变化推断人工审核完成。不得把文件监听或独立会话视为本阶段的触发器。
 
-阶段 2 汇报必须包含完整全局流程，并标记：当前位置 = 阶段 2 完成；下一步 = 在 Chat Pack 生成并审核最终 Weekly Output、芒格之魂、核心纪要、问题与回答和 Memory 候选；再下一步 = Chat Pack 定稿内容保存并读回有效后，当前流程自动生成并校验 `memory-candidates.md`，展示真实拟迁移内容并与第二步已预览的执行范围合并为一张最终确认卡；无需额外完成/继续消息。若用户在另一界面制作，需把真实定稿内容交付当前流程，不能以文件监听替代内容交接。第二步预览必须一次列明本周期 Memory 写入目标、备份载荷（`01_core/`、`03_input/`、`04_output/`、`05_library/`，不含图像文件）及 Learn-X 专用飞书云盘 / `Snapshots` 目的地、YW Next 刷新范围、留存清理和读回校验；不得包含尚未生成的记忆内容，也不构成授权。最终卡再列出实际拟迁移条目、排除项、目的地和同一组收尾动作，用户一次确认后执行。不得把备份或 YW Next 再拆成多个确认点。多周范围不得把仅接受单周参数的收尾命令用于单个组成周；范围适配未就绪时停在受影响写入前并明确说明。
+阶段 2 汇报必须包含完整全局流程，并标记：当前位置 = 阶段 2 完成；下一步 = 在 Chat Pack 生成并审核最终 Weekly Output、芒格之魂、核心纪要、问题与回答和 Memory 候选；再下一步 = Chat Pack 定稿内容保存并读回有效后，当前流程自动生成并校验 `memory-candidates.md`，展示真实拟迁移内容并与第二步已预览的执行范围合并为一张最终确认卡；无需额外完成/继续消息。若用户在另一界面制作，需把真实定稿内容交付当前流程，不能以文件监听替代内容交接。第二步预览必须一次列明本周期 Memory 写入目标、备份载荷（`01_core/`、`03_input/`、`04_output/`、`05_library/`，不含图像文件）及 Learn-X 专用飞书云盘 / `Snapshots` 目的地、写后自动尝试的 YWContext P1 全文同步、留存清理和读回校验；不得包含尚未生成的记忆内容，也不构成授权。最终卡再列出实际拟迁移条目、排除项、目的地和同一组收尾动作，用户一次确认后执行。不得把备份拆成多个确认点；YWContext 是基于写后读回证据自动派生的同步动作，不要求逐条再次确认。多周范围不得把仅接受单周参数的收尾命令用于单个组成周；范围适配未就绪时停在受影响写入前并明确说明。
 阶段 2 的人工复核仍包含 Weekly Output 中的问题与回答；它们只保留在 Weekly Output，不生成 Memory 候选。
 
 阶段 2 汇报直接复用 `process-pack.md` 第 2 节的「重要来源」和「可选来源」两张表：按来源配置顺序，已确认周记作为阶段前提单列。其余输入逐行保留 Process Pack 中的状态、文件原始 → 解析清洗后有效（去重前）→ Process Pack 最终纳入字符链路和结果；链路最后一个数字必须是本阶段最终纳入数。只有 Voice-X 等实际发生语义压缩的来源才显示压缩比例，文件名本身就是可点击核查入口。不能只报告来源数量和产物路径。失败或不可用行必须在相应分组表内可见，不得只藏在末尾缺口列表。
@@ -316,14 +316,14 @@ node .agents/skills/learn-x-weekly-journal/scripts/link-core.mjs --period YYYY-W
 
 ## 阶段 3：已审核记忆
 
-目标：先准备已确认的 Memory 候选和最终确认卡；用户确认后，按依赖顺序写入 Memory、备份并刷新下一周“找事”离线索引。
+目标：先准备已确认的 Memory 候选和最终确认卡；用户确认后写入并读回 Memory，再完成备份和自动尝试 YWContext P1 完整内容同步。
 
 1. 当前流程收到 Chat Pack 定稿内容后，立即读回 `04_output/weekly/YYYY-WW.md`；验证文件目标周与本轮一致、Weekly Output 是实质性周报而非空壳/模板、必需章节完整且实质正文有效、必需段落无占位文本。任一检查失败都报告具体缺项并停在阶段 2，不生成确认卡。文件存在或 mtime 变化不算人工审核证据。
-3. 上述读回和内容校验成功后，自动进入阶段 3；Chat Pack 定稿内容本身是交接依据，无需用户另发 `Chat Pack 已完成`、`继续` 或 `给我完整确认卡`。这只表示当前 Weekly Output 已完成并经过人工审核，不等于授权执行批量写入。先运行 `npm run memory:weekly -- --week YYYY-Www` 生成或刷新候选，再读取候选和规则，逐条展示真实拟迁移内容、排除项和目的地。问题、背景与回答保留在 Weekly Output，默认整体排除，不进入候选或 Memory。将准确的拟写入条目及目的地写入该周 `_dist/weekly/YYYY-Www/memory-proposed.md`，然后运行 `npm run memory:weekly -- --week YYYY-Www --bind-approval`；把实际条目与第二步的范围预览合成“最后确认卡”。此时不写正式 Memory、备份、YW Next 或 Flomo。最终卡与第二步预览的固定执行范围一致时，用户一次确认后，先运行 `npm run memory:weekly -- --week YYYY-Www --verify-approval --fingerprint <本卡对应的指纹>`，通过后才执行卡内写入；若周报、候选、拟写条目或季度 Memory 目标在卡片确认前发生变化，旧指纹立即失效；重新读回并生成卡片、取得新确认。确认词只需指向这张最终确认卡及其指纹，例如：`确认执行 YYYY-Www 最终确认卡（指纹：<卡片指纹>）`；该确认覆盖卡片列出的全部实际条目、固定范围和目的地。此后不得按备份、Full Access、YW Next、Flomo 分别再次请求确认；同一目标周、同一事务范围内因网络、Ego Lite、读回或工具环境失败而进行的安全重试沿用这次授权。只有新增目标、扩大数据范围、改变写入对象或新增删除动作时才重新确认。公众号发布始终由用户人工完成。若当前并非阶段 2 完成状态，`继续`按前序阶段规则解释，不得直接进入这里。
+3. 上述读回和内容校验成功后，自动进入阶段 3；Chat Pack 定稿内容本身是交接依据，无需用户另发 `Chat Pack 已完成`、`继续` 或 `给我完整确认卡`。这只表示当前 Weekly Output 已完成并经过人工审核，不等于授权执行批量写入。先运行 `npm run memory:weekly -- --week YYYY-Www` 生成或刷新候选，再读取候选和规则，逐条展示真实拟迁移内容、排除项和目的地。问题、背景与回答保留在 Weekly Output，默认整体排除，不进入候选或 Memory。将准确的拟写入条目及目的地写入该周 `_dist/weekly/YYYY-Www/memory-proposed.md`，然后运行 `npm run memory:weekly -- --week YYYY-Www --bind-approval`；把实际条目与第二步的范围预览合成“最后确认卡”。此时不写正式 Memory、备份、YWContext 或 Flomo。最终卡与第二步预览的固定执行范围一致时，用户一次确认后，先运行 `npm run memory:weekly -- --week YYYY-Www --verify-approval --fingerprint <本卡对应的指纹>`，通过后才执行卡内写入；若周报、候选、拟写条目或季度 Memory 目标在卡片确认前发生变化，旧指纹立即失效；重新读回并生成卡片、取得新确认。确认词只需指向这张最终确认卡及其指纹，例如：`确认执行 YYYY-Www 最终确认卡（指纹：<卡片指纹>）`；该确认覆盖卡片列出的全部实际条目、固定范围和目的地。备份、Flomo 沿用一次确认；写后读回产生的 YWContext 同步是自动动作，不要求逐条确认。同一目标周、同一事务范围内因网络、Ego Lite、读回或工具环境失败而进行的安全重试沿用这次授权。只有新增目标、扩大数据范围、改变写入对象或新增删除动作时才重新确认。公众号发布始终由用户人工完成。若当前并非阶段 2 完成状态，`继续`按前序阶段规则解释，不得直接进入这里。
 
    **联合确认与执行：** 调用 `scripts/unified-confirmation.mjs` 的 `prepareUnifiedPreview`，按 Learn-X / Core、具体条目、内容和目标展示一张分项卡；修改或排除后重建并重新展示。若返回 `status=no-new-items`，说明本周 Core 无新增待确认项，不展示空卡或重复认可，并继续盘点已保存批次的恢复状态。卡片正文含唯一指纹，下一轮用户对该指纹的明确确认才是执行依据。收到确认后，通过 Codex 官方 `mcp__codex_app__read_thread` 读取当前线程消息；把官方响应交给 `createCodexHostAdapter`，然后调用 `confirmAndSyncCodexBatch`。它先核验实际展示卡、本人确认、Core 来源及远端目标基线，再不可变保存认可批次并读回，最后逐目标同步。批次保存失败不得执行任何目标；Core 同步返回失败或抛出异常时，结果为 `pending`，保留已保存认可并继续 Learn-X 收尾，不重复询问认可。Core 总览目标逐项写后读回为 `verified` 后，会调用 YW-Context 单一发布入口同步 `core-personal-docs`，回传来源版本、记录数与目标提交；若 ACC07 尚未放行，镜像状态为 `awaiting_acc07`，不影响已确认的 Core 写入或独立 Learn-X 收尾。
 
-   `confirmAndSyncCodexBatch` 返回后，先运行 `verifyWeeklyMemoryApproval` 并保留其返回值为 `approvalEvidence`；只写入确认批次中的 Memory 项，写后读回形成 `memoryWriteEvidence: { ok: true, status: 'verified', evidence: { batchId, itemIds, targetPath, sha256 } }`。证据只包含目标、条目 ID 与内容哈希，不保存记忆正文。随后调用 `executeConfirmedLearnXCloseout({ batch: confirmed.batch, learnXRoot, stateRoot: <Core 仓库根目录>, approvalEvidence, memoryWriteEvidence, executors })`。执行器映射到本 Skill 已有的备份、YW Next、Flomo 操作，每项使用 `{ execute, resolve }`：`execute(item, batch)` 只运行该条已确认的现有步骤并返回读回证据；`resolve(item, batch, priorState)` 先读目标，已落地则返回 `{ ok: true, status: 'verified', evidence }`，能证明未落地且基线未变才返回 `{ status: 'not-applied', baselineUnchanged: true, evidence }`，冲突返回 `{ status: 'conflict' }`，否则返回 `unknown`。证据只保留目标标识和哈希，不保留内容；不能用命令退出码代替读回。运行器在动作前后把每项结果写入权限为 `0600` 的 `runtime/weekly-review/<覆盖周>/closeout/<batchId>.json`；未知、部分或冲突结果不得盲目重试。缺少 Memory 写入读回证据时不得执行后续收尾。备份与 YW Next 可并行；Flomo 仅在本批次明确认可且备份与 YW Next 均已验证完成后运行。Core 认可回流独立于年度周报和总览写入；Core 暂缓时先完成 Learn-X，之后新增 Core 内容只确认新增部分并形成新批次。
+   `confirmAndSyncCodexBatch` 返回后，先运行 `verifyWeeklyMemoryApproval` 并保留其返回值为 `approvalEvidence`；只写入确认批次中的 Memory 项，写后读回形成 `memoryWriteEvidence: { ok: true, status: 'verified', evidence: { targetPath, week, itemIds, sha256 } }`。证据只包含目标、目标周、条目 ID 与文件哈希，不保存记忆正文。随后调用 `executeConfirmedLearnXCloseout({ batch: confirmed.batch, learnXRoot, stateRoot: <Core 仓库根目录>, approvalEvidence, memoryWriteEvidence, executors })`。备份与 Flomo 是显式确认的动作；`ywcontext` 是从已确认 Memory 项自动派生的动作，不增加用户确认。YWContext 执行器使用 `execute(item, batch, memoryWriteEvidence)`；只有严格匹配本批 source hash、来源版本、记录数、manifest hash、发布提交和远端读回提交的 `yw-context-p1-publish-receipt/v1` 回执才算成功。恢复中的未知动作不得凭通用 `not-applied` 证明自动重试；只有绑定本批路径、条目 ID、源哈希、来源版本、记录数和远端状态的权威读回可决定恢复。运行器在动作前后把每项结果写入权限为 `0600` 的 `runtime/weekly-review/<覆盖周>/closeout/<batchId>.json`。缺少 Memory 写入读回证据时不执行 YWContext。备份与 YWContext 在业务依赖上独立，但共享同一状态文件，因此按顺序执行；Flomo 仅在本批次明确认可且备份已验证完成后运行。动态入口或消费者读回能力缺失时 YWContext 保持 `pending` / `unknown`，不阻塞 Memory、备份或 Flomo 的独立结果。Core 认可回流独立于年度周报和总览写入；Core 暂缓时先完成 Learn-X，之后新增 Core 内容只确认新增部分并形成新批次。
 
    代码模块不接受 CLI JSON、命令参数或模型推断作为确认凭据。仅 Codex 宿主可接入：在 `functions.exec` 中先用 `mcp__node_repl__js` 读取 `nodeRepl.requestMeta.threadId`，随后调用 `mcp__codex_app__read_thread`（本地宿主使用 `hostId: "local"`），最后把未经改写的工具响应通过 `JSON.stringify` 安全嵌入 `mcp__node_repl__js`，动态导入模块并调用宿主函数。遇到 `page.hasMore` 且尚未包含目标消息 ID 时，按返回的 `page.nextCursor` 继续读旧页；将同一线程页面按新到旧传给 `createCodexHostAdapter`。不得把本机线程 JSONL 当作用户消息凭证。模拟数据只用于测试，不证明真实确认或飞书写入。
 
@@ -353,17 +353,16 @@ node .agents/skills/learn-x-weekly-journal/scripts/link-core.mjs --period YYYY-W
    - 成功后执行留存清理：保留最近 31 天内所有成功快照，并永久保留每个自然年度最后一次成功快照；同一文件同时满足两个条件时只保留一个物理文件。
    - 删除只针对 Base 已登记、窗口外且非年度快照的文件；云盘删除和 Base 清理失败都必须记录告警。
    - 新快照上传和 Base 读回成功后，即使留存清理失败，也保持该快照 `success`；命令以非零状态暴露清理失败，不能把已成功上传的快照改成 `failed`。
-   - 备份失败不回滚已写入的 Memory，继续 YW Next 和 Flomo，但最终汇报必须标记 `Overall: partial`，明确列出 `Backup: failed`。
-11. Memory 写入成功后，在同一阶段执行 `$ywnext 更新索引 YYYY-Www`；Flomo 必须等待本项全部校验成功：
-   - 读取 `01_core/memory/*.memory.md`；Memory 已承接最近四周及长期校准，因此 Weekly Output、Process Pack、`input.json`、周记、日记、阅读、智慧之门、AI Coach 和其他原始周输入不进入 YW Next 语义上下文。
-   - 找事配置、常做清单和最近计划只作为运行控制输入，不写入个人核心上下文；不得用它们补充 Memory 缺口。
-   - 读取“找事配置” Base 的启用记录，运行 `$ywnext` 的配置校验脚本，将原始快照写入 `/Users/yuwei/code/skills/ywnext/runtime/evidence/YYYY-Www.config.json`；脚本不归一化权重、不提炼证据、不生成建议。
-   - 由 AI 严格依据 `$ywnext` 的 Markdown 规则阅读 Memory，生成 `/Users/yuwei/code/skills/ywnext/runtime/evidence/YYYY-Www.md`（Memory 来源路径、范围、全文阅读状态与缺口）及 `runtime/core-context/full.md`、`weighted.md`、`core.md`（三档独立静态核心上下文）。不生成或读取 `current.md`。
-   - 继续生成仅供 YW Next 使用的 `runtime/core-context/full-full.md`：只全文保留 `01_core/memory/*.memory.md`，再由 AI 仅基于该文件生成 `/Users/yuwei/code/skills/ywnext/runtime/candidate-list.md`，做、学、玩、思考各 20 条，含详情、适用条件与候选权重。候选不另存周度快照。
-   - 运行 Memory 证据、三档核心上下文、full-full Memory-only 与候选清单校验。YW Next 不生成六仓库切片；其他仓库只按相关性读取通过校验的 `runtime/core-context/full.md`、`weighted.md` 或 `core.md`，不得读取 `full-full.md` 或历史遗留切片目录。配置读取失败时，在证据索引中标注缺口且不生成新的核心上下文或候选清单；不得用旧外部数据伪装为本次更新，也不得阻塞已成功写入的 Memory。
-12. Flomo 反向同步已停用。周自动化不得把 `sync:flomo` 作为阶段收尾触发，也不得在 YW Next 后自动写回 `weekly.md` 或季度 Memory；汇报固定写「Flomo 反向同步状态：已停用，未执行」。
+   - 备份失败不回滚已写入的 Memory，继续自动尝试独立的 YWContext P1 同步；Flomo 因前置备份未通过而保持 `pending`。最终汇报必须标记 `Overall: partial`，明确列出 `Backup: failed`。
+11. Memory 写入并完成本地权威目标读回后，自动派生 YWContext P1 完整内容同步；无需用户逐条确认。该动作只接受已确认批次和 `verifyConfirmedWeeklyMemoryWrite` 返回的精确凭据：`{ targetPath, week, itemIds, sha256 }`。写入器必须从 Learn-X `01_core/memory/*.memory.md` 重新读取完整正文并核验源哈希，不得只发布索引或依据历史快照补齐。
+   - 只有 `schemaVersion: 2` 的当前确认范围触发自动同步。旧 `schemaVersion: 1` 范围仅能只读核验历史批次；旧卡不能重新确认，也不能被解释为 YWContext 授权。
+   - 调用 `executeConfirmedLearnXCloseout` 时，YWContext 执行器接收 `execute(item, batch, memoryWriteEvidence)`；成功回执必须含 `schema: "yw-context-publish-receipt/v1"`、`source_id: "learn-x-memory-p1-content"`、`source_revision`、`source_sha256`、`p1_record_count`、`p1_records_sha256`、相同的 40 位 `published_commit` / `remote_readback_commit`、`manifest_sha256`，并绑定本批 `targetPath`、`itemIds` 和 `sourceSha256`。
+   - 只有源项完整读取、P1 全文发布、远端固定提交读回且以上字段均匹配时才记为 `completed`。没有可验证的源回链、动态发布入口或消费者读回时记录 `pending` / `unknown` 与稳定原因 `dynamic_ywcontext_sync_unavailable`；不接固定 probe importer，不伪称成功，也不阻塞已完成的 Memory 写入。
+   - YWContext 的未知发布结果不能靠一般“基线未变”回执重试。恢复器必须先核验源 SHA、批次身份、远端提交和 manifest；无法确定是否已发布时继续保留 `unknown`，不自动重发。
+   - 备份与自动 YWContext 同步按顺序更新同一收尾状态文件。Flomo 只依赖本次确认的备份成功，与 YWContext 的 pending/unknown 状态分开记录。
+12. Flomo 反向同步已停用。周自动化不得把 `sync:flomo` 作为阶段收尾触发，也不得在自动 YWContext 同步后写回 `weekly.md` 或季度 Memory；汇报固定写「Flomo 反向同步状态：已停用，未执行」。
 
-阶段 3 汇报必须包含候选数量、实际迁移数量、目标文件、去重结果、找事索引路径和状态、Flomo 反向同步状态：已停用，未执行、验证结果、当前位置、下一步和下次运行。
+阶段 3 汇报必须包含候选数量、实际迁移数量、目标文件、去重结果、YWContext P1 同步状态及回执字段或 pending 原因、Flomo 反向同步状态：已停用，未执行、验证结果、当前位置、下一步和下次运行。
 
 ## 边界
 

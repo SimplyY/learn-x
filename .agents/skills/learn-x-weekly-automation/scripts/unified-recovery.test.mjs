@@ -62,7 +62,7 @@ test('Core 暂缓时恢复 Learn-X-only 收尾，并对未知结果先核查再�
   const { batch } = await confirmCard({ root: stateRoot, card, messageId: 'learnx-only-reply', expectedSender: 'codex-user', hostEvidence: { schemaVersion: 1, threadId: 'learnx-only-thread', displayMessageId: 'learnx-only-display', displayTurnId: 'display-turn', confirmationTurnId: 'confirm-turn', displayTurnIndex: 1, confirmationTurnIndex: 0 }, fetchConfirmation: async id => ({ id, sender: 'codex-user', text: card.confirmationText, sentAt: confirmedAt }) });
   const host = { readThread: async () => ({}) };
   const verifyConfirmation = async () => ({ ok: true, evidence: 'mock host readback' });
-  const verifyMemoryApproval = async ({ week: approvedWeek, fingerprint }) => ({ verified: true, week: approvedWeek, fingerprint });
+  const verifyMemoryApproval = async ({ week: approvedWeek, fingerprint }) => ({ verified: true, week: approvedWeek, fingerprint, schemaVersion: 2 });
   let writes = 0;
   const unknownExecutors = { backup: Object.assign(async () => { writes += 1; throw new Error('mock transport lost'); }, { resolve: async () => ({ status: 'unknown', evidence: 'mock target unavailable' }) }) };
   const first = await recoverCodexConfirmedBatches({ coreRoot, stateRoot, host, verifyConfirmation, verifyMemoryApproval, closeoutExecutors: unknownExecutors });
@@ -114,12 +114,16 @@ test('Memory 写入后进程中断时，恢复只读验证已批准条目并继�
   assert.equal(sourceProof.fingerprint, batch.sourceBindings.learnxMemoryFingerprint);
   const host = { readThread: async () => ({}) };
   const result = await recoverCodexConfirmedBatches({ coreRoot, learnXRoot: stateRoot, stateRoot, host, verifyConfirmation: async () => ({ ok: true, evidence: 'mock host readback' }), closeoutExecutors: { backup: async () => ({ ok: true, status: 'verified', evidence: { indexSha256: 'e'.repeat(64) } }) } });
-  assert.equal(result.completed[0]?.status, 'recovered', JSON.stringify(result));
-  assert.equal(result.pending.length, 0);
+  assert.equal(result.completed.length, 0);
+  assert.equal(result.pending[0]?.status, 'pending_recovery', JSON.stringify(result));
+  assert.equal(result.pending[0]?.outcomes.learnXCloseout.results.ywcontext.status, 'pending');
+  assert.equal(result.pending[0]?.outcomes.learnXCloseout.results.ywcontext.reason, 'yw_context_sync_entrypoint_unavailable');
   const ledger = JSON.parse(await readFile(path.join(stateRoot, 'runtime/weekly-review', week, 'closeout', `${batch.batchId}.json`), 'utf8'));
-  assert.deepEqual(Object.keys(ledger.memoryWriteEvidence.evidence), ['sha256']);
   assert.equal(ledger.reviewWeek, week);
   assert.equal(ledger.confirmedAt, confirmedAt);
+  assert.equal(ledger.actions.ywcontext.status, 'pending');
+  assert.deepEqual({ targetPath: ledger.memoryWriteEvidence.evidence.targetPath, week: ledger.memoryWriteEvidence.evidence.week, itemIds: ledger.memoryWriteEvidence.evidence.itemIds }, { targetPath: '01_core/memory/2026-Q3.memory.md', week, itemIds: ['memory-1'] });
+  assert.match(ledger.memoryWriteEvidence.evidence.sha256, /^[a-f0-9]{64}$/);
 });
 
 test('恢复仅接受与确认批次和目标绑定的真实回执 proof', async t => {
