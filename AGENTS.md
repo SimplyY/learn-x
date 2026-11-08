@@ -17,7 +17,7 @@
 
 ## Learn-X Flomo 群触发路由
 
-- 在 `learn-x` 群（`oc_846411e4168e681d7f7b491c837163fd`）收到单条原始消息，且 Bridge 上下文确认 `senderType=user`、发送者是当前已验证用户时，检查正文是否包含 `flomo 每日回顾`。通过后路由到 `.agents/skills/learn-x-flomo-review/SKILL.md`。
+- 在 `learn-x` 群（`oc_846411e4168e681d7f7b491c837163fd`）收到单条原始消息，且 Bridge 上下文确认 `senderType=user`、发送者是当前已验证用户时，若正文包含 `flomo 每日回顾`，或原始交互卡精确匹配 `learn-x-flomo-review` 定义的触发卡指纹，则路由到 `.agents/skills/learn-x-flomo-review/SKILL.md`。
 - 执行前读取该 Skill；完整资格、去重、隐私和发送规则以 Skill 为准。机器人、引用、附件或身份不明的同文消息不构成触发。
 
 ## Learn-X WeRead 阅读路由

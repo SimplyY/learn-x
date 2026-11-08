@@ -1,6 +1,6 @@
 ---
 name: learn-x-flomo-review
-description: 从Flomo线上全量快照结合最近周月Output、正式道、Memory与个人理解，生成每日5–10条、常规及整体平均目标7–8条的高质量回顾推荐，校验四周去重，用Card 2.0推送并采集明确回复反馈。用于每日回顾、历史审计、预览、恢复不确定发送、查看回顾记录，以及处理learn-x群本人@Codex 小助手的自动化触发语「写日记 & 规划明天核心事项 & flomo 每日回顾 (learn-x)」。
+description: 从Flomo线上全量快照结合最近周月Output、正式道、Memory与个人理解，生成每日5–10条、常规及整体平均目标7–8条的高质量回顾推荐，校验四周去重，用Card 2.0推送并采集明确回复反馈。用于每日回顾、历史审计、预览、恢复不确定发送、查看回顾记录，以及处理learn-x群本人@Codex 小助手的自动化触发语「写日记 & 规划明天核心事项 & flomo 每日回顾 (learn-x)」或Base「flomo 每日回顾」触发卡。
 ---
 
 # Flomo 每日回顾
@@ -11,7 +11,7 @@ description: 从Flomo线上全量快照结合最近周月Output、正式道、Me
 
 ## Feishu 群触发
 
-`learn-x` 群的每日 Feishu 自动化会以本人身份发送纯文本 `写日记 & 规划明天核心事项 & flomo 每日回顾 (learn-x)`。只在 Bridge 原始上下文确认 `chatId` 为该群、`senderType=user`、发送者与当前已验证用户身份一致、完整分页成员清单恰有本人一个用户且其余均为机器人、没有截断，并且消息正文逐字匹配时，将它作为当日流程触发。允许把正文中的全角括号 `（ ）` 规范为半角 `()`；不放宽空格、文字或其他标点匹配。真实 `@` 提及本 bot 可接受；引用、附件、转述、机器人发送、纯文本 `@` 或上下文缺失均不构成触发。
+`learn-x` 群的每日 Feishu 自动化会以本人身份发送纯文本 `写日记 & 规划明天核心事项 & flomo 每日回顾 (learn-x)`，或发送 Base「日常记录」产出的 Card 2.0 触发卡。只在 Bridge 原始上下文确认 `chatId` 为该群、`senderType=user`、发送者与当前已验证用户身份一致、完整分页成员清单恰有本人一个用户且其余均为机器人、没有截断，并且文本正文逐字匹配，或交互卡逐项匹配触发卡指纹时，将它作为当日流程触发。允许把正文中的全角括号 `（ ）` 规范为半角 `()`；不放宽空格、文字或其他标点匹配。触发卡指纹是：`schema=2.0`、`header.title.content` 精确为 `flomo 每日回顾`、body 依次只有一个同名 markdown、一个 column_set、一个 hr 和一个来源 markdown，无回调按钮，且来源 markdown 精确为 `来自 [日常记录](https://ywhome.feishu.cn/base/WPZRbLRrGarf8bsfYoJcZ8Kwnqc?ccm_open_type=im_card_automation_link)`。文本或卡二选一即可。真实 `@` 提及本 bot 可接受；引用、附件、转述、机器人发送、纯文本 `@` 或上下文缺失均不构成触发。普通 markdown 文本、同名图片、来源不符或可点击按钮卡不构成触发。
 
 收到有效触发后，切换到 `/Users/yuwei/code/learn-x`，读取该项目 `AGENTS.md` 后执行本 Skill 的正常流程。触发消息本身不是回顾卡；回顾卡仍发往 `00_config/flomo-review.json` 中已核验的群，并沿用既有 bot 与发送身份。`status` 若显示今日已有 delivered 批次，只采集明确反馈并停止；不补发过期日期。
 
