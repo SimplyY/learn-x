@@ -383,12 +383,12 @@ test('capacity report supports seven and twenty-eight days without exposing note
   for (const days of [7, 28]) {
     const result = await simulateCapacity(root, '2026-10-08', days);
     assert.equal(result.possible, false);
-    assert.equal(result.minimum, days === 7 ? 49 : 186);
+    assert.equal(result.minimum, days === 7 ? 42 : 158);
     assert.equal(result.scheduledDays, 0);
     const saved = JSON.parse(await readFile(result.reportPath, 'utf8'));
     assert.equal(saved.days, days);
-  assert.deepEqual(saved.targetDailyCountRange, [7, 10]);
-    assert.deepEqual(saved.averageDailyCountTargetRange, [7, 8]);
+    assert.deepEqual(saved.targetDailyCountRange, [6, 10]);
+    assert.deepEqual(saved.averageDailyCountTargetRange, [6, 6]);
     assert.ok(!JSON.stringify(saved).includes('noteKey'));
     assert.ok(!JSON.stringify(saved).includes('note_'));
   }
@@ -405,7 +405,7 @@ test('under-target high-quality selection requires and shows its shortfall reaso
   assert.equal(preview.count, 5);
   const message = await readFile(path.join(root, '04_output/_dist/flomo-review', date, 'message.md'), 'utf8');
   assert.match(message, /实际推荐5条/);
-  assert.match(message, /符合质量与上下文要求的笔记不足7条/);
+assert.match(message, /符合质量与上下文要求的笔记不足6条/);
 });
 
 test('prepared request declares the age-deviation field required by preview validation', async (t) => {
@@ -413,7 +413,7 @@ test('prepared request declares the age-deviation field required by preview vali
   const request = await readJson(path.join(paths(root).runtime, date, 'request.json'));
   assert.match(request.instruction, /ageDeviationReason/);
   assert.match(request.instruction, /比例偏离时必须填ageDeviationReason/);
-  assert.match(request.instruction, /单次推荐5–10条，常规数量与整体平均目标均为7–8条/);
+  assert.match(request.instruction, /单次推荐5–10条，常规数量与整体平均目标均为6条/);
 });
 
 test('under-target selection carries its quality shortfall through a complete send and readback', async (t) => {
@@ -424,7 +424,7 @@ test('under-target selection carries its quality shortfall through a complete se
   const result = await sendReview(root, decision, { ...options, deliveryOptions: { runCli: mock.runCli } });
   assert.equal(result.status, 'delivered');
   assert.equal(result.count, 5);
-  assert.match(JSON.stringify(mock.sentCard()), /符合质量与上下文要求的笔记不足7条/);
+assert.match(JSON.stringify(mock.sentCard()), /符合质量与上下文要求的笔记不足6条/);
   const batch = (await readJson(paths(root).ledger)).batches[date];
   assert.equal(batch.countDeviationReason, decision.countDeviationReason);
   assert.equal(batch.cardContentSha256, cardContentSha256(batch.card));

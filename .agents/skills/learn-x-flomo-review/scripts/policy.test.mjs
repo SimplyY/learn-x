@@ -204,21 +204,21 @@ test('eligibility excludes unscored, stale, low-quality and invalid or future-da
   assert.throws(() => validateSelection({ date: '2026-10-06', notes: notes(), items: malformed }), /missing-recommendation-reason/);
 });
 
-test('capacity simulation proves 185 impossible and 186 feasible over four complete ISO weeks', () => {
-  const impossible = simulate28Days({ notes: notes(185), startDate: '2026-10-05' });
+test('capacity simulation proves 157 impossible and 158 feasible over four complete ISO weeks', () => {
+  const impossible = simulate28Days({ notes: notes(157), startDate: '2026-10-05' });
   assert.equal(impossible.possible, false);
-  assert.equal(impossible.minimum, 186);
-  const possible = simulate28Days({ notes: notes(186), startDate: '2026-10-05' });
+  assert.equal(impossible.minimum, 158);
+  const possible = simulate28Days({ notes: notes(158), startDate: '2026-10-05' });
   assert.equal(possible.possible, true);
   assert.equal(possible.schedule.length, 28);
   assert.equal(possible.schedule.at(-1).repeats, 10);
   for (const day of possible.schedule) {
-    assert.equal(day.items.length, 7);
+    assert.equal(day.items.length, 6);
     assert.ok(day.repeats <= 10);
     assert.ok(day.pairOverlaps.every((pair) => pair.overlap <= 5));
   }
-  assert.equal(simulateSupply({ notes: notes(48), startDate: '2026-10-05', days: 7 }).possible, false);
-  assert.equal(simulateSupply({ notes: notes(49), startDate: '2026-10-05', days: 7 }).possible, true);
+  assert.equal(simulateSupply({ notes: notes(41), startDate: '2026-10-05', days: 7 }).possible, false);
+  assert.equal(simulateSupply({ notes: notes(42), startDate: '2026-10-05', days: 7 }).possible, true);
 });
 
 test('28-day capacity simulations cross ISO year and non-Monday start without reset errors', () => {

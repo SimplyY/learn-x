@@ -321,7 +321,7 @@ export async function prepareReview(root = repoRoot, date = shanghaiDate(), opti
     sourceMode: catalog.sourceMode || 'legacy-archive', snapshot: catalog.snapshot || null,
     notes: eligible.map(({ noteKey, groupKey, createdAt, bodyHash, quality, source }) => ({ noteKey, groupKey, createdAt, bodyHash, quality, source })),
     feedback: Object.values(ledger.feedback).filter(e => !e.superseded && eligible.some(n => n.noteKey === e.noteKey)),
-    instruction: `完整读取上下文；单次推荐${MIN_REVIEW_ITEMS}–${MAX_REVIEW_ITEMS}条，常规数量与整体平均目标均为7–8条。先选与近期周/月Output强匹配的高质量笔记；前三条可使用高质量长期背景关联并说明关联，第4–${MAX_REVIEW_ITEMS}条必须强匹配。若只有${MIN_REVIEW_ITEMS}–${TARGET_MIN_REVIEW_ITEMS - 1}条同时满足质量与对应序号上下文要求，可少于常规目标发送，必须填写countDeviationReason说明质量或匹配原因；不得为了达到数量或平均目标降低质量。按整周年龄统计优化近30天与近365天软比例；比例偏离时必须填ageDeviationReason解释，不得为配比降低质量。少于${MIN_REVIEW_ITEMS}条则报告blocked，不凑数。每条reason不超过${MAX_REVIEW_REASON_CHARS}字，只写一条可执行的回看问题或判断，不写解释段落。复读每条原文，引用真实上下文。输出{date,contextHash,catalogHash,countDeviationReason,ageDeviationReason,items:[{noteKey,bodyHash,relevance:strong|background,reason,contextEvidence:[{path,quote}]}]}。` };
+    instruction: `完整读取上下文；单次推荐${MIN_REVIEW_ITEMS}–${MAX_REVIEW_ITEMS}条，常规数量与整体平均目标均为6条。先选与近期周/月Output强匹配的高质量笔记；前三条可使用高质量长期背景关联并说明关联，第4–${MAX_REVIEW_ITEMS}条必须强匹配。若只有${MIN_REVIEW_ITEMS}–${TARGET_MIN_REVIEW_ITEMS - 1}条同时满足质量与对应序号上下文要求，可少于常规目标发送，必须填写countDeviationReason说明质量或匹配原因；不得为了达到数量或平均目标降低质量。按整周年龄统计优化近30天与近365天软比例；比例偏离时必须填ageDeviationReason解释，不得为配比降低质量。少于${MIN_REVIEW_ITEMS}条则报告blocked，不凑数。每条reason不超过${MAX_REVIEW_REASON_CHARS}字，只写一条可执行的回看问题或判断，不写解释段落。复读每条原文，引用真实上下文。输出{date,contextHash,catalogHash,countDeviationReason,ageDeviationReason,items:[{noteKey,bodyHash,relevance:strong|background,reason,contextEvidence:[{path,quote}]}]}。` };
   const directory = path.join(p.runtime, date); await atomicJson(path.join(directory, 'request.json'), packet, p.root);
   return { date, qualifiedEligible: eligible.length, contextHash: packet.contextHash, catalogHash: packet.catalogHash,
     sourceMode: packet.sourceMode, snapshot: packet.snapshot, requestPath: path.join(directory, 'request.json'), missing: context.manifest.missing };
@@ -610,7 +610,7 @@ export async function simulateCapacity(root = repoRoot, startDate = shanghaiDate
     days,
     possible: simulation.possible,
     targetDailyCountRange: [TARGET_MIN_REVIEW_ITEMS, MAX_REVIEW_ITEMS],
-    averageDailyCountTargetRange: [7, 8],
+    averageDailyCountTargetRange: [6, 6],
     ...(simulation.reason ? { reason: simulation.reason } : {}),
     ...(simulation.date ? { failedDate: simulation.date } : {}),
     uniqueQualified: simulation.uniqueQualified,

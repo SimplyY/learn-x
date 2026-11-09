@@ -1,7 +1,7 @@
 const DAY = 86400000;
 const OCCUPIED = new Set(['reserved', 'sending', 'delivered', 'needs_review']);
 export const MIN_REVIEW_ITEMS = 5;
-export const TARGET_MIN_REVIEW_ITEMS = 7;
+export const TARGET_MIN_REVIEW_ITEMS = 6;
 export const MAX_REVIEW_ITEMS = 10;
 export const MAX_REVIEW_REASON_CHARS = 10;
 export const MAX_PAIR_OVERLAP = 5;
