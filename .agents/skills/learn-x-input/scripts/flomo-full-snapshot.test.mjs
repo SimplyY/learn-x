@@ -79,6 +79,46 @@ test("normalization preserves line endings and consecutive blank lines", () => {
   assert.equal(flomoBodyHash(body), flomoBodyHash("第一段。\n\n\n第二段。"));
 });
 
+test("normalizes six HTTPS image references and rejects invalid or duplicate inputs", () => {
+  const url = (index) => `https://cdn.flomoapp.com/storage/${index}.webp`;
+  const images = Array.from({ length: 6 }, (_, index) => ({ url: url(index), position: index }));
+  const scan = fullScan([
+    sourceRecord("memo-images", "带图笔记需要完整校验。", { images, imageCount: 6, truncatedImageCount: 0 }),
+    sourceRecord("memo-legacy", "旧快照没有图片字段"),
+  ]);
+  scan.detailVerification = {
+    verified: true, memoId: "memo-images", bodyLength: normalizeFlomoBody("带图笔记需要完整校验。").length,
+    bodyHash: flomoBodyHash("带图笔记需要完整校验。"), method: "original-link-detail-sheet-tiptap-prosemirror",
+  };
+  const validated = validateFullFlomoScan(scan);
+  assert.equal(validated.records[0].images.length, 6);
+  assert.deepEqual(validated.records[0].images[0], { url: url(0), position: 0 });
+  assert.deepEqual(validated.records[0].images[5], { url: url(5), position: 5 });
+  assert.equal(validated.records[1].images, undefined);
+
+  assert.throws(() => validateFullFlomoScan(fullScan([
+    sourceRecord("memo-images", "非法协议", { images: [{ url: "http://cdn.flomoapp.com/a.webp", position: 0 }] }),
+  ])), /flomo-full-scan-images-invalid/);
+  assert.throws(() => validateFullFlomoScan(fullScan([
+    sourceRecord("memo-images", "位置错误", { images: [{ url: url(0), position: 1 }] }),
+  ])), /flomo-full-scan-images-invalid/);
+  assert.throws(() => validateFullFlomoScan(fullScan([
+    sourceRecord("memo-images", "重复地址", { images: [{ url: url(0), position: 0 }, { url: url(0), position: 1 }] }),
+  ])), /flomo-full-scan-images-invalid/);
+  assert.throws(() => validateFullFlomoScan(fullScan([
+    sourceRecord("memo-images", "超过六张", { images: Array.from({ length: 7 }, (_, index) => ({ url: url(index), position: index })) }),
+  ])), /flomo-full-scan-images-invalid/);
+  assert.throws(() => validateFullFlomoScan(fullScan([
+    sourceRecord("memo-images", "缺图片总数", { images, truncatedImageCount: 0 }),
+  ])), /flomo-full-scan-images-invalid/);
+  assert.throws(() => validateFullFlomoScan(fullScan([
+    sourceRecord("memo-images", "图片总数小于可见数", { images, imageCount: 5, truncatedImageCount: 0 }),
+  ])), /flomo-full-scan-images-invalid/);
+  assert.throws(() => validateFullFlomoScan(fullScan([
+    sourceRecord("memo-images", "截断数不一致", { images, imageCount: 8, truncatedImageCount: 1 }),
+  ])), /flomo-full-scan-images-invalid/);
+});
+
 test("rejects a Library storage path before scanning or writing staged data", async (t) => {
   const forbiddenRoot = path.join(os.homedir(), "Library", "Application Support", "Learn-X", "flomo-review");
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-forbidden-root-"));
@@ -336,7 +376,7 @@ function makeBrowserHarness({ initialRecords, nextRecords = [], libraryCount, de
     card.className = "memo";
     const parsedUrl = new URL(record.url);
     const timeLinkHref = relativeTimeLinkHrefs ? `${parsedUrl.pathname}${parsedUrl.search}` : record.url;
-    card.innerHTML = `<a class="time" href="${timeLinkHref}"><span class="text">${record.timeText}</span></a><div class="display"><div class="mainContent"><div class="content copy-allowed richText${folded ? " is-fold" : ""}">${record.bodyMarkup ?? record.bodyText}</div></div></div>${folded ? '<button class="showBtn">展开</button>' : ""}`;
+    card.innerHTML = `<a class="time" href="${timeLinkHref}"><span class="text">${record.timeText}</span></a><div class="display"><div class="mainContent"><div class="content copy-allowed richText${folded ? " is-fold" : ""}">${record.bodyMarkup ?? record.bodyText}</div>${record.imageMarkup ?? ""}</div></div>${folded ? '<button class="showBtn">展开</button>' : ""}`;
     const timeLink = card.querySelector("a.time");
     timeLink?.addEventListener("click", (event) => {
       event.preventDefault();
@@ -349,7 +389,7 @@ function makeBrowserHarness({ initialRecords, nextRecords = [], libraryCount, de
       const detailCard = document.createElement("div");
       detailCard.className = detailCardUsesMemoClass ? "memo normal" : "normal";
       const detailLink = detailSheetHasLink ? `<a class="time" href="${detailRecord.url}">${detailRecord.timeText}</a>` : "";
-      detailCard.innerHTML = `${detailLink}<div class="display"><div class="mainContent"><div class="content copy-allowed richText">${detailRecord.bodyMarkup ?? detailRecord.bodyText}</div></div></div>`;
+      detailCard.innerHTML = `${detailLink}<div class="display"><div class="mainContent"><div class="content copy-allowed richText">${detailRecord.bodyMarkup ?? detailRecord.bodyText}</div>${detailRecord.imageMarkup ?? ""}</div></div>`;
       const detailBody = detailCard.querySelector(".richText");
       detailBody.getBoundingClientRect = () => ({ top: 150, bottom: 230, left: 0, right: 400, width: 400, height: 80 });
       for (const target of detailCard.querySelectorAll("p, li, blockquote")) {
@@ -663,6 +703,26 @@ test("full browser scan preserves exact DOM tags separately when their body text
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(result.records[0].bodyText, bodyText);
   assert.deepEqual(result.records[0].tags, ["自我认知/ai洞察"]);
+  assert.doesNotThrow(() => validateFullFlomoScan(result));
+});
+
+test("full browser scan reads Flomo file attachments outside the rich text body", async (t) => {
+  const bodyText = "带图存量笔记需要重扫。";
+  const sourceUrl = "https://static.flomoapp.com/file/a/original.jpg?signature=a";
+  const thumbnailUrl = "https://static.flomoapp.com/file/a/original.jpg/thumbnailwebp?signature=b";
+  const memo = sourceRecord("memo-card-image", bodyText, {
+    imageMarkup: `<div class="files"><div class="el-image"><img src="${thumbnailUrl}" data-source="${sourceUrl}" alt="loading"></div></div>`,
+  });
+  const { result } = await runBrowserScan(t, {
+    initialRecords: [memo],
+    libraryCount: 1,
+    detailRecord: memo,
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.records[0].images.length, 1);
+  assert.equal(result.records[0].imageCount, 1);
+  assert.equal(result.records[0].truncatedImageCount, 0);
+  assert.deepEqual(result.records[0].images[0], { url: sourceUrl, position: 0 });
   assert.doesNotThrow(() => validateFullFlomoScan(result));
 });
 

@@ -19,6 +19,7 @@
     "input:flomo": "node .agents/skills/learn-x-weekly-automation/scripts/weekly-retry-supervisor.mjs --mode manual --source flomo",
     "input:weekly": "node .agents/skills/learn-x-input/scripts/collect-weekly-journal.mjs",
     "input:weekly:range": "node .agents/skills/learn-x-input/scripts/collect-weekly-range-journal.mjs",
+    "input:weekly:range-anchor": "node .agents/skills/learn-x-input/scripts/collect-weekly-range-journal.mjs --record-anchor",
     "input:weekly-anchor": "node .agents/skills/learn-x-input/scripts/collect-weekly-journal.mjs --record-anchor",
     "publish:weekly-context": "node .agents/skills/learn-x-input/scripts/publish-weekly-context.mjs",
     "input:voice": "node .agents/skills/learn-x-input/scripts/collect-voice-weekly.mjs",

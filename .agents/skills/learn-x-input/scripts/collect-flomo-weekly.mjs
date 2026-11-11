@@ -1078,6 +1078,20 @@ const state = async () => {
       document.body.append(bodyHost);
       const bodyText = normalize(bodyCopy ? extractFlomoText(bodyCopy) : '');
       const bodySourceText = normalize(bodyCopy?.textContent || '');
+      const imageUrls = new Set();
+      const images = [];
+      for (const image of card.querySelectorAll('.files img')) {
+        let url = null;
+        try {
+          const parsed = new URL(image.getAttribute('data-source') || image.getAttribute('src') || '', location.href);
+          if (parsed.protocol === 'https:' && parsed.hostname && !parsed.username && !parsed.password) {
+            url = parsed.toString();
+          }
+        } catch {}
+        if (!url || imageUrls.has(url)) continue;
+        imageUrls.add(url);
+        if (images.length < 6) images.push({ url, position: images.length });
+      }
       bodyHost.remove();
       const tags = [...(bodyCopy?.querySelectorAll('.tag') || [])]
         .map((tag) => (tag.innerText || tag.textContent || '').trim().replace(/^#+/u, '').toLowerCase())
@@ -1088,13 +1102,15 @@ const state = async () => {
       if (!bodyComplete || timeMs == null) { incompleteBodies += 1; continue; }
       const record = { memoId: link.id, url: link.url, timeText: link.timeText,
         createdAt: new Date(timeMs).toISOString(), timeMs, bodyText, bodySourceText, tags, bodyComplete: true, isPinned };
+      if (imageUrls.size) Object.assign(record, { images, imageCount: imageUrls.size, truncatedImageCount: Math.max(0, imageUrls.size - 6) });
       if (!store.has(link.id)) {
         store.set(link.id, { ...record });
         newRecords.push(record);
       } else {
         const old = store.get(link.id);
         if (old.createdAt !== record.createdAt || old.bodyText !== record.bodyText || old.bodySourceText !== record.bodySourceText ||
-            JSON.stringify(old.tags || []) !== JSON.stringify(record.tags) || old.url !== record.url) {
+            JSON.stringify(old.tags || []) !== JSON.stringify(record.tags) || old.url !== record.url ||
+            JSON.stringify(old.images || []) !== JSON.stringify(record.images || [])) {
           conflicts.push(link.id);
         } else if (record.isPinned && !old.isPinned) {
           old.isPinned = true;
@@ -1228,7 +1244,8 @@ try {
     for (const record of current.records) {
       if (seen.has(record.memoId)) {
         const old = seen.get(record.memoId);
-        if (old.createdAt !== record.createdAt || old.bodyText !== record.bodyText || old.bodySourceText !== record.bodySourceText || old.url !== record.url) throw new Error('scan-record-conflict');
+        if (old.createdAt !== record.createdAt || old.bodyText !== record.bodyText || old.bodySourceText !== record.bodySourceText || old.url !== record.url ||
+            JSON.stringify(old.images || []) !== JSON.stringify(record.images || [])) throw new Error('scan-record-conflict');
         old.isPinned ||= record.isPinned;
       } else seen.set(record.memoId, record);
     }

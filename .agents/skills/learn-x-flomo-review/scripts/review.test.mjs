@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm, unlink, chmod, lstat, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { refreshArchive, activateOnlineSnapshot, restoreOnlineSnapshotBackup, acceptQuality, prepareReview, previewReview, renderReview, sendReview, recoverReview, feedbackReview, simulateCapacity, readJson, atomicJson, paths, emptyLedger } from './review.mjs';
+import { refreshArchive, activateOnlineSnapshot, restoreOnlineSnapshotBackup, acceptQuality, prepareReview, previewReview, renderReview, resolveReviewImages, sendReview, recoverReview, feedbackReview, simulateCapacity, readJson, atomicJson, paths, emptyLedger } from './review.mjs';
 import { cardContentSha256 } from './delivery.mjs';
 import { sha256 } from './context.mjs';
 import { flomoBodyHash, flomoMemoUrl, writeStagedOnlineFlomoSnapshot } from '../../learn-x-input/scripts/lib/flomo-full-snapshot.mjs';
@@ -310,6 +310,115 @@ assert.match(JSON.stringify(result.card), /1\. 对于复杂概率，人大概率
   assert.ok(!JSON.stringify(result.card).includes('原文见随附Markdown'));
 });
 
+test('cards render wisdom-review image layouts without exposing source URLs', () => {
+  const notes = ['single', 'double', 'triple', 'six'].map((noteKey, index) => ({
+    noteKey, createdAt: `2026-10-0${index + 1}T09:00:00+08:00`, body: `第${index + 1}条带图笔记。`,
+    bodyHash: `${noteKey}-hash`, source: { path: 'flomo.md', line: index + 1, url: `https://v.flomoapp.com/mine/?memo_id=${noteKey}` },
+    quality: { score: 3 },
+  }));
+  const decision = { date, items: notes.map(note => ({ noteKey: note.noteKey, bodyHash: note.bodyHash, relevance: 'strong', reason: '现实反馈需再检验' })) };
+  decision.countDeviationReason = '测试渲染';
+  const result = renderReview(decision, notes, null, new Map([
+    ['single', ['img_one']],
+    ['double', ['img_1', 'img_2']],
+    ['triple', ['img_1', 'img_2', 'img_3']],
+    ['six', ['img_1', 'img_2', 'img_3', 'img_4', 'img_5', 'img_6']],
+  ]));
+  const images = result.card.body.elements.filter(element => element.tag === 'img' || element.tag === 'img_combination');
+  assert.equal(images.length, 4);
+  assert.deepEqual(images.map(image => image.tag), ['img', 'img_combination', 'img_combination', 'img_combination']);
+  assert.equal(images[0].img_key, 'img_one');
+  assert.deepEqual(images.map(image => image.combination_mode), [undefined, 'double', 'triple', 'bisect']);
+  assert.deepEqual(result.card.body.elements.filter(element => element.tag === 'img_combination').map(image => image.img_list.length), [2, 3, 6]);
+  assert.doesNotMatch(JSON.stringify(result.card), /cdn\.flomoapp\.com|storage\/image/);
+  assert.equal(renderReview(decision, notes).card.body.elements.some(element => element.tag === 'img' || element.tag === 'img_combination'), false);
+});
+
+test('image resolution enforces limits, skips failures, and reuses the preview receipt', async () => {
+  const notes = ['six', 'four'].map((noteKey, index) => ({
+    noteKey, createdAt: `2026-10-0${index + 1}T09:00:00+08:00`, body: `第${index + 1}条带图笔记。`,
+    bodyHash: `${noteKey}-hash`, source: { path: 'flomo.md', line: index + 1, url: `https://v.flomoapp.com/mine/?memo_id=${noteKey}` },
+    quality: { score: 3 },
+    images: Array.from({ length: noteKey === 'six' ? 6 : 4 }, (_, position) => ({
+      url: `https://cdn.flomoapp.com/storage/${noteKey}-${position}.webp`, position,
+    })),
+  }));
+  const decision = { date, items: notes.map(note => ({ noteKey: note.noteKey, bodyHash: note.bodyHash, relevance: 'strong', reason: '现实反馈需再检验' })) };
+  const config = { images: { enabled: true, maxPerNote: 6, maxTotal: 8 } };
+  let fetchCalls = 0;
+  const fetchFn = async (url) => {
+    fetchCalls += 1;
+    if (String(url).endsWith('six-5.webp')) return new Response('failure', { status: 404 });
+    return new Response(PNG_IMAGE_BYTES, { status: 200, headers: { 'content-type': 'image/png' } });
+  };
+  let uploadCalls = 0;
+  const runCli = async args => {
+    uploadCalls += 1;
+    assert.deepEqual(args.slice(0, 2), ['im', 'images']);
+    assert.ok(args.includes('--as') && args[args.indexOf('--as') + 1] === 'bot');
+    return { data: { image_key: `img_v3_${String(uploadCalls).padStart(16, '0')}` } };
+  };
+  const receipt = await resolveReviewImages({ items: decision.items, notes, config, date, catalogHash: 'a'.repeat(64), fetchFn, runCli });
+  assert.equal(receipt.enabled, true);
+  assert.deepEqual(receipt.stats, { candidateImageCount: 10, selectedImageCount: 8, skippedImageCount: 1, truncatedPerNoteCount: 0, truncatedTotalCount: 1 });
+  assert.equal(receipt.images.length, 8);
+  assert.equal(receipt.imageKeysByNote.get('six').length, 5);
+  assert.equal(receipt.imageKeysByNote.get('four').length, 3);
+  assert.doesNotMatch(JSON.stringify(receipt), /cdn\.flomoapp\.com|storage\/(six|four)-/);
+  const reused = await resolveReviewImages({ items: decision.items, notes, config, date, catalogHash: 'a'.repeat(64),
+    preResolvedImages: receipt, fetchFn: async () => { throw Error('must-not-download'); }, runCli: async () => { throw Error('must-not-upload'); } });
+  assert.deepEqual([...reused.imageKeysByNote], [...receipt.imageKeysByNote]);
+  assert.equal(reused.images.length, 8);
+  const previewOptions = { items: decision.items, notes, config, date, catalogHash: 'a'.repeat(64),
+    fetchFn: async () => { throw Error('must-not-download'); }, runCli: async () => { throw Error('must-not-upload'); } };
+  await assert.rejects(resolveReviewImages({ ...previewOptions,
+    preResolvedImages: { ...receipt, sourceHash: 'b'.repeat(64) } }), /review-images-preview-invalid/);
+  await assert.rejects(resolveReviewImages({ ...previewOptions,
+    preResolvedImages: { ...receipt, images: [{ ...receipt.images[0], position: 5 }] } }),
+    /review-images-preview-invalid/);
+  await assert.rejects(resolveReviewImages({ ...previewOptions,
+    preResolvedImages: { ...receipt, images: [{ ...receipt.images[0], imgKey: 'not-lark-key' }] } }),
+    /review-images-preview-invalid/);
+  await assert.rejects(resolveReviewImages({ ...previewOptions,
+    preResolvedImages: { ...receipt, stats: { ...receipt.stats, candidateImageCount: 999 } } }),
+    /review-images-preview-invalid/);
+  await assert.rejects(resolveReviewImages({ ...previewOptions,
+    preResolvedImages: { ...receipt, stats: { ...receipt.stats,
+      skippedImageCount: 0, truncatedTotalCount: receipt.stats.skippedImageCount + receipt.stats.truncatedTotalCount } } }),
+    /review-images-preview-invalid/);
+});
+
+test('disabled image config is the no-image compatibility path', async () => {
+  const result = await resolveReviewImages({
+    items: [{ noteKey: 'note', bodyHash: 'hash', relevance: 'strong', reason: '现实反馈需再检验' }],
+    notes: [{ noteKey: 'note', bodyHash: 'hash', createdAt: '2026-10-06T09:00:00+08:00',
+      body: '无图旧路径', source: { path: 'flomo.md', line: 1, url: 'https://v.flomoapp.com/mine/?memo_id=note' }, quality: { score: 3 } }],
+    config: {}, date, catalogHash: 'a'.repeat(64),
+    fetchFn: async () => { throw Error('must-not-download'); },
+    runCli: async () => { throw Error('must-not-upload'); },
+  });
+  assert.equal(result.enabled, false);
+  assert.equal(result.images.length, 0);
+  assert.equal(result.imageKeysByNote.size, 0);
+});
+
+test('image URLs reject IPv6 loopback aliases before download', async () => {
+  for (const url of ['https://[::]/unsafe.png', 'https://[64:ff9b::7f00:1]/unsafe.png', 'https://[::7f00:1]/unsafe.png']) {
+    const note = { noteKey: 'unsafe-ip', createdAt: '2026-10-11T09:00:00+08:00', body: '安全边界测试。',
+      bodyHash: 'unsafe-ip-hash', source: { path: 'flomo.md', line: 1, url: 'https://v.flomoapp.com/mine/?memo_id=unsafe-ip' },
+      quality: { score: 3 }, images: [{ url, position: 0 }] };
+    const result = await resolveReviewImages({
+      items: [{ noteKey: note.noteKey, bodyHash: note.bodyHash, relevance: 'strong', reason: '安全边界' }],
+      notes: [note], config: { images: { enabled: true, maxPerNote: 6, maxTotal: 20 } }, date,
+      catalogHash: 'a'.repeat(64), fetchFn: async () => { throw Error('must-not-download'); },
+      runCli: async () => { throw Error('must-not-upload'); },
+    });
+    assert.equal(result.images.length, 0);
+    assert.deepEqual(result.stats, { candidateImageCount: 1, selectedImageCount: 0,
+      skippedImageCount: 1, truncatedPerNoteCount: 0, truncatedTotalCount: 0 });
+  }
+});
+
 test('card titles occupy their own line and blank lines separate paragraphs', () => {
   const note = { noteKey: 'layout', createdAt: '2026-10-15T09:00:00+08:00',
     body: '第一段。\n\n第二段。', bodyHash: 'layout-hash',
@@ -446,6 +555,10 @@ function stagedOnlineScan(id = 'memo-online', body = '线上笔记的完整真�
       timeText: '2026-10-10 09:00', bodyText: body, bodyComplete: true, isPinned: false }],
   };
 }
+
+const PNG_IMAGE_BYTES = Buffer.from([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+]);
 
 test('first online activation backs up legacy state, preserves ledger occupancy, and is idempotent', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'flomo-online-activation-'));

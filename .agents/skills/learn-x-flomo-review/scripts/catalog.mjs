@@ -387,7 +387,9 @@ export function scanOnlineSnapshot(snapshot, { previous, sourcePath } = {}) {
     const previousQualityValue = canReuseQuality ? previousQuality(prior, current) : null;
     const note = { noteKey, memoId: memo.memoId, aliases, groupKey: prior?.groupKey || `content:${memo.bodyHash}`,
       groupAliases: [...new Set(prior?.groupAliases || [])], createdAt: memo.createdAt, body, tags: memo.tags || [],
-      bodyHash: current.bodyHash, source: memoSource, sources: [memoSource], quality: previousQualityValue };
+      bodyHash: current.bodyHash, source: memoSource, sources: [memoSource], quality: previousQualityValue,
+      ...(memo.images ? { images: memo.images,
+        imageCount: memo.imageCount, truncatedImageCount: memo.truncatedImageCount } : {}) };
     if (current.reason) {
       excluded.push({ source: memoSource, memoId: memo.memoId, noteKey, previousNote: note, reason: current.reason, count: 1 });
       continue;

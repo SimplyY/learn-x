@@ -311,6 +311,27 @@ test('card-only send accepts lark-cli line-break rendering without changing outb
   assert.equal(result.readback, true);
 });
 
+test('card-only send accepts real image and image combination readback markup', async () => {
+  const card = {
+    schema: '2.0',
+    header: { title: { tag: 'plain_text', content: 'Flomo 回顾｜2026-10-06' }, subtitle: { tag: 'plain_text', content: '采集时间：2026-10-05；覆盖率：950/951' } },
+    body: { elements: [
+      { tag: 'markdown', content: '回顾日期：2026-10-06' },
+      { tag: 'img', img_key: 'img_one', alt: { content: '测试单图' } },
+      { tag: 'img_combination', img_list: [{ img_key: 'img_one' }, { img_key: 'img_two' }] },
+    ] },
+  };
+  const content = '<card title="Flomo 回顾｜2026-10-06" subtitle="采集时间：2026-10-05；覆盖率：950/951">\n回顾日期：2026-10-06\n🖼️ 测试单图(img_key:img_one)\n🖼️ 2 image(s)(keys:img_one,img_two)\n</card>';
+  const result = await sendRecommendation({ chatId, card, idempotencyKey, botSenderId: appId, runCli: async args => {
+    if (args[1] === '+messages-send') return envelope({ message_id: 'om_root', chat_id: chatId });
+    if (args[1] === '+messages-mget') return envelope({ messages: [cardMarkupMessage(card, { content })] });
+    throw Error('unexpected-call');
+  } });
+  assert.equal(result.readback, true);
+  assert.equal(result.cardContentSha256, cardContentSha256(card));
+  assert.equal(result.cardReadbackSha256, createHash('sha256').update(content).digest('hex'));
+});
+
 test('card readback converts generated paragraph breaks while preserving a literal br tag', async () => {
   const card = reviewCard('回顾日期：2026-10-06<br>字面标签<br><br>新段落');
   const cardReadbackBreaks = generatedBreaks(card, 0, [1, 2]);

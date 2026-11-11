@@ -360,9 +360,10 @@ test("a UTC range sharing Shanghai calendar labels is still the wrong coverage",
 });
 
 function onlineSnapshot(entries, expectedCount = entries.length) {
-  const records = entries.map(({ id, body, tags, createdAt = "2026-10-10T01:00:00.000Z", isPinned = false }) => ({
+  const records = entries.map(({ id, body, tags, images, createdAt = "2026-10-10T01:00:00.000Z", isPinned = false }) => ({
     memoId: id, url: flomoMemoUrl(id), createdAt, timeText: "2026-10-10 09:00",
     bodyText: body, bodyComplete: true, isPinned, ...(tags ? { tags } : {}),
+    ...(images ? { images, imageCount: images.length, truncatedImageCount: 0 } : {}),
   }));
   const longest = [...records].sort((a, b) => b.bodyText.length - a.bodyText.length)[0];
   return createOnlineFlomoSnapshot({
@@ -403,6 +404,17 @@ test("online catalog never substitutes legacy Markdown text for verified snapsho
   assert.equal(result.notes[0].body, snapshotBody);
   assert.equal(result.notes[0].bodyHash, hashBody(snapshotBody));
   assert.equal(result.notes[0].source.sourceMode, "flomo-online-full");
+});
+
+test("online catalog keeps note images without changing body identity", () => {
+  const body = "这张图是当前判断的真实证据。";
+  const images = [{ url: "https://cdn.flomoapp.com/storage/evidence.webp", position: 0 }];
+  const legacy = scanOnlineSnapshot(onlineSnapshot([{ id: "REMOTE-ID", body }]));
+  const result = scanOnlineSnapshot(onlineSnapshot([{ id: "REMOTE-ID", body, images }]));
+  assert.deepEqual(result.notes[0].images, images);
+  assert.equal(result.notes[0].imageCount, 1);
+  assert.equal(result.notes[0].truncatedImageCount, 0);
+  assert.equal(result.notes[0].bodyHash, legacy.notes[0].bodyHash);
 });
 
 test("online catalog resets legacy quality, keeps same-ID exposure through edits, and records deletions", () => {

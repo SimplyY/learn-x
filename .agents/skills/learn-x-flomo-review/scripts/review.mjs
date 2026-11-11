@@ -3,12 +3,18 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
+import { isIP } from 'node:net';
+import { lookup } from 'node:dns';
+import https from 'node:https';
+import os from 'node:os';
+import { mkdtemp, rm, writeFile as writeFileRaw, unlink as unlinkRaw } from 'node:fs/promises';
 import { scanArchive, scanOnlineSnapshot, hashBody } from './catalog.mjs';
 import { assertFlomoPathWithinRoot, defaultFlomoPrivateDataRoot, readVerifiedStagedOnlineFlomoSnapshot,
   resolveFlomoPathAllowed, resolveFlomoPathAllowedSync } from '../../learn-x-input/scripts/lib/flomo-full-snapshot.mjs';
 import { flomoTags } from '../../learn-x-input/scripts/lib/flomo-filter.mjs';
 import { validateSelection, eligibleNotes, simulateSupply, isoWeek, activeWeeks, MIN_REVIEW_ITEMS, TARGET_MIN_REVIEW_ITEMS, MAX_REVIEW_ITEMS, MAX_REVIEW_REASON_CHARS } from './policy.mjs';
-import { preflightDelivery, auditRecentReviewHistory, sendRecommendation, recoverRecommendation, collectFeedback, cardContentSha256 } from './delivery.mjs';
+import { runLarkCli, preflightDelivery, auditRecentReviewHistory, sendRecommendation, recoverRecommendation, collectFeedback, cardContentSha256 } from './delivery.mjs';
 import { buildReviewContext, validateEvidence, sha256, shanghaiDate, validDate } from './context.mjs';
 
 export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
@@ -128,6 +134,340 @@ export function catalogHash(catalog) {
   return sha256(JSON.stringify({ sourceMode: catalog.sourceMode || 'legacy-archive', snapshot: catalog.snapshot || null,
     dedupeGeneration: catalog.dedupeGeneration || 'legacy',
     notes: catalog.notes.map(n => ({ noteKey: n.noteKey, aliases: n.aliases, groupKey: n.groupKey, groupAliases: n.groupAliases, bodyHash: n.bodyHash, quality: n.quality, sources: n.sources })) }));
+}
+function normalizeImageConfig(config) {
+  const images = config?.images ?? {};
+  if (!images || images.enabled === false) return { enabled: false, maxPerNote: 0, maxTotal: 0 };
+  if (images.enabled !== true) return { enabled: false, maxPerNote: 0, maxTotal: 0 };
+  const maxPerNote = images.maxPerNote ?? 6, maxTotal = images.maxTotal ?? 20;
+  if (!Number.isInteger(maxPerNote) || maxPerNote < 1 || maxPerNote > 6 ||
+      !Number.isInteger(maxTotal) || maxTotal < 1 || maxTotal > 20) throw Error('review-images-config-invalid');
+  return { enabled: true, maxPerNote, maxTotal };
+}
+function unsafeImageHost(hostname) {
+  const host = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+  if (!host || ['localhost', 'ip6-localhost', 'ip6-loopback'].includes(host)) return true;
+  return isIP(host) ? unsafeImageIP(host) : false;
+}
+function unsafeImageIP(address) {
+  const type = isIP(address);
+  if (type === 4) {
+    const [a, b] = address.split('.').map(Number);
+    return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) ||
+      a >= 224;
+  }
+  if (type === 6) {
+    const value = address.toLowerCase();
+    if (value === '::' || value === '::1' || value.startsWith('::ffff:')) return true;
+    const [head, tail = ''] = value.split('::');
+    const headGroups = head ? head.split(':') : [];
+    const tailGroups = tail ? tail.split(':') : [];
+    const fill = 8 - headGroups.length - tailGroups.length;
+    if (fill < 0 || headGroups.length + tailGroups.length > 8) return true;
+    const groups = [...headGroups, ...Array(fill).fill(0), ...tailGroups].map(group => Number.parseInt(group, 16));
+    if (groups.length !== 8 || groups.some(Number.isNaN)) return true;
+    if (groups[0] === 0x64 && groups[1] === 0xff9b) return true;
+    if (groups.slice(0, 5).every(group => group === 0)) return true;
+    if (groups[0] === 0x2001 && (groups[1] === 0x0000 || groups[1] === 0x0db8)) return true;
+    if (groups[0] === 0x2002 || (groups[0] & 0xfe00) === 0xfc00 ||
+        (groups[0] & 0xffc0) === 0xfe80 || (groups[0] & 0xff00) === 0xff00) return true;
+    if (groups.slice(0, 5).every(group => group === 0) && groups[5] === 0xffff) return true;
+    return false;
+  }
+  return true;
+}
+function safeImageLookup(hostname, options, callback) {
+  lookup(hostname, { ...options, all: true }, (error, addresses) => {
+    if (error) return callback(error);
+    const safeAddresses = (Array.isArray(addresses) ? addresses : [addresses])
+      .filter(address => address && !unsafeImageIP(address.address));
+    if (!safeAddresses.length) return callback(Error('review-image-url-invalid'));
+    callback(null, safeAddresses[0].address, safeAddresses[0].family);
+  });
+}
+function assertImageUrl(candidate) {
+  let parsed;
+  try { parsed = new URL(candidate); } catch { throw Error('review-image-url-invalid'); }
+  if (parsed.protocol !== 'https:' || !parsed.hostname || parsed.username || parsed.password ||
+      unsafeImageHost(parsed.hostname)) throw Error('review-image-url-invalid');
+  return parsed;
+}
+function httpsImageRequest(parsed, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const request = https.request(parsed, { method: 'GET', lookup: safeImageLookup, timeout: 15_000 }, response => {
+      const headers = { get(name) { return response.headers[String(name).toLowerCase()] ?? null; } };
+      if (response.statusCode < 200 || response.statusCode >= 400) {
+        reject(Error(response.statusCode >= 400 ? 'review-image-download-failed' : 'review-image-redirect-invalid'));
+        return;
+      }
+      const declaredSize = Number(response.headers['content-length'] ?? NaN);
+      if (Number.isFinite(declaredSize) && declaredSize > maxBytes) {
+        reject(Error('review-image-format-invalid'));
+        return;
+      }
+      const chunks = [];
+      let size = 0;
+      response.on('data', chunk => {
+        size += chunk.length;
+        if (size > maxBytes) {
+          request.destroy();
+          reject(Error('review-image-format-invalid'));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on('error', reject);
+      response.on('end', () => resolve({
+        status: response.statusCode,
+        headers,
+        bytes: Buffer.concat(chunks),
+      }));
+    });
+    request.on('timeout', () => request.destroy(Error('review-image-download-failed')));
+    request.on('error', reject);
+    request.end();
+  });
+}
+async function httpsDownloadImage(candidate, maxBytes = 10 * 1024 * 1024) {
+  let parsed = assertImageUrl(candidate);
+  for (let redirects = 0;; redirects++) {
+    if (redirects > 3) throw Error('review-image-redirect-too-many');
+    const response = await httpsImageRequest(parsed, maxBytes);
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get('location');
+      let next;
+      try { next = new URL(location, parsed); } catch { throw Error('review-image-redirect-invalid'); }
+      if (next.protocol !== 'https:' || next.origin !== parsed.origin || next.username || next.password ||
+          unsafeImageHost(next.hostname)) throw Error('review-image-redirect-unsafe');
+      parsed = next;
+      continue;
+    }
+    return response;
+  }
+}
+function validateImageMagic(bytes, mime) {
+  const data = bytes.subarray(0, 12);
+  const isPng = data.subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  const isJpeg = data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff;
+  const isGif = data.subarray(0, 3).toString('latin1') === 'GIF';
+  const isWebp = data.subarray(0, 4).toString('latin1') === 'RIFF' && data.subarray(8, 12).toString('latin1') === 'WEBP';
+  if ((mime === 'image/png' && !isPng) || (mime === 'image/jpeg' && !isJpeg) ||
+      (mime === 'image/gif' && !isGif) || (mime === 'image/webp' && !isWebp)) {
+    throw Error('review-image-format-invalid');
+  }
+}
+async function downloadImage(candidate, { fetchFn = fetch, maxBytes = 10 * 1024 * 1024 } = {}) {
+  let response;
+  if (fetchFn === fetch) {
+    response = await httpsDownloadImage(candidate, maxBytes);
+  } else {
+    let parsed = assertImageUrl(candidate);
+    response = await fetchFn(parsed, { redirect: 'manual', signal: AbortSignal.timeout(15_000) });
+    let redirects = 0;
+    while (response.status >= 300 && response.status < 400) {
+      if (++redirects > 3) throw Error('review-image-redirect-too-many');
+      const location = response.headers.get('location');
+      let next;
+      try { next = new URL(location, parsed); } catch { throw Error('review-image-redirect-invalid'); }
+      if (next.protocol !== 'https:' || next.origin !== parsed.origin || next.username || next.password ||
+          unsafeImageHost(next.hostname)) throw Error('review-image-redirect-unsafe');
+      parsed = next;
+      response = await fetchFn(parsed, { redirect: 'manual', signal: AbortSignal.timeout(15_000) });
+    }
+    response.bytes = await response.arrayBuffer();
+  }
+  if (!response.status || response.status < 200 || response.status >= 300) throw Error('review-image-download-failed');
+  const mime = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase();
+  const bytes = Buffer.from(response.bytes);
+  if (!IMAGE_MIME_EXTENSIONS.has(mime) || !bytes.byteLength || bytes.byteLength > maxBytes) {
+    throw Error('review-image-format-invalid');
+  }
+  validateImageMagic(bytes, mime);
+  return { bytes, mime, size: bytes.byteLength };
+}
+const IMAGE_MIME_EXTENSIONS = new Map([
+  ['image/png', '.png'], ['image/jpeg', '.jpg'], ['image/gif', '.gif'], ['image/webp', '.webp'],
+]);
+function bytesSha256(bytes) {
+  return createHash('sha256').update(new Uint8Array(bytes)).digest('hex');
+}
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const IMAGE_KEY_PATTERN = /^img_v3_[A-Za-z0-9_-]{8,128}$/;
+function imageSourceHash(items, notes) {
+  const noteMap = new Map(notes.map(note => [note.noteKey, note]));
+  const source = items.map(item => {
+    const note = noteMap.get(item.noteKey);
+    const images = Array.isArray(note?.images) ? note.images : [];
+    const imageCount = Number.isSafeInteger(note?.imageCount) ? note.imageCount : images.length;
+    return [item.noteKey, images, imageCount];
+  });
+  return sha256(JSON.stringify(source));
+}
+function imageUploadPlan(items, notes, settings) {
+  const noteMap = new Map(notes.map(note => [note.noteKey, note]));
+  let remaining = settings.maxTotal;
+  return items.map(item => {
+    const note = noteMap.get(item.noteKey);
+    const images = Array.isArray(note?.images) ? note.images : [];
+    const imageCount = Number.isSafeInteger(note?.imageCount) ? note.imageCount : images.length;
+    const eligible = Math.min(imageCount, settings.maxPerNote);
+    const attempts = Math.min(eligible, remaining);
+    remaining -= attempts;
+    return { noteKey: item.noteKey, note, images, imageCount, eligible, attempts };
+  });
+}
+export async function resolveReviewImages({ items, notes, config, date, catalogHash: currentCatalogHash,
+  preResolvedImages, runCli = runLarkCli, fetchFn = fetch } = {}) {
+  const settings = normalizeImageConfig(config);
+  if (!settings.enabled) {
+    return { schemaVersion: 1, date, catalogHash: currentCatalogHash, enabled: false,
+      maxPerNote: settings.maxPerNote, maxTotal: settings.maxTotal, images: [],
+      imageKeysByNote: new Map(),
+      stats: { candidateImageCount: 0, selectedImageCount: 0, skippedImageCount: 0, truncatedPerNoteCount: 0, truncatedTotalCount: 0 } };
+  }
+  if (preResolvedImages) {
+    const receipt = preResolvedImages;
+    const plan = imageUploadPlan(items, notes, settings);
+    if (receipt?.schemaVersion !== 1 || receipt.date !== date || receipt.catalogHash !== currentCatalogHash ||
+        receipt.enabled !== true || receipt.maxPerNote !== settings.maxPerNote || receipt.maxTotal !== settings.maxTotal ||
+        receipt.sourceHash !== imageSourceHash(items, notes) ||
+        !Array.isArray(receipt.images) || !Array.isArray(receipt.attemptedImages) ||
+        typeof receipt.stats !== 'object' || receipt.stats === null) {
+      throw Error('review-images-preview-invalid');
+    }
+    const selectedNotes = new Map(notes.map(note => [note.noteKey, note]));
+    const keysByNote = new Map();
+    const selectedByNote = new Map();
+    const attemptedBySource = new Set();
+    const uploadedBySource = new Set();
+    let uploadedAttemptCount = 0, failedAttemptCount = 0;
+    for (const attempt of receipt.attemptedImages) {
+      const entry = plan.find(entry => entry.noteKey === attempt?.noteKey);
+      if (typeof attempt?.noteKey !== 'string' || !entry ||
+          !Number.isSafeInteger(attempt.position) || attempt.position < 0 || attempt.position >= entry.eligible ||
+          !/^[a-f0-9]{64}$/.test(attempt.sourceUrlHash ?? '') ||
+          attempt.sourceUrlHash !== sha256(entry.images[attempt.position]?.url ?? '') ||
+          !['uploaded', 'failed'].includes(attempt.outcome)) {
+        throw Error('review-images-preview-invalid');
+      }
+      const attemptKey = `${attempt.noteKey}:${attempt.position}`;
+      if (attemptedBySource.has(attemptKey)) throw Error('review-images-preview-invalid');
+      attemptedBySource.add(attemptKey);
+      if (attempt.outcome === 'uploaded') uploadedBySource.add(attemptKey);
+      attempt.outcome === 'uploaded' ? uploadedAttemptCount += 1 : failedAttemptCount += 1;
+    }
+    for (const image of receipt.images) {
+      if (typeof image?.noteKey !== 'string' || !selectedNotes.has(image.noteKey) ||
+          !/^[a-f0-9]{64}$/.test(image.sourceUrlHash ?? '') || !/^[a-f0-9]{64}$/.test(image.sha256 ?? '') ||
+          !Number.isSafeInteger(image.size) || image.size < 1 || typeof image.mime !== 'string' ||
+          !IMAGE_MIME_EXTENSIONS.has(image.mime) || image.size > MAX_IMAGE_BYTES ||
+          typeof image.imgKey !== 'string' || !IMAGE_KEY_PATTERN.test(image.imgKey)) {
+        throw Error('review-images-preview-invalid');
+      }
+      const entry = plan.find(entry => entry.noteKey === image.noteKey);
+      if (!entry || !Number.isSafeInteger(image.position) || image.position < 0 ||
+          image.position >= entry.eligible || image.sourceUrlHash !== sha256(entry.images[image.position]?.url ?? '')) {
+        throw Error('review-images-preview-invalid');
+      }
+      const selected = selectedByNote.get(image.noteKey) ?? new Map();
+      if (selected.has(image.position)) throw Error('review-images-preview-invalid');
+      selected.set(image.position, image.imgKey);
+      selectedByNote.set(image.noteKey, selected);
+    }
+    const seenKeys = new Set();
+    let totalImages = 0;
+    for (const [noteKey, selected] of selectedByNote) {
+      if (selected.size > settings.maxPerNote) throw Error('review-images-preview-invalid');
+      for (const [position, key] of [...selected].sort(([left], [right]) => left - right)) {
+        if (seenKeys.has(key)) throw Error('review-images-preview-invalid');
+        seenKeys.add(key);
+        totalImages += 1;
+        const keys = keysByNote.get(noteKey) ?? [];
+        keys.push(key);
+        keysByNote.set(noteKey, keys);
+      }
+    }
+    const candidateImageCount = plan.reduce((sum, entry) => sum + entry.imageCount, 0);
+    const truncatedPerNoteCount = plan.reduce((sum, entry) =>
+      sum + Math.max(0, entry.imageCount - settings.maxPerNote), 0);
+    const stats = receipt.stats;
+    const numericStats = ['candidateImageCount', 'selectedImageCount', 'skippedImageCount',
+      'truncatedPerNoteCount', 'truncatedTotalCount'].every(name =>
+      Number.isSafeInteger(stats[name]) && stats[name] >= 0);
+    if (totalImages > settings.maxTotal || !numericStats ||
+        stats.candidateImageCount !== candidateImageCount ||
+        stats.selectedImageCount !== receipt.images.length || stats.selectedImageCount !== totalImages ||
+        stats.skippedImageCount !== failedAttemptCount ||
+        receipt.attemptedImages.length !== stats.skippedImageCount + totalImages ||
+        uploadedAttemptCount !== totalImages ||
+        [...selectedByNote].some(([noteKey, selected]) =>
+          [...selected.keys()].some(position => !uploadedBySource.has(`${noteKey}:${position}`))) ||
+        stats.truncatedTotalCount !== candidateImageCount - totalImages -
+          failedAttemptCount - truncatedPerNoteCount ||
+        stats.truncatedTotalCount < 0 ||
+        stats.truncatedPerNoteCount !== truncatedPerNoteCount) {
+      throw Error('review-images-preview-invalid');
+    }
+    return { ...receipt, imageKeysByNote: keysByNote };
+  }
+  const noteMap = new Map(notes.map(note => [note.noteKey, note]));
+  let candidateImageCount = 0, selectedImageCount = 0, skippedImageCount = 0, truncatedPerNoteCount = 0, truncatedTotalCount = 0;
+  const metadata = [];
+  const attemptedImages = [];
+  const imageKeysByNote = new Map();
+  let uploadCount = 0;
+  for (const item of items) {
+    const note = noteMap.get(item.noteKey);
+    if (!note) throw Error('review-image-note-missing');
+    const images = Array.isArray(note.images) ? note.images : [];
+    const imageCount = Number.isSafeInteger(note.imageCount) ? note.imageCount : images.length;
+    candidateImageCount += imageCount;
+    const eligible = images.slice(0, settings.maxPerNote);
+    truncatedPerNoteCount += Math.max(0, imageCount - eligible.length);
+    const uploads = eligible.slice(0, Math.max(0, settings.maxTotal - uploadCount));
+    truncatedTotalCount += eligible.length - uploads.length;
+    const keys = [];
+    if (uploads.length) {
+      const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'flomo-review-'));
+      try {
+        for (const [index, image] of uploads.entries()) {
+          let target;
+          const sourceUrlHash = sha256(image.url);
+          try {
+            const downloaded = await downloadImage(image.url, { fetchFn });
+            const extension = IMAGE_MIME_EXTENSIONS.get(downloaded.mime);
+            target = path.join(tmpDir, `img-${index}${extension}`);
+            await writeFileRaw(target, new Uint8Array(downloaded.bytes), { mode: 0o600 });
+            const payload = await runCli(['im', 'images', 'create', '--data', JSON.stringify({ image_type: 'message' }),
+              '--file', `image=./${path.basename(target)}`, '--as', 'bot', '--format', 'json'], { cwd: tmpDir });
+            const imgKey = payload?.data?.image_key ?? payload?.image_key;
+            if (typeof imgKey !== 'string' || !imgKey) throw Error('review-image-upload-key-missing');
+            metadata.push({ noteKey: note.noteKey, position: image.position, sourceUrlHash,
+              sha256: bytesSha256(downloaded.bytes), size: downloaded.size, mime: downloaded.mime, imgKey });
+            attemptedImages.push({ noteKey: note.noteKey, position: image.position,
+              sourceUrlHash, outcome: 'uploaded' });
+            keys.push(imgKey);
+            uploadCount += 1;
+            selectedImageCount += 1;
+          } catch {
+            if (!attemptedImages.some(attempt => attempt.noteKey === note.noteKey && attempt.position === image.position)) {
+              attemptedImages.push({ noteKey: note.noteKey, position: image.position, sourceUrlHash, outcome: 'failed' });
+            }
+            skippedImageCount += 1;
+            if (target) await unlinkRaw(target).catch(() => {});
+          }
+        }
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    }
+    if (keys.length) imageKeysByNote.set(note.noteKey, keys);
+  }
+  return { schemaVersion: 1, date, catalogHash: currentCatalogHash, sourceHash: imageSourceHash(items, notes), enabled: true,
+    maxPerNote: settings.maxPerNote, maxTotal: settings.maxTotal, images: metadata, attemptedImages,
+    stats: { candidateImageCount, selectedImageCount, skippedImageCount, truncatedPerNoteCount, truncatedTotalCount },
+    imageKeysByNote };
 }
 function assertMatchingDedupeGeneration(catalog, ledger) {
   if ((catalog.dedupeGeneration || 'legacy') !== (ledger.dedupeGeneration || 'legacy')) throw Error('dedupe-generation-mismatch');
@@ -398,7 +738,22 @@ function reviewSnapshotSubtitle(date, snapshot) {
   return `回顾日期：${date} · 笔记快照：${at} · 覆盖 ${coverage.observedCount}/${coverage.expectedCount}`;
 }
 
-export function renderReview(decision, notes, snapshot = null) {
+function combinationMode(count) {
+  if (count <= 2) return 'double';
+  if (count <= 3) return 'triple';
+  if (count <= 6) return 'bisect';
+  return 'trisect';
+}
+
+function buildImageElements(keys) {
+  if (!keys?.length) return [];
+  if (keys.length === 1) {
+    return [{ tag: 'img', img_key: keys[0], alt: { tag: 'plain_text', content: '' }, preview: true }];
+  }
+  return [{ tag: 'img_combination', combination_mode: combinationMode(keys.length), img_list: keys.map(img_key => ({ img_key })) }];
+}
+
+export function renderReview(decision, notes, snapshot = null, imageKeysByNote = new Map()) {
   const title = `# Flomo 回顾｜${decision.date}`;
   const provenance = snapshot?.sourceMode === 'flomo-online-full' && snapshot.coverage
     ? `笔记快照：${new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(snapshot.capturedAt))} · 覆盖 ${snapshot.coverage.observedCount}/${snapshot.coverage.expectedCount}`
@@ -436,6 +791,8 @@ export function renderReview(decision, notes, snapshot = null) {
     const renderedBody = cardBody(note);
     const elementIndex = cardElements.length;
     cardElements.push({ tag: 'markdown', content: `${prefix}${renderedBody.content}` });
+    const imageKeys = imageKeysByNote.get(note.noteKey) ?? [];
+    cardElements.push(...buildImageElements(imageKeys));
     const breakOffsets = [...prefixBreakOffsets, ...renderedBody.generatedBreakOffsets.map(offset => prefix.length + offset)];
     if (breakOffsets.length) {
       cardReadbackBreaks.push({ elementIndex, offsets: breakOffsets });
@@ -457,7 +814,7 @@ export function renderReview(decision, notes, snapshot = null) {
     body: { elements: [...cardElements, { tag: 'markdown', content: `可以回复本条消息：“第2条有帮助”“第1条跳过”或“第${lastItemNumber}条已回顾”。` }] } };
   return { markdown: `${message.join('\n')}\n`, fullMarkdown: `${full.join('\n')}\n`, card, cardReadbackBreaks, cardReadbackSpacers };
 }
-export async function inspectDecision(root, decision, { freshContext = false, contextOptions = {} } = {}) {
+export async function inspectDecision(root, decision, { freshContext = false, contextOptions = {}, imageOptions = {} } = {}) {
   const p = paths(root), catalog = await readJson(p.catalog), ledger = assertLedger(await readJson(p.ledger, emptyLedger()));
   assertMatchingDedupeGeneration(catalog, ledger);
   const request = await readJson(path.join(p.runtime, validDate(decision.date), 'request.json'));
@@ -474,7 +831,10 @@ export async function inspectDecision(root, decision, { freshContext = false, co
   if (decision.items.length < TARGET_MIN_REVIEW_ITEMS && (typeof decision.countDeviationReason !== 'string' || !decision.countDeviationReason.trim())) throw Error('count-shortfall-needs-reason');
   if (stats.age.deviations.length && !decision.ageDeviationReason?.trim()) throw Error('age-deviation-needs-reason');
   stats.age.deviationReason = stats.age.deviations.length ? decision.ageDeviationReason.trim() : null;
-  return { catalog, ledger, context, stats, ...renderReview(decision, catalog.notes, catalog.snapshot) };
+  const config = await readJson(p.config, {});
+  const images = await resolveReviewImages({ items: decision.items, notes: catalog.notes, config, date: decision.date,
+    catalogHash: decision.catalogHash, ...imageOptions });
+  return { catalog, ledger, context, stats, images, ...renderReview(decision, catalog.notes, catalog.snapshot, images.imageKeysByNote) };
 }
 export async function previewReview(root, decision) {
   const result = await inspectDecision(root, decision), p = paths(root), dir = path.join(p.runtime, decision.date);
@@ -483,6 +843,7 @@ export async function previewReview(root, decision) {
   await writeProjectFile(p.root, path.join(dir, 'review.md'), result.fullMarkdown, { mode: 0o600 });
   await writeProjectFile(p.root, path.join(dir, 'message.md'), result.markdown, { mode: 0o600 });
   await atomicJson(path.join(dir, 'validation.json'), result.stats, p.root);
+  await atomicJson(path.join(dir, 'images.json'), result.images, p.root);
   return { date: decision.date, count: decision.items.length, stats: result.stats, snapshot: result.catalog.snapshot || null, previewPath: path.join(dir, 'review.md') };
 }
 export async function sendReview(root, decision, { now = new Date(), deliveryOptions = {}, contextOptions = {} } = {}) {
@@ -491,7 +852,12 @@ export async function sendReview(root, decision, { now = new Date(), deliveryOpt
   await refreshArchive(root);
   return withLock(root, async () => {
     const p = paths(root), config = await readJson(p.config);
-    const check = await inspectDecision(root, decision, { freshContext: true, contextOptions });
+    const imageSettings = normalizeImageConfig(config);
+    const preResolvedImages = await readJson(path.join(p.runtime, decision.date, 'images.json'), null);
+    if (imageSettings.enabled && preResolvedImages?.enabled !== true) throw Error('review-images-preview-required');
+    const check = await inspectDecision(root, decision, { freshContext: true, contextOptions,
+      imageOptions: { ...(deliveryOptions.runCli ? { runCli: deliveryOptions.runCli } : {}),
+        ...(preResolvedImages ? { preResolvedImages } : {}) } });
     const previous = check.ledger.batches[decision.date];
     if (previous && ['delivered', 'sending', 'needs_review', 'reserved'].includes(previous.status)) throw Error('date-already-reserved-or-delivered');
     const preflight = await preflightDelivery({ ...config.delivery, now, runCli: deliveryOptions.runCli });
@@ -511,7 +877,7 @@ export async function sendReview(root, decision, { now = new Date(), deliveryOpt
           groupKey: note.groupKey, createdAt: note.createdAt, bodyHash: note.bodyHash } };
       }),
       ...(decision.items.length < TARGET_MIN_REVIEW_ITEMS ? { countDeviationReason: decision.countDeviationReason.trim() } : {}),
-      stats: check.stats, chatId: config.delivery.chatId, profile: preflight.profile, botSenderId: preflight.botSenderId, botSenderIds: preflight.botSenderIds, idempotencyKey: `learn-x-flomo-review:${decision.date}`,
+      stats: check.stats, images: check.images, chatId: config.delivery.chatId, profile: preflight.profile, botSenderId: preflight.botSenderId, botSenderIds: preflight.botSenderIds, idempotencyKey: `learn-x-flomo-review:${decision.date}`,
       card: check.card, cardReadbackBreaks: check.cardReadbackBreaks, cardReadbackSpacers: check.cardReadbackSpacers, cardContentSha256: cardContentSha256(check.card), auditPath, auditSha256: sha256(check.fullMarkdown), createdAt: now.toISOString() };
     check.ledger.batches[decision.date] = batch; await atomicJson(p.ledger, check.ledger, p.root);
     batch.status = 'sending'; batch.sendStartedAt = new Date().toISOString(); await atomicJson(p.ledger, check.ledger, p.root);

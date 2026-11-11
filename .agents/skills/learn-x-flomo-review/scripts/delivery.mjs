@@ -166,6 +166,13 @@ function renderCardReadback(card) {
   for (const element of elements) {
     if (element?.tag === 'markdown' && typeof element.content === 'string') rendered.push(element.content);
     else if (element?.tag === 'hr') rendered.push('---');
+    else if (element?.tag === 'img' && typeof element.img_key === 'string') {
+      rendered.push(`🖼️ ${element.alt?.content ?? ''}(img_key:${element.img_key})`);
+    }
+    else if (element?.tag === 'img_combination' && Array.isArray(element.img_list)) {
+      const keys = element.img_list.map(item => item?.img_key ?? '').join(',');
+      rendered.push(`🖼️ ${element.img_list.length} image(s)(keys:${keys})`);
+    }
     else return null;
   }
   return `<card title="${title}" subtitle="${subtitle}">\n${rendered.join('\n')}\n</card>`;

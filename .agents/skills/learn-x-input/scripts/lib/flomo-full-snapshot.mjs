@@ -137,6 +137,21 @@ export function flomoMemoUrl(memoId) {
   return `https://v.flomoapp.com/mine/?memo_id=${encodeURIComponent(memoId)}`;
 }
 
+function normalizeImageReferences(images) {
+  if (images === undefined) return null;
+  if (!Array.isArray(images) || images.length > 6) throw new Error("flomo-full-scan-images-invalid");
+  const normalized = images.map((image, position) => {
+    let parsed;
+    try { parsed = new URL(image?.url); } catch { throw new Error("flomo-full-scan-images-invalid"); }
+    if (parsed.protocol !== "https:" || !parsed.hostname || parsed.username || parsed.password ||
+        image?.position !== position) throw new Error("flomo-full-scan-images-invalid");
+    return { url: parsed.toString(), position };
+  });
+  const urls = new Set(normalized.map((image) => image.url));
+  if (urls.size !== normalized.length) throw new Error("flomo-full-scan-images-invalid");
+  return normalized;
+}
+
 export function validateFullFlomoScan(scan) {
   if (!scan || scan.mode !== "full" || scan.complete !== true || !Array.isArray(scan.records)) {
     throw new Error("flomo-full-scan-incomplete");
@@ -184,6 +199,13 @@ export function validateFullFlomoScan(scan) {
     }
     const tags = record.tags === undefined ? undefined : [...new Set(record.tags
       .map((tag) => tag.trim().replace(/^#+/u, "").toLowerCase()).filter(Boolean))];
+    const images = normalizeImageReferences(record.images);
+    const imageCount = images === undefined ? undefined : record.imageCount;
+    const truncatedImageCount = images === undefined ? undefined : record.truncatedImageCount;
+    if (images !== null && (!Number.isSafeInteger(imageCount) || imageCount < images.length ||
+        truncatedImageCount !== Math.max(0, imageCount - images.length))) {
+      throw new Error("flomo-full-scan-images-invalid");
+    }
     return {
       memoId: record.memoId,
       url: record.url,
@@ -192,6 +214,7 @@ export function validateFullFlomoScan(scan) {
       bodyText: normalizeFlomoBody(record.bodyText),
       bodyHash: flomoBodyHash(record.bodyText),
       ...(tags ? { tags } : {}),
+      ...(images ? { images, imageCount, truncatedImageCount } : {}),
       isPinned: record.isPinned === true,
     };
   });

@@ -141,9 +141,9 @@
       "local_path": "02_prompts/journal/weekly-journal.md",
       "synced": {
         "document_id": "DovOdEwTGoXnsOxe9U8cC5lIn4b",
-        "revision": 5,
-        "sha256": "6e7277dd9cae71c41730a8aaf2a1d898da242f4e614c725eb3bde39f9d7f18fe",
-        "at": "2026-10-02T13:19:35.631Z"
+        "revision": 11,
+        "sha256": "62b0d6b36ad22da722853a21df32d7c8aa905d1b0b86987b94bf37cb0059570f",
+        "at": "2026-11-11T12:02:37.577Z"
       }
     },
     "learn-x.reading-weekly": {
