@@ -295,8 +295,8 @@ test('cards use original opening text as titles and include Flomo links', () => 
   assert.equal(result.cardReadbackSpacers[0].offsets.length, 8);
   assert.match(JSON.stringify(result.card), /1\. 诗：风来东湖/);
 assert.match(JSON.stringify(result.card), /风来东湖涌，&nbsp;<br>&nbsp;<br>桥卧山水间/);
-assert.match(JSON.stringify(result.card), /鱼不存在，世俗的成就。<br>普通换行保留。\\n1\. 对于复杂概率/);
-assert.match(JSON.stringify(result.card), /1\. 对于复杂概率，人大概率计算错\\n2\. 人天然对随机性无法合理预测。/);
+assert.match(JSON.stringify(result.card), /鱼不存在，世俗的成就。<br>普通换行保留。\\n- 1、 对于复杂概率/);
+assert.match(JSON.stringify(result.card), /- 1、 对于复杂概率，人大概率计算错\\n- 2、 人天然对随机性无法合理预测。/);
   assert.match(JSON.stringify(result.card), /2\. 鱼不存在/);
   assert.match(JSON.stringify(result.card), /3\. 标题超过六个/);
   assert.ok(!JSON.stringify(result.card).match(/[ ](?=")/));
@@ -472,8 +472,8 @@ test('card body keeps complete flomo text and resumes plain paragraphs after lis
   const decision = { date, countDeviationReason: '单条渲染测试', items: [{ noteKey: note.noteKey, bodyHash: note.bodyHash, relevance: 'strong', reason: '检查完整原文' }] };
   const result = renderReview(decision, [note]);
   const content = result.card.body.elements.find(element => element.tag === 'markdown' && element.content.includes('庄子逍遥游')).content;
-assert.match(content, /定义一\n2\. 定义二&nbsp;<br>&nbsp;<br>如何逍遥游\？/);
-  assert.match(content, /无尺子\n2\. 无期望/);
+assert.match(content, /定义一\n- 2、 定义二&nbsp;<br>&nbsp;<br>如何逍遥游\？/);
+assert.match(content, /无尺子\n- 2、 无期望/);
 assert.match(content, /#记录\/读书笔记&nbsp;<br>&nbsp;<br>庄子逍遥游&nbsp;<br>&nbsp;<br>什么是逍遥游\？/);
 });
 
@@ -484,7 +484,7 @@ test('card body preserves nested list hierarchy', () => {
   const decision = { date, countDeviationReason: '嵌套列表测试', items: [{ noteKey: note.noteKey, bodyHash: note.bodyHash, relevance: 'strong', reason: '检查层级' }] };
   const result = renderReview(decision, [note]);
   const content = result.card.body.elements.find(element => element.tag === 'markdown' && element.content.includes('人体简史')).content;
-  assert.match(content, /1\. 人体简史\n  1\. 现代健康问题\n    1\. 包括饮食\n    2\. 让健康行为嵌入生活\n2\. 超越百岁/);
+  assert.match(content, /- 1、 人体简史\n    - 1、 现代健康问题\n        - 1、 包括饮食\n        - 2、 让健康行为嵌入生活\n- 2、 超越百岁/);
 });
 
 test('capacity report supports seven and twenty-eight days without exposing note identities', async (t) => {

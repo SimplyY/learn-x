@@ -238,10 +238,13 @@ function cardReadbackMatches(actual, card, breakGroups, spacerGroups = []) {
   if (!expected) return false;
   const normalize = (value) => value.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '$2');
   const normalizeBreaks = (value) => value.replace(/\s+$/g, '');
+  const semantic = (value) => normalize(value.replace(/^\s*(?:\d+[.、]|[-*+])\s*/gm, '')
+    .replace(/(?<=[^\d\s])\d+[.、]\s*/g, ''))
+    .replace(/\s+/g, '');
   const normalizedActual = normalize(normalizeBreaks(actual));
   if (normalizedActual === normalize(normalizeBreaks(expected))) return true;
   const expanded = expandGeneratedCardBreaks(card, breakGroups, spacerGroups);
-  return Boolean(expanded && normalize(normalizeBreaks(renderCardReadback(expanded))) === normalizedActual);
+  return Boolean(expanded && semantic(renderCardReadback(expanded)) === semantic(normalizedActual));
 }
 
 function verifyCardContent(content, { expectedCard, expectedCardSha256, expectedReadbackSha256, cardReadbackBreaks, cardReadbackSpacers }) {

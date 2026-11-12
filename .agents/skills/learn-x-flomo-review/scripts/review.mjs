@@ -708,11 +708,13 @@ function cardBody(note) {
     if (list) {
       if (parts.length) {
         if (pendingBreaks) appendParagraphBreaks();
-        else append('\n');
+        append('\n');
       }
-      const indent = rawLine.slice(0, rawLine.length - rawLine.trimStart().length);
-      const marker = /^\d/.test(list[1]) ? `${list[1].replace(/[、)]$/, '.')} ` : '- ';
-      append(`${indent}${marker}${list[2].trim()}`);
+      const rawIndent = rawLine.slice(0, rawLine.length - rawLine.trimStart().length);
+      const indentLevel = Math.floor(rawIndent.replace(/\t/g, '  ').length / 2);
+      const indent = '    '.repeat(indentLevel);
+      const text = /^\d/.test(list[1]) ? `${list[1].replace(/[.、)]$/u, '')}、 ${list[2].trim()}` : list[2].trim();
+      append(`${indent}- ${text}`);
       inList = true;
       pendingBreaks = 0;
     } else {
