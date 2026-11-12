@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import { mirrorCoreOverviewToYWContext, recoverCodexConfirmedBatches } from './unified-confirmation.mjs';
+import { mirrorCoreOverviewToYWContext, recoverCodexConfirmedBatches, verifyPublishedCoreMirror } from './unified-confirmation.mjs';
 import { bindWeeklyMemoryApproval, prepareWeeklyMemory, verifyConfirmedWeeklyMemoryWrite, verifyWeeklyMemoryApproval, verifyWeeklyMemoryApprovalSources } from '../../learn-x-process/scripts/prepare-weekly-memory.mjs';
 
 const coreRoot = '/Users/yuwei/code/core';
@@ -89,10 +91,11 @@ test('Core 写入已完成但 YWContext 镜像失败时，下次既有恢复入�
         coreRoot, stateRoot, batch,
         coreSync: verifiedTargets,
         env: { YW_CONTEXT_ROOT: path.resolve(coreRoot, '../yw-context') },
-        run: async () => ({ stdout: JSON.stringify({ status: 'published_and_read_back', source_revision: 'core-revision-2', record_count: 2, commit: 'a'.repeat(40) }) })
+        run: async () => ({ stdout: JSON.stringify({ status: 'published_and_read_back', source_id: 'core-personal-docs', batch_id: 'core-personal-docs-fixture', source_revision: 'core-revision-2', record_count: 2, commit: 'a'.repeat(40) }) })
       });
       return { ok: true, ywContextMirror: receipt };
-    }
+    },
+    verifyYwContextMirror: async () => true,
   });
   assert.equal(retries, 1);
   assert.equal(recovered.completed[0]?.status, 'recovered');
@@ -102,6 +105,80 @@ test('Core 写入已完成但 YWContext 镜像失败时，下次既有恢复入�
   assert.equal(finalState.attemptCount, 2);
   assert.equal(finalState.current.sourceRevision, 'core-revision-2');
   assert.equal(finalState.current.commit, 'a'.repeat(40));
+
+  finalState.current.sourceRevision = 'not-the-published-revision';
+  await writeFile(statePath, `${JSON.stringify(finalState)}\n`);
+  const forgedState = await recoverCodexConfirmedBatches({
+    coreRoot, stateRoot, verifyYwContextMirror: async () => false,
+  });
+  assert.equal(forgedState.completed.length, 0);
+  assert.equal(forgedState.pending[0].status, 'awaiting-host');
+});
+
+test('YWContext 镜像恢复只接受远端提交中绑定同一来源版本、确认 revision 和 P1 正文的收据', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'verified-ywcontext-mirror-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const repo = path.join(root, 'yw-context');
+  const bare = path.join(root, 'origin.git');
+  await mkdir(repo, { recursive: true });
+  await mkdir(bare, { recursive: true });
+  const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  execFileSync('git', ['init', '--bare', '--initial-branch=main', bare], { encoding: 'utf8', stdio: 'ignore' });
+  git('init', '--initial-branch=main');
+  git('config', 'user.name', 'test');
+  git('config', 'user.email', 'test@example.invalid');
+  const documentId = 'YGbcdcvz0osWSoxy4Iecb0X2nZd';
+  const wikiNodeId = 'QIaQwXf07iMvqokKQf3cp3XmnMC';
+  const sourceVersion = `feishu-revision:560:sha256:${'a'.repeat(64)}`;
+  const p1Version = `full-content:${sourceVersion}:policy-v1`;
+  const contentPath = 'data/records/p1/core-personal-docs/p1-content-2026-overview/versions/body.md';
+  const body = Buffer.from('# Core overview\n\nVerified body\n');
+  const p1Hash = createHash('sha256').update(body).digest('hex');
+  const record = (logical_id, level, version, sha256, storage_mode) => ({ logical_id, level, source_version: version, sha256, storage_mode });
+  const readbackCommit = '2026-11-12T00:00:00.000Z';
+  const publicationReceipt = {
+    schema: 'yw-context-publication-receipt/v1', source_id: 'core-personal-docs', batch_id: 'core-personal-docs-fixture',
+    source_revision: 'core-personal-docs-v1:fixture', record_count: 2, verified_at: readbackCommit,
+    records: [record('2026-overview', 'P2', sourceVersion, 'a'.repeat(64), 'external'), record('p1-content-2026-overview', 'P1', p1Version, p1Hash, 'git')]
+  };
+  const catalog = { records: {
+    'core-personal-docs/2026-overview': { source_identity: { document_id: documentId, wiki_node_id: wikiNodeId }, versions: [{ source_version: sourceVersion, sha256: 'a'.repeat(64) }] },
+    'core-personal-docs/p1-content-2026-overview': { versions: [{ source_version: p1Version, sha256: p1Hash, source_reference: { source_version: sourceVersion, sha256: 'a'.repeat(64) }, content_path: contentPath }] }
+  } };
+  const sourceState = { schema: 'yw-context-source-state/v1', source_id: 'core-personal-docs', status: 'verified', last_verified_batch: publicationReceipt.batch_id, source_revision: publicationReceipt.source_revision, record_count: 2 };
+  const registry = { sources: [{ id: 'core-personal-docs', registered_documents: [{ logical_id: '2026-overview', document_id: documentId, level: 'P1' }] }] };
+  const files = {
+    [`data/receipts/core-personal-docs/${publicationReceipt.batch_id}.json`]: publicationReceipt,
+    'data/state/core-personal-docs.json': sourceState,
+    'data/catalog.json': catalog,
+    'sources/registry.json': registry,
+  };
+  for (const [relative, value] of Object.entries(files)) {
+    const target = path.join(repo, relative);
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, `${JSON.stringify(value)}\n`);
+  }
+  await mkdir(path.dirname(path.join(repo, contentPath)), { recursive: true });
+  await writeFile(path.join(repo, contentPath), body);
+  git('add', '.');
+  git('commit', '-m', 'verified fixture');
+  const commit = git('rev-parse', 'HEAD');
+  git('remote', 'add', 'origin', bare);
+  git('push', '-u', 'origin', 'main');
+
+  const batch = {
+    batchId: 'codex-confirmed-batch', reviewWeek: week,
+    items: [{ id: 'overview-item', domain: 'core', targets: ['overview'], targetBindings: { overview: { documentId } } }]
+  };
+  const mirrorState = { schemaVersion: 1, batchId: batch.batchId, reviewWeek: week, current: {
+    status: 'published_and_read_back', sourceId: 'core-personal-docs', batchId: publicationReceipt.batch_id,
+    sourceRevision: publicationReceipt.source_revision, recordCount: 2, commit, verifiedAt: readbackCommit,
+  } };
+  const coreSyncState = { entries: { 'overview-item:overview': { result: 'verified', revision: '560' } } };
+  assert.equal(await verifyPublishedCoreMirror({ contextRoot: repo, batch, mirrorState, coreSyncState }), true);
+  const forged = structuredClone(mirrorState);
+  forged.current.sourceRevision = 'not-the-published-revision';
+  assert.equal(await verifyPublishedCoreMirror({ contextRoot: repo, batch, mirrorState: forged, coreSyncState }), false);
 });
 
 test('没有官方线程读取器时保留待恢复状态，不触发写入', async t => {

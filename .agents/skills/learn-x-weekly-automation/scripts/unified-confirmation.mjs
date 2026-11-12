@@ -2,7 +2,7 @@
 // conversation host; CLI arguments or local JSON are never approval evidence.
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { existsSync } from 'node:fs';
-import { execFile, spawn } from 'node:child_process';
+import { execFile, spawn, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -16,6 +16,7 @@ const defaultCoreRoot = path.resolve(defaultLearnXRoot, '../core');
 const execFileAsync = promisify(execFile);
 
 const hash = value => createHash('sha256').update(value, 'utf8').digest('hex');
+const hashBytes = value => createHash('sha256').update(value).digest('hex');
 const mirrorStatePath = (stateRoot, batch) => path.join(stateRoot, 'runtime/weekly-review', batch.reviewWeek, 'yw-context-mirror', `${batch.batchId}.json`);
 const validMirrorIdentity = batch => /^\d{4}-W(?:0[1-9]|[1-4]\d|5[0-3])$/.test(batch?.reviewWeek || '') && /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(batch?.batchId || '');
 
@@ -37,7 +38,8 @@ async function readYwContextMirrorState(stateRoot, batch) {
 function isVerifiedYwContextMirrorState(state, batch) {
   const current = state?.current;
   return state?.schemaVersion === 1 && state.batchId === batch?.batchId && state.reviewWeek === batch?.reviewWeek &&
-    current?.status === 'published_and_read_back' && /^[a-f0-9]{40}$/.test(current.commit || '') &&
+    current?.status === 'published_and_read_back' && current.sourceId === 'core-personal-docs' &&
+    typeof current.batchId === 'string' && /^[a-z0-9][a-z0-9._-]{0,99}$/.test(current.batchId) && /^[a-f0-9]{40}$/.test(current.commit || '') &&
     typeof current.sourceRevision === 'string' && current.sourceRevision.length > 0 &&
     Number.isInteger(current.recordCount) && current.recordCount > 0 && Number.isFinite(Date.parse(current.verifiedAt || ''));
 }
@@ -50,6 +52,8 @@ async function writeYwContextMirrorAttempt({ stateRoot, batch, result, now = () 
   const current = {
     attemptedAt,
     status: result.status || 'unknown',
+    sourceId: result.source_id === 'core-personal-docs' ? result.source_id : null,
+    batchId: /^[a-z0-9][a-z0-9._-]{0,99}$/.test(result.batch_id || '') ? result.batch_id : null,
     errorCode: /^[a-z0-9][a-z0-9._-]{0,99}$/.test(result.error_code || '') ? result.error_code : null,
     sourceRevision: typeof result.source_revision === 'string' ? result.source_revision : null,
     recordCount: Number.isInteger(result.record_count) ? result.record_count : null,
@@ -90,6 +94,75 @@ async function writeYwContextMirrorAttempt({ stateRoot, batch, result, now = () 
   }
   if (await readFile(file, 'utf8') !== text) throw new Error('ywcontext-mirror-state-readback-mismatch');
   return path.relative(stateRoot, file);
+}
+
+function readGitBytes(repo, revision, relativePath) {
+  const result = spawnSync('git', ['show', `${revision}:${relativePath}`], {
+    cwd: repo, encoding: null, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+  });
+  return result.status === 0 && result.stdout?.length ? result.stdout : null;
+}
+
+function runGitRead(repo, args) {
+  return spawnSync('git', args, {
+    cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 4 * 1024 * 1024,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+  });
+}
+
+export async function verifyPublishedCoreMirror({ contextRoot, batch, mirrorState, coreSyncState } = {}) {
+  const current = mirrorState?.current;
+  if (!isVerifiedYwContextMirrorState(mirrorState, batch) || !coreSyncState?.entries) return false;
+  const repo = path.resolve(contextRoot || process.env.YW_CONTEXT_ROOT || path.resolve(defaultCoreRoot, '../yw-context'));
+  const fetched = runGitRead(repo, ['fetch', '--no-tags', 'origin', '+refs/heads/main:refs/remotes/origin/main']);
+  if (fetched.status !== 0) return false;
+  const ancestry = runGitRead(repo, ['merge-base', '--is-ancestor', current.commit, 'refs/remotes/origin/main']);
+  if (ancestry.status !== 0) return false;
+  const receiptBytes = readGitBytes(repo, current.commit, `data/receipts/core-personal-docs/${current.batchId}.json`);
+  const sourceStateBytes = readGitBytes(repo, current.commit, 'data/state/core-personal-docs.json');
+  const catalogBytes = readGitBytes(repo, current.commit, 'data/catalog.json');
+  const registryBytes = readGitBytes(repo, current.commit, 'sources/registry.json');
+  if (!receiptBytes || !sourceStateBytes || !catalogBytes || !registryBytes) return false;
+  let receipt, sourceState, catalog, registry;
+  try {
+    receipt = JSON.parse(receiptBytes.toString('utf8'));
+    sourceState = JSON.parse(sourceStateBytes.toString('utf8'));
+    catalog = JSON.parse(catalogBytes.toString('utf8'));
+    registry = JSON.parse(registryBytes.toString('utf8'));
+  } catch { return false; }
+  if (receipt?.schema !== 'yw-context-publication-receipt/v1' || receipt.source_id !== 'core-personal-docs' ||
+      receipt.batch_id !== current.batchId || receipt.source_revision !== current.sourceRevision ||
+      receipt.record_count !== current.recordCount || !Array.isArray(receipt.records) ||
+      sourceState?.schema !== 'yw-context-source-state/v1' || sourceState.source_id !== 'core-personal-docs' ||
+      sourceState.status !== 'verified' || sourceState.last_verified_batch !== current.batchId ||
+      sourceState.source_revision !== current.sourceRevision || sourceState.record_count !== current.recordCount) return false;
+  const source = registry?.sources?.find(item => item.id === 'core-personal-docs');
+  if (!source?.registered_documents?.length) return false;
+  const overviewItems = batch.items.filter(item => item.domain === 'core' && item.targets?.includes('overview'));
+  if (!overviewItems.length) return false;
+  for (const item of overviewItems) {
+    const binding = item.targetBindings?.overview;
+    const targetReceipt = coreSyncState.entries?.[`${item.id}:overview`];
+    const document = source.registered_documents.find(row => row.document_id === binding?.documentId && row.level === 'P1');
+    if (!document || !targetReceipt || targetReceipt.result !== 'verified' || targetReceipt.revision == null) return false;
+    const p2 = receipt.records.find(row => row.logical_id === document.logical_id && row.level === 'P2');
+    const p1 = receipt.records.find(row => row.logical_id === `p1-content-${document.logical_id}` && row.level === 'P1');
+    const revisionMatch = String(p2?.source_version || '').match(/^feishu-revision:(\d+):sha256:([a-f0-9]{64})$/u);
+    if (!p2 || !p1 ||
+        !revisionMatch || revisionMatch[1] !== String(targetReceipt.revision) || p2.sha256 !== revisionMatch[2] ||
+        !String(p1.source_version || '').startsWith(`full-content:${p2.source_version}:`)) return false;
+    const p2Entry = catalog.records?.[`core-personal-docs/${document.logical_id}`];
+    const p1Entry = catalog.records?.[`core-personal-docs/p1-content-${document.logical_id}`];
+    const p2Version = p2Entry?.versions?.find(row => row.source_version === p2.source_version && row.sha256 === p2.sha256);
+    const p1Version = p1Entry?.versions?.find(row => row.source_version === p1.source_version && row.sha256 === p1.sha256);
+    if (p2Entry?.source_identity?.document_id !== document.document_id || !p2Version || !p1Version ||
+        p1Version.source_reference?.source_version !== p2.source_version || p1Version.source_reference?.sha256 !== p2.sha256 ||
+        typeof p1Version.content_path !== 'string') return false;
+    const content = readGitBytes(repo, current.commit, p1Version.content_path);
+    if (!content || hashBytes(content) !== p1.sha256) return false;
+  }
+  return true;
 }
 const canonicalWeek = value => {
   const match = /^(\d{4})-W?(\d{2})$/.exec(value || '');
@@ -628,10 +701,13 @@ export async function mirrorCoreOverviewToYWContext({ coreRoot = defaultCoreRoot
     const receipt = JSON.parse(stdout);
     const commit = receipt.remote_commit || receipt.commit || null;
     const verified = ['published_and_read_back', 'idempotent'].includes(receipt.status) &&
+      receipt.source_id === 'core-personal-docs' && /^[a-z0-9][a-z0-9._-]{0,99}$/.test(receipt.batch_id || '') &&
       /^[a-f0-9]{40}$/.test(commit || '') && typeof receipt.source_revision === 'string' &&
       Number.isInteger(receipt.record_count) && receipt.record_count > 0;
     return finish({
       status: verified ? 'published_and_read_back' : receipt.status || 'unknown',
+      source_id: receipt.source_id,
+      batch_id: receipt.batch_id,
       error_code: receipt.error_code,
       source_revision: receipt.source_revision,
       record_count: receipt.record_count,
@@ -710,7 +786,7 @@ export async function executeConfirmedLearnXCloseout({ batch, learnXRoot = defau
 // Called only from existing Learn-X trigger opportunities. It scans every Core
 // confirmation week, but touches only batches whose verified export or one of
 // their per-target receipts is missing/incomplete.
-export async function recoverCodexConfirmedBatches({ coreRoot = defaultCoreRoot, learnXRoot = defaultLearnXRoot, stateRoot = coreRoot, host, syncBatch = syncCodexConfirmedBatch, closeoutExecutors = null, verifyConfirmation = verifyCodexConfirmationBatch, verifyMemoryApproval = verifyWeeklyMemoryApproval, verifyMemoryWrite = null, excludeBatchId = null } = {}) {
+export async function recoverCodexConfirmedBatches({ coreRoot = defaultCoreRoot, learnXRoot = defaultLearnXRoot, stateRoot = coreRoot, host, syncBatch = syncCodexConfirmedBatch, closeoutExecutors = null, verifyConfirmation = verifyCodexConfirmationBatch, verifyMemoryApproval = verifyWeeklyMemoryApproval, verifyMemoryWrite = null, verifyYwContextMirror = verifyPublishedCoreMirror, contextRoot = null, excludeBatchId = null } = {}) {
   const runtimeRoot = path.join(stateRoot, 'runtime/weekly-review');
   const [{ readConfirmedBatch }, { isVerifiedTargetReceipt }, { inspectApprovedCloseout }] = await Promise.all([
     import(pathToFileURL(path.join(coreRoot, '.agents/skills/core-weekly/scripts/weekly-review-lib/confirmation.mjs')).href),
@@ -798,7 +874,15 @@ export async function recoverCodexConfirmedBatches({ coreRoot = defaultCoreRoot,
           continue;
         }
       }
-      const mirrorComplete = !coreOverviewRequired || isVerifiedYwContextMirrorState(mirrorState, batch);
+      let mirrorComplete = !coreOverviewRequired;
+      if (coreOverviewRequired && isVerifiedYwContextMirrorState(mirrorState, batch)) {
+        try {
+          mirrorComplete = await verifyYwContextMirror({
+            contextRoot: contextRoot || process.env.YW_CONTEXT_ROOT || path.resolve(coreRoot, '../yw-context'),
+            coreRoot, stateRoot, batch, mirrorState, coreSyncState: state,
+          }) === true;
+        } catch { mirrorComplete = false; }
+      }
       if (coreComplete && mirrorComplete && closeoutState.complete) { results.completed.push({ batchId: batch.batchId, status: 'already-complete' }); continue; }
       if (!host || typeof host.readThread !== 'function') {
         results.pending.push({ batchId: batch.batchId, batchFile, threadId: batch.hostEvidence?.threadId ?? null, displayMessageId: batch.hostEvidence?.displayMessageId ?? null, confirmationMessageId: batch.confirmation?.messageId ?? null, status: 'awaiting-host', reason: 'official Codex thread reader unavailable' });
