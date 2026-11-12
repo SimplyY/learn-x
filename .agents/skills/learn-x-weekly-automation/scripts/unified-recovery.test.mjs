@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { recoverCodexConfirmedBatches } from './unified-confirmation.mjs';
+import { mirrorCoreOverviewToYWContext, recoverCodexConfirmedBatches } from './unified-confirmation.mjs';
 import { bindWeeklyMemoryApproval, prepareWeeklyMemory, verifyConfirmedWeeklyMemoryWrite, verifyWeeklyMemoryApproval, verifyWeeklyMemoryApprovalSources } from '../../learn-x-process/scripts/prepare-weekly-memory.mjs';
 
 const coreRoot = '/Users/yuwei/code/core';
@@ -38,6 +38,70 @@ test('既有周流程扫描所有历史未完成批次并只调用不完整项',
   assert.equal(next.considered, 2);
   assert.equal(next.completed.filter(item => item.status === 'already-complete').length, 1);
   assert.deepEqual(calls, [second.file]);
+});
+
+test('Core 写入已完成但 YWContext 镜像失败时，下次既有恢复入口会持久化补齐', async t => {
+  const stateRoot = await mkdtemp(path.join(os.tmpdir(), 'unified-recovery-ywcontext-mirror-'));
+  t.after(() => rm(stateRoot, { recursive: true, force: true }));
+  const { prepareConfirmationCard, confirmCard } = await import('../../../../../core/.agents/skills/core-weekly/scripts/weekly-review-lib/confirmation.mjs');
+  const { syncConfirmedBatch } = await import('../../../../../core/.agents/skills/core-weekly/scripts/weekly-review-lib/sync-confirmed.mjs');
+  const card = prepareConfirmationCard({
+    reviewWeek: week,
+    sourceBindings,
+    items: [{
+      id: 'core-overview', domain: 'core', source: 'human', locator: '2026｜总览/行动重点', originalValue: 'before',
+      value: 'Synthetic approved overview update', targets: ['overview'],
+      targetBindings: { overview: { documentId: 'overview-doc', locator: 'Overview!A1', beforeValue: 'before', beforeStructure: 'before-structure', afterStructure: 'after-structure' } }
+    }]
+  });
+  const { file, batch } = await confirmCard({
+    root: stateRoot, card, messageId: 'mirror-recovery-confirmation', expectedSender: 'codex-user',
+    hostEvidence: { schemaVersion: 1, threadId: 'mirror-recovery-thread', displayMessageId: 'mirror-recovery-display', displayTurnId: 'display-turn', confirmationTurnId: 'confirm-turn', displayTurnIndex: 1, confirmationTurnIndex: 0 },
+    fetchConfirmation: async id => ({ id, sender: 'codex-user', text: card.confirmationText, sentAt: confirmedAt })
+  });
+  let actual = { value: 'before', structure: 'before-structure', revision: 'rev-before' };
+  const coreSync = await syncConfirmedBatch({
+    root: stateRoot, batchFile: file,
+    readTarget: async ({ binding }) => ({ documentId: binding.documentId, locator: binding.locator, unique: true, ...actual }),
+    writeTarget: async ({ item, binding }) => { actual = { value: item.value, structure: binding.afterStructure, revision: 'rev-after' }; },
+    verifyConfirmation: async () => ({ ok: true, evidence: 'trusted confirmation readback' })
+  });
+  assert.equal(coreSync.ok, true);
+  const verifiedTargets = { targets: { 'core-overview:overview': { result: 'verified' } } };
+  const firstMirror = await mirrorCoreOverviewToYWContext({
+    coreRoot, stateRoot, batch, coreSync: verifiedTargets, env: { YW_CONTEXT_ROOT: path.resolve(coreRoot, '../yw-context') },
+    run: async () => { throw new Error('synthetic publisher unavailable'); }
+  });
+  assert.equal(firstMirror.status, 'failed');
+  const statePath = path.join(stateRoot, 'runtime/weekly-review', week, 'yw-context-mirror', `${batch.batchId}.json`);
+  const pendingState = JSON.parse(await readFile(statePath, 'utf8'));
+  assert.equal(pendingState.current.status, 'failed');
+  assert.equal(pendingState.attemptCount, 1);
+
+  let retries = 0;
+  const host = { readThread: async () => ({}) };
+  const recovered = await recoverCodexConfirmedBatches({
+    coreRoot, stateRoot, host, verifyConfirmation: async () => ({ ok: true, evidence: 'trusted host reread' }),
+    syncBatch: async ({ batch: _ignored, batchFile: recoveredFile }) => {
+      retries += 1;
+      assert.equal(recoveredFile, file);
+      const receipt = await mirrorCoreOverviewToYWContext({
+        coreRoot, stateRoot, batch,
+        coreSync: verifiedTargets,
+        env: { YW_CONTEXT_ROOT: path.resolve(coreRoot, '../yw-context') },
+        run: async () => ({ stdout: JSON.stringify({ status: 'published_and_read_back', source_revision: 'core-revision-2', record_count: 2, commit: 'a'.repeat(40) }) })
+      });
+      return { ok: true, ywContextMirror: receipt };
+    }
+  });
+  assert.equal(retries, 1);
+  assert.equal(recovered.completed[0]?.status, 'recovered');
+  assert.equal(recovered.pending.length, 0);
+  const finalState = JSON.parse(await readFile(statePath, 'utf8'));
+  assert.equal(finalState.current.status, 'published_and_read_back');
+  assert.equal(finalState.attemptCount, 2);
+  assert.equal(finalState.current.sourceRevision, 'core-revision-2');
+  assert.equal(finalState.current.commit, 'a'.repeat(40));
 });
 
 test('没有官方线程读取器时保留待恢复状态，不触发写入', async t => {

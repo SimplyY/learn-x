@@ -6,7 +6,7 @@ import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, link, unlink, readdir, lstat } from 'node:fs/promises';
+import { mkdir, open, readFile, link, unlink, readdir, lstat, rename } from 'node:fs/promises';
 import { stageLearnXCard } from './confirmation-input.mjs';
 import { verifyConfirmedWeeklyMemoryWrite, verifyWeeklyMemoryApproval, verifyWeeklyMemoryApprovalSources } from '../../learn-x-process/scripts/prepare-weekly-memory.mjs';
 
@@ -16,6 +16,81 @@ const defaultCoreRoot = path.resolve(defaultLearnXRoot, '../core');
 const execFileAsync = promisify(execFile);
 
 const hash = value => createHash('sha256').update(value, 'utf8').digest('hex');
+const mirrorStatePath = (stateRoot, batch) => path.join(stateRoot, 'runtime/weekly-review', batch.reviewWeek, 'yw-context-mirror', `${batch.batchId}.json`);
+const validMirrorIdentity = batch => /^\d{4}-W(?:0[1-9]|[1-4]\d|5[0-3])$/.test(batch?.reviewWeek || '') && /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(batch?.batchId || '');
+
+async function readYwContextMirrorState(stateRoot, batch) {
+  if (!validMirrorIdentity(batch)) return null;
+  const file = mirrorStatePath(stateRoot, batch);
+  let raw;
+  try { raw = await readFile(file, 'utf8'); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  let state;
+  try { state = JSON.parse(raw); } catch { throw new Error('ywcontext-mirror-state-invalid'); }
+  if (state?.schemaVersion !== 1 || state.batchId !== batch.batchId || state.reviewWeek !== batch.reviewWeek ||
+      !Array.isArray(state.attempts) || !state.current || typeof state.current.status !== 'string') {
+    throw new Error('ywcontext-mirror-state-invalid');
+  }
+  return state;
+}
+
+function isVerifiedYwContextMirrorState(state, batch) {
+  const current = state?.current;
+  return state?.schemaVersion === 1 && state.batchId === batch?.batchId && state.reviewWeek === batch?.reviewWeek &&
+    current?.status === 'published_and_read_back' && /^[a-f0-9]{40}$/.test(current.commit || '') &&
+    typeof current.sourceRevision === 'string' && current.sourceRevision.length > 0 &&
+    Number.isInteger(current.recordCount) && current.recordCount > 0 && Number.isFinite(Date.parse(current.verifiedAt || ''));
+}
+
+async function writeYwContextMirrorAttempt({ stateRoot, batch, result, now = () => new Date() }) {
+  if (!validMirrorIdentity(batch)) return null;
+  const file = mirrorStatePath(stateRoot, batch);
+  const previous = await readYwContextMirrorState(stateRoot, batch);
+  const attemptedAt = now().toISOString();
+  const current = {
+    attemptedAt,
+    status: result.status || 'unknown',
+    errorCode: /^[a-z0-9][a-z0-9._-]{0,99}$/.test(result.error_code || '') ? result.error_code : null,
+    sourceRevision: typeof result.source_revision === 'string' ? result.source_revision : null,
+    recordCount: Number.isInteger(result.record_count) ? result.record_count : null,
+    commit: /^[a-f0-9]{40}$/.test(result.commit || '') ? result.commit : null,
+    ...(result.status === 'published_and_read_back' && Number.isFinite(Date.parse(attemptedAt)) ? { verifiedAt: attemptedAt } : {}),
+  };
+  const attempts = [...(previous?.attempts || []), current].slice(-32);
+  const state = {
+    schemaVersion: 1,
+    batchId: batch.batchId,
+    reviewWeek: batch.reviewWeek,
+    attemptCount: (previous?.attemptCount || 0) + 1,
+    current,
+    lastVerified: current.status === 'published_and_read_back' ? {
+      sourceRevision: current.sourceRevision,
+      commit: current.commit,
+      recordCount: current.recordCount,
+      verifiedAt: current.verifiedAt,
+    } : previous?.lastVerified || null,
+    attempts,
+  };
+  const text = `${JSON.stringify(state)}\n`;
+  await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  const temp = `${file}.${randomUUID()}.tmp`;
+  let handle;
+  try {
+    handle = await open(temp, 'wx', 0o600);
+    await handle.writeFile(text);
+    await handle.sync();
+    await handle.close();
+    handle = null;
+    await rename(temp, file);
+    const directory = await open(path.dirname(file), 'r');
+    try { await directory.sync(); } finally { await directory.close(); }
+  } finally {
+    if (handle) await handle.close();
+    await unlink(temp).catch(error => { if (error.code !== 'ENOENT') throw error; });
+  }
+  if (await readFile(file, 'utf8') !== text) throw new Error('ywcontext-mirror-state-readback-mismatch');
+  return path.relative(stateRoot, file);
+}
 const canonicalWeek = value => {
   const match = /^(\d{4})-W?(\d{2})$/.exec(value || '');
   return match ? `${match[1]}-W${match[2]}` : null;
@@ -497,7 +572,7 @@ export async function verifyCodexConfirmationBatch({ coreRoot = defaultCoreRoot,
   return { ok: true, evidence: hash(JSON.stringify([threadId, actualDisplay.id, actualDisplay.text, actualDisplay.turnId, actualReply.id, actualReply.text, actualReply.sentAt, card.fingerprint])) };
 }
 
-export async function syncCodexConfirmedBatch({ coreRoot = defaultCoreRoot, batchFile, host, feishuUrl = null }) {
+export async function syncCodexConfirmedBatch({ coreRoot = defaultCoreRoot, stateRoot = coreRoot, batchFile, host, feishuUrl = null }) {
   if (!host || typeof host.readThread !== 'function') throw new Error('trusted Codex host required');
   const dir = path.join(coreRoot, '.agents/skills/core-weekly/scripts/weekly-review-lib');
   const [{ buildContext }, { createCoreFeishuAdapter }, { syncConfirmedBatch }, { readConfirmedBatch }] = await Promise.all([
@@ -511,23 +586,31 @@ export async function syncCodexConfirmedBatch({ coreRoot = defaultCoreRoot, batc
   const batch = await readConfirmedBatch(batchFile);
   const verifyConfirmation = current => verifyCodexConfirmationBatch({ coreRoot, batch: current, host });
   const coreSync = await syncConfirmedBatch({ root: coreRoot, batchFile, ...adapter, verifyConfirmation, feishuUrl });
-  const ywContextMirror = await mirrorCoreOverviewToYWContext({ coreRoot, batch, coreSync });
+  const ywContextMirror = await mirrorCoreOverviewToYWContext({ coreRoot, stateRoot, batch, coreSync });
   return { ...coreSync, ywContextMirror };
 }
 
 // Core remains the authority. Mirror only after the exact confirmed overview
 // targets have passed their own target readback; an unrelated failed target
 // must not erase verified overview evidence or undo the Core confirmation.
-export async function mirrorCoreOverviewToYWContext({ coreRoot = defaultCoreRoot, batch, coreSync, env = process.env, run = execFileAsync } = {}) {
+export async function mirrorCoreOverviewToYWContext({ coreRoot = defaultCoreRoot, stateRoot = coreRoot, batch, coreSync, env = process.env, run = execFileAsync, now = () => new Date() } = {}) {
   const overviewItems = batch?.items?.filter(item => item.domain === 'core' && item.targets?.includes('overview')) ?? [];
   if (!overviewItems.length) return { status: 'not-applicable' };
+  const finish = async result => {
+    try {
+      const statePath = await writeYwContextMirrorAttempt({ stateRoot, batch, result, now });
+      return statePath ? { ...result, state_path: statePath } : result;
+    } catch {
+      return { ...result, publication_status: result.status, status: 'state_write_failed', error_code: 'yw_context_mirror_state_write_failed' };
+    }
+  };
   const targets = coreSync?.targets ?? {};
   if (!overviewItems.every(item => targets[`${item.id}:overview`]?.result === 'verified')) {
-    return { status: 'awaiting_core_readback', error_code: 'confirmed_overview_not_verified' };
+    return finish({ status: 'awaiting_core_readback', error_code: 'confirmed_overview_not_verified' });
   }
   const contextRoot = path.resolve(env.YW_CONTEXT_ROOT || path.resolve(coreRoot, '../yw-context'));
   const script = path.join(contextRoot, 'scripts/sync-core-personal-docs.mjs');
-  if (!existsSync(script)) return { status: 'unavailable', error_code: 'yw_context_sync_entrypoint_not_found' };
+  if (!existsSync(script)) return finish({ status: 'unavailable', error_code: 'yw_context_sync_entrypoint_not_found' });
   let stdout;
   try {
     ({ stdout } = await run(process.execPath, [script, '--repo-root', contextRoot, '--apply'], {
@@ -539,20 +622,24 @@ export async function mirrorCoreOverviewToYWContext({ coreRoot = defaultCoreRoot
       windowsHide: true
     }));
   } catch {
-    return { status: 'failed', error_code: 'yw_context_sync_failed' };
+    return finish({ status: 'failed', error_code: 'yw_context_sync_failed' });
   }
   try {
     const receipt = JSON.parse(stdout);
-    return {
-      status: receipt.status || 'unknown',
+    const commit = receipt.remote_commit || receipt.commit || null;
+    const verified = ['published_and_read_back', 'idempotent'].includes(receipt.status) &&
+      /^[a-f0-9]{40}$/.test(commit || '') && typeof receipt.source_revision === 'string' &&
+      Number.isInteger(receipt.record_count) && receipt.record_count > 0;
+    return finish({
+      status: verified ? 'published_and_read_back' : receipt.status || 'unknown',
       error_code: receipt.error_code,
       source_revision: receipt.source_revision,
       record_count: receipt.record_count,
-      commit: receipt.commit || null,
+      commit,
       acceptance_probe: receipt.acceptance_probe === true
-    };
+    });
   } catch {
-    return { status: 'failed', error_code: 'yw_context_receipt_invalid' };
+    return finish({ status: 'failed', error_code: 'yw_context_receipt_invalid' });
   }
 }
 
@@ -564,11 +651,26 @@ export async function confirmAndSyncCodexBatch({ coreRoot = defaultCoreRoot, lea
   const hasCoreItems = confirmed.batch.items.some(item => item.domain === 'core');
   let coreSync = { ok: true, status: 'not-applicable' };
   if (hasCoreItems) {
-    try { coreSync = await syncBatch({ coreRoot, batchFile: confirmed.file, host }); }
-    catch (error) { coreSync = { ok: false, status: 'pending', error: error?.message ?? String(error) }; }
+    try { coreSync = await syncBatch({ coreRoot, stateRoot, batchFile: confirmed.file, host }); }
+    catch (error) {
+      const ywContextMirror = await mirrorCoreOverviewToYWContext({ coreRoot, stateRoot, batch: confirmed.batch, coreSync: { targets: {} } });
+      coreSync = { ok: false, status: 'pending', error: error?.message ?? String(error), ywContextMirror };
+    }
+    if (coreSync?.ywContextMirror === undefined && confirmed.batch.items.some(item => item.domain === 'core' && item.targets?.includes('overview'))) {
+      coreSync = { ...coreSync, ywContextMirror: await mirrorCoreOverviewToYWContext({ coreRoot, stateRoot, batch: confirmed.batch, coreSync: { targets: {} } }) };
+    }
     if (coreSync?.ok !== true) coreSync = { ...(coreSync && typeof coreSync === 'object' ? coreSync : {}), ok: false, syncStatus: coreSync?.status ?? null, status: 'pending' };
+    if (coreSync?.ywContextMirror) {
+      coreSync = { ...coreSync, ywContextMirrorVerified: coreSync.ywContextMirror.status === 'published_and_read_back' };
+    }
   }
-  return { ...confirmed, coreSync };
+  let recovery;
+  try {
+    recovery = await recoverCodexConfirmedBatches({ coreRoot, learnXRoot, stateRoot, host, excludeBatchId: confirmed.batch.batchId });
+  } catch (error) {
+    recovery = { considered: 0, completed: [], skipped: [], pending: [{ status: 'recovery_scan_failed', reason: error?.message ?? String(error) }] };
+  }
+  return { ...confirmed, coreSync, recovery };
 }
 
 // The weekly Skill calls this only after writing and reading back the confirmed
@@ -608,7 +710,7 @@ export async function executeConfirmedLearnXCloseout({ batch, learnXRoot = defau
 // Called only from existing Learn-X trigger opportunities. It scans every Core
 // confirmation week, but touches only batches whose verified export or one of
 // their per-target receipts is missing/incomplete.
-export async function recoverCodexConfirmedBatches({ coreRoot = defaultCoreRoot, learnXRoot = defaultLearnXRoot, stateRoot = coreRoot, host, syncBatch = syncCodexConfirmedBatch, closeoutExecutors = null, verifyConfirmation = verifyCodexConfirmationBatch, verifyMemoryApproval = verifyWeeklyMemoryApproval, verifyMemoryWrite = null } = {}) {
+export async function recoverCodexConfirmedBatches({ coreRoot = defaultCoreRoot, learnXRoot = defaultLearnXRoot, stateRoot = coreRoot, host, syncBatch = syncCodexConfirmedBatch, closeoutExecutors = null, verifyConfirmation = verifyCodexConfirmationBatch, verifyMemoryApproval = verifyWeeklyMemoryApproval, verifyMemoryWrite = null, excludeBatchId = null } = {}) {
   const runtimeRoot = path.join(stateRoot, 'runtime/weekly-review');
   const [{ readConfirmedBatch }, { isVerifiedTargetReceipt }, { inspectApprovedCloseout }] = await Promise.all([
     import(pathToFileURL(path.join(coreRoot, '.agents/skills/core-weekly/scripts/weekly-review-lib/confirmation.mjs')).href),
@@ -637,12 +739,14 @@ export async function recoverCodexConfirmedBatches({ coreRoot = defaultCoreRoot,
         continue;
       }
       if (batch.schemaVersion !== 3 || !batch.hostEvidence) { results.skipped.push({ batchId: batch.batchId, status: 'legacy-unverified' }); continue; }
+      if (batch.batchId === excludeBatchId) { results.skipped.push({ batchId: batch.batchId, status: 'current-batch' }); continue; }
       if (batch.reviewWeek !== weekEntry.name) {
         results.pending.push({ batchId: batch.batchId, status: 'needs_review', reason: 'review week directory mismatch' });
         results.considered += 1;
         continue;
       }
       const coreItems = batch.items.filter(item => item.domain === 'core');
+      const coreOverviewRequired = coreItems.some(item => item.targets.includes('overview'));
       const closeoutItems = batch.items.filter(item => item.domain === 'learn-x' && item.targets.includes('weekly-closeout'));
       const memoryItems = batch.items.filter(item => item.domain === 'learn-x' && item.targets.includes('memory'));
       if (!coreItems.length && !closeoutItems.length && !memoryItems.length) { results.skipped.push({ batchId: batch.batchId, status: 'no-recoverable-targets' }); continue; }
@@ -686,7 +790,16 @@ export async function recoverCodexConfirmedBatches({ coreRoot = defaultCoreRoot,
         }
       }
       const coreComplete = stateComplete && exportComplete;
-      if (coreComplete && closeoutState.complete) { results.completed.push({ batchId: batch.batchId, status: 'already-complete' }); continue; }
+      let mirrorState = null;
+      if (coreOverviewRequired) {
+        try { mirrorState = await readYwContextMirrorState(stateRoot, batch); }
+        catch (error) {
+          results.pending.push({ batchId: batch.batchId, status: 'needs_review', reason: error.message || 'ywcontext mirror state invalid' });
+          continue;
+        }
+      }
+      const mirrorComplete = !coreOverviewRequired || isVerifiedYwContextMirrorState(mirrorState, batch);
+      if (coreComplete && mirrorComplete && closeoutState.complete) { results.completed.push({ batchId: batch.batchId, status: 'already-complete' }); continue; }
       if (!host || typeof host.readThread !== 'function') {
         results.pending.push({ batchId: batch.batchId, batchFile, threadId: batch.hostEvidence?.threadId ?? null, displayMessageId: batch.hostEvidence?.displayMessageId ?? null, confirmationMessageId: batch.confirmation?.messageId ?? null, status: 'awaiting-host', reason: 'official Codex thread reader unavailable' });
         continue;
@@ -702,8 +815,8 @@ export async function recoverCodexConfirmedBatches({ coreRoot = defaultCoreRoot,
         continue;
       }
       const outcomes = {};
-      if (coreItems.length && !coreComplete) {
-        try { outcomes.core = await syncBatch({ coreRoot, batchFile, host }); }
+      if (coreItems.length && (!coreComplete || !mirrorComplete)) {
+        try { outcomes.core = await syncBatch({ coreRoot, stateRoot, batchFile, host }); }
         catch (error) { outcomes.core = { ok: false, status: 'pending', error: error?.message ?? String(error) }; }
         if (outcomes.core?.ok !== true) outcomes.core = { ...(outcomes.core && typeof outcomes.core === 'object' ? outcomes.core : {}), ok: false, syncStatus: outcomes.core?.status ?? null, status: 'pending' };
       }
@@ -729,8 +842,14 @@ export async function recoverCodexConfirmedBatches({ coreRoot = defaultCoreRoot,
         }
       }
       const coreDone = coreComplete || outcomes.core?.ok === true;
+      let refreshedMirrorState = mirrorState;
+      if (coreOverviewRequired && !mirrorComplete) {
+        try { refreshedMirrorState = await readYwContextMirrorState(stateRoot, batch); }
+        catch (error) { outcomes.ywContextMirrorState = { status: 'needs_review', reason: error.message || 'ywcontext mirror state invalid' }; }
+      }
+      const mirrorDone = !coreOverviewRequired || isVerifiedYwContextMirrorState(refreshedMirrorState, batch);
       const closeoutDone = closeoutState.complete || ['completed', 'not-applicable'].includes(outcomes.learnXCloseout?.status);
-      if (coreDone && closeoutDone) results.completed.push({ batchId: batch.batchId, status: 'recovered', outcomes });
+      if (coreDone && mirrorDone && closeoutDone) results.completed.push({ batchId: batch.batchId, status: 'recovered', outcomes });
       else results.pending.push({ batchId: batch.batchId, status: 'pending_recovery', outcomes });
     }
   }
