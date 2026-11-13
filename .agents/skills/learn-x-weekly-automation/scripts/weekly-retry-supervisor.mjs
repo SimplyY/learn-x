@@ -130,7 +130,7 @@ export function createWeeklyRetryState(week) {
       nextRetryAt: null, lastAttemptAt: null, lastSuccessAt: null,
       lastErrorClass: null, lastErrorSignal: null, sameErrorCount: 0,
       lastInvocationId: null, lastAutomationId: null, automationAttemptCounts: {},
-      ...(source.id === "flomo" ? { ywContextMirror: null } : {})
+      ...(source.id === "flomo" ? { ywContextMirror: recordFlomoMirrorResult(null) } : {})
     }])),
     flomoReviewImport: null,
     pendingRecoveryEvents: [],
@@ -759,12 +759,9 @@ export async function runWeeklyRetrySupervisor({
       if (advice.recommendations?.length) recoveryAdvice[id] = advice.recommendations;
     }
     const alerts = await repeatedFailureAlerts(state, repoRoot);
-    const flomoMirror = state.sources.flomo?.ywContextMirror;
-    if (flomoMirror && flomoMirror.disposition !== "verified") {
-      alerts.push({ sourceId: "flomo", component: "yw-context-mirror", disposition: flomoMirror.disposition,
-        status: flomoMirror.status, ...(flomoMirror.error_code ? { error_code: flomoMirror.error_code } : {}),
-        updatedAt: flomoMirror.updatedAt });
-    }
+    const flomoMirror = recordFlomoMirrorResult(state.sources.flomo?.ywContextMirror, now());
+    const flomoMirrorAlert = createFlomoMirrorAlert(flomoMirror);
+    if (flomoMirrorAlert) alerts.push(flomoMirrorAlert);
     return {
       week: normalizedWeek,
       mode,
@@ -772,7 +769,7 @@ export async function runWeeklyRetrySupervisor({
       sources: Object.fromEntries(Object.entries(state.sources).map(([id, item]) => [id, { status: item.status, attempts: item.attempts, retries: item.retries, rescueUsed: item.rescueUsed,
         recoveryActions: item.recoveryActions || [], problemRunId: item.problemRunId || null,
         lastErrorClass: item.lastErrorClass, nextRetryAt: item.nextRetryAt,
-        ...(id === "flomo" ? { ywContextMirror: item.ywContextMirror || null } : {}) }])),
+        ...(id === "flomo" ? { ywContextMirror: recordFlomoMirrorResult(item.ywContextMirror, now()) } : {}) }])),
       alerts,
       recoveryAdvice,
       ...(manualFallback ? { manualFallback } : {}),
@@ -794,11 +791,15 @@ export async function runWeeklyRetrySupervisor({
     } catch {
       manualFallback = await weeklyAiManualFallback(repoRoot, weekRoot, normalizedWeek, latest?.sources.ai, null);
     }
+    const flomoMirror = latest?.sources.flomo
+      ? recordFlomoMirrorResult(latest.sources.flomo.ywContextMirror, now()) : null;
+    const flomoMirrorAlert = flomoMirror && createFlomoMirrorAlert(flomoMirror);
     return { week: normalizedWeek, mode, statePath, skipped: "supervisor-state-lock-reacquire-timeout",
       sources: latest ? Object.fromEntries(Object.entries(latest.sources).map(([id, item]) => [id, { status: item.status,
         attempts: item.attempts, retries: item.retries, rescueUsed: item.rescueUsed, recoveryActions: item.recoveryActions || [],
         problemRunId: item.problemRunId || null, lastErrorClass: item.lastErrorClass, nextRetryAt: item.nextRetryAt,
-        ...(id === "flomo" ? { ywContextMirror: item.ywContextMirror || null } : {}) }])) : {},
+        ...(id === "flomo" ? { ywContextMirror: flomoMirror } : {}) }])) : {},
+      alerts: flomoMirrorAlert ? [flomoMirrorAlert] : [],
       diagnostic: stateLockDiagnostic || { step: "supervisor-state-lock", outcome: "reacquire-failed",
         requiredBudgetMs: AI_WAIT_REACQUIRE_MIN_BUDGET_MS },
       ...(manualFallback ? { manualFallback } : {}) };
@@ -1792,10 +1793,23 @@ function sanitizeFlomoMirrorResult(value) {
 
 function recordFlomoMirrorResult(value, now = Date.now()) {
   const result = sanitizeFlomoMirrorResult(value);
-  const disposition = ["published_and_read_back", "idempotent"].includes(result.status) ? "verified"
+  let disposition = ["published_and_read_back", "idempotent"].includes(result.status) && validGitCommit(result.commit) ? "verified"
     : result.status === "awaiting_acc07" ? "blocked"
       : result.status === "unknown" ? "unknown" : "pending";
-  return { ...result, disposition, updatedAt: new Date(now).toISOString() };
+  if (["published_and_read_back", "idempotent"].includes(result.status) && !validGitCommit(result.commit)) {
+    result.error_code ||= "yw_context_commit_unverifiable";
+    disposition = "unknown";
+  }
+  const parsedUpdatedAt = Date.parse(value?.updatedAt || "");
+  return { ...result, disposition,
+    updatedAt: Number.isFinite(parsedUpdatedAt) ? new Date(parsedUpdatedAt).toISOString() : new Date(now).toISOString() };
+}
+
+function createFlomoMirrorAlert(mirror) {
+  return !mirror || mirror.disposition === "verified" ? null : {
+    sourceId: "flomo", component: "yw-context-mirror", disposition: mirror.disposition,
+    status: mirror.status, ...(mirror.error_code ? { error_code: mirror.error_code } : {}), updatedAt: mirror.updatedAt
+  };
 }
 
 function normalizeRecoveryEvidence(week, value = {}) {
@@ -1905,9 +1919,7 @@ async function loadState(filePath, week) {
       parsed.sources[source.id].retries = source.retries;
       parsed.sources[source.id].rescueUsed = Boolean(parsed.sources[source.id].rescueUsed);
       parsed.sources[source.id].recoveryActions = Array.isArray(parsed.sources[source.id].recoveryActions) ? parsed.sources[source.id].recoveryActions : [];
-      if (source.id === "flomo" && !Object.hasOwn(parsed.sources[source.id], "ywContextMirror")) {
-        parsed.sources[source.id].ywContextMirror = null;
-      }
+      if (source.id === "flomo") parsed.sources[source.id].ywContextMirror = recordFlomoMirrorResult(parsed.sources[source.id].ywContextMirror);
       if (source.id === "health" && parsed.sources[source.id].status === "recheck-only"
         && parsed.sources[source.id].attempts === 0 && parsed.sources[source.id].lastAttemptAt == null) {
         parsed.sources[source.id].status = "pending";

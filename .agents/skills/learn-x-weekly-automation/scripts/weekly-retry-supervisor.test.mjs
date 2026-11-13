@@ -1636,6 +1636,92 @@ test("a ready Flomo weekly input keeps a failed YW-Context mirror pending in dur
     && alert.disposition === "pending"), "the run summary surfaces the mirror gap immediately");
 });
 
+test("legacy Flomo state without a mirror receipt is normalized to unknown and alerted", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-mirror-legacy-state-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const weekRoot = path.join(root, "03_input/weekly", week);
+  await mkdir(weekRoot, { recursive: true });
+  const state = createWeeklyRetryState(week);
+  for (const source of WEEKLY_SOURCE_CONFIG) state.sources[source.id].status = source.collector ? "succeeded" : "recheck-only";
+  state.sources.flomo.attempts = 1;
+  delete state.sources.flomo.ywContextMirror;
+  await writeFile(path.join(weekRoot, "_weekly-retry-state.json"), `${JSON.stringify(state)}\n`);
+
+  const result = await runWeeklyRetrySupervisor({
+    week, repoRoot: root, maxDurationMs: 0, now: () => Date.parse("2026-10-05T01:00:00.000Z"),
+    runSource: async () => assert.fail("completed weekly input must not be recollected"), readOutcome: async () => null
+  });
+
+  const saved = JSON.parse(await readFile(path.join(weekRoot, "_weekly-retry-state.json"), "utf8"));
+  assert.equal(result.sources.flomo.status, "succeeded", "weekly input keeps its independent successful status");
+  assert.equal(result.sources.flomo.ywContextMirror.status, "unknown");
+  assert.equal(result.sources.flomo.ywContextMirror.disposition, "unknown");
+  assert.equal(result.sources.flomo.ywContextMirror.error_code, "yw_context_sync_result_missing");
+  assert.ok(result.alerts.some((alert) => alert.component === "yw-context-mirror" && alert.disposition === "unknown"));
+  assert.deepEqual(saved.sources.flomo.ywContextMirror, result.sources.flomo.ywContextMirror,
+    "the migrated state is durable and matches the surfaced evidence");
+});
+
+test("persisted Flomo mirror state is whitelisted and cannot claim verification without a commit", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-mirror-sanitize-state-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const weekRoot = path.join(root, "03_input/weekly", week);
+  await mkdir(weekRoot, { recursive: true });
+  const state = createWeeklyRetryState(week);
+  for (const source of WEEKLY_SOURCE_CONFIG) state.sources[source.id].status = source.collector ? "succeeded" : "recheck-only";
+  state.sources.flomo.attempts = 1;
+  state.sources.flomo.ywContextMirror = {
+    status: "published_and_read_back", disposition: "verified", updatedAt: "2026-10-05T00:00:00.000Z",
+    private_body: "synthetic private fixture", unknown_key: "discard this"
+  };
+  await writeFile(path.join(weekRoot, "_weekly-retry-state.json"), `${JSON.stringify(state)}\n`);
+
+  const result = await runWeeklyRetrySupervisor({
+    week, repoRoot: root, maxDurationMs: 0, now: () => Date.parse("2026-10-05T01:00:00.000Z"),
+    runSource: async () => assert.fail("completed weekly input must not be recollected"), readOutcome: async () => null
+  });
+
+  const saved = JSON.parse(await readFile(path.join(weekRoot, "_weekly-retry-state.json"), "utf8"));
+  const mirror = result.sources.flomo.ywContextMirror;
+  assert.equal(mirror.status, "published_and_read_back");
+  assert.equal(mirror.disposition, "unknown", "a status label alone is not remote commit evidence");
+  assert.equal(mirror.error_code, "yw_context_commit_unverifiable");
+  assert.equal(Object.hasOwn(mirror, "private_body"), false);
+  assert.equal(Object.hasOwn(mirror, "unknown_key"), false);
+  assert.equal(Object.hasOwn(saved.sources.flomo.ywContextMirror, "private_body"), false);
+  assert.equal(Object.hasOwn(saved.sources.flomo.ywContextMirror, "unknown_key"), false);
+  assert.ok(result.alerts.some((alert) => alert.component === "yw-context-mirror" && alert.disposition === "unknown"));
+});
+
+test("a whitelisted Flomo readback commit verifies persisted mirror state", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-mirror-verified-state-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const weekRoot = path.join(root, "03_input/weekly", week);
+  await mkdir(weekRoot, { recursive: true });
+  const state = createWeeklyRetryState(week);
+  for (const source of WEEKLY_SOURCE_CONFIG) state.sources[source.id].status = source.collector ? "succeeded" : "recheck-only";
+  state.sources.flomo.attempts = 1;
+  state.sources.flomo.ywContextMirror = {
+    status: "published_and_read_back", commit: "d".repeat(40), disposition: "pending",
+    updatedAt: "2026-10-05T00:00:00.000Z", unknown_key: "discard this"
+  };
+  await writeFile(path.join(weekRoot, "_weekly-retry-state.json"), `${JSON.stringify(state)}\n`);
+
+  const result = await runWeeklyRetrySupervisor({
+    week, repoRoot: root, maxDurationMs: 0, now: () => Date.parse("2026-10-05T01:00:00.000Z"),
+    runSource: async () => assert.fail("completed weekly input must not be recollected"), readOutcome: async () => null
+  });
+
+  const saved = JSON.parse(await readFile(path.join(weekRoot, "_weekly-retry-state.json"), "utf8"));
+  assert.equal(result.sources.flomo.ywContextMirror.disposition, "verified");
+  assert.equal(saved.sources.flomo.ywContextMirror.disposition, "verified");
+  assert.equal(Object.hasOwn(saved.sources.flomo.ywContextMirror, "unknown_key"), false);
+  assert.equal(result.alerts.some((alert) => alert.component === "yw-context-mirror"), false);
+});
+
 test("the Flomo adapter carries sanitized Retry-After metadata into retry classification", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-retry-after-adapter-"));
   t.after(() => rm(root, { recursive: true, force: true }));
