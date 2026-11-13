@@ -6,7 +6,7 @@ import test from "node:test";
 import { defaultFlomoPrivateDataRoot, flomoBodyHash, flomoMemoUrl, resolveFlomoPathAllowed, writeStagedOnlineFlomoSnapshot } from "./lib/flomo-full-snapshot.mjs";
 import { fileExists, readWeeklySourceStatus } from "./lib/source-status.mjs";
 import { activateOnlineSnapshot, paths, readJson } from "../../learn-x-flomo-review/scripts/review.mjs";
-import { parseSyncArgs, syncFlomoFullWeek } from "./sync-flomo-full-week.mjs";
+import { parseSyncArgs, runYWContextFlomoSync, syncFlomoFullWeek } from "./sync-flomo-full-week.mjs";
 
 const week = "2026-W40";
 
@@ -82,6 +82,26 @@ test("YW-Context mirror runs after activation and its failure does not change Le
   assert.equal(result.status, "ready");
   assert.equal(result.ywContextMirror.status, "failed");
   assert.equal((await readWeeklySourceStatus(weekRoot, week)).sources.flomo.status, "ready");
+});
+
+test("YW-Context sync preserves the sanitized publication and failure-status receipt fields", async (t) => {
+  const { root } = await fixture(t);
+  await mkdir(path.join(root, "scripts"), { recursive: true });
+  await writeFile(path.join(root, "scripts/sync-flomo-snapshot.mjs"), "// fixture entrypoint\n");
+  const sourceRevision = `flomo-snapshot-v1:${"a".repeat(36)}:${"b".repeat(64)}`;
+  const commit = "c".repeat(40);
+  const statusReportCommit = "d".repeat(40);
+  const result = runYWContextFlomoSync(root, {
+    env: { YW_CONTEXT_ROOT: root },
+    spawn: (_command, args, options) => {
+      assert.equal(args.at(-1), "--apply");
+      assert.equal(path.resolve(options.cwd), path.resolve(root));
+      return { status: 0, stdout: JSON.stringify({ status: "incomplete_snapshot", source_revision: sourceRevision,
+        commit, status_report: { status: "published_and_read_back", commit: statusReportCommit }, private_body: "fixture only" }) };
+    },
+  });
+  assert.deepEqual(result, { status: "incomplete_snapshot", source_revision: sourceRevision, commit,
+    status_report_status: "published_and_read_back", status_report_commit: statusReportCommit });
 });
 
 test("a handwritten weekly file blocks snapshot activation before it can diverge from the active snapshot", async (t) => {

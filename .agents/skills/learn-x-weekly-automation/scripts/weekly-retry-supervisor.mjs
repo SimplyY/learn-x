@@ -129,7 +129,8 @@ export function createWeeklyRetryState(week) {
       recoveryActions: [], problemRunId: null,
       nextRetryAt: null, lastAttemptAt: null, lastSuccessAt: null,
       lastErrorClass: null, lastErrorSignal: null, sameErrorCount: 0,
-      lastInvocationId: null, lastAutomationId: null, automationAttemptCounts: {}
+      lastInvocationId: null, lastAutomationId: null, automationAttemptCounts: {},
+      ...(source.id === "flomo" ? { ywContextMirror: null } : {})
     }])),
     flomoReviewImport: null,
     pendingRecoveryEvents: [],
@@ -757,14 +758,22 @@ export async function runWeeklyRetrySupervisor({
         satisfiedPreconditions: ["same-target-week"] }, { stateRoot: path.join(repoRoot, ".agents/skills/learn-x-weekly-automation/state") });
       if (advice.recommendations?.length) recoveryAdvice[id] = advice.recommendations;
     }
+    const alerts = await repeatedFailureAlerts(state, repoRoot);
+    const flomoMirror = state.sources.flomo?.ywContextMirror;
+    if (flomoMirror && flomoMirror.disposition !== "verified") {
+      alerts.push({ sourceId: "flomo", component: "yw-context-mirror", disposition: flomoMirror.disposition,
+        status: flomoMirror.status, ...(flomoMirror.error_code ? { error_code: flomoMirror.error_code } : {}),
+        updatedAt: flomoMirror.updatedAt });
+    }
     return {
       week: normalizedWeek,
       mode,
       statePath,
       sources: Object.fromEntries(Object.entries(state.sources).map(([id, item]) => [id, { status: item.status, attempts: item.attempts, retries: item.retries, rescueUsed: item.rescueUsed,
         recoveryActions: item.recoveryActions || [], problemRunId: item.problemRunId || null,
-        lastErrorClass: item.lastErrorClass, nextRetryAt: item.nextRetryAt }])),
-      alerts: await repeatedFailureAlerts(state, repoRoot),
+        lastErrorClass: item.lastErrorClass, nextRetryAt: item.nextRetryAt,
+        ...(id === "flomo" ? { ywContextMirror: item.ywContextMirror || null } : {}) }])),
+      alerts,
       recoveryAdvice,
       ...(manualFallback ? { manualFallback } : {}),
       recoveryMemory: { status: recoveryWriteErrors.length ? "partial" : "ready", writeFailures: recoveryWriteErrors.length,
@@ -788,7 +797,8 @@ export async function runWeeklyRetrySupervisor({
     return { week: normalizedWeek, mode, statePath, skipped: "supervisor-state-lock-reacquire-timeout",
       sources: latest ? Object.fromEntries(Object.entries(latest.sources).map(([id, item]) => [id, { status: item.status,
         attempts: item.attempts, retries: item.retries, rescueUsed: item.rescueUsed, recoveryActions: item.recoveryActions || [],
-        problemRunId: item.problemRunId || null, lastErrorClass: item.lastErrorClass, nextRetryAt: item.nextRetryAt }])) : {},
+        problemRunId: item.problemRunId || null, lastErrorClass: item.lastErrorClass, nextRetryAt: item.nextRetryAt,
+        ...(id === "flomo" ? { ywContextMirror: item.ywContextMirror || null } : {}) }])) : {},
       diagnostic: stateLockDiagnostic || { step: "supervisor-state-lock", outcome: "reacquire-failed",
         requiredBudgetMs: AI_WAIT_REACQUIRE_MIN_BUDGET_MS },
       ...(manualFallback ? { manualFallback } : {}) };
@@ -1373,6 +1383,9 @@ async function runOneSource(source, kind, context) {
   let classified;
   try {
   classified = classifyOutcome(source.id, outcome, { now: context.now() });
+  const flomoMirror = source.id === "flomo" && outcome?.ywContextMirror
+    ? recordFlomoMirrorResult(outcome.ywContextMirror, context.now()) : null;
+  if (flomoMirror) entry.ywContextMirror = flomoMirror;
   const durationMs = Math.max(0, context.now() - began);
   const previousErrorClass = entry.lastErrorClass;
   const errorSignal = ["failed", "needs_review", "unavailable"].includes(classified.status)
@@ -1416,6 +1429,7 @@ async function runOneSource(source, kind, context) {
     recoveredErrorSignal: classified.status === "succeeded" ? entry.lastErrorSignal || null : null,
     hypothesis: classified.errorClass,
     evidence: sourceStatusEvidence(source, outcome),
+    ...(flomoMirror ? { ywContextMirror: flomoMirror } : {}),
     evidenceMetadata: normalizeRecoveryEvidence(context.week, {
       sourceStatus: outcome?.status || classified.status,
       sourceVersion: outcome?.sourceVersion || outcome?.skillVersion || "",
@@ -1529,7 +1543,9 @@ export async function runConfiguredSource(source, { week, repoRoot, onDependency
     }
     let runResult = null;
     try { runResult = JSON.parse(result.stdout.trim().split("\n").at(-1)); } catch {}
-    return { ...current, ...(runResult?.error ? { error: runResult.error } : {}), ...(runResult?.snapshotId ? {
+    return { ...current, ...(runResult?.error ? { error: runResult.error } : {}), ...(source.id === "flomo" ? {
+      ywContextMirror: sanitizeFlomoMirrorResult(runResult?.ywContextMirror)
+    } : {}), ...(runResult?.snapshotId ? {
       snapshotId: runResult.snapshotId, capturedAt: runResult.capturedAt,
       coverage: runResult.coverage, termination: runResult.termination,
     } : {}) };
@@ -1749,6 +1765,39 @@ function sourceStatusEvidence(source, outcome) {
   };
 }
 
+function validSafeToken(value) {
+  return typeof value === "string" && /^[a-z0-9][a-z0-9_-]{0,63}$/i.test(value);
+}
+
+function validSafeRevision(value) {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9:._-]{0,255}$/.test(value);
+}
+
+function validGitCommit(value) {
+  return typeof value === "string" && /^[a-f0-9]{40,64}$/i.test(value);
+}
+
+function sanitizeFlomoMirrorResult(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { status: "unknown", error_code: "yw_context_sync_result_missing" };
+  }
+  const result = { status: validSafeToken(value.status) ? value.status : "unknown" };
+  if (validSafeToken(value.error_code)) result.error_code = value.error_code;
+  if (validSafeRevision(value.source_revision)) result.source_revision = value.source_revision;
+  if (validGitCommit(value.commit)) result.commit = value.commit;
+  if (validSafeToken(value.status_report_status)) result.status_report_status = value.status_report_status;
+  if (validGitCommit(value.status_report_commit)) result.status_report_commit = value.status_report_commit;
+  return result;
+}
+
+function recordFlomoMirrorResult(value, now = Date.now()) {
+  const result = sanitizeFlomoMirrorResult(value);
+  const disposition = ["published_and_read_back", "idempotent"].includes(result.status) ? "verified"
+    : result.status === "awaiting_acc07" ? "blocked"
+      : result.status === "unknown" ? "unknown" : "pending";
+  return { ...result, disposition, updatedAt: new Date(now).toISOString() };
+}
+
 function normalizeRecoveryEvidence(week, value = {}) {
   const evidence = { targetWeek: week };
   const statuses = new Set(["pending", "running", "ready", "empty", "succeeded", "failed", "unavailable", "needs_review"]);
@@ -1856,6 +1905,9 @@ async function loadState(filePath, week) {
       parsed.sources[source.id].retries = source.retries;
       parsed.sources[source.id].rescueUsed = Boolean(parsed.sources[source.id].rescueUsed);
       parsed.sources[source.id].recoveryActions = Array.isArray(parsed.sources[source.id].recoveryActions) ? parsed.sources[source.id].recoveryActions : [];
+      if (source.id === "flomo" && !Object.hasOwn(parsed.sources[source.id], "ywContextMirror")) {
+        parsed.sources[source.id].ywContextMirror = null;
+      }
       if (source.id === "health" && parsed.sources[source.id].status === "recheck-only"
         && parsed.sources[source.id].attempts === 0 && parsed.sources[source.id].lastAttemptAt == null) {
         parsed.sources[source.id].status = "pending";

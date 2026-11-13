@@ -149,9 +149,11 @@ export function runYWContextFlomoSync(learnXRoot, { env = process.env, spawn = s
     const receipt = JSON.parse(result.stdout);
     return {
       status: receipt.status || "unknown",
-      error_code: receipt.status_report?.status === "failed" ? "source_update_requires_acceptance" : undefined,
+      ...(receipt.status_report?.status === "failed" ? { error_code: "source_update_requires_acceptance" } : {}),
       source_revision: receipt.source_revision,
       commit: receipt.commit || receipt.status_report?.commit || null,
+      status_report_status: receipt.status_report?.status || undefined,
+      status_report_commit: receipt.status_report?.commit || undefined,
     };
   } catch {
     return { status: "failed", error_code: "yw_context_receipt_invalid" };

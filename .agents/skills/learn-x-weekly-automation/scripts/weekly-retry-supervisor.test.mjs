@@ -1592,12 +1592,48 @@ test("the Flomo adapter passes the supervisor invocation UUID and automation ID 
         "--invocation-id", invocationId]);
       assert.equal(options.env.LEARN_X_AUTOMATION_ID, "learn-x-flomo-00-10");
       invocation = { args, env: options.env };
-      return { stdout: JSON.stringify({ snapshotId: "snapshot-adapter", capturedAt: "2026-10-05T00:00:00.000Z" }) };
+      return { stdout: JSON.stringify({ snapshotId: "snapshot-adapter", capturedAt: "2026-10-05T00:00:00.000Z",
+        ywContextMirror: { status: "incomplete_snapshot", error_code: "flomo-source-gap",
+          source_revision: "flomo-snapshot-v1:123e4567-e89b-42d3-a456-426614174000", commit: "a".repeat(40),
+          status_report_status: "published_and_read_back", status_report_commit: "b".repeat(40), private_body: "fixture only" } }) };
     },
     readOutcome: async () => ({ status: "ready", updatedAt: new Date().toISOString() }),
   });
   assert.ok(invocation);
   assert.equal(outcome.snapshotId, "snapshot-adapter");
+  assert.deepEqual(outcome.ywContextMirror, {
+    status: "incomplete_snapshot", error_code: "flomo-source-gap",
+    source_revision: "flomo-snapshot-v1:123e4567-e89b-42d3-a456-426614174000", commit: "a".repeat(40),
+    status_report_status: "published_and_read_back", status_report_commit: "b".repeat(40)
+  });
+});
+
+test("a ready Flomo weekly input keeps a failed YW-Context mirror pending in durable supervisor state", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-mirror-pending-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const sourceRevision = `flomo-snapshot-v1:123e4567-e89b-42d3-a456-426614174000:${"c".repeat(64)}`;
+  const statusReportCommit = "b".repeat(40);
+  const result = await runWeeklyRetrySupervisor({
+    week, mode: "manual", sourceId: "flomo", singleAttempt: true, skipPreparation: true,
+    automationId: "ywcontext-flomo-reconcile-test", repoRoot: root, maxDurationMs: 60_000,
+    now: () => Date.parse("2026-10-05T01:00:00.000Z"), readOutcome: async () => null,
+    runSource: async () => ({ status: "ready", count: 1, snapshotId: "snapshot-fixture",
+      ywContextMirror: { status: "incomplete_snapshot", error_code: "flomo-source-gap", source_revision: sourceRevision,
+        commit: "a".repeat(40), status_report_status: "published_and_read_back", status_report_commit: statusReportCommit,
+        private_body: "fixture only" } })
+  });
+  const state = JSON.parse(await readFile(result.statePath, "utf8"));
+  assert.equal(state.sources.flomo.status, "succeeded", "weekly input and its mirror have independent states");
+  assert.deepEqual(state.sources.flomo.ywContextMirror, {
+    status: "incomplete_snapshot", error_code: "flomo-source-gap", source_revision: sourceRevision,
+    commit: "a".repeat(40), status_report_status: "published_and_read_back", status_report_commit: statusReportCommit,
+    disposition: "pending", updatedAt: "2026-10-05T01:00:00.000Z"
+  });
+  assert.equal(Object.hasOwn(state.sources.flomo.ywContextMirror, "private_body"), false);
+  assert.equal(result.sources.flomo.ywContextMirror.disposition, "pending");
+  assert.ok(result.alerts.some((alert) => alert.sourceId === "flomo" && alert.component === "yw-context-mirror"
+    && alert.disposition === "pending"), "the run summary surfaces the mirror gap immediately");
 });
 
 test("the Flomo adapter carries sanitized Retry-After metadata into retry classification", async (t) => {
