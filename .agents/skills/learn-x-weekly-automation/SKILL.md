@@ -356,8 +356,9 @@ node .agents/skills/learn-x-weekly-journal/scripts/link-core.mjs --period YYYY-W
    - 备份失败不回滚已写入的 Memory，继续自动尝试独立的 YWContext P1 同步；Flomo 因前置备份未通过而保持 `pending`。最终汇报必须标记 `Overall: partial`，明确列出 `Backup: failed`。
 11. Memory 写入并完成本地权威目标读回后，自动派生 YWContext P1 完整内容同步；无需用户逐条确认。该动作只接受已确认批次和 `verifyConfirmedWeeklyMemoryWrite` 返回的精确凭据：`{ targetPath, week, itemIds, sha256 }`。写入器必须从 Learn-X `01_core/memory/*.memory.md` 重新读取完整正文并核验源哈希，不得只发布索引或依据历史快照补齐。
    - 只有 `schemaVersion: 2` 的当前确认范围触发自动同步。旧 `schemaVersion: 1` 范围仅能只读核验历史批次；旧卡不能重新确认，也不能被解释为 YWContext 授权。
+   - 单周路径由 `executeConfirmedLearnXCloseout` 在 Memory 写后读回完成时触发。多周范围路径由 `applyWeeklyRangeMemory` 在完整写后读回后触发；只接受其当前 `schemaVersion: 2` 确认包、范围指纹、最终审核与授权消息哈希、目标文件 SHA，以及每个 `item_id`、段落定位和正文 SHA 一致的收据。不得把旧范围卡升级为当前确认包。
    - 调用 `executeConfirmedLearnXCloseout` 时，YWContext 执行器接收 `execute(item, batch, memoryWriteEvidence)`；成功回执必须含 `schema: "yw-context-p1-publish-receipt/v1"`、`source_id: "learn-x-memory-p1-content"`、`source_revision`、`source_sha256`、`p1_record_count`、`p1_records_sha256`、`p1_bundle_sha256`、相同的 40 位 `published_commit` / `remote_readback_commit`，并绑定本批 `targetPath`、`itemIds` 和 `sourceSha256`。
-   - 只有源项完整读取、P1 全文发布、远端固定提交读回且以上字段均匹配时才记为 `completed`。没有可验证的源回链、动态发布入口或消费者读回时记录 `pending` / `unknown` 与稳定原因 `dynamic_ywcontext_sync_unavailable`；不接固定 probe importer，不伪称成功，也不阻塞已完成的 Memory 写入。
+   - 只有源项完整读取、P1 全文发布、远端固定提交读回且以上字段均匹配时，发布动作才记为 `published_and_read_back`。这不代表消费者已经解析；消费者实际读取另写绑定提交与内容哈希的 ACK。没有可验证的源回链或动态发布入口时记录 `pending` / `unknown` 与稳定原因 `dynamic_ywcontext_sync_unavailable`；不接固定 probe importer，不伪称发布成功，也不阻塞已完成的 Memory 写入。
    - YWContext 的未知发布结果不能靠一般“基线未变”回执重试。恢复器必须先核验源 SHA、批次身份、远端提交和 manifest；无法确定是否已发布时继续保留 `unknown`，不自动重发。
    - 备份与自动 YWContext 同步按顺序更新同一收尾状态文件。Flomo 只依赖本次确认的备份成功，与 YWContext 的 pending/unknown 状态分开记录。
 12. Flomo 反向同步已停用。周自动化不得把 `sync:flomo` 作为阶段收尾触发，也不得在自动 YWContext 同步后写回 `weekly.md` 或季度 Memory；汇报固定写「Flomo 反向同步状态：已停用，未执行」。

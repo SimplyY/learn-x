@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, writeFile, chmod, unlink } from "node:fs/promi
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { extractMemoryCandidates, extractRequiredSections, quarterFromIsoWeek } from "./prepare-weekly-memory.mjs";
+import { createYwContextP1Executor } from "../../learn-x-weekly-automation/scripts/unified-confirmation.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const defaultRepoRoot = path.resolve(__dirname, "../../../..");
@@ -147,7 +148,7 @@ export async function prepareWeeklyRangeMemory({ periodId, repoRoot = defaultRep
   }
 }
 
-export async function applyWeeklyRangeMemory({ periodId, fingerprint, authorizationEvidence, repoRoot = defaultRepoRoot } = {}) {
+export async function applyWeeklyRangeMemory({ periodId, fingerprint, authorizationEvidence, repoRoot = defaultRepoRoot, ywContextExecutor = null } = {}) {
   const outputDir = path.join(repoRoot, "04_output/_dist/weekly", periodId || "");
   const approvalPath = path.join(outputDir, "_range-memory-proposal.json");
   const candidatePath = path.join(outputDir, "memory-candidates.md");
@@ -188,7 +189,17 @@ export async function applyWeeklyRangeMemory({ periodId, fingerprint, authorizat
     automaticCloseoutAuthorization: approval.authorizationEvidence?.userMessageSha256,
     memoryTarget: sha256(targetContent)
   };
-  if (Object.entries(currentHashes).some(([key, value]) => approval.sourceHashes?.[key] !== value)
+  const rangeHeading = "## " + periodId;
+  const alreadyApplied = targetContent.split(rangeHeading).length - 1 === 1;
+  const receiptPath = path.join(outputDir, "_range-memory-write-receipt.json");
+  const savedReceiptText = alreadyApplied ? await readOptional(receiptPath) : null;
+  const savedReceipt = savedReceiptText == null ? null : JSON.parse(savedReceiptText);
+  const targetMatchesReceipt = savedReceipt?.schemaVersion === 2 && savedReceipt.periodId === periodId &&
+    savedReceipt.fingerprint === fingerprint && savedReceipt.target === approval.paths.memoryTarget &&
+    savedReceipt.targetSha256 === currentHashes.memoryTarget && savedReceipt.authorizationMessageId === approval.authorizationEvidence?.userMessageId &&
+    savedReceipt.authorizationMessageSha256 === approval.authorizationEvidence?.userMessageSha256;
+  if (Object.entries(currentHashes).some(([key, value]) => key === "memoryTarget" && targetMatchesReceipt
+      ? false : approval.sourceHashes?.[key] !== value)
     || approval.artifactHashes?.candidates !== sha256(candidatePack)
     || approval.artifactHashes?.proposal !== sha256(proposal)
     || approval.artifactHashes?.cardBody !== sha256(cardBody)
@@ -201,12 +212,11 @@ export async function applyWeeklyRangeMemory({ periodId, fingerprint, authorizat
     || candidates.coreSummary.length !== 1 || candidates.mungerInsights.length !== 1 || candidates.checked.length !== 0) {
     throw new Error("weekly-range-memory-approved-candidates-invalid");
   }
-  const rangeHeading = "## " + periodId;
-  if (targetContent.split(rangeHeading).length - 1 === 1) {
-    const receipt = await readOptional(path.join(outputDir, "_range-memory-write-receipt.json"));
-    if (receipt != null) {
-      const saved = JSON.parse(receipt);
-      if (saved.fingerprint === fingerprint && saved.targetSha256 === sha256(targetContent)) return { status: "already-success", targetSha256: saved.targetSha256, receiptPath: path.join(outputDir, "_range-memory-write-receipt.json") };
+  if (alreadyApplied) {
+    if (targetMatchesReceipt) {
+      const syncState = await attemptRangeYwContextSync({ approval, receipt: savedReceipt, candidates, targetContent, repoRoot, ywContextExecutor, retry: true });
+      const updatedReceipt = await persistRangeYwContextState(receiptPath, savedReceipt, syncState);
+      return { status: "already-success", targetSha256: savedReceipt.targetSha256, receiptPath, ywcontextSync: updatedReceipt.ywcontextSync };
     }
     throw new Error("weekly-range-memory-target-already-has-period-without-matching-receipt");
   }
@@ -236,7 +246,6 @@ export async function applyWeeklyRangeMemory({ periodId, fingerprint, authorizat
     || savedTarget.split("[" + periodId + "] 洞察：").length - 1 !== 1) {
     throw new Error("weekly-range-memory-write-readback-mismatch");
   }
-  const receiptPath = path.join(outputDir, "_range-memory-write-receipt.json");
   const receiptValue = {
     schemaVersion: 2,
     periodId,
@@ -265,7 +274,126 @@ export async function applyWeeklyRangeMemory({ periodId, fingerprint, authorizat
   }
   if (priorReceipt == null) await atomicWrite(receiptPath, JSON.stringify(receiptValue, null, 2) + "\n");
   if (JSON.stringify(await readJson(receiptPath)) !== JSON.stringify(receiptValue)) throw new Error("weekly-range-memory-receipt-readback-mismatch");
-  return { status: "written", target: targetPath, targetSha256: sha256(savedTarget), receiptPath, fingerprint };
+  const syncState = await attemptRangeYwContextSync({ approval, receipt: receiptValue, candidates, targetContent: savedTarget, repoRoot, ywContextExecutor, retry: false });
+  const updatedReceipt = await persistRangeYwContextState(receiptPath, receiptValue, syncState);
+  return { status: "written", target: targetPath, targetSha256: sha256(savedTarget), receiptPath, fingerprint, ywcontextSync: updatedReceipt.ywcontextSync };
+}
+
+function buildRangeYwContextInput({ approval, receipt, candidates, targetContent }) {
+  const periodId = approval.periodId;
+  const coreValue = candidates.coreSummary.map(item => "- " + indent(item.text)).join("\n\n");
+  const mungerValue = candidates.mungerInsights.map(item => "- [" + periodId + "] 洞察：\n  " + indent(item.text)).join("\n\n");
+  const expectedItems = [
+    { id: "range-core-summary", section: periodId + "/Memory", value: coreValue },
+    { id: "range-munger-insights", section: "芒格之魂手动洞察候选池", value: mungerValue },
+  ];
+  if (receipt?.schemaVersion !== 2 || receipt.periodId !== periodId || receipt.fingerprint !== approval.fingerprint ||
+      receipt.target !== approval.paths.memoryTarget || receipt.targetSha256 !== sha256(targetContent) ||
+      receipt.authorizationMessageId !== approval.authorizationEvidence?.userMessageId ||
+      receipt.authorizationMessageSha256 !== approval.authorizationEvidence?.userMessageSha256 ||
+      !Array.isArray(receipt.items) || receipt.items.length !== expectedItems.length ||
+      !Number.isFinite(Date.parse(receipt.writtenAt || ""))) {
+    throw new Error("weekly-range-memory-ywcontext-receipt-mismatch");
+  }
+  for (let index = 0; index < expectedItems.length; index += 1) {
+    const expected = expectedItems[index];
+    const saved = receipt.items[index];
+    if (saved?.id !== expected.id || saved.section !== expected.section || saved.sha256 !== sha256(expected.value)) {
+      throw new Error("weekly-range-memory-ywcontext-item-mismatch");
+    }
+  }
+  const items = expectedItems.map(item => ({
+    id: item.id,
+    domain: "learn-x",
+    source: "human",
+    locator: approval.paths.memoryTarget + "#" + periodId + "/" + item.id,
+    section: item.section,
+    value: item.value,
+    targets: ["memory"],
+  }));
+  const batch = {
+    batchId: "learn-x-memory-range-" + approval.fingerprint.slice(0, 16),
+    confirmedAt: receipt.writtenAt,
+    reviewWeek: periodId,
+    sourceBindings: {
+      learnxMemoryFingerprint: approval.fingerprint,
+      finalReviewMessageId: approval.reviewEvidence.userMessageId,
+      finalReviewMessageSha256: approval.reviewEvidence.userMessageSha256,
+    },
+    items,
+  };
+  const memoryWriteEvidence = {
+    ok: true,
+    status: "verified",
+    evidence: {
+      targetPath: receipt.target,
+      week: periodId,
+      itemIds: receipt.items.map(item => item.id),
+      sha256: receipt.targetSha256,
+      fingerprint: receipt.fingerprint,
+      authorizationMessageId: receipt.authorizationMessageId,
+      authorizationMessageSha256: receipt.authorizationMessageSha256,
+      finalReviewMessageId: approval.reviewEvidence.userMessageId,
+      finalReviewMessageSha256: approval.reviewEvidence.userMessageSha256,
+      items: receipt.items,
+    },
+  };
+  return { batch, memoryWriteEvidence, itemIds: items.map(item => item.id) };
+}
+
+function validRangeYwContextReceipt(result, { approval, receipt, itemIds }) {
+  const evidence = result?.evidence;
+  return result?.ok === true && result.status === "verified" && evidence?.schema === "yw-context-p1-publish-receipt/v1" &&
+    evidence.source_id === "learn-x-memory-p1-content" && typeof evidence.source_revision === "string" &&
+    evidence.source_sha256 === receipt.targetSha256 && evidence.sourceSha256 === receipt.targetSha256 &&
+    evidence.targetPath === approval.paths.memoryTarget && evidence.p1_record_count === itemIds.length &&
+    Array.isArray(evidence.itemIds) && JSON.stringify(evidence.itemIds) === JSON.stringify(itemIds) &&
+    /^[a-f0-9]{64}$/.test(evidence.p1_records_sha256 || "") && /^[a-f0-9]{64}$/.test(evidence.p1_bundle_sha256 || "") &&
+    /^[a-f0-9]{40}$/.test(evidence.published_commit || "") && evidence.published_commit === evidence.remote_readback_commit &&
+    /^[a-f0-9]{40}$/.test(evidence.p2_remote_commit || "") && typeof evidence.p2_batch_id === "string" && typeof evidence.batch_id === "string";
+}
+
+async function attemptRangeYwContextSync({ approval, receipt, candidates, targetContent, repoRoot, ywContextExecutor, retry }) {
+  const input = buildRangeYwContextInput({ approval, receipt, candidates, targetContent });
+  const executor = ywContextExecutor || createYwContextP1Executor({ learnXRoot: repoRoot });
+  try {
+    let result;
+    if (retry) {
+      result = await executor.resolve(null, input.batch, null, input.memoryWriteEvidence);
+      if (validRangeYwContextReceipt(result, { approval, receipt, itemIds: input.itemIds })) return {
+        status: "published_and_read_back", sourceId: "learn-x-memory-p1-content", targetPath: receipt.target,
+        sourceSha256: receipt.targetSha256, evidence: result.evidence,
+      };
+      if (result?.status !== "not-applied" && result?.status !== "p2-ready-for-p1") return {
+        status: result?.status === "unknown" ? "unknown" : "pending",
+        errorCode: "dynamic_ywcontext_sync_unavailable",
+        sourceId: "learn-x-memory-p1-content", targetPath: receipt.target, sourceSha256: receipt.targetSha256,
+      };
+    }
+    result = await executor.execute(null, input.batch, input.memoryWriteEvidence);
+    if (validRangeYwContextReceipt(result, { approval, receipt, itemIds: input.itemIds })) return {
+      status: "published_and_read_back", sourceId: "learn-x-memory-p1-content", targetPath: receipt.target,
+      sourceSha256: receipt.targetSha256, evidence: result.evidence,
+    };
+    return {
+      status: result?.status === "unknown" ? "unknown" : "pending",
+      errorCode: "dynamic_ywcontext_sync_unavailable",
+      sourceId: "learn-x-memory-p1-content", targetPath: receipt.target, sourceSha256: receipt.targetSha256,
+    };
+  } catch {
+    return {
+      status: "unknown", errorCode: "dynamic_ywcontext_sync_unavailable",
+      sourceId: "learn-x-memory-p1-content", targetPath: receipt.target, sourceSha256: receipt.targetSha256,
+    };
+  }
+}
+
+async function persistRangeYwContextState(receiptPath, receipt, ywcontextSync) {
+  const updated = { ...receipt, ywcontextSync };
+  await atomicWrite(receiptPath, JSON.stringify(updated, null, 2) + "\n");
+  const readback = await readJson(receiptPath);
+  if (JSON.stringify(readback) !== JSON.stringify(updated)) throw new Error("weekly-range-memory-ywcontext-receipt-readback-mismatch");
+  return readback;
 }
 
 function buildApprovalScope(periodId, quarter) {
@@ -282,7 +410,7 @@ function buildApprovalScope(periodId, quarter) {
       level: "P1",
       contentMode: "full",
       trigger: "automatic after verified Memory writeback; no per-record confirmation",
-      receiptSchema: "yw-context-publish-receipt/v1",
+      receiptSchema: "yw-context-p1-publish-receipt/v1",
       unavailableStatus: "pending/unknown with dynamic_ywcontext_sync_unavailable"
     },
     flomo: {
