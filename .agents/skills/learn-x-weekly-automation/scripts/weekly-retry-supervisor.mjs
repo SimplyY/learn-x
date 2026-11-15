@@ -223,6 +223,7 @@ export async function runWeeklyRetrySupervisor({
   week,
   mode = "initial",
   sourceId = null,
+  skipAi = false,
   resubmitUncertainAi = false,
   recoveryActionCode = "",
   problemId = "",
@@ -274,7 +275,8 @@ export async function runWeeklyRetrySupervisor({
   if (resubmitUncertainAi && (mode !== "manual" || sourceId !== "ai")) throw new Error("uncertain-ai-resubmission-requires-manual-source-ai");
   if (mode === "manual" && !["flomo", "daily"].includes(sourceId) && !(sourceId === "ai" && resubmitUncertainAi)) throw new Error("manual-mode-requires-source-flomo-daily-or-confirmed-ai-resubmission");
   if (mode === "manual" && sourceId === "daily" && (!skipPreparation || enableFlomoReviewImport)) throw new Error("manual-daily-requires-skipped-side-effects");
-  const selectedSources = sourceId ? WEEKLY_SOURCE_CONFIG.filter((source) => source.id === sourceId) : WEEKLY_SOURCE_CONFIG;
+  const selectedSources = (sourceId ? WEEKLY_SOURCE_CONFIG.filter((source) => source.id === sourceId) : WEEKLY_SOURCE_CONFIG)
+    .filter((source) => !(skipAi && source.id === "ai"));
   const safePaths = await ensureWeeklyDirectory(repoRoot, normalizedWeek);
   repoRoot = safePaths.repoRoot;
   const weekRoot = safePaths.weekRoot;
@@ -518,7 +520,7 @@ export async function runWeeklyRetrySupervisor({
     if (mode === "initial") {
       const dueFirst = selectedSources.filter((source) => source.collector && state.sources[source.id]?.attempts === 0 && state.sources[source.id]?.status === "pending");
       await runBatch(dueFirst, "first", sourceContext());
-      if (!sourceId) await runEligibleAiResubmission(sourceContext());
+      if (!sourceId && !skipAi) await runEligibleAiResubmission(sourceContext());
       if (stateLockLost || !lock) return await unlockedAiWaitResult();
     }
 
@@ -733,7 +735,7 @@ export async function runWeeklyRetrySupervisor({
         event({ step: "retry-rescue", outcome: "bounded-window-ended", evidence: STATE_FILE });
         await save();
       }
-      if (!sourceId) await runEligibleAiResubmission(sourceContext());
+      if (!sourceId && !skipAi) await runEligibleAiResubmission(sourceContext());
       if (stateLockLost || !lock) return await unlockedAiWaitResult();
     }
 
@@ -2075,6 +2077,7 @@ export function parseArgs(argv) {
     singleAttempt: argv.includes("--single-attempt"),
     skipPreparation: argv.includes("--skip-prepare"),
     skipFlomoReviewImport: argv.includes("--skip-flomo-review-import"),
+    skipAi: argv.includes("--skip-ai"),
     automationId: value("--automation-id", ""),
     ...(scheduledAt ? { scheduledAt: new Date(Date.parse(scheduledAt)).toISOString() } : {}),
     ...(maxDurationMs !== undefined ? { maxDurationMs } : {}),
