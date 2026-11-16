@@ -53,7 +53,7 @@ rm 03_input/weekly/YYYY-Www/README.md
 
 0. 自动判断目标周：未指定时，周一至周五默认处理上一 ISO 周；周六、周日默认处理当前 ISO 周。周三至周五运行时需要提示“现在仍是周中，默认处理上一周”；周六、周日处理当前周时视为提前写当周，只能声明覆盖截至运行时。
 1. 采集所有自动来源并更新 `_source-status.json`；成功空结果统一报告“0 条记录，文件未生成”，失败/不可用单独报告。此阶段不采集周记，不生成 `input.json`、`process-pack.md` 或 Weekly Output 壳。
-2. 自动化读取 `03_input/weekly/00_template/ai.md`，通过全局 ChatGPT Web Bridge 在已登录 ChatGPT 新聊天中生成 `ai.generated.md`；不发送本地周输入材料。失败时报告可手动复制的 fallback prompt。
+2. 自动化读取 `03_input/weekly/00_template/ai.md`，通过全局 ChatGPT Web Bridge 在已登录 ChatGPT 新聊天中生成 `ai.generated.md`；不发送本地周输入材料。失败时报告可手动复制的 fallback prompt。该提示词已纳入 Prompt 治理（`prompt_id: learn-x.weekly-ai-review`，P0，飞书真源 https://ywhome.feishu.cn/wiki/G42Twa666iPjtNkvIdOc9DMNnEh）；本地文件是受控兼容副本，正文修改须在飞书真源进行后用中央 `sync-backups` 同步，自动化切换到共享读取器 latest 读取仍是待办。
 3. 自动化生成飞书周记草稿（Action Feedback 已退役，不再有配套草稿）。用户审核、修改；只有用户回复“周记已确认”后才进入阶段 2。阶段 2 采集确认后的 `weekly.md`，随后仅发布唯一“新周计划”表格行到 `04_output/_dist/shared-context/current.json`（版本放在同目录 `weekly/` 下），再生成 `input.json`、Process Pack 和 Weekly Output 壳。
 4. 用户基于最新 Process Pack 完成 `04_output/weekly/YYYY-WW.md`、核心内容和 Memory 候选审核后，回复继续进入阶段 3。阶段 3 先生成并校验 `memory-candidates.md`，再展示包含正式 Memory、备份与 Flomo 目标的唯一确认卡（Action Feedback Base 已退役）；用户确认后写入并读回 Memory，再自动尝试把已确认 Memory 完整同步到 YWContext P1。P1 同步失败或状态未知时如实记录，不阻塞已完成的 Memory 写入，也不回退到 YWNext 旧内容。公众号发布仍由用户人工完成。
 

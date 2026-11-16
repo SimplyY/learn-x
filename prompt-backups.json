@@ -163,6 +163,15 @@
         "sha256": "d68893967cb48307f86f9c7ae9851d80e71bff807530ca0d44d6af156f164e4a",
         "at": "2026-11-04T03:22:05.067Z"
       }
+    },
+    "learn-x.weekly-ai-review": {
+      "local_path": "03_input/weekly/00_template/ai.md",
+      "synced": {
+        "document_id": "EqoqdiKXiosbeexd3spce9Ofn8f",
+        "revision": 5,
+        "sha256": "f714b4dd5c8cbb77eb45ac57091d56bd5f0485183b84899f54187903646ec099",
+        "at": "2026-11-16T05:42:14.204Z"
+      }
     }
   }
 }

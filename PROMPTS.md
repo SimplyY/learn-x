@@ -27,6 +27,7 @@ node /Users/yuwei/code/skills/prompt-governance/scripts/sync-backups.mjs --promp
 | `learn-x.weekly-journal` | `02_prompts/journal/weekly-journal.md` |
 | `learn-x.reading-weekly` | `02_prompts/meta/chatgpt-reading-weekly.md` |
 | `learn-x.reading-daily` | `02_prompts/meta/chatgpt-reading-daily.md` |
+| `learn-x.weekly-ai-review` | `03_input/weekly/00_template/ai.md` |
 | `learn-x.monthly-journal` | `02_prompts/journal/monthly-journal.md` |
 | `chatpack.weekly-output-rules` | `02_prompts/chatpack/reflective-decision/weekly-output-rules.md` |
 | `chatpack.monthly-output-rules` | `02_prompts/chatpack/reflective-decision/monthly-output-rules.md` |

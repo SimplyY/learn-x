@@ -6,7 +6,7 @@
 
 `00_config/prompt-assets.json` 登记稳定 `prompt_id`、优先级、兼容文件路径、派生关系和最近一次记录的 revision/hash。它是消费者与飞书文档之间的技术映射，不是第二份正文真源。revision、hash 与读取时间只作运行证据。
 
-本仓全部 18 个 Learn-X Prompt 的 Git 备份位置和维护步骤见 [`PROMPTS.md`](../PROMPTS.md)。`prompt-backups.json` 独立记录仓库副本路径和同步 revision/hash，不被 Chat Pack 缓存读取。全局 Prompt 与其他项目的路径见 `skills/prompt-governance/references/prompt-backups.md`。
+本仓全部 19 个 Learn-X Prompt 的 Git 备份位置和维护步骤见 [`PROMPTS.md`](../PROMPTS.md)。`prompt-backups.json` 独立记录仓库副本路径和同步 revision/hash，不被 Chat Pack 缓存读取。全局 Prompt 与其他项目的路径见 `skills/prompt-governance/references/prompt-backups.md`。
 
 修改受治理 Prompt 时默认只做微调：保持既有结构、标题和字段；除非用户明确要求重构，不做整段重写。
 
