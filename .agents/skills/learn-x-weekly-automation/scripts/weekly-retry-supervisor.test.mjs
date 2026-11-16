@@ -243,6 +243,9 @@ test("classifies recoverable network faults separately from login, schema, and u
   assert.deepEqual(classifyWeeklyFailure("operation not permitted", { sourceId: "flomo", code: "EPERM" }), {
     errorClass: "local-execution-permission-denied", retryable: false, retryAfterMs: 0,
   });
+  assert.deepEqual(classifyWeeklyFailure("flomo-storage-file-not-private:quality-packets/assessment.json", { sourceId: "flomo" }), {
+    errorClass: "local-storage-permissions-invalid", retryable: false, retryAfterMs: 0,
+  });
   assert.equal(classifyWeeklyFailure("field contract mismatch").errorClass, "source-contract-mismatch");
   assert.deepEqual(classifyWeeklyFailure("Flomo 全量快照同步失败（ego-detail-body-mismatch stage=verify-longest-detail）：scan-integrity-check-failed", { sourceId: "flomo" }), {
     errorClass: "source-integrity-failed", retryable: false, retryAfterMs: 0,

@@ -42,14 +42,14 @@ After a validated full snapshot becomes active, `sync-flomo-full-week.mjs` invok
 5. If the API returns `upgrade_info`, stop that WeRead attempt and handle it as a version mismatch, not a transient network retry. Verify the upgrade instructions and package origin against the official WeRead Skill, install only a newer verified package using its documented method, read back the installed version, then retry the target-week collection once. If the upgrade target, origin, or installed version cannot be verified, leave WeRead failed and continue unrelated sources.
 6. Run `npm run process:weekly -- --week YYYY-Www` only when the user also wants the Weekly Process Pack refreshed.
 
-The collector exports weekly reading time, books whose latest reading time falls in the requested ISO week, each book's latest progress and current chapter, plus personal highlights and thoughts created during that week. The current chapter is a progress snapshot, not a complete chapter-by-chapter reading history. It may use notebook recency to limit candidate books, but must filter every exported note by its own creation time.
+The collector exports weekly reading time, books whose latest reading time falls in the requested ISO week, each book's latest progress and current chapter, plus personal highlights and thoughts created during that week. The current chapter is a progress snapshot, not a complete chapter-by-chapter reading history. It may use notebook recency to limit candidate books, but must filter every exported note by its own creation time. `dataSemantics` is the shared WeRead contract: highlights are high-weight author/original evidence; thoughts are highest-weight personal input because they capture the user's expression, thinking, and questions. Every WeRead collector must use the shared `WEREAD_DATA_SEMANTICS` contract, and downstream processing must not treat thoughts as ordinary excerpts.
 
 Render all seven days from the weekly `readTimes` buckets, including zero-minute days. A shelf item is shown as read only when it has positive progress, a known current chapter, or a positive per-book time in the weekly ranking; `0%` plus an unknown chapter without weekly time is treated as a newly added shelf item and omitted.
 
 ## Boundaries
 
 - Treat WeRead as information input, not self-feedback, action evidence, or Memory.
-- Keep the weekly Markdown source-preserving: include the collection range, timezone, generated time, reading statistics, progress snapshots, highlights, and thoughts. Do not persist WeRead IDs, ranges, chapter UIDs, or position links.
+- Keep the weekly Markdown source-preserving: include the collection range, timezone, data-semantics weights, generated time, reading statistics, progress snapshots, highlights, and thoughts. Do not persist WeRead IDs, ranges, chapter UIDs, or position links.
 - Use `/readdata/detail` weekly statistics as the total-time source. Use `readUpdateTime` only to identify books read during the week; do not infer per-book duration from timestamps.
 - Label the mapped progress chapter as the latest current chapter. Do not claim that it is the complete list of chapters read during the week.
 - Do not collect public reviews, popular highlights, or bookmark positions without content.

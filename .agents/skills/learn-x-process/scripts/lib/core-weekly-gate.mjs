@@ -71,12 +71,13 @@ async function runCoreGate(week, coreRoot = defaultCoreRoot) {
   }
 }
 
-export async function requireCoreWeeklyGate(weeks, { coreRoot = defaultCoreRoot, repoRoot = defaultRepoRoot, runGate, validateJournalLinks = true } = {}) {
+export async function requireCoreWeeklyGate(weeks, { coreRoot = defaultCoreRoot, repoRoot = defaultRepoRoot, runGate, validateJournalLinks = true, skipCompletionGate = false } = {}) {
   if (!Array.isArray(weeks) || weeks.length < 1 || weeks.length > 4
     || weeks.some(week => !/^\d{4}-W(?:0[1-9]|[1-4]\d|5[0-3])$/.test(week))) {
     throw new Error("weekly-process-blocked-core: ISO week list is invalid");
   }
-  if (validateJournalLinks) await assertWeeklyCoreLinks(weeks, { repoRoot });
+  const links = validateJournalLinks ? await assertWeeklyCoreLinks(weeks, { repoRoot }) : [];
+  if (skipCompletionGate) return links.map((link) => ({ ...link, completionGate: "skipped" }));
   const gate = runGate || (week => runCoreGate(week, coreRoot));
   const results = [];
   const issues = [];

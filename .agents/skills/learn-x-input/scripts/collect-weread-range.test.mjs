@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { collectWereadRange, defaultRecentRange, parseShanghaiDateRange, writeWereadRange } from "./collect-weread-range.mjs";
+import { WEREAD_DATA_SEMANTICS } from "./lib/weread-data-semantics.mjs";
 
 test("default range is Shanghai midnight for today and the prior two days through now", () => {
   const now = new Date("2026-11-03T02:15:00Z"); // 10:15 Shanghai
@@ -44,6 +45,7 @@ test("collects range highlights and thoughts with stable source IDs and acquired
   });
 
   assert.equal(payload.complete, true);
+  assert.equal(payload.dataSemantics.thoughts.weight, "highest");
   assert.deepEqual(payload.counts, { candidateBooks: 1, books: 1, acquiredHighlights: 1, acquiredThoughts: 1, unusableEntries: 0 });
   assert.equal(payload.books[0].bookId, "book-1");
   assert.equal(payload.books[0].highlights[0].sourceId, "weread-bookmark:book-1:mark-1");

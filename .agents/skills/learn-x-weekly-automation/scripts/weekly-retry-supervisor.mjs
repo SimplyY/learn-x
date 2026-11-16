@@ -140,6 +140,9 @@ export function createWeeklyRetryState(week) {
 
 export function classifyWeeklyFailure(message, { sourceId = "", code = "", now = Date.now(), retryAfterMs: suppliedRetryAfterMs = null } = {}) {
   const value = `${code} ${message}`.toLowerCase();
+  if (sourceId === "flomo" && /local-storage-permissions-invalid|flomo-storage-(?:directory|file|symlink)-not-private|flomo-full-snapshot-storage-directory-not-private|review-private-directory-insecure|review-output-path-not-private/.test(value)) {
+    return { errorClass: "local-storage-permissions-invalid", retryable: false, retryAfterMs: 0 };
+  }
   if (/weread-skill-upgrade-required|weread-skill-version-unverifiable|skill.{0,20}(upgrade|version)|upgrade_info/.test(value)) {
     return { errorClass: "source-version-mismatch", retryable: false, retryAfterMs: 0 };
   }

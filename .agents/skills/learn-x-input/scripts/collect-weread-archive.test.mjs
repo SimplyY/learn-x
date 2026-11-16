@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { classifyGroup, collectWereadArchive, writeWereadArchive } from "./collect-weread-archive.mjs";
+import { WEREAD_DATA_SEMANTICS } from "./lib/weread-data-semantics.mjs";
 
 test("classifyGroup maps composite WeRead categories per ADR 0002", () => {
   assert.equal(classifyGroup("精品小说-玄幻小说"), "fiction");
@@ -126,6 +127,8 @@ test("collects all notebooks across pages with lastSort cursor, >=150ms delays, 
   const { notebooksPages, infoByBookId, bookmarksByBookId } = fixture();
   const { callApi, sleep, calls, sleeps } = buildCallApi({ notebooksPages, infoByBookId, bookmarksByBookId });
   const payload = await collectWereadArchive({ apiKey: "test", callApi, sleep });
+  assert.equal(payload.dataSemantics, WEREAD_DATA_SEMANTICS);
+  assert.deepEqual(payload.dataScope, { highlights: "collected", thoughts: "not-collected" });
 
   const notebookCalls = calls.filter((call) => call.api_name === "/user/notebooks");
   assert.equal(notebookCalls.length, 2);
@@ -182,7 +185,7 @@ test("writes one year file per group/year; books stay whole, ordered by recent h
     // 跨年书整本不劈：2025 的划线随小说书落在 fiction/2026.md，且不存在 fiction/2025.md
     const fiction = await readFile(path.join(outputRoot, "fiction", "2026.md"), "utf8");
     assert.match(fiction, /^# 微信读书划线｜小说｜2026\n/);
-    assert.match(fiction, /- 分组：小说\n- 年份：2026\n- 书数：1\n- 划线数：2\n- 字符数：9\n- 生成时间：2026-09-26T00:00:00\.000Z\n- 口径：全量重建·不蒸馏\n/);
+    assert.match(fiction, /- 分组：小说\n- 年份：2026\n- 书数：1\n- 划线数：2\n- 字符数：9\n- 数据权重：划线=high（用户标记的重点原文，适合作为原文证据。）\n- 生成时间：2026-09-26T00:00:00\.000Z\n- 口径：全量重建·不蒸馏\n/);
     assert.match(fiction, /## 《小说书》｜作者甲\n\n- 分类：小说\n- 首次划线：2025-03-15\n- 最近划线：2026-01-01\n/);
     assert.ok(fiction.indexOf("### 第二章") < fiction.indexOf("### 第一章"), "highlights sorted by createTime");
     assert.match(fiction, /### 第二章\n\n> 第二章内容\n\n### 第一章\n\n> 𠮷字测试/);

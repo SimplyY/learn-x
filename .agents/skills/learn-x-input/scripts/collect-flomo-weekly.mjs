@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fileExists, updateWeeklySourceStatus } from "./lib/source-status.mjs";
 import { learnXGeneratedReason } from "./lib/flomo-filter.mjs";
-import { assertFlomoPathWithinRoot, ensurePrivateFlomoDirectory, MAX_ACCEPTED_MISSING_RECORDS, resolveFlomoPathAllowed, resolveFlomoPrivateDataRoot, writeStagedOnlineFlomoSnapshot } from "./lib/flomo-full-snapshot.mjs";
+import { assertFlomoPathWithinRoot, assertPrivateFlomoStorageTree, ensurePrivateFlomoDirectory, MAX_ACCEPTED_MISSING_RECORDS, resolveFlomoPathAllowed, resolveFlomoPrivateDataRoot, writeStagedOnlineFlomoSnapshot } from "./lib/flomo-full-snapshot.mjs";
 import { isoWeekRangeShanghai, normalizeWeek, defaultWeeklyReviewWeek } from "./collect-weread-weekly.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -511,6 +511,7 @@ export function formatCliError(error) {
 
 export function classifyFlomoError(error) {
   const value = `${error?.message || ""} ${error?.code || ""} ${error?.stderr || ""}`.toLowerCase();
+  if (/flomo-storage-(?:directory|file|symlink)-not-private|flomo-full-snapshot-storage-directory-not-private|review-private-directory-insecure|review-output-path-not-private/.test(value)) return "local-storage-permissions-invalid";
   if (/flomo-timestamp-density-review-required/.test(value)) return "timestamp-density-review-required";
   if (/ego.*(?:bootstrap|login|permission|control)|user.control|unauthori[sz]ed|forbidden/.test(value)) return "ego-login-or-control-required";
   if (/task-exit-unconfirmed|taskspace-(?:binding-mismatch|resume-name-required)|cleanup-unconfirmed|detail-(?:body-mismatch|link-unresolved|editor-(?:unavailable|target-unavailable|cancel-unavailable)|verification-(?:missing|invalid))|library-count-(?:mismatch|gap-exceeds-tolerance|changed|unavailable)|memo-id-missing|body-incomplete|pagination-incomplete|pagination-control-missing|scan-record-conflict|scan-conflict/.test(value)) return "scan-integrity-check-failed";
@@ -520,6 +521,26 @@ export function classifyFlomoError(error) {
   if (/econnreset|econnrefused|eai_again|enotfound|err_name_not_resolved|err_connection_reset|err_connection_refused|network|dns|temporar|http.?5[0-9][0-9]/.test(value)) return "network-transient";
   if (/invalid|incomplete|week.*record/.test(value)) return "scan-integrity-check-failed";
   return "browser-scan-failed";
+}
+
+function classifyEgoExecutionStage(error, processOutput, currentStage) {
+  if (currentStage !== "ego-cli-process") return currentStage;
+  const value = `${error?.code || ""} ${processOutput}`.toLowerCase();
+  const codeSuffix = Number.isInteger(error?.code) && error.code >= 0 && error.code <= 255
+    ? `-exit-${error.code}`
+    : typeof error?.code === "string" && /^[A-Z0-9_]{1,24}$/.test(error.code)
+      ? `-${error.code.toLowerCase().replace(/_/g, "-")}` : "";
+  if (/failed to start ego lite|default agent sandbox.{0,80}full access|retry with full access/.test(value)) return `ego-cli-runner-startup${codeSuffix}`;
+  if (/failed to connect to ego_cli bootstrap|cannot connect to the ego_cli bootstrap/.test(value)) return "ego-cli-bootstrap";
+  if (error?.code === "ENOENT" && error?.path === "ego-browser") return "ego-cli-not-found";
+  if (error?.killed || error?.code === "ETIMEDOUT") return "ego-cli-timeout";
+  if (/eai_again|enotfound|err_name_not_resolved/.test(value)) return `ego-cli-network-dns${codeSuffix}`;
+  if (/econnreset|err_connection_reset/.test(value)) return `ego-cli-network-reset${codeSuffix}`;
+  if (/econnrefused|err_connection_refused/.test(value)) return `ego-cli-network-refused${codeSuffix}`;
+  if (/http.?5[0-9][0-9]/.test(value)) return `ego-cli-http-5xx${codeSuffix}`;
+  if (/network|dns|temporar/.test(value)) return `ego-cli-network${codeSuffix}`;
+  if (Number.isInteger(error?.code) && error.code >= 0 && error.code <= 255) return `ego-cli-exit-${error.code}`;
+  return "ego-cli-process";
 }
 
 export async function scanFlomoWithEgo({ week, range, mode = "weekly", invocationId, taskSpaceId, taskSpaceName, keepTaskSpace = false, resumeTaskSpace = false, timeout, repoRoot: projectRoot = repoRoot, storageRoot } = {}) {
@@ -543,15 +564,21 @@ export async function scanFlomoWithEgo({ week, range, mode = "weekly", invocatio
   const stagingDirectory = await resolveFlomoPathAllowed(path.join(runtimeRoot, "staged"));
   assertFlomoPathWithinRoot(runtimeRoot, stagingDirectory);
   await ensurePrivateFlomoDirectory(runtimeRoot);
+  await assertPrivateFlomoStorageTree(runtimeRoot);
   await ensurePrivateFlomoDirectory(stagingDirectory);
+  await assertPrivateFlomoStorageTree(runtimeRoot);
   const resultPath = await resolveFlomoPathAllowed(path.join(stagingDirectory, `scan-result-${invocation}.json`));
   assertFlomoPathWithinRoot(runtimeRoot, resultPath);
   const script = mode === "full"
     ? buildEgoFullScanScript({ taskName, taskSpaceId, taskSpaceName, resultPath, maxSteps: MAX_SCAN_STEPS, keepTaskSpace, resumeTaskSpace })
     : buildEgoScanScript({ week, range, taskName, resultPath, maxSteps: MAX_SCAN_STEPS });
   await writeFile(resultPath, "", { encoding: "utf8", flag: "wx", mode: 0o600 });
+  let executionStage = "storage-preflight";
   try {
+    await assertPrivateFlomoStorageTree(runtimeRoot);
+    executionStage = "ego-cli-process";
     await runEgoScript(script, { timeout: timeout || (mode === "full" ? 30 * 60_000 : 30 * 60_000) });
+    executionStage = "ego-result-read";
     const result = JSON.parse(await readFile(resultPath, "utf8"));
     if (result?.ok === false) {
       const knownErrors = new Set(["service-rate-limit", "network-timeout", "network-transient"]);
@@ -573,18 +600,31 @@ export async function scanFlomoWithEgo({ week, range, mode = "weekly", invocatio
     }
     return result;
   } catch (error) {
-    if (error.code === "ENOENT" && error.path === "ego-browser") throw new Error("ego-browser-unavailable");
-    const processOutput = `${error?.message || ""} ${error?.stderr || ""} ${error?.stdout || ""}`;
+    const processOutput = `${typeof error?.code === "string" ? error.code : ""} ${error?.stderr || ""} ${error?.stdout || ""}`;
+    const failureStage = mode === "full"
+      ? (typeof error?.stage === "string" && /^[a-z0-9-]{1,64}$/.test(error.stage)
+        ? error.stage : executionStage === "ego-cli-process"
+          ? classifyEgoExecutionStage(error, processOutput, executionStage) : null)
+      : null;
+    const safeError = (message) => {
+      const mapped = new Error(message);
+      if (failureStage) mapped.stage = failureStage;
+      return mapped;
+    };
+    if (error.code === "ENOENT" && error.path === "ego-browser") throw safeError("ego-browser-unavailable");
     if (/failed to connect to ego_cli bootstrap|cannot connect to the ego_cli bootstrap/i.test(processOutput)) {
-      throw new Error("ego-bootstrap-unavailable");
+      throw safeError("ego-bootstrap-unavailable");
     }
-    if (/^ego-[a-z0-9-]+$/.test(String(error.message || ""))) throw error;
-    if (mode === "full" && (error.killed || error.code === "ETIMEDOUT")) throw new Error("ego-task-exit-unconfirmed");
-    if (error.killed || error.code === "ETIMEDOUT") throw new Error("ego-browser-timeout");
-    if (/econnreset|econnrefused|eai_again|enotfound|err_name_not_resolved|err_connection_reset|err_connection_refused|network|dns|temporar|http.?5[0-9][0-9]/i.test(`${error.message || ""} ${error.code || ""} ${error.stderr || ""}`)) {
-      throw new Error("ego-network-transient");
+    if (/^ego-[a-z0-9-]+$/.test(String(error.message || ""))) {
+      if (failureStage && !error.stage) error.stage = failureStage;
+      throw error;
     }
-    throw new Error("ego-browser-scan-failed");
+    if (mode === "full" && (error.killed || error.code === "ETIMEDOUT")) throw safeError("ego-task-exit-unconfirmed");
+    if (error.killed || error.code === "ETIMEDOUT") throw safeError("ego-browser-timeout");
+    if (/econnreset|econnrefused|eai_again|enotfound|err_name_not_resolved|err_connection_reset|err_connection_refused|network|dns|temporar|http.?5[0-9][0-9]/i.test(processOutput)) {
+      throw safeError("ego-network-transient");
+    }
+    throw safeError("ego-browser-scan-failed");
   } finally {
     await rm(resultPath, { force: true });
   }

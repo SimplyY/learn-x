@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { isoWeeksInYear } from "./lib/iso-week.mjs";
+import { WEREAD_DATA_SEMANTICS } from "./lib/weread-data-semantics.mjs";
 import { fileExists, updateWeeklySourceStatus } from "./lib/source-status.mjs";
 
 const API_URL = "https://i.weread.qq.com/api/agent/gateway";
@@ -66,6 +67,7 @@ export async function collectWereadWeekly(options = {}) {
     },
     generatedAt,
     skillVersion,
+    dataSemantics: WEREAD_DATA_SEMANTICS,
     reading,
     stats: {
       candidateBookCount: notebooks.length,
@@ -276,6 +278,7 @@ export function renderMarkdown(payload) {
     `- 来源：微信读书阅读统计、阅读进度、个人划线与个人想法`,
     `- 采集范围：${payload.range.start} 至 ${payload.range.endExclusive}（不含结束时刻）`,
     `- 时区：${payload.timezone}`,
+    `- 数据权重：划线=${payload.dataSemantics.highlights.weight}（${payload.dataSemantics.highlights.meaning}）；想法=${payload.dataSemantics.thoughts.weight}（${payload.dataSemantics.thoughts.meaning}）`,
     `- 生成时间：${payload.generatedAt}`,
     `- 本周阅读书籍：${payload.stats.readBookCount} 本`,
     `- 产生笔记书籍：${payload.stats.bookCount} 本`,

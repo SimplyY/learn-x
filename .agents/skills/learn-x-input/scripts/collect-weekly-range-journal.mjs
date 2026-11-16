@@ -135,7 +135,7 @@ export async function collectConfirmedWeeklyRangeJournal({ periodId, repoRoot: r
     || anchor.writeDate !== expected.writeDate) {
     throw new Error("weekly-range-journal-anchor-invalid: period, weeks, target, or coverage mismatch");
   }
-  await requireCoreGate(weeks, { repoRoot: root });
+  await requireCoreGate(weeks, { repoRoot: root, skipCompletionGate: true });
 
   const response = await fetchSection({ docUrl: WEEKLY_JOURNAL_DOCUMENT_URL, blockId: anchor.targetBlockId, timeoutMs: 60_000 });
   const document = response?.data?.document || response?.document;

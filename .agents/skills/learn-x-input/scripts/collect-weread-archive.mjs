@@ -3,6 +3,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { WEREAD_DATA_SEMANTICS } from "./lib/weread-data-semantics.mjs";
 
 const API_URL = "https://i.weread.qq.com/api/agent/gateway";
 // SKILL_VERSION 是 WeRead Agent Gateway 的协议版本参数（与 collect-weread-weekly.mjs 保持一致、已实测可用），不是产物版本号，不得随脚本演进改动。
@@ -73,6 +74,8 @@ export async function collectWereadArchive(options = {}) {
   return {
     generatedAt: now().toISOString(),
     skillVersion: SKILL_VERSION,
+    dataSemantics: WEREAD_DATA_SEMANTICS,
+    dataScope: { highlights: "collected", thoughts: "not-collected" },
     totals: Object.fromEntries(GROUPS.map((group) => [group, groupStats(books, group)])),
     books,
     perBook: books.map((book) => ({
@@ -169,6 +172,7 @@ function renderYearFile(group, year, books, generatedAt) {
     `- 书数：${books.length}`,
     `- 划线数：${books.reduce((sum, book) => sum + book.highlights.length, 0)}`,
     `- 字符数：${books.reduce((sum, book) => sum + book.chars, 0)}`,
+    `- 数据权重：划线=${WEREAD_DATA_SEMANTICS.highlights.weight}（${WEREAD_DATA_SEMANTICS.highlights.meaning}）`,
     `- 生成时间：${generatedAt}`,
     `- 口径：全量重建·不蒸馏`,
     ""

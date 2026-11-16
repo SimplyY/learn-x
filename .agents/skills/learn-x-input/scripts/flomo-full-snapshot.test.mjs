@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -8,6 +8,7 @@ import { JSDOM } from "jsdom";
 import { buildEgoFullScanScript, collectFlomoFullSnapshot } from "./collect-flomo-weekly.mjs";
 import {
   assertFlomoStorageRootAllowed,
+  assertPrivateFlomoStorageTree,
   createOnlineFlomoSnapshot,
   defaultFlomoPrivateDataRoot,
   flomoBodyHash,
@@ -71,6 +72,23 @@ test("default Flomo snapshot storage is a project-local ignored directory", () =
   assert.equal(defaultFlomoPrivateDataRoot("/tmp/learn-x-fixture"),
     path.join("/tmp/learn-x-fixture", "04_output/_dist/flomo-review/online-full"));
   assert.doesNotMatch(defaultFlomoPrivateDataRoot(), /(?:^|[/\\])Library(?:[/\\]|$)/);
+});
+
+test("private Flomo tree audit rejects non-private nested directories and files", async (t) => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-private-tree-"));
+  t.after(() => rm(repoRoot, { recursive: true, force: true }));
+  const storageRoot = defaultFlomoPrivateDataRoot(repoRoot);
+  const nested = path.join(storageRoot, "quality-packets");
+  const artifact = path.join(nested, "assessment.json");
+  await mkdir(nested, { recursive: true, mode: 0o700 });
+  await chmod(nested, 0o755);
+  await assert.rejects(assertPrivateFlomoStorageTree(storageRoot), /flomo-storage-directory-not-private:quality-packets/);
+  await chmod(nested, 0o700);
+  await writeFile(artifact, "{}\n", { mode: 0o600 });
+  await chmod(artifact, 0o644);
+  await assert.rejects(assertPrivateFlomoStorageTree(storageRoot), /flomo-storage-file-not-private:quality-packets[/\\]assessment\.json/);
+  await chmod(artifact, 0o600);
+  assert.equal(await assertPrivateFlomoStorageTree(storageRoot), await resolveFlomoPathAllowed(storageRoot));
 });
 
 test("normalization preserves line endings and consecutive blank lines", () => {

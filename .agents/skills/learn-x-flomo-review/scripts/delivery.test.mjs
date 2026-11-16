@@ -33,11 +33,16 @@ test('recent history audit verifies ledgered cards and blocks orphan, duplicate 
   await assert.rejects(auditRecentReviewHistory({ ...args, batches: { [date]: batch },
     runCli: async () => envelope({ messages: [], has_more: false }) }), { code: 'review-history-ledger-card-missing' });
   await assert.rejects(auditRecentReviewHistory({ ...args, batches: { [date]: { ...batch, messageId: 'om_other' } } }), { code: 'review-history-ledger-message-mismatch' });
-  await assert.rejects(auditRecentReviewHistory({ ...args, batches: { [date]: batch }, runCli: async () => envelope({ messages: [remote, { ...remote, message_id: 'om_duplicate' }], has_more: false }) }), { code: 'review-history-multiple-cards' });
+  assert.deepEqual(await auditRecentReviewHistory({ ...args, batches: { [date]: batch }, runCli: async () => envelope({ messages: [remote, { ...remote, message_id: 'om_duplicate' }], has_more: false }) }), {
+    checkedCards: 1, complete: true, startDate: args.startDate, end: now.toISOString(),
+  });
+  assert.deepEqual(await auditRecentReviewHistory({ ...args, batches: { [date]: batch }, runCli: async () => envelope({ messages: [remote, { ...remote, message_id: 'om_duplicate' }, { ...remote, message_id: 'om_duplicate_2' }], has_more: false }) }), {
+    checkedCards: 1, complete: true, startDate: args.startDate, end: now.toISOString(),
+  });
   await assert.rejects(auditRecentReviewHistory({ ...args, batches: { [date]: batch }, runCli: async () => envelope({ messages: [remote], has_more: true }) }), { code: 'review-history-incomplete' });
 });
 
-test('recent history audit recognizes legacy posts and detects cross-format duplicate cards', async () => {
+test('recent history audit recognizes legacy posts and filters non-ledger duplicate cards', async () => {
   const date = '2026-10-12';
   const legacyMarkdown = markdown.replaceAll('2026-10-06', date);
   const legacyHash = createHash('sha256').update(normalizeMessageMarkdown(legacyMarkdown)).digest('hex');
@@ -56,7 +61,9 @@ test('recent history audit recognizes legacy posts and detects cross-format dupl
   const card = { schema: '2.0', header: { title: { tag: 'plain_text', content: `Flomo 回顾｜${date}` }, subtitle: { tag: 'plain_text', content: 'snapshot' } }, body: { elements: [{ tag: 'markdown', content: `回顾日期：${date}` }] } };
   const interactive = { message_id: 'om_card_duplicate', chat_id: chatId, msg_type: 'interactive', deleted: false,
     sender: { id: appId, sender_type: 'app' }, content: JSON.stringify(card) };
-  await assert.rejects(auditRecentReviewHistory({ ...args, runCli: async () => envelope({ messages: [legacy, interactive], has_more: false }) }), { code: 'review-history-multiple-cards' });
+  assert.deepEqual(await auditRecentReviewHistory({ ...args, runCli: async () => envelope({ messages: [legacy, interactive], has_more: false }) }), {
+    checkedCards: 1, complete: true, startDate: args.startDate, end: now.toISOString(),
+  });
 });
 const mockPreflight = ({ who, members, recent, meta } = {}) => async (args) => {
   if (args[0] === 'whoami') return envelope(who ?? { identity: 'bot', app: { appId } });

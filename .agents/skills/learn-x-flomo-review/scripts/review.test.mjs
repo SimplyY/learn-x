@@ -27,14 +27,16 @@ async function fixture(t) {
   await put('04_output/weekly/2026-40.md', output);
   await put('04_output/monthly/2026-09.md', output);
   await put('01_core/memory/2026-Q3.memory.md', '# Memory\n\n已确认的长期学习判断。');
-  const archive = Array.from({ length: 8 }, (_, i) => `## 2026-09-${20 + i} 09:00\n\n- 来源：<https://v.flomoapp.com/mine/?memo_id=M${20 + i}>\n\n我从第${i + 1}次真实实验中观察到，先记录反馈才能辨认限制条件。\n`).join('\n---\n\n');
+  const dates = ['2026-10-06', '2026-10-02', '2026-08-01', '2026-07-15', '2026-04-10', '2025-10-09', '2025-08-01', '2025-07-01'];
+  const archive = Array.from({ length: 8 }, (_, i) => `## ${dates[i]} 09:00\n\n- 来源：<https://v.flomoapp.com/mine/?memo_id=M${20 + i}>\n\n我从第${i + 1}次真实实验中观察到，先记录反馈才能辨认限制条件。\n`).join('\n---\n\n');
   await put('03_input/monthly/2026-9/flomo.md', archive);
   await refreshArchive(root);
   let catalog = await readJson(paths(root).catalog);
   await acceptQuality(root, { policyVersion: '1', items: catalog.notes.map(note => ({ noteKey: note.noteKey, bodyHash: note.bodyHash, score: 3, reason: '记录经验并提炼可迁移判断', quote: '先记录反馈' })) });
   const prepared = await prepareReview(root, date, { readDao });
   catalog = await readJson(paths(root).catalog);
-  const decision = { date, contextHash: prepared.contextHash, catalogHash: prepared.catalogHash, countDeviationReason: '测试样本只有六条，用于覆盖低于七条目标时仍保留质量门槛。', ageDeviationReason: '本测试库只有近期合格来源；先遵守质量与硬去重，年龄比例按整周继续观察。', items: catalog.notes.slice(0, 6).map(note => ({ noteKey: note.noteKey, bodyHash: note.bodyHash, relevance: 'strong', reason: '现实反馈需再检验', contextEvidence: [{ path: '04_output/weekly/2026-40.md', quote: '近期正在重新辨认长期方向与现实反馈。' }] })) };
+  const selected = catalog.notes.filter(note => ['M20', 'M21', 'M22', 'M23', 'M24', 'M25'].includes(note.memoId));
+  const decision = { date, contextHash: prepared.contextHash, catalogHash: prepared.catalogHash, countDeviationReason: '测试样本只有六条，用于覆盖低于七条目标时仍保留质量门槛。', ageDeviationReason: '测试样本覆盖两条近期、一条三个月、一条半年与一条一年内来源。', items: selected.map(note => ({ noteKey: note.noteKey, bodyHash: note.bodyHash, relevance: 'strong', reason: '现实反馈需再检验', contextEvidence: [{ path: '04_output/weekly/2026-40.md', quote: '近期正在重新辨认长期方向与现实反馈。' }] })) };
   return { root, put, decision, options: { now, contextOptions: { readDao } } };
 }
 
@@ -273,6 +275,10 @@ test('absent reply from a complete thread does not imply deletion or silence as 
 
 test('review reason is constrained to the declared card limit', async (t) => {
   const { root, decision, options } = await fixture(t);
+  const outputDirectory = path.join(paths(root).runtime, date);
+  const oldMessage = path.join(outputDirectory, 'message.md');
+  await writeFile(oldMessage, 'synthetic previous preview\n', { mode: 0o644 });
+  await chmod(oldMessage, 0o644);
   const tooLong = structuredClone(decision);
   tooLong.items[0].reason = '结合本周真实反馈，重新核对判断和现实条件。';
   await assert.rejects(previewReview(root, tooLong, options), /review-reason-length-invalid/);
@@ -280,6 +286,26 @@ test('review reason is constrained to the declared card limit', async (t) => {
   assert.equal(preview.count, 6);
   const message = await readFile(path.join(root, '04_output/_dist/flomo-review', date, 'message.md'), 'utf8');
   assert.match(message, /回顾理由：现实反馈需再检验/);
+  assert.equal((await lstat(paths(root).runtime)).mode & 0o777, 0o700);
+  assert.equal((await lstat(outputDirectory)).mode & 0o777, 0o700);
+  for (const name of ['request.json', 'decision.json', 'review.md', 'message.md', 'validation.json', 'images.json']) {
+    assert.equal((await lstat(path.join(outputDirectory, name))).mode & 0o777, 0o600, `private review file mode: ${name}`);
+  }
+});
+
+test('private JSON writers create 0700 directories and replace files as 0600', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flomo-private-json-mode-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const p = paths(root), directory = path.join(p.privateRoot, 'quality-packets');
+  const file = path.join(directory, 'assessment-test.json');
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await chmod(directory, 0o700);
+  await writeFile(file, '{"old":true}\n', { mode: 0o644 });
+  await chmod(file, 0o644);
+  await atomicJson(file, { synthetic: true }, root);
+  assert.equal((await lstat(p.privateRoot)).mode & 0o777, 0o700);
+  assert.equal((await lstat(directory)).mode & 0o777, 0o700);
+  assert.equal((await lstat(file)).mode & 0o777, 0o600);
 });
 
 test('cards use original opening text as titles and include Flomo links', () => {
@@ -492,7 +518,7 @@ test('capacity report supports seven and twenty-eight days without exposing note
   for (const days of [7, 28]) {
     const result = await simulateCapacity(root, '2026-10-08', days);
     assert.equal(result.possible, false);
-    assert.equal(result.minimum, days === 7 ? 42 : 158);
+  assert.equal(result.minimum, days === 7 ? 42 : 168);
     assert.equal(result.scheduledDays, 0);
     const saved = JSON.parse(await readFile(result.reportPath, 'utf8'));
     assert.equal(saved.days, days);
@@ -574,8 +600,11 @@ test('first online activation backs up legacy state, preserves ledger occupancy,
   const legacyLedger = emptyLedger();
   legacyLedger.batches['2026-10-11'] = { date: '2026-10-11', status: 'delivered', messageId: 'om-already-sent',
     items: [{ noteKey: 'old-key', groupKey: 'old-group' }] };
+  const legacyLedgerPath = path.join(before.legacyRuntime, 'ledger.json');
   await atomicJson(before.legacyCatalog, legacyCatalog);
-  await atomicJson(path.join(before.legacyRuntime, 'ledger.json'), legacyLedger);
+  await atomicJson(legacyLedgerPath, legacyLedger);
+  await chmod(before.legacyCatalog, 0o644);
+  await chmod(legacyLedgerPath, 0o644);
   const incompleteStage = await writeStagedOnlineFlomoSnapshot(root, stagedOnlineScan(), staging);
   await unlink(incompleteStage.bundlePath);
   await assert.rejects(activateOnlineSnapshot(root, incompleteStage.snapshotPath), /online-snapshot-bundle-invalid/);
@@ -606,6 +635,8 @@ test('first online activation backs up legacy state, preserves ledger occupancy,
   assert.equal(ledger.batches['2026-10-11'].dedupeGeneration, 'legacy');
   assert.deepEqual(JSON.parse(await readFile(path.join(storageMode.backupPath, 'legacy-catalog.json'), 'utf8')), legacyCatalog);
   assert.deepEqual(JSON.parse(await readFile(path.join(storageMode.backupPath, 'legacy-ledger.json'), 'utf8')), legacyLedger);
+  assert.equal((await lstat(path.join(storageMode.backupPath, 'legacy-catalog.json'))).mode & 0o777, 0o600);
+  assert.equal((await lstat(path.join(storageMode.backupPath, 'legacy-ledger.json'))).mode & 0o777, 0o600);
   assert.deepEqual(await activateOnlineSnapshot(root, stagedPath), {
     status: 'already-active', snapshotId: catalog.snapshot.snapshotId, coverage: storageMode.coverage,
   });
@@ -705,7 +736,7 @@ test('online activation refuses an insecure private root before writing or switc
   const p = paths(root);
   const staged = await writeStagedOnlineFlomoSnapshot(root, stagedOnlineScan(), { storageRoot: p.privateRoot });
   await chmod(p.privateRoot, 0o755);
-  await assert.rejects(activateOnlineSnapshot(root, staged.snapshotPath), /review-private-directory-insecure/);
+  await assert.rejects(activateOnlineSnapshot(root, staged.snapshotPath), /flomo-full-snapshot-storage-directory-not-private/);
   assert.equal(paths(root).onlineStorageActive, false);
   assert.equal((await lstat(p.privateRoot)).mode & 0o777, 0o755, 'activation does not silently change an existing directory');
 });

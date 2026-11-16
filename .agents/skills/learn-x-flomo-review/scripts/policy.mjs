@@ -4,8 +4,10 @@ export const MIN_REVIEW_ITEMS = 5;
 export const TARGET_MIN_REVIEW_ITEMS = 6;
 export const MAX_REVIEW_ITEMS = 10;
 export const MAX_REVIEW_REASON_CHARS = 10;
-export const MAX_PAIR_OVERLAP = 5;
-export const MAX_WINDOW_REPEATS = 10;
+export const MAX_PAIR_OVERLAP = 0;
+export const MAX_WINDOW_REPEATS = 0;
+export const MAX_RECENT_PER_DAY = 2;
+export const MAX_LONG_NOTES_PER_DAY = 2;
 
 function fail(reason) { throw new Error(`flomo-review-${reason}`); }
 function dayTime(date) {
@@ -27,7 +29,7 @@ export function activeWeeks(date) {
   return Array.from({ length: 4 }, (_, i) => isoWeek(dateString(time - i * 7 * DAY)));
 }
 
-// Age is measured at Shanghai 23:59:59.999; exact 30/365-day boundaries are included.
+// Age is measured at Shanghai 23:59:59.999; exact 30/90/182/365-day boundaries are included.
 export function ageBand(createdAt, date) {
   const target = dayTime(date) + DAY - 8 * 3600000 - 1;
   let created;
@@ -42,7 +44,7 @@ export function ageBand(createdAt, date) {
   }
   const days = (target - created) / DAY;
   if (days < 0) fail('future-created-at');
-  return days <= 30 ? 'recent' : days <= 365 ? 'year' : 'older';
+  return days <= 30 ? 'recent' : days <= 90 ? 'quarter' : days <= 182 ? 'half_year' : days <= 365 ? 'year' : 'older';
 }
 
 function catalogIndex(notes) {
@@ -147,7 +149,7 @@ function addGroups(byWeek, week, groups) {
   return next;
 }
 function ageStatistics(byWeek, week, index, date, exactNotes = new Map()) {
-  const counts = { recent: 0, year: 0, older: 0 };
+  const counts = { recent: 0, quarter: 0, half_year: 0, year: 0, older: 0 };
   for (const group of byWeek.get(week)) {
     const exact = exactNotes.get(group);
     let band;
@@ -163,13 +165,17 @@ function ageStatistics(byWeek, week, index, date, exactNotes = new Map()) {
   }
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   const recentRatio = total ? counts.recent / total : 0;
-  const nearYearRatio = total ? (counts.recent + counts.year) / total : 0;
+  const quarterRatio = total ? counts.quarter / total : 0;
+  const halfYearRatio = total ? counts.half_year / total : 0;
+  const yearRatio = total ? counts.year / total : 0;
   const olderRatio = total ? counts.older / total : 0;
   const deviations = [];
-  if (total && (recentRatio < .2 || recentRatio > .3)) deviations.push('recent-outside-20-30-percent');
-  if (total && (nearYearRatio < .8 || nearYearRatio > .9)) deviations.push('near-year-outside-80-90-percent');
+  if (counts.recent > MAX_RECENT_PER_DAY) deviations.push('recent-exceeds-two');
+  if (counts.quarter < 1) deviations.push('quarter-band-missing');
+  if (counts.half_year < 1) deviations.push('half-year-band-missing');
+  if (counts.year < 1) deviations.push('year-band-missing');
   if (total && olderRatio > .2) deviations.push('older-exceeds-20-percent');
-  return { counts, total, recentRatio, nearYearRatio, olderRatio, deviations };
+  return { counts, total, recentRatio, quarterRatio, halfYearRatio, yearRatio, olderRatio, deviations };
 }
 
 export function validateSelection({ date, items, notes, ledger }) {
@@ -199,7 +205,12 @@ export function validateSelection({ date, items, notes, ledger }) {
   } });
   const proposedAgeNotes = new Map(delivered.ageNotesByWeek.get(week));
   for (const item of normalized) proposedAgeNotes.set(item.groupKey, index.byKey.get(item.noteKey));
-  return { date, week, items: normalized, ...budgets(next), age: { ...ageStatistics(addGroups(delivered.byWeek, week, normalized.map((item) => item.groupKey)), week, index, date, proposedAgeNotes), basis: 'delivered-plus-proposed' }, ageObserved: { ...ageStatistics(delivered.byWeek, week, index, date, delivered.ageNotesByWeek.get(week)), basis: 'delivered-only' } };
+  const selectedNotes = normalized.map((item) => index.byKey.get(item.noteKey));
+  const longNoteCount = selectedNotes.filter((note) => [...note.body.trim()].length > 200).length;
+  if (longNoteCount > MAX_LONG_NOTES_PER_DAY) fail('long-note-exceeds-two');
+  const age = { ...ageStatistics(addGroups(delivered.byWeek, week, normalized.map((item) => item.groupKey)), week, index, date, proposedAgeNotes), basis: 'delivered-plus-proposed' };
+  if (age.deviations.length) fail(`age-composition-invalid:${age.deviations.join(',')}`);
+  return { date, week, items: normalized, ...budgets(next), age, ageObserved: { ...ageStatistics(delivered.byWeek, week, index, date, delivered.ageNotesByWeek.get(week)), basis: 'delivered-only' } };
 }
 export const normalizeSelection = validateSelection;
 

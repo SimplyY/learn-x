@@ -356,23 +356,26 @@ export async function auditRecentReviewHistory({ chatId, startDate, end = new Da
     byDate.set(date, found);
   }
   for (const [date, messages] of byDate) {
-    if (messages.length !== 1) throw new DeliveryError('review-history-multiple-cards');
     const batch = batches?.[date];
+    const effectiveMessages = messages.length > 1 && batch?.messageId
+      ? messages.filter(message => message.message_id === batch.messageId)
+      : messages;
+    if (effectiveMessages.length !== 1) throw new DeliveryError('review-history-multiple-cards');
     if (!batch) throw new DeliveryError('review-history-untracked-card');
-    if (batch.messageId !== messages[0].message_id) throw new DeliveryError('review-history-ledger-message-mismatch');
+    if (batch.messageId !== effectiveMessages[0].message_id) throw new DeliveryError('review-history-ledger-message-mismatch');
     if (batch.chatId !== chatId) throw new DeliveryError('review-history-ledger-receipt-incomplete');
-    if (messages[0].msg_type === 'post') {
+    if (effectiveMessages[0].msg_type === 'post') {
       if (!legacyReceiptReady(batch) || batch.readback !== true || batch.attachmentReadback !== true) {
         throw new DeliveryError('review-history-ledger-receipt-incomplete');
       }
-      verifyLegacyMessage(messages[0], { chatId, messageId: batch.messageId,
+      verifyLegacyMessage(effectiveMessages[0], { chatId, messageId: batch.messageId,
         markdownSha256: batch.markdownSha256, attachmentKey: batch.attachmentKey,
         dateMarker: `回顾日期：${date}`, botSenderId: batch.botSenderId, botSenderIds: batch.botSenderIds });
     } else {
       if (!batch.card || !/^[a-f0-9]{64}$/.test(batch.cardContentSha256 ?? '')) {
         throw new DeliveryError('review-history-ledger-receipt-incomplete');
       }
-      verifyMessage(messages[0], { chatId, messageId: batch.messageId,
+      verifyMessage(effectiveMessages[0], { chatId, messageId: batch.messageId,
         cardContentSha256: batch.cardContentSha256, cardReadbackSha256: batch.cardReadbackSha256,
         cardReadbackBreaks: batch.cardReadbackBreaks, cardReadbackSpacers: batch.cardReadbackSpacers, expectedCard: batch.card,
         dateMarker: `回顾日期：${date}`, botSenderId: batch.botSenderId, botSenderIds: batch.botSenderIds });

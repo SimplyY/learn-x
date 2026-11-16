@@ -571,9 +571,23 @@ function buildInputAuditRow({ payload, definition, fileSummary, statusInfo }) {
   const present = hasMaterial || Boolean(excluded) || Boolean(payload.excludedFiles?.some((file) => file.file === definition.file && file.present));
   const filePath = fileSummary?.path || `03_input/weekly/${distWeekId(payload.week)}/${definition.file}`;
   const link = present ? localFileLink(filePath, fileSummary?.shortPath || definition.file) : "—";
+  const trustedEmpty = Boolean(entry?.status === "empty" && entry.count === 0
+    && ["flomo", "voice"].includes(statusInfo?.source)
+    && (Array.isArray(entry.weeks)
+      ? entry.weeks.length === payload.weeks?.length
+        && entry.weeks.every((weekEntry, index) => weekEntry.week === payload.weeks[index]
+          && weekEntry.status === "empty" && weekEntry.count === 0
+          && hasTrustedEmptyScan(weekEntry.summary, weekEntry.week, statusInfo.source))
+      : hasTrustedEmptyScan(entry.summary, payload.week, statusInfo.source)));
 
   let result;
-  const preparedExclusion = payload.preprocessing?.exclusions?.find((item) => item.sourcePath === fileSummary?.path);
+  const preparedExclusions = (payload.preprocessing?.exclusions || []).filter((item) =>
+    item.sourcePath === fileSummary?.path
+    || (Array.isArray(payload.weeks) && payload.weeks.includes(item.week)
+      && item.sourcePath === `03_input/weekly/${item.week}/${definition.file}`));
+  const preparedExclusion = preparedExclusions[0];
+  const allRangeWeeksExcluded = Array.isArray(payload.weeks) && preparedExclusions.length >= payload.weeks.length;
+  const preprocessingReason = preparedExclusions.map((item) => `${item.week ? `${item.week}: ` : ""}${item.reason}`).join("；");
   if (excluded) {
     result = `排除：来源核验失败（${excluded.reason}）`;
   } else if (entry?.status === "partial" && hasMaterial) {
@@ -581,7 +595,9 @@ function buildInputAuditRow({ payload, definition, fileSummary, statusInfo }) {
   } else if (entry && entry.status !== "ready") {
     result = `排除：${entry.summary || entry.status}${stale}`;
   } else if (preparedExclusion) {
-    result = `排除：预处理未就绪（${preparedExclusion.reason}）`;
+    result = allRangeWeeksExcluded
+      ? `排除：预处理未就绪（${preprocessingReason}）`
+      : `部分覆盖；已排除预处理未就绪组成周（${preprocessingReason}）`;
   } else if (entry?.status === "ready" && !hasMaterial) {
     result = "异常：状态为 ready，但没有可纳入的有效材料";
   } else if (isReady) {
@@ -609,9 +625,7 @@ function buildInputAuditRow({ payload, definition, fileSummary, statusInfo }) {
     link,
     note: entry?.summary || definition.note || "",
     optional: Boolean(definition.optional),
-    trustedEmpty: Boolean(entry?.status === "empty" && entry.count === 0
-      && ["flomo", "voice"].includes(statusInfo?.source)
-      && hasTrustedEmptyScan(entry.summary, payload.week, statusInfo.source))
+    trustedEmpty
   };
 }
 
@@ -841,6 +855,7 @@ export function buildFileSummaries(payload, processItems = payload.items) {
       source: file.source,
       modifiedAt: file.modifiedAt,
       size: file.size,
+      weekSources: file.weekSources,
       rawChars: file.rawChars,
       effectiveChars: file.effectiveChars,
       processChars: 0,
@@ -916,9 +931,16 @@ function renderFileMaterials(items, fileSummaries, preprocessing = {}) {
   return fileSummaries.map((file, index) => {
     const sourceId = sourceFileId(index);
     const fileItems = itemsByPath.get(file.path) || [];
-    const excluded = preprocessing.exclusions?.find((item) => item.sourcePath === file.path);
-    const body = excluded
-      ? `- 排除：预处理未就绪（${excluded.reason}）。原始输入保留在 \`${file.path}\`。`
+    const fileWeeks = file.weekSources?.map((entry) => entry.week).filter(Boolean) || [];
+    const exclusions = (preprocessing.exclusions || []).filter((item) =>
+      item.sourcePath === file.path
+      || (fileWeeks.includes(item.week) && item.sourcePath === `03_input/weekly/${item.week}/${path.basename(file.path)}`));
+    const allWeeksExcluded = exclusions.length >= Math.max(1, fileWeeks.length);
+    const exclusionSummary = exclusions.map((item) => `${item.week ? `${item.week}: ` : ""}${item.reason}`).join("；");
+    const body = allWeeksExcluded
+      ? `- 排除：预处理未就绪（${exclusionSummary}）。原始输入保留在 \`${file.path}\`。`
+      : exclusions.length
+      ? [`- 部分覆盖：有组成周的预处理未就绪（${exclusionSummary}）。`, ...fileItems.map((item) => renderTextBlock(item.text))].join("\n\n")
       : fileItems.length === 1
       ? renderTextBlock(fileItems[0].text)
       : fileItems.map((item) => [
@@ -976,7 +998,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const options = parseArgs(process.argv.slice(2));
   const week = options.week || defaultWeeklyReviewWeek();
   if (!options.prepare) {
-    try { await requireCoreWeeklyGate([week]); }
+    try { await requireCoreWeeklyGate([week], { skipCompletionGate: true }); }
     catch (error) { console.error(error.message); process.exit(3); }
   }
   const result = await generateWeeklyProcessPack(options);

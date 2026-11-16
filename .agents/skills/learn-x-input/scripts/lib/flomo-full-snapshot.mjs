@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { lstatSync, readlinkSync } from "node:fs";
-import { lstat, mkdir, open, readFile, readlink, rename, unlink } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, readlink, readdir, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -99,10 +99,32 @@ export async function ensurePrivateFlomoDirectory(directory) {
   const safeDirectory = await resolveFlomoPathAllowed(directory);
   await mkdir(safeDirectory, { recursive: true, mode: 0o700 });
   const metadata = await lstat(safeDirectory);
-  if (!metadata.isDirectory() || metadata.isSymbolicLink() || (metadata.mode & 0o077) !== 0) {
+  if (!metadata.isDirectory() || metadata.isSymbolicLink() || (metadata.mode & 0o777) !== 0o700) {
     throw new Error("flomo-full-snapshot-storage-directory-not-private");
   }
   return safeDirectory;
+}
+
+export async function assertPrivateFlomoStorageTree(storageRoot) {
+  const root = await resolveFlomoPathAllowed(storageRoot);
+  const rootMetadata = await lstat(root);
+  if (!rootMetadata.isDirectory() || rootMetadata.isSymbolicLink() || (rootMetadata.mode & 0o777) !== 0o700) {
+    throw new Error("flomo-full-snapshot-storage-directory-not-private");
+  }
+  const visit = async (entry, relative = ".") => {
+    const metadata = await lstat(entry);
+    if (metadata.isSymbolicLink()) throw new Error(`flomo-storage-symlink-not-private:${relative}`);
+    if (metadata.isDirectory()) {
+      if ((metadata.mode & 0o777) !== 0o700) throw new Error(`flomo-storage-directory-not-private:${relative}`);
+      for (const name of await readdir(entry)) await visit(path.join(entry, name), path.join(relative, name));
+      return;
+    }
+    if (!metadata.isFile() || (metadata.mode & 0o777) !== 0o600) {
+      throw new Error(`flomo-storage-file-not-private:${relative}`);
+    }
+  };
+  for (const name of await readdir(root)) await visit(path.join(root, name), name);
+  return root;
 }
 
 export function assertFlomoPathWithinRoot(root, candidate) {
@@ -342,6 +364,7 @@ export async function writeStagedOnlineFlomoSnapshot(repoRoot, scan, {
   const renderedCard = `${JSON.stringify(card, null, 2)}\n`;
   await ensurePrivateFlomoDirectory(runtime);
   if (stageDirectory !== path.resolve(runtime)) await ensurePrivateFlomoDirectory(stageDirectory);
+  await assertPrivateFlomoStorageTree(runtime);
   const renderedSnapshot = `${JSON.stringify(snapshot, null, 2)}\n`;
   await atomicWrite(stagePath, renderedSnapshot);
   await atomicWrite(previewFile, renderedPreview);
@@ -358,6 +381,7 @@ export async function writeStagedOnlineFlomoSnapshot(repoRoot, scan, {
   };
   // This marker is the bundle commit point. Activation rejects artifacts without it.
   await atomicWrite(bundlePath, `${JSON.stringify(bundle, null, 2)}\n`);
+  await assertPrivateFlomoStorageTree(runtime);
   return { snapshot, snapshotPath: stagePath, previewPath: previewFile, cardPath: cardFile, bundlePath };
 }
 
@@ -367,6 +391,7 @@ export async function readVerifiedStagedOnlineFlomoSnapshot(snapshotPath, { stor
     const allowedRoot = await resolveFlomoPathAllowed(storageRoot);
     try { assertFlomoPathWithinRoot(allowedRoot, resolvedSnapshotPath); }
     catch { throw new Error("online-snapshot-path-outside-storage-root"); }
+    await assertPrivateFlomoStorageTree(allowedRoot);
   }
   const stageDirectory = path.dirname(resolvedSnapshotPath);
   const bundlePath = await resolveFlomoPathAllowed(`${resolvedSnapshotPath}.bundle.json`);

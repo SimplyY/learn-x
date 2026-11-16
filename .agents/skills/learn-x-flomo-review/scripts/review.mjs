@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir, rename, unlink, readdir, open, copyFile, lstat } from 'node:fs/promises';
+import { readFile, mkdir, rename, unlink, readdir, open, copyFile, lstat, chmod } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +10,7 @@ import https from 'node:https';
 import os from 'node:os';
 import { mkdtemp, rm, writeFile as writeFileRaw, unlink as unlinkRaw } from 'node:fs/promises';
 import { scanArchive, scanOnlineSnapshot, hashBody } from './catalog.mjs';
-import { assertFlomoPathWithinRoot, defaultFlomoPrivateDataRoot, readVerifiedStagedOnlineFlomoSnapshot,
+import { assertFlomoPathWithinRoot, assertPrivateFlomoStorageTree, defaultFlomoPrivateDataRoot, readVerifiedStagedOnlineFlomoSnapshot,
   resolveFlomoPathAllowed, resolveFlomoPathAllowedSync } from '../../learn-x-input/scripts/lib/flomo-full-snapshot.mjs';
 import { flomoTags } from '../../learn-x-input/scripts/lib/flomo-filter.mjs';
 import { validateSelection, eligibleNotes, simulateSupply, isoWeek, activeWeeks, MIN_REVIEW_ITEMS, TARGET_MIN_REVIEW_ITEMS, MAX_REVIEW_ITEMS, MAX_REVIEW_REASON_CHARS } from './policy.mjs';
@@ -37,16 +37,37 @@ async function resolveProjectPath(projectRoot, candidate) {
   const safeRoot = await resolveFlomoPathAllowed(projectRoot);
   return assertFlomoPathWithinRoot(safeRoot, await resolveFlomoPathAllowed(candidate));
 }
-async function writeProjectFile(projectRoot, file, content, options) {
-  await writeFile(await resolveProjectPath(projectRoot, file), content, options);
+function isWithinPath(root, candidate) {
+  const relative = path.relative(path.resolve(root).toLowerCase(), path.resolve(candidate).toLowerCase());
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
-async function makeProjectDirectory(projectRoot, directory) {
+async function ensurePrivateOutputDirectory(projectRoot, directory) {
+  const p = paths(projectRoot);
   const safeDirectory = await resolveProjectPath(projectRoot, directory);
-  await mkdir(safeDirectory, { recursive: true });
+  const privateBase = [p.privateRoot, p.runtime].find(root => isWithinPath(root, safeDirectory));
+  if (!privateBase) throw Error('review-output-path-not-private');
+  await ensurePrivateDirectory(privateBase, p.root);
+  await ensurePrivateDirectory(safeDirectory, p.root);
   return safeDirectory;
 }
+async function writeProjectFile(projectRoot, file, content) {
+  const safeFile = await resolveProjectPath(projectRoot, file);
+  await ensurePrivateOutputDirectory(projectRoot, path.dirname(safeFile));
+  const temp = `${safeFile}.${randomUUID()}.tmp`, fd = await open(temp, 'wx', 0o600);
+  try { await fd.writeFile(content, 'utf8'); await fd.sync(); } finally { await fd.close(); }
+  try { await rename(temp, safeFile); } finally { await unlink(temp).catch(e => { if (e.code !== 'ENOENT') throw e; }); }
+}
+async function makeProjectDirectory(projectRoot, directory) {
+  return ensurePrivateOutputDirectory(projectRoot, directory);
+}
 async function copyProjectFile(projectRoot, source, destination) {
-  await copyFile(await resolveProjectPath(projectRoot, source), await resolveProjectPath(projectRoot, destination));
+  const safeSource = await resolveProjectPath(projectRoot, source);
+  const safeDestination = await resolveProjectPath(projectRoot, destination);
+  await ensurePrivateOutputDirectory(projectRoot, path.dirname(safeDestination));
+  await copyFile(safeSource, safeDestination);
+  const metadata = await lstat(safeDestination);
+  if (!metadata.isFile() || metadata.isSymbolicLink()) throw Error('review-private-file-invalid');
+  await chmod(safeDestination, 0o600);
 }
 async function unlinkProjectFile(projectRoot, file) {
   await unlink(await resolveProjectPath(projectRoot, file));
@@ -100,7 +121,12 @@ export async function readJson(file, fallback) {
 }
 export async function atomicJson(file, value, projectRoot) {
   const safeFile = projectRoot ? await resolveProjectPath(projectRoot, file) : await resolveFlomoPathAllowed(file);
-  await mkdir(path.dirname(safeFile), { recursive: true });
+  if (projectRoot) {
+    const p = paths(projectRoot);
+    if ([p.privateRoot, p.runtime].some(root => isWithinPath(root, safeFile))) {
+      await ensurePrivateOutputDirectory(projectRoot, path.dirname(safeFile));
+    } else await mkdir(path.dirname(safeFile), { recursive: true });
+  } else await mkdir(path.dirname(safeFile), { recursive: true });
   const tmp = `${safeFile}.${randomUUID()}.tmp`, fd = await open(tmp, 'wx', 0o600);
   try { await fd.writeFile(`${JSON.stringify(value, null, 2)}\n`); await fd.sync(); } finally { await fd.close(); }
   try { await rename(tmp, safeFile); } finally { await unlink(tmp).catch(e => { if (e.code !== 'ENOENT') throw e; }); }
@@ -109,7 +135,7 @@ async function checkPrivateDirectory(directory, { create = false, projectRoot } 
   const safeDirectory = projectRoot ? await resolveProjectPath(projectRoot, directory) : await resolveFlomoPathAllowed(directory);
   if (create) await mkdir(safeDirectory, { recursive: true, mode: 0o700 });
   const metadata = await lstat(directory);
-  if (!metadata.isDirectory() || metadata.isSymbolicLink() || (metadata.mode & 0o077) !== 0) {
+  if (!metadata.isDirectory() || metadata.isSymbolicLink() || (metadata.mode & 0o777) !== 0o700) {
     throw Error('review-private-directory-insecure');
   }
 }
@@ -119,6 +145,7 @@ async function ensurePrivateDirectory(directory, projectRoot) {
 export async function withLock(root, action) {
   const p = paths(root), { privateRoot, lockPath } = p;
   await ensurePrivateDirectory(privateRoot, p.root);
+  if (p.onlineStorageActive) await assertPrivateFlomoStorageTree(privateRoot);
   const safeRoot = await resolveFlomoPathAllowed(privateRoot);
   const lock = assertFlomoPathWithinRoot(safeRoot, await resolveFlomoPathAllowed(lockPath)); let fd;
   try { fd = await open(lock, 'wx', 0o600); } catch (e) { if (e.code === 'EEXIST') throw Error('review-locked-inspect-owner-before-recovery'); throw e; }
@@ -474,7 +501,8 @@ function assertMatchingDedupeGeneration(catalog, ledger) {
 }
 export async function refreshArchive(root = repoRoot) {
   return withLock(root, async () => {
-    const p = paths(root), previous = await readJson(p.catalog, { schemaVersion: 1, notes: [] });
+    const p = paths(root);
+    const previous = await readJson(p.catalog, { schemaVersion: 1, notes: [] });
     let catalog;
     if (p.onlineStorageActive) {
       const state = await readJson(p.storageModePath);
@@ -839,11 +867,13 @@ export async function inspectDecision(root, decision, { freshContext = false, co
   return { catalog, ledger, context, stats, images, ...renderReview(decision, catalog.notes, catalog.snapshot, images.imageKeysByNote) };
 }
 export async function previewReview(root, decision) {
-  const result = await inspectDecision(root, decision), p = paths(root), dir = path.join(p.runtime, decision.date);
+  const p = paths(root);
+  if (p.onlineStorageActive) await assertPrivateFlomoStorageTree(p.privateRoot);
+  const result = await inspectDecision(root, decision), dir = path.join(p.runtime, decision.date);
   await makeProjectDirectory(p.root, dir);
   await atomicJson(path.join(dir, 'decision.json'), decision, p.root);
-  await writeProjectFile(p.root, path.join(dir, 'review.md'), result.fullMarkdown, { mode: 0o600 });
-  await writeProjectFile(p.root, path.join(dir, 'message.md'), result.markdown, { mode: 0o600 });
+  await writeProjectFile(p.root, path.join(dir, 'review.md'), result.fullMarkdown);
+  await writeProjectFile(p.root, path.join(dir, 'message.md'), result.markdown);
   await atomicJson(path.join(dir, 'validation.json'), result.stats, p.root);
   await atomicJson(path.join(dir, 'images.json'), result.images, p.root);
   return { date: decision.date, count: decision.items.length, stats: result.stats, snapshot: result.catalog.snapshot || null, previewPath: path.join(dir, 'review.md') };
@@ -870,7 +900,7 @@ export async function sendReview(root, decision, { now = new Date(), deliveryOpt
       weeks: activeWeeks(decision.date), batches: check.ledger.batches, botSenderIds: preflight.botSenderIds,
       profile: preflight.profile, runCli: deliveryOptions.runCli });
     const dir = path.join(p.runtime, decision.date); await makeProjectDirectory(p.root, dir);
-    const auditPath = path.join(dir, 'review.md'); await writeProjectFile(p.root, auditPath, check.fullMarkdown, { mode: 0o600 });
+    const auditPath = path.join(dir, 'review.md'); await writeProjectFile(p.root, auditPath, check.fullMarkdown);
     const batch = { date: decision.date, status: 'reserved', dedupeGeneration: check.catalog.dedupeGeneration || 'legacy',
       snapshot: check.catalog.snapshot || null, contextHash: decision.contextHash, catalogHash: decision.catalogHash,
       items: decision.items.map(i => {
@@ -995,6 +1025,7 @@ export async function simulateCapacity(root = repoRoot, startDate = shanghaiDate
 async function main(argv) {
   const [command] = argv, arg = key => argv[argv.indexOf(key) + 1], date = argv.includes('--date') ? validDate(arg('--date')) : shanghaiDate();
   const p = paths();
+  if (p.onlineStorageActive) await assertPrivateFlomoStorageTree(p.privateRoot);
   if (command === 'archive') return refreshArchive();
   if (command === 'activate-snapshot') return activateOnlineSnapshot(repoRoot, arg('--file'));
   if (command === 'restore-snapshot-backup') return restoreOnlineSnapshotBackup();

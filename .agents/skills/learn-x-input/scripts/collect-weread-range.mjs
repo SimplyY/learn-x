@@ -6,6 +6,7 @@ import path from "node:path";
 import { readFile, mkdir, writeFile, rename, chmod, lstat, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { readInstalledWereadSkillVersion } from "./collect-weread-weekly.mjs";
+import { WEREAD_DATA_SEMANTICS } from "./lib/weread-data-semantics.mjs";
 
 const API_URL = "https://i.weread.qq.com/api/agent/gateway";
 const KEYCHAIN_SERVICE = "learn-x-weread-api-key";
@@ -152,6 +153,7 @@ export async function collectWereadRange(options = {}) {
     complete: discovery.complete && errors.length === 0,
     skillVersion,
     requestedBook: filter || null,
+    dataSemantics: WEREAD_DATA_SEMANTICS,
     counts: { candidateBooks: matched.length, books: books.length, acquiredHighlights: highlightCount, acquiredThoughts: thoughtCount, unusableEntries },
     errors,
     books

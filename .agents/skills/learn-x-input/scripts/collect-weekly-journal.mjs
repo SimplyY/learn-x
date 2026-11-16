@@ -82,7 +82,7 @@ export async function collectConfirmedWeeklyJournal({ week, repoRoot: root = rep
     throw new Error("weekly-journal-anchor-invalid: anchor JSON cannot be read");
   }
   validateAnchor(anchor, normalizedWeek);
-  await requireCoreGate([normalizedWeek], { repoRoot: root });
+  await requireCoreGate([normalizedWeek], { repoRoot: root, skipCompletionGate: true });
 
   const response = await fetchSection({
     docUrl: WEEKLY_JOURNAL_DOCUMENT_URL,

@@ -68,8 +68,16 @@ export async function generateWeeklyRangeProcessPack({ periodId, repoRoot: root 
     const originalFiles = [];
     let sourceText;
     if (name === "flomo.md") {
-      sourceText = await readFile(path.join(root, rangePath), "utf8");
-      for (const entry of entries) originalFiles.push({ week: entry.week, path: entry.file.path, sha256: entry.file.rawHash, rawChars: entry.file.rawChars });
+      const sections = [];
+      for (const { week, file } of entries) {
+        const body = await readFile(path.join(root, file.path), "utf8");
+        const hash = sha256(body);
+        if (file.rawHash && file.rawHash !== hash) throw new Error(`weekly-range-source-stale: ${file.path}`);
+        sections.push(`<!-- source-week: ${week}; source-path: ${file.path}; sha256: ${hash} -->\n${body.replace(/\s*$/, "")}\n<!-- end-source-week: ${week} -->`);
+        originalFiles.push({ week, path: file.path, sha256: hash, rawChars: file.rawChars });
+      }
+      sourceText = `${sections.join("\n\n")}\n`;
+      await writeRegenerableOutput(path.join(root, rangePath), sourceText, trustedPreviousFileHashes.get(rangePath));
     } else {
       const sections = [];
       for (const { week, file } of entries) {
@@ -431,7 +439,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const manifestPath = path.join(repoRoot, "03_input/weekly", periodId, "_range-manifest.json");
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
   const weeks = validatePeriod(periodId, manifest.period?.weeks);
-  try { await requireCoreWeeklyGate(weeks); }
+  try { await requireCoreWeeklyGate(weeks, { skipCompletionGate: true }); }
   catch (error) { console.error(error.message); process.exit(3); }
   const result = await generateWeeklyRangeProcessPack({ periodId });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

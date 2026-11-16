@@ -1541,7 +1541,11 @@ function applyCustomContextSelections() {
 }
 
 function renderCustomContextCount() {
-  els.customContextCount.textContent = `已选 ${state.customDraftSelections.size} 个文件`;
+  const files = state.customContextFiles.filter((file) => state.customDraftSelections.has(file.path));
+  const missing = files.filter((file) => contextFileCharCount(file) === null);
+  const knownChars = files.reduce((total, file) => total + (contextFileCharCount(file) ?? 0), 0);
+  const charsLabel = missing.length ? `已知 ${formatNumber(knownChars)} 字` : `总计 ${formatNumber(knownChars)} 字`;
+  els.customContextCount.textContent = `已选 ${files.length} 个文件 · ${charsLabel}`;
 }
 
 function renderSourceChecklist() {
@@ -1636,7 +1640,12 @@ function renderContextNode(node, container, depth) {
     label.type = "button";
     label.className = "context-label";
     label.title = node.path;
-    label.innerHTML = `<strong>${escapeHtml(node.name)}/</strong><span>${node.files.length} 个文件</span>`;
+    const folderChars = node.files.reduce((total, file) => {
+      const count = contextFileCharCount(file);
+      return total === null || count === null ? null : total + count;
+    }, 0);
+    const folderCharsLabel = folderChars === null ? "字数待读取" : `总计 ${formatNumber(folderChars)} 字`;
+    label.innerHTML = `<strong>${escapeHtml(node.name)}/</strong><span>${node.files.length} 个文件 · ${folderCharsLabel}</span>`;
     label.addEventListener("click", () => {
       if (expanded) state.expandedContextDirs.delete(node.path);
       else state.expandedContextDirs.add(node.path);
@@ -1792,7 +1801,8 @@ async function generateContext({ coreAssets = {}, signal, isCurrent = () => true
     const weighted = buildWeightedContext(filesWithContent);
     state.context = weighted;
     setProgress(100);
-    els.learningStatus.textContent = `已编排 ${filesWithContent.length} 个文件的上下文。`;
+    const contextChars = filesWithContent.reduce((total, file) => total + estimateTextStats(file.content || "").visibleChars, 0);
+    els.learningStatus.textContent = `已编排 ${filesWithContent.length} 个文件的上下文，总计 ${formatNumber(contextChars)} 字。`;
     renderChatPackPreview();
     return true;
   } catch (error) {
@@ -1826,23 +1836,26 @@ function refreshSelectedContextStats() {
   const measurableFiles = files.filter((file) => !file.live);
   const hasLiveFiles = measurableFiles.length !== fileCount;
   const missing = measurableFiles.filter((file) => contextFileCharCount(file) === null);
-  const totalChars = missing.length ? null : measurableFiles.reduce((total, file) => total + contextFileCharCount(file), 0);
+  const knownChars = measurableFiles.reduce((total, file) => total + (contextFileCharCount(file) ?? 0), 0);
+  const totalChars = missing.length || hasLiveFiles ? null : knownChars;
   const coreStatus = state.runtime.target === "local" ? "Core 正文使用 Chat Pack 缓存" : "Core 正文在生成时实时读取";
   const status = missing.length ? "正在统计字数" : hasLiveFiles ? coreStatus : "";
-  renderSelectedContextStats(fileCount, totalChars, status);
+  renderSelectedContextStats(fileCount, knownChars, totalChars, status);
 
   if (missing.length) {
     loadContextContents(missing).then(() => {
       if (requestId === selectedContextStatsRequestId) refreshSelectedContextStats();
     }).catch(() => {
-      if (requestId === selectedContextStatsRequestId) renderSelectedContextStats(fileCount, null, "字数读取失败");
+      if (requestId === selectedContextStatsRequestId) renderSelectedContextStats(fileCount, knownChars, null, "字数读取失败");
     });
   }
 }
 
-function renderSelectedContextStats(fileCount, totalChars, status = "") {
+function renderSelectedContextStats(fileCount, knownChars, totalChars, status = "") {
   const warning = fileCount > 20 ? " · 过多，建议 20 个以内" : "";
-  const count = status || `总计 ${formatNumber(totalChars)} 字`;
+  const count = totalChars === null
+    ? `已知 ${formatNumber(knownChars)} 字${status ? ` · ${status}` : ""}`
+    : `总计 ${formatNumber(totalChars)} 字`;
   if (!els.selectedContextSummary) return;
   els.selectedContextSummary.textContent = `已选 ${formatNumber(fileCount)} 个文件 · ${count}${warning}`;
   els.selectedContextSummary.className = fileCount > 20 ? "danger" : "";

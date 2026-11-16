@@ -10,7 +10,7 @@ description: Learn-X 每周输入自动采集、Weekly Output 报告准备、已
 正常触发仍处理一个 ISO 周。用户明确给出连续周期范围或明确要求跨周时，可把范围设为 1–4 个完整、连续的 ISO 周；未指定范围时保持单周默认。周期 ID 在同一 ISO 年内使用 `YYYY-Www-Www`（如 `2026-W43-W44`）；跨 ISO 年使用完整端点（如 `2026-W52-2027-W01`）。范围覆盖从首周周一至末周周日，写作日为末周结束日的次日。超过 4 周、范围不连续或起止周无法唯一解析时，先询问再运行。下文凡写“目标周”，范围模式均指整个周期；不得只拿首周或末周代表整个范围。
 
 - 一个范围是一条完整流程：只产出一个周记段落、一个 Process Pack、一个 Weekly Output 和一笔 Memory 审批事务。用户只经历一次本流程；单周采集器在流程内部按 ISO 周顺序各处理一次，复用已验证快照，不重采 `ready/empty` 来源，不并行启动同一来源采集器。保留各周的目录、状态和来源路径，范围清单写入 `03_input/weekly/<period-id>/_range-manifest.json`。
-- 范围周记草稿链接到每个组成周自己的 Core 文档。每个 Core 文档先放五个 Core 行和四个本人填写项（本周行动、现实反馈、本周思考和预判、下周行动）；每格须有内容或明确写 `无`、`不适用`、`未观察到`。范围内任一周未填完时，Process Pack 主流程停在 Core 门禁前，不生成或覆盖范围 Pack。
+- 范围周记草稿仍链接到每个组成周自己的 Core 文档，并核验链接回执；Core 本人填写项门禁默认跳过，不阻止周记采回或 Process Pack 生成。Core 来源仍按真实状态报告，缺失或未填写不得伪装为完成。
 - 任意周记或报告字段中的事实范围必须覆盖整个周期。汇总来源状态时保留逐周明细；所有组成周都成功（`ready` 或有效 `empty`）后，范围状态才可标为完整。某来源仅部分周可用时，可纳入已验证部分，但须标记部分覆盖；不得把单周 `ready` 扩大成范围 `ready`。Flomo 合并全部组成周的有效笔记并按时间排序，分别保留各周扫描完整性，不能把多次全库计数伪装为一次连续扫描。
 - ChatGPT Bridge 由用户手动操作。自动化不得提交、观察、恢复或重发 Bridge 请求；需要 ChatGPT 内容时提供可粘贴提示词。用户提供的范围总结保存在 `03_input/weekly/<period-id>/ai.md` 或明确命名的范围文件中，并按人工输入记录来源，不伪造 Bridge 状态。
 - 周记只创建一个末周结束次日的段落，并显式列出周期 ID 和完整日期。周记未确认前不得采回 `weekly.md` 或生成 Process Pack。确认后将唯一 `weekly.md` 写到范围目录，并生成一份范围版 `input.json` / `process-pack.md` 到 `04_output/_dist/weekly/<period-id>/`；唯一 Weekly Output 为 `04_output/weekly/<period-id>.md`。不得为组成周分别生成 Process Pack 或 Weekly Output。现有只接受 `--week` 的 Process Pack 命令不得用首周或末周冒充范围；范围版必须汇集所有组成周的已验证输入、状态和预处理结果，并核验每个事实覆盖日期。没有可比的等长历史 Output 时明确标注，不拿单周 Output 冒充范围基线。
@@ -259,11 +259,11 @@ node .agents/skills/learn-x-weekly-journal/scripts/link-core.mjs --period YYYY-W
 
 ## 阶段 2：周记采集与报告准备
 
-目标：先验证周记与覆盖周 Core 的本人思考均已确认，再采集 `weekly.md`、核验必要输入并生成 `_dist` 和 Output 最小壳；Process Pack 就绪后继续同周 Core 挑战。
+目标：验证已确认周记后采集 `weekly.md`、核验必要输入并生成 `_dist` 和 Output 最小壳。Core 挑战为可选支线，不阻塞主流程。
 
-1. 按“周记日期映射”计算写作日。阶段 1 生成并回读周记草稿后，已保存该目标周的标题、底层 `document_id` 和目标 block 锚点。用户回复 `周记已确认`、`继续生成周报材料`，或在已移除草稿标记后明确回复 `继续`，才进入阶段 2。`npm run input:weekly -- --week YYYY-Www` 会先校验周记锚点中的 Core 链接读回回执，并在线核对五项 Core 的 20 个本人填写项；任一项未完成时提示从周记链接填写并停止，不读取线上周记、不写 `weekly.md` 或共享周计划。通过后才窄范围采回锚定段落，不搜索或读取相邻周兜底。仍含 `【待优化】AI 基础草稿` 时停止。周记生成时排除 Calendar 是生成规则；不得追溯拦截已由用户确认的既有周记，也不得仅因旧草稿含 Calendar 内容要求重写。成功采回后，该命令校验本地 `weekly.md` 并仅发布唯一“新周计划”表格行到 `04_output/_dist/shared-context/weekly/`；不发布其他周记内容或 AI 输出。`weekly.md` 保留来源 URL、revision（缺失时为 unknown）、写作日标题、覆盖范围、定位依据和采集时间，原文不压缩。共享版本不记录猜测的确认时间；采集时间不能替代确认时间。记录 `weekly_journal_fetch` 阶段耗时。
+1. 按“周记日期映射”计算写作日。阶段 1 生成并回读周记草稿后，已保存该目标周的标题、底层 `document_id` 和目标 block 锚点。用户回复 `周记已确认`、`继续生成周报材料`，或在已移除草稿标记后明确回复 `继续`，才进入阶段 2。`npm run input:weekly -- --week YYYY-Www` 核验周记锚点中的 Core 链接读回回执，但默认跳过 Core 20 个本人填写项门禁。随后窄范围采回锚定段落，不搜索或读取相邻周兜底。仍含 `【待优化】AI 基础草稿` 时停止。周记生成时排除 Calendar 是生成规则；不得追溯拦截已由用户确认的既有周记，也不得仅因旧草稿含 Calendar 内容要求重写。成功采回后，该命令校验本地 `weekly.md` 并仅发布唯一“新周计划”表格行到 `04_output/_dist/shared-context/weekly/`；不发布其他周记内容或 AI 输出。`weekly.md` 保留来源 URL、revision（缺失时为 unknown）、写作日标题、覆盖范围、定位依据和采集时间，原文不压缩。共享版本不记录猜测的确认时间；采集时间不能替代确认时间。记录 `weekly_journal_fetch` 阶段耗时。
    - 采集前如果发现缺少飞书周记所需授权，先一次性列出并请求全部缺失 scopes，再继续，不要一项一项分开打断用户。
-   - 多周范围使用 `npm run input:weekly:range -- --period=YYYY-Www-Www`；它在读取周记前逐周执行同一 Core 链接和填写门禁，任一周未完成时不采回范围 `weekly.md`，也不更新范围锚点或清单。
+   - 多周范围使用 `npm run input:weekly:range -- --period=YYYY-Www-Www`；它逐周核验 Core 链接回执，并默认跳过本人填写项门禁。
 2. Process Pack 组装时按目标周计算上一 ISO 周，只读取上一周完整的 `04_output/weekly/YYYY-WW.md`，并将它作为“仅作对照”材料完整嵌入第 9 节；不读取旧周记替代旧 Output。旧 Output 不能作为本周事实，本周事实以当前 Process Pack 的本周材料为准。基线缺失、为空或只是自动 Output 空壳时，保留第 9 节并标注 `missing`、`empty` 或 `shell`，明确不可比较；不得回退到更早周。
    - 阶段 2 汇报只报告上一周 Output 的周期、状态和绝对可点击文件链接，不复述旧 Output 正文或旧问答。
 3. 生成 `_dist` 前，验证这些当前周输入：
@@ -288,13 +288,12 @@ node .agents/skills/learn-x-weekly-journal/scripts/link-core.mjs --period YYYY-W
    npm run process:weekly -- --week YYYY-Www
    ```
 
-   正常路径只读取预处理缓存并做轻量组装，不重新采集或调用语义压缩。命令先核对周记锚点中的 Core 直达链接已有读回回执，再对目标周 Core 文档运行 `weekly-review.mjs gate --week YYYY-Www --json`；五项 Core 的四个本人填写项都完成或明确标为 `无 / 不适用 / 未观察到` 后，才继续采集并生成 Process Pack。门禁失败时提示用户从周记链接进入 Core 填写，停在 Pack 生成前；范围模式逐周检查所有组成周及链接。日记和确认周记仍是硬门槛；其他来源验证失败或缓存缺失时排除对应材料、生成有缺口 Pack 并醒目标注，不等待不相关来源。周记始终完整保留，不受 15,000 字符阈值影响。记录 `process_pack` 阶段耗时。
+   正常路径只读取预处理缓存并做轻量组装，不重新采集或调用语义压缩。命令核验周记锚点中的 Core 直达链接读回回执，但默认不运行 Core 本人填写项门禁。日记和确认周记仍是硬门槛；其他来源验证失败或缓存缺失时排除对应材料、生成有缺口 Pack 并醒目标注，不等待不相关来源。周记始终完整保留，不受 15,000 字符阈值影响。记录 `process_pack` 阶段耗时。
 
-   多周范围使用 `node .agents/skills/learn-x-process/scripts/generate-weekly-range-process-pack.mjs --period=YYYY-Www-Www`。命令在读取或写入范围 Pack 前，对清单中的每个 ISO 周执行 Core gate；任一周未完成即停止，保留已有 Pack，不用首周或末周代替范围。
+   多周范围使用 `node .agents/skills/learn-x-process/scripts/generate-weekly-range-process-pack.mjs --period=YYYY-Www-Www`。命令保留范围清单、来源状态和输入哈希核验，默认跳过逐周 Core 本人填写项门禁。
 
-   单周 Process Pack 校验通过后，对同一目标周运行一次 `weekly-review.mjs prepare --week YYYY-Www --json`，复用阶段 1 已绑定的 Core 文档，只补齐五项当前快照、完整五项复盘结构及有来源的候选。不得新建文档或覆盖本人填写内容。范围模式不得把范围 Pack 传给单周 `prepare`；改用范围 `input.json` 中 `sourceWeek` 精确匹配的材料，为每个 Core 周分别形成挑战上下文，不把无周归属的范围周记或 AI 总结强行拆给单周。缺少周归属或事实覆盖无法核实的材料不进入该周挑战。Pack / Core 总览不可读或 prepare 失败时保留现有 Core 内容并报告待处理状态。
+   Core 深度复盘是可选支线；用户主动进行时，AI 建议标为候选，由用户逐项取舍。默认流程不运行 `weekly-review.mjs prepare`，不等待本人思考完成。
 
-   Core 深度复盘在同一周流程中继续：门禁通过后再补充来源材料并进入 AI 挑战；AI 建议标为候选，由用户逐项取舍。Core 可以在填写阶段暂停；在本人思考完成前，主流程不得生成 Process Pack。人工填写内容由 Core 原文保留并进入后续统一确认。
 
 8. 回读 Process Pack 第 9 节，确认上一周 Output 基线状态、完整正文（若 ready）和“仅作对照”边界正确。标准流程不得在 Pack 生成后再补填输入。
 

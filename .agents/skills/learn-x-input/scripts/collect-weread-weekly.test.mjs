@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { collectWereadWeekly, defaultWeeklyReviewWeek, isoWeekRangeShanghai, normalizeWeek, readInstalledWereadSkillVersion, renderMarkdown, writeWereadWeekly } from "./collect-weread-weekly.mjs";
+import { WEREAD_DATA_SEMANTICS } from "./lib/weread-data-semantics.mjs";
 
 test("reads the installed WeRead Skill version from its package metadata", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-weread-version-"));
@@ -73,6 +74,8 @@ test("collects only highlights and thoughts inside the requested week", async ()
   const payload = await collectWereadWeekly({ week: "2026-W24", apiKey: "test", callApi, skillVersion: "1.0.5" });
 
   assert.equal(payload.skillVersion, "1.0.5");
+  assert.equal(payload.dataSemantics, WEREAD_DATA_SEMANTICS);
+  assert.equal(payload.dataSemantics.thoughts.weight, "highest");
   assert.equal(payload.stats.highlightCount, 1);
   assert.equal(payload.stats.thoughtCount, 1);
   assert.equal(payload.stats.readBookCount, 1);
@@ -88,6 +91,8 @@ test("collects only highlights and thoughts inside the requested week", async ()
   assert.equal(payload.books[0].highlights[0].range, undefined);
   assert.equal(payload.books[0].thoughts[0].id, undefined);
   const markdown = renderMarkdown(payload);
+  assert.match(markdown, /数据权重：划线=high/);
+  assert.match(markdown, /想法=highest/);
   assert.match(markdown, /阅读 \/ 收听总时长：1 小时 30 分钟/);
   assert.match(markdown, /最近阅读到：第二章/);
   assert.match(markdown, /本周书籍阅读时长：1 小时/);

@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { cp, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, cp, lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { defaultFlomoPrivateDataRoot } from "./lib/flomo-full-snapshot.mjs";
-import { buildEgoFullScanScript, buildEgoScanScript, buildFlomoTaskSpaceName, collectFlomoFullSnapshot, collectFlomoWeekly, formatCliError, parseArgs, parseMemoTime, scanFlomoWithEgo, validateCompleteScan } from "./collect-flomo-weekly.mjs";
+import { buildEgoFullScanScript, buildEgoScanScript, buildFlomoTaskSpaceName, collectFlomoFullSnapshot, collectFlomoWeekly, classifyFlomoError, formatCliError, parseArgs, parseMemoTime, scanFlomoWithEgo, validateCompleteScan } from "./collect-flomo-weekly.mjs";
 
 test("each Flomo invocation gets an automation-scoped TaskSpace name", () => {
   const first = buildFlomoTaskSpaceName("123e4567-e89b-42d3-a456-426614174000", "learn-x-flomo-00-10");
@@ -14,6 +14,20 @@ test("each Flomo invocation gets an automation-scoped TaskSpace name", () => {
   assert.equal(first, "learn-x-flomo-00-10-flomo-123e4567-e89b-42d3-a456-426614174000");
   assert.notEqual(first, second);
   assert.throws(() => buildFlomoTaskSpaceName("invalid", "learn-x-flomo-00-10"), /invocation-id-invalid/);
+});
+
+test("full Flomo scan rejects unsafe private artifacts before creating a browser result", async (t) => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-private-preflight-"));
+  t.after(() => rm(repoRoot, { recursive: true, force: true }));
+  const storageRoot = defaultFlomoPrivateDataRoot(repoRoot);
+  const unsafeDirectory = path.join(storageRoot, "quality-packets");
+  await mkdir(unsafeDirectory, { recursive: true, mode: 0o700 });
+  await chmod(unsafeDirectory, 0o755);
+  await assert.rejects(scanFlomoWithEgo({
+    mode: "full", repoRoot, storageRoot, invocationId: "123e4567-e89b-42d3-a456-426614174000",
+  }), /flomo-storage-directory-not-private:quality-packets/);
+  await assert.rejects(lstat(path.join(storageRoot, "staged")), { code: "ENOENT" });
+  assert.equal(classifyFlomoError(new Error("flomo-storage-file-not-private:quality-packets/assessment.json")), "local-storage-permissions-invalid");
 });
 
 test("parses explicit full-snapshot options and rejects invalid combinations", () => {
@@ -406,6 +420,47 @@ fs.writeFileSync(resultPath, JSON.stringify({ ok: false, error: "network-timeout
       assert.equal(error.observedUniqueIds, 0);
       assert.equal(error.step, -1);
       assert.equal(JSON.stringify(error).includes("body"), false);
+      return true;
+    });
+  } finally {
+    process.env.PATH = previousPath;
+  }
+});
+
+test("keeps a safe Ego CLI stage when the runner exits before writing its result", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-cli-stage-diagnostic-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const bin = path.join(root, "bin");
+  await mkdir(bin, { recursive: true });
+  await writeFile(path.join(bin, "ego-browser"), "#!/bin/sh\nprintf '%s\\n' 'EAI_AGAIN network failure PRIVATE_SENTINEL' >&2\nexit 23\n", { mode: 0o700 });
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${bin}${path.delimiter}${previousPath || ""}`;
+  try {
+    await assert.rejects(scanFlomoWithEgo({ mode: "full", repoRoot: root }), (error) => {
+      assert.equal(error.message, "ego-network-transient");
+      assert.equal(error.stage, "ego-cli-network-dns-exit-23");
+      assert.equal(JSON.stringify(error).includes("PRIVATE_SENTINEL"), false);
+      assert.equal(error.stderr, undefined);
+      return true;
+    });
+  } finally {
+    process.env.PATH = previousPath;
+  }
+});
+
+test("classifies Ego Lite startup blocked by the default agent sandbox", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-flomo-cli-sandbox-startup-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const bin = path.join(root, "bin");
+  await mkdir(bin, { recursive: true });
+  await writeFile(path.join(bin, "ego-browser"), "#!/bin/sh\nprintf '%s\\n' 'Failed to start ego lite. Agent note: if ego-browser runs in the default agent sandbox, retry with Full Access. Otherwise launch ego lite manually.' >&2\nexit 1\n", { mode: 0o700 });
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${bin}${path.delimiter}${previousPath || ""}`;
+  try {
+    await assert.rejects(scanFlomoWithEgo({ mode: "full", repoRoot: root }), (error) => {
+      assert.equal(error.message, "ego-browser-scan-failed");
+      assert.equal(error.stage, "ego-cli-runner-startup-exit-1");
+      assert.equal(error.stderr, undefined);
       return true;
     });
   } finally {
