@@ -1,3 +1,5 @@
+> ⚠️ 已废弃（2026-11-16）：本 Prompt 已由治理 Prompt `chatpack.monthly-output`（现行真源：飞书「Monthly Output 核心输出要求」）取代，运行时不再读取本文件。本副本移入 archive 仅供历史追溯；废弃政策见 learn-x/docs/PROMPT_GOVERNANCE.md。
+
 # Monthly Output 核心输出要求
 
 本文件维护 `learn-x-process` 的 Monthly Output 生成要求。

@@ -29,5 +29,5 @@ node /Users/yuwei/code/skills/prompt-governance/scripts/sync-backups.mjs --promp
 | `learn-x.reading-daily` | `02_prompts/meta/chatgpt-reading-daily.md` |
 | `learn-x.weekly-ai-review` | `03_input/weekly/00_template/ai.md` |
 | `learn-x.monthly-journal` | `02_prompts/journal/monthly-journal.md` |
-| `chatpack.weekly-output-rules` | `02_prompts/chatpack/reflective-decision/weekly-output-rules.md` |
-| `chatpack.monthly-output-rules` | `02_prompts/chatpack/reflective-decision/monthly-output-rules.md` |
+| `chatpack.weekly-output-rules`（已废弃 2026-11-16，现行：`chatpack.weekly-output`） | `02_prompts/chatpack/archive/weekly-output-rules.md` |
+| `chatpack.monthly-output-rules`（已废弃 2026-11-16，现行：`chatpack.monthly-output`） | `02_prompts/chatpack/archive/monthly-output-rules.md` |

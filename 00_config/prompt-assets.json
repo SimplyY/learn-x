@@ -109,9 +109,9 @@
       "derived_from": "common.munger-soul",
       "synced": {
         "document_id": "WOtXdvxiAoCTP0x3bgNcL0swnNf",
-        "revision": 4,
-        "sha256": "f6972b31ba1b7ca5483639fd20a2991ae996b942d00ee1e23142ba3d5a40925e",
-        "at": "2026-10-31T12:32:22.939Z"
+        "revision": 5,
+        "sha256": "19353d2b8b4c8cb8bf745c71a53bbaac30fbe2f0b43a8f87f227c3b8a45f3a61",
+        "at": "2026-11-16T06:39:48.502Z"
       }
     },
     "chatpack.first-principles": {

@@ -1,3 +1,5 @@
+> ⚠️ 已废弃（2026-11-16）：本文件是治理前的本地旧版规则。运行时 Weekly Output 主提示词为治理 Prompt `chatpack.weekly-output`（飞书 latest），其他入口用共享 fetch-prompt 读取。本文件仅供历史追溯与旧 Process Pack 对照，不得作为生成依据。
+
 # Weekly Output 核心输出要求
 
 本文件定义 `learn-x-process` 生成 Weekly Output 时的判断原则、输出结构和质量标准。

@@ -1,3 +1,5 @@
+> ⚠️ 已退役（2026-10）：Action Feedback 能力已退役，由 Core V1（/Users/yuwei/code/core）接管周度行动复盘。本文件仅供历史追溯，不得调用。
+
 # Action Feedback 周报规则
 
 Action Feedback 是每周中间产物，不是最终 Weekly Output 的完整章节。

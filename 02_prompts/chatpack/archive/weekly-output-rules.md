@@ -1,3 +1,5 @@
+> ⚠️ 已废弃（2026-11-16）：本 Prompt 已由治理 Prompt `chatpack.weekly-output`（现行真源：飞书「Weekly Output 核心输出要求」）取代，运行时不再读取本文件。本副本移入 archive 仅供历史追溯；废弃政策见 learn-x/docs/PROMPT_GOVERNANCE.md。
+
 # Weekly Output 核心输出要求
 
 本文件定义 `learn-x-process` 生成 Weekly Output 时的判断原则、输出结构和质量标准。

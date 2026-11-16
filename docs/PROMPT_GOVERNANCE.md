@@ -40,6 +40,17 @@ flowchart LR
 - Weekly、Monthly、Yearly Output 主 Prompt 分别使用 `chatpack.weekly-output`、`chatpack.monthly-output`、`chatpack.yearly-output`。Chat Pack 本地生成入口负责读取并标注专用缓存中的正文；缓存无效时等待其后台 latest 刷新，失败后停止。其他入口须先运行共享读取器并遵循本次返回的 `content`。
 - 未登记为受治理 Prompt 的本地适配内容继续按现有方式工作。
 
+## 废弃政策
+
+Prompt 被新一代规格取代时，旧资产必须一次性走完废弃流程（2026-11-16 起，`chatpack.{weekly,monthly}-output-rules` 即按此处理）：
+
+1. 中央 `registry.json` 标注 `status: deprecated` + `superseded_by`；此后 `fetch-prompt` 对旧 id 硬失败，`sync-backups` 冻结其备份。
+2. 飞书文档改名带【已废弃 <日期>】标记、正文顶部加废弃声明，并移入所在栏目的「归档｜已废弃 Prompt」节点。
+3. `02_prompts` 仓库备份移入 `02_prompts/chatpack/archive/`，文件头加废弃标注；`PROMPTS.md` 与中央 `backup-targets.json` 同步新路径。
+4. 治理前的本地旧版规则文件（`.agents/skills/learn-x-process/resources/`）不删除：文件头加废弃标注，仅供历史 Process Pack 对照，任何运行时不得消费。
+
+有意并存的不同角色资产必须用标题括注区分角色，禁止完全同名。重复标题、相似标题与废弃标注一致性由中央 `prompt-governance/scripts/audit-space.mjs` 审计，失败项未清零前不得登记或发布新 Prompt。
+
 ## 登记与维护
 
 普通 Prompt 可以先作为非治理文件试用。`discover`、`adopt` 用于治理资产的发现和登记。治理维护、状态诊断与运行时专用兼容副本修复工具仍可显式使用；`status --live`、`sync`、`publish` 不属于日常运行时生效步骤。

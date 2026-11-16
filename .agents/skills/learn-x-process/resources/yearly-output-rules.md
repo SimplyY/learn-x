@@ -1,3 +1,5 @@
+> ⚠️ 已废弃（2026-11-16）：本文件是治理前的本地旧版规则。运行时 Yearly Output 主提示词为治理 Prompt `chatpack.yearly-output`（飞书 latest），其他入口用共享 fetch-prompt 读取。本文件仅供历史追溯，不得作为生成依据。
+
 # Yearly Output 核心输出要求
 
 本文件维护 `learn-x-process` 的 Yearly Output 生成要求。
