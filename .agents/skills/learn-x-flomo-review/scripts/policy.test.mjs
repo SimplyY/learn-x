@@ -135,6 +135,20 @@ test('four-week repetition rejects even one independently of pair overlap', () =
   assert.throws(() => validateSelection({ date: '2026-10-06', notes: catalog, ledger, items: items(catalog, [0, 90, 91, 92, 93]) }), /pair-overlap-exceeds-0/);
 });
 
+test('historical pair overlap from past deliveries no longer blocks a clean new week', () => {
+  const catalog = notes();
+  const ledger = history(catalog, [
+    ['2026-09-28', [0, 1, 2, 3, 4, 5]],
+    ['2026-09-21', [0, 6, 7, 8, 9, 10]]
+  ]);
+  const result = validateSelection({ date: '2026-10-06', notes: catalog, ledger, items: items(catalog, [11, 12, 13, 14, 15]) });
+  assert.equal(result.repeats, 1);
+  assert.ok(result.pairOverlaps.some((entry) => entry.overlap > 0));
+  const eligible = eligibleNotes({ date: '2026-10-06', notes: catalog, ledger });
+  const exposed = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((index) => catalog[index].noteKey);
+  assert.ok(!eligible.some((note) => exposed.includes(note.noteKey)));
+});
+
 test('reserved, sending, delivered and needs_review block date and weekly exposures; failed releases them', () => {
   const catalog = notes();
   for (const status of ['reserved', 'sending', 'delivered', 'needs_review']) {

@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { digest, flomoComparableText, loadManifestSpecs, loadSpecs, normalizeMemoText, reconcile } from "./flomo-sync-core.mjs";
+import { digest, flomoComparableText, loadManifestSpecs, loadSpecs, loadWeeklyMemorySpecs, normalizeMemoText, reconcile } from "./flomo-sync-core.mjs";
 import { runEgoBatch } from "./flomo-sync-ego-batch.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -77,9 +77,11 @@ export async function syncFlomoWeekly(options = {}) {
 
 async function syncFlomoWeeklyImpl({ week, period, manifestPath, dryRun = false, only, skipKeys = [], overwriteConflicts = false, overwriteKeys = [], browser } = {}, runBatch = runEgoBatch) {
   if ([week, period, manifestPath].filter(Boolean).length !== 1) throw new Error("Choose exactly one of --week, --period, or --manifest.");
-  if (only && !["weekly", "monthly", "memory"].includes(only)) throw new Error("Use --only weekly|monthly|memory.");
+  if (only && !["weekly", "monthly", "memory", "weekly-memory"].includes(only)) throw new Error("Use --only weekly|weekly-memory|monthly|memory.");
   if (overwriteConflicts && (!manifestPath || !overwriteKeys.length)) throw new Error("Conflict overwrite requires --manifest and --overwrite-key.");
-  const input = manifestPath ? await loadManifestSpecs(repoRoot, path.resolve(manifestPath)) : await loadSpecs(repoRoot, period || week);
+  const input = manifestPath ? await loadManifestSpecs(repoRoot, path.resolve(manifestPath))
+    : only === "weekly-memory" ? await loadWeeklyMemorySpecs(repoRoot, period || week)
+      : await loadSpecs(repoRoot, period || week);
   const skipSet = new Set(skipKeys);
   const selectedInput = only ? input.specs.filter((spec) => spec.kind === only) : input.specs;
   const missingOverwriteKeys = overwriteConflicts ? overwriteKeys.filter((key) => !selectedInput.some((spec) => spec.key === key)) : [];
@@ -161,6 +163,10 @@ async function syncFlomoWeeklyImpl({ week, period, manifestPath, dryRun = false,
         }
         content = merged.content;
         needsRemoteWrite = flomoComparableText(content) !== flomoComparableText(remoteContent);
+        if (spec.allowWriteBack === false && merged.writeBack && merged.writeBack !== spec.source) {
+          preflightErrors.push(`${spec.key}: remote edits conflict with the Weekly Output source; reconcile manually before syncing.`);
+          continue;
+        }
         if (merged.writeBack && merged.writeBack !== spec.content && !dryRun) await writeFile(spec.filePath, merged.writeBack, "utf8");
       }
     }

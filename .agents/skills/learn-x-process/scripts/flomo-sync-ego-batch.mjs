@@ -86,14 +86,14 @@ const memoSelector = (memoId, child) => {
 
 const readMemo = async (page, memo) => {
   const returnUrl = await page.url();
-  const displaySelector = memoSelector(memo.memoId, ".display");
-  await page.dblclick(displaySelector, { label: "open Flomo memo" });
-  const editorSelector = memoSelector(memo.memoId, ".tiptap.ProseMirror");
-  await page.waitForSelector(editorSelector, { state: "visible", timeout: 7000 });
-  const content = await page.evaluate((selector) => document.querySelector(selector)?.innerText ?? null, editorSelector);
-  if (typeof content !== "string") throw new Error("Flomo memo editor did not expose readable content.");
-  // Read without editing, then return to the exact search URL. The current UI
-  // has no cancel button; navigation closes this read-only editor safely.
+  const safeId = String(memo.memoId).replace(/[^a-zA-Z0-9_-]/g, "");
+  const linkSelector = 'a[href*="memo_id=' + safeId + '"]';
+  await page.click(linkSelector, { label: "open Flomo memo details" });
+  const detailSelector = ".memo-detail-sheet .content.copy-allowed";
+  await page.waitForSelector(detailSelector, { state: "visible", timeout: 7000 });
+  const content = await page.evaluate((selector) => document.querySelector(selector)?.innerText ?? null, detailSelector);
+  if (typeof content !== "string") throw new Error("Flomo memo details did not expose the full readable content.");
+  // Read the full non-editable detail pane, then return to the exact search URL.
   await navigate(page, returnUrl);
   return { memoId: memo.memoId, content };
 };
@@ -153,10 +153,15 @@ const writeMemo = async (page, plan) => {
   const title = plan.content.split(String.fromCharCode(10))[0];
   if (!tag || !title) throw new Error("Prepared Flomo memo is missing its title or sync tag.");
   await navigate(page, "https://v.flomoapp.com/mine");
-  await page.waitForFunction((expectedTitle) => [...document.querySelectorAll(".memo.normal")].some((card) => (card.innerText ?? "").includes(expectedTitle)), title, { timeout: 15000 });
+  await page.waitForFunction((expectedTitle) => [...document.querySelectorAll(".memo.normal")].some((card) => {
+    const href = card.querySelector('a[href*="memo_id="]')?.href ?? "";
+    const memoId = new URL(href, location.origin).searchParams.get("memo_id") ?? "";
+    return (card.innerText ?? "").includes(expectedTitle) && memoId && !memoId.startsWith("local_");
+  }), title, { timeout: 15000 });
   const after = await extractFeedCards(page);
   memo = after.find((item) => item.text.includes(title) && item.text.includes(tag));
   if (!memo) throw new Error("Flomo did not expose the written memo for readback.");
+  if (memo.memoId.startsWith("local_")) throw new Error("Flomo memo still has a temporary local ID; refusing to record sync state.");
   return await readMemo(page, memo);
 };
 

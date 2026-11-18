@@ -73,7 +73,7 @@ test("loads one verified combined weekly memo and quarter Memory for a confirmed
     processPack: { periodId: period, status: "readback-verified" },
   }));
   await writeFile(path.join(root, "04_output/_dist/weekly", period, "_range-memory-write-receipt.json"), JSON.stringify({
-    schemaVersion: 1, periodId: period, fingerprint: "range-fingerprint", target: memoryPath,
+    schemaVersion: 2, periodId: period, fingerprint: "range-fingerprint", target: memoryPath,
     targetSha256: digest(memory), authorizationMessageId: "message-id", authorizationMessageSha256: "message-hash",
   }));
   await writeFile(path.join(root, "04_output/_dist/weekly", period, "_range-memory-proposal.json"), JSON.stringify({

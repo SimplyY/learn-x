@@ -151,12 +151,40 @@ export function sanitizeFlomoSource(source) {
 
 export function memoSpec(kind, id, source) {
   const labels = { weekly: "周记", monthly: "月记", memory: "记忆" };
-  const title = `Learn-X ${labels[kind] ?? kind}｜${id}`;
-  const tag = `#learn-x/${kind}/${id}`;
+  const title = kind === "weekly-memory" ? `${id}｜周度记忆` : `Learn-X ${labels[kind] ?? kind}｜${id}`;
+  const tag = kind === "weekly-memory" ? `#learn-x/weekly-memory/${id}` : `#learn-x/${kind}/${id}`;
   const safeSource = sanitizeFlomoSource(source);
   const verification = `Learn-X 同步校验：${digest(safeSource).slice(0, 16)}`;
   const content = `${title}\n\n${safeSource}\n\n${verification}\n#learn-x/sync ${tag}`;
   return { key: `${kind}:${id}`, kind, id, title, tag, verification, content, hash: digest(content) };
+}
+
+export async function loadWeeklyMemorySpecs(repoRoot, periodInput) {
+  const period = normalizePeriod(periodInput);
+  const [year, week] = period.split("-W");
+  const filename = period.slice(7).includes("-") ? `${period}.md` : `${year}-${week}.md`;
+  const filePath = path.join(repoRoot, "04_output/weekly", filename);
+  const output = await readFile(filePath, "utf8");
+  const heading = /^#{1,6}\s*\*{0,2}Flomo｜长期硬盘记忆\*{0,2}\s*$/mi.exec(output);
+  if (!heading) throw new Error(`Weekly Output has no Flomo long-term-memory section: ${period}`);
+  const start = heading.index + heading[0].length;
+  const tail = output.slice(start);
+  const nextHeading = /^#{1,6}\s/m.exec(tail);
+  const sourceLines = (nextHeading ? tail.slice(0, nextHeading.index) : tail)
+    .replace(/&#x20;/gi, " ")
+    .replace(/&#\d+;/g, "")
+    .replace(/^\s*复制\s*$/gm, "")
+    .replace(/^(\s*)(\d+)\\\.\s+/gm, "$1$2. ")
+    .split(/\r?\n/);
+  while (sourceLines.length && (!sourceLines[0].trim() || /^以下(?:主要补充|为重新组织的双周候选).*$/u.test(sourceLines[0].trim()))) sourceLines.shift();
+  if (sourceLines[0]?.trim().replace(/^\*\*|\*\*$/g, "") === `${period}｜周度记忆`) sourceLines.shift();
+  while (sourceLines.length && !sourceLines[0].trim()) sourceLines.shift();
+  while (sourceLines.length && (!sourceLines.at(-1).trim()
+    || /^(?:以上(?:均为|为)候选.*|以下主要补充.*)$/u.test(sourceLines.at(-1).trim()))) sourceLines.pop();
+  const source = sourceLines.join("\n").trim();
+  if (!isSubstantive(source)) throw new Error(`Weekly Flomo memory section is empty: ${period}`);
+  const spec = memoSpec("weekly-memory", period, source);
+  return { period, week: period, specs: [{ ...spec, filePath, source, allowWriteBack: false }], skipped: [] };
 }
 
 export async function loadSpecs(repoRoot, periodInput) {
@@ -196,7 +224,7 @@ export async function loadSpecs(repoRoot, periodInput) {
       readFile(path.join(distRoot, "_range-memory-proposal.json"), "utf8").then(JSON.parse),
     ]);
     const memoryRelativePath = path.relative(repoRoot, memoryPath).split(path.sep).join("/");
-    if (receipt.schemaVersion !== 1 || receipt.periodId !== period || receipt.target !== memoryRelativePath ||
+    if (receipt.schemaVersion !== 2 || receipt.periodId !== period || receipt.target !== memoryRelativePath ||
         receipt.targetSha256 !== digest(memorySource) || receipt.fingerprint !== proposal.fingerprint ||
         proposal.periodId !== period || proposal.quarter !== quarter ||
         !receipt.authorizationMessageId || !receipt.authorizationMessageSha256) {

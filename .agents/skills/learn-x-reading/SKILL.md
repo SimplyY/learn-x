@@ -7,7 +7,7 @@ description: "把微信读书指定范围内的划线与用户想法整理为按
 
 ## 当前支持范围
 
-本 Skill 当前只处理微信读书内容。**实体书照片、圈注/划线识别及视觉标记覆盖按用户指示暂缓**；收到照片时不声称已采集，也不把 OCR 文本当作视觉标记验收。真实书页入口须等用户后续明确恢复该工作后再设计。
+本 Skill 支持微信读书内容和 Flomo 中带「读书笔记」标签的笔记。**实体书照片、圈注/划线识别及视觉标记覆盖按用户指示暂缓**；收到照片时不声称已采集，也不把 OCR 文本当作视觉标记验收。真实书页入口须等用户后续明确恢复该工作后再设计。
 
 目标是低成本保存可追溯的阅读上下文，供 ChatGPT 即时伴读或每周精读。默认输出不是长篇报告，不代写 Flomo。
 
@@ -32,6 +32,14 @@ description: "把微信读书指定范围内的划线与用户想法整理为按
    ```
 
    默认的最近 3 天范围按上海时区计算。输出写在 `.runtime/reading/weread-range-latest.json`，权限 0600；采集器报告的 `complete` 和 `errors` 必须原样纳入判断。
+
+   如需采集 Flomo 读书笔记，运行：
+
+   ```bash
+   node .agents/skills/learn-x-input/scripts/collect-flomo-reading-range.mjs [--from YYYY-MM-DD --to YYYY-MM-DD] [--tag 读书笔记]
+   ```
+
+   该采集器复用已激活的 Flomo 线上全量快照，只保留标签名包含「读书笔记」的记录；书名优先取该标签末段，创建时间按 `Asia/Shanghai` 保留。输出写在 `.runtime/reading/flomo-range-latest.json`，权限 0600。快照覆盖缺口、旧快照未覆盖请求结束时间、记录哈希错误或身份异常都会让 `complete=false`；未确认 `complete=true` 前不得声称完整采集或写入公开阅读库。
 
 2. 按书归组。每本书单独形成一个 batch，稳定 `batchId` 基于该书本次实际来源 ID。分别标注作者内容与用户本人想法。电子书划线可以精选，不得将精选数说成取得总数；用户自己的想法不压缩成 AI 观点。按 `dataSemantics` 区分权重：划线是 high 级原文证据，用户想法是 highest 级个人表达、思考和问题，整理时不得降级为普通摘录。
 

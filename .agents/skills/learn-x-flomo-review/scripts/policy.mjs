@@ -127,7 +127,7 @@ function exposure({ date, ledger = { batches: {} }, index }) {
   }
   return { byWeek, ageNotesByWeek };
 }
-function budgets(byWeek) {
+function budgets(byWeek, currentWeek = null) {
   const entries = [...byWeek];
   const union = new Set(entries.flatMap(([, set]) => [...set]));
   const repeats = entries.reduce((sum, [, set]) => sum + set.size, 0) - union.size;
@@ -135,10 +135,19 @@ function budgets(byWeek) {
   for (let i = 0; i < entries.length; i++) for (let j = i + 1; j < entries.length; j++) {
     const overlap = [...entries[i][1]].filter((key) => entries[j][1].has(key)).length;
     pairOverlaps.push({ weeks: [entries[i][0], entries[j][0]], overlap });
-    if (overlap > MAX_PAIR_OVERLAP) fail(`pair-overlap-exceeds-${MAX_PAIR_OVERLAP}`);
+    if (overlap > MAX_PAIR_OVERLAP && currentWeek === null) {
+      fail(`pair-overlap-exceeds-${MAX_PAIR_OVERLAP}`);
+    }
   }
-  if (repeats > MAX_WINDOW_REPEATS) fail(`four-week-repeats-exceed-${MAX_WINDOW_REPEATS}`);
+  if (currentWeek === null && repeats > MAX_WINDOW_REPEATS) fail(`four-week-repeats-exceed-${MAX_WINDOW_REPEATS}`);
   return { repeats, pairOverlaps };
+}
+function assertNoNewRepeats(byWeek, proposedGroups, week) {
+  const proposed = new Set(proposedGroups);
+  for (const [pastWeek, exposed] of byWeek) {
+    if (pastWeek === week) continue;
+    if ([...proposed].some((group) => exposed.has(group))) fail(`pair-overlap-exceeds-${MAX_PAIR_OVERLAP}`);
+  }
 }
 function addGroups(byWeek, week, groups) {
   const next = new Map([...byWeek].map(([key, set]) => [key, new Set(set)]));
@@ -210,19 +219,21 @@ export function validateSelection({ date, items, notes, ledger }) {
   if (longNoteCount > MAX_LONG_NOTES_PER_DAY) fail('long-note-exceeds-two');
   const age = { ...ageStatistics(addGroups(delivered.byWeek, week, normalized.map((item) => item.groupKey)), week, index, date, proposedAgeNotes), basis: 'delivered-plus-proposed' };
   if (age.deviations.length) fail(`age-composition-invalid:${age.deviations.join(',')}`);
-  return { date, week, items: normalized, ...budgets(next), age, ageObserved: { ...ageStatistics(delivered.byWeek, week, index, date, delivered.ageNotesByWeek.get(week)), basis: 'delivered-only' } };
+  assertNoNewRepeats(byWeek, normalized.map((item) => item.groupKey), week);
+  return { date, week, items: normalized, ...budgets(next, 'audit'), age, ageObserved: { ...ageStatistics(delivered.byWeek, week, index, date, delivered.ageNotesByWeek.get(week)), basis: 'delivered-only' } };
 }
 export const normalizeSelection = validateSelection;
 
 export function eligibleNotes({ date, notes, ledger }) {
   const index = catalogIndex(notes);
   const { byWeek } = exposure({ date, ledger, index });
-  budgets(byWeek);
+  budgets(byWeek, 'audit');
   const seen = new Set();
   return notes.filter((note) => {
-    if (!qualified(note) || !note.source?.url || seen.has(note.groupKey) || byWeek.get(isoWeek(date)).has(note.groupKey)) return false;
+    const exposedAnywhere = [...byWeek.values()].some((groups) => groups.has(note.groupKey));
+    if (!qualified(note) || !note.source?.url || seen.has(note.groupKey) || exposedAnywhere) return false;
     try { ageBand(note.createdAt, date); } catch { return false; }
-    try { budgets(addGroups(byWeek, isoWeek(date), [note.groupKey])); }
+    try { budgets(addGroups(byWeek, isoWeek(date), [note.groupKey]), 'audit'); }
     catch { return false; }
     seen.add(note.groupKey);
     return true;

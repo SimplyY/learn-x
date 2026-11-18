@@ -376,10 +376,11 @@ export function normalizeEntry(entry, { source, book, index }) {
     recordId,
     bookKey: sha256(bookIdentity(book)).slice(0, 20),
     source,
-    sourceId: source === "weread" ? sourceId : null,
+    sourceId: source === "weread" || source === "flomo" ? sourceId : null,
     sourceFingerprint: sha256(stableSerialize(entry.sourceEvidence)),
     location: location || "定位未提供",
     date: normalizeDate(entry.date),
+    time: source === "flomo" ? clean(entry.time || entry.sourceEvidence?.timeText || "") : "",
     kind: clean(entry.kind || "划线"),
     authorContent: clean(entry.authorContent || entry.coreClaim),
     foundations: cleanLines(entry.foundations || entry.thoughtFoundations),
@@ -402,8 +403,8 @@ function normalizeBook(book) {
 }
 
 function normalizeSource(value) {
-  if (value === "weread") return value;
-  throw new Error("reading-source-invalid: only WeRead is currently supported; physical-book collection is deferred.");
+  if (value === "weread" || value === "flomo") return value;
+  throw new Error("reading-source-invalid: only WeRead and Flomo reading notes are supported; physical-book collection is deferred.");
 }
 
 function normalizeDate(value) {
@@ -438,7 +439,7 @@ function compareEntries(left, right) {
 }
 
 function renderBookMarkdown({ book, entries, collectedAt }) {
-  const sources = ["微信读书精选"];
+  const sources = entries.some((entry) => entry.source === "flomo") ? ["Flomo 读书笔记"] : ["微信读书精选"];
   const lines = [
     `# 《${escapeMarkdown(book.title)}》`,
     "",
@@ -454,6 +455,7 @@ function renderBookMarkdown({ book, entries, collectedAt }) {
   for (const entry of entries) {
     lines.push(`## ${escapeMarkdown(entry.location)} · ${entry.date}`, "");
     lines.push(`- 来源记录：\`${entry.recordId}\``, `- 标记类型：${escapeMarkdown(entry.kind)}`);
+    if (entry.time) lines.push(`- 记录时间：${escapeMarkdown(entry.time)}（Asia/Shanghai）`);
     if (entry.authorContent) lines.push(`- 作者内容提炼：${escapeMarkdown(entry.authorContent)}`);
     if (entry.foundations.length) lines.push(`- 思想基石：${entry.foundations.map(escapeMarkdown).join("；")}`);
     if (entry.questions.length) lines.push(`- 待检验问题：${entry.questions.map(escapeMarkdown).join("；")}`);

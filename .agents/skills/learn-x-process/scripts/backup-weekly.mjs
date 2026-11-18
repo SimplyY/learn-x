@@ -14,7 +14,7 @@ export const BACKUP_ROOTS = ["01_core", "03_input", "04_output", "05_library"];
 export const DRIVE_FOLDER_NAME = "Learn-X Backups";
 export const BASE_NAME = "Learn-X Backup Index";
 export const TABLE_NAME = "Snapshots";
-export const MAX_ARCHIVE_BYTES = 10_000_000;
+export const MAX_ARCHIVE_BYTES = 15_000_000;
 const FLOMO_ONLINE_ROOT = "04_output/_dist/flomo-review/online-full";
 export const EXCLUDED_FILE_REASONS = [
   { reason: "macOS metadata", test: (name) => name === ".DS_Store" },
@@ -201,18 +201,23 @@ async function flomoBackupPolicy(rootDirectory) {
   const backupStat = await lstatWithinRoot(rootDirectory, backupRelativeFromRoot);
   if (!backupStat?.isDirectory() || backupStat.isSymbolicLink()) throw new Error("Flomo 当前回滚快照目录缺失或不是普通目录，拒绝生成不完整备份。");
 
-  const keep = new Set(["storage-mode.json", activeSnapshotPath, activeCatalogPath, activeLedgerPath]);
-  for (const relative of keep) {
+  const keep = new Set(["storage-mode.json", activeSnapshotPath, activeLedgerPath]);
+  for (const relative of [...keep, activeCatalogPath]) {
     const info = await lstatWithinRoot(rootDirectory, `${FLOMO_ONLINE_ROOT}/${relative}`);
     if (!info?.isFile() || info.isSymbolicLink()) throw new Error(`Flomo 活动快照文件缺失或不是普通文件：${relative}`);
   }
-  return { keep, rollbackPrefix: path.relative(onlineRoot, backupAbsolutePath).split(path.sep).join("/") };
+  return {
+    keep,
+    excludedActiveCatalogPath: activeCatalogPath,
+    rollbackPrefix: path.relative(onlineRoot, backupAbsolutePath).split(path.sep).join("/")
+  };
 }
 
 function flomoPathExclusion(filePath, policy) {
   const prefix = `${FLOMO_ONLINE_ROOT}/`;
   if (!policy || !filePath.startsWith(prefix)) return null;
   const relative = filePath.slice(prefix.length);
+  if (relative === policy.excludedActiveCatalogPath) return "user-authorized exclusion: oversized derived Flomo catalog; active snapshot and ledger retained";
   if (policy.keep.has(relative) || relative.startsWith(`${policy.rollbackPrefix}/`)) return null;
   if (relative.startsWith("snapshots/")) return "historical Flomo snapshots (active snapshot retained)";
   if (relative.startsWith("staged/")) return "unactivated Flomo staging snapshot";
@@ -225,7 +230,7 @@ export function assertArchiveSizeWithinLimit(archiveBytes, files = []) {
   if (archiveBytes <= MAX_ARCHIVE_BYTES) return { archiveBytes, limitBytes: MAX_ARCHIVE_BYTES };
   const largest = [...files].sort((a, b) => b.bytes - a.bytes).slice(0, 5)
     .map((file) => `${file.path}=${file.bytes}B`).join(", ");
-  throw new Error(`backup-archive-over-10MB: ${archiveBytes}B > ${MAX_ARCHIVE_BYTES}B; largest files: ${largest || "none"}`);
+  throw new Error(`backup-archive-over-15MB: ${archiveBytes}B > ${MAX_ARCHIVE_BYTES}B; largest files: ${largest || "none"}`);
 }
 
 async function walk(root, current = root, entries = [], excluded = [], options = {}) {
@@ -780,7 +785,7 @@ export function validateArchiveEntries(listing) {
 
 export async function validateArchiveFile(archivePath, expectedArchiveBytes, expectedArchiveSha256, expectedManifestSha256) {
   const archiveBytes = (await stat(archivePath)).size;
-  if (archiveBytes > MAX_ARCHIVE_BYTES) throw new Error(`远端压缩包超出 10 MB 上限：${archiveBytes}B`);
+  if (archiveBytes > MAX_ARCHIVE_BYTES) throw new Error(`远端压缩包超出 15 MB 上限：${archiveBytes}B`);
   if (expectedArchiveBytes != null && archiveBytes !== Number(expectedArchiveBytes)) throw new Error("远端压缩包字节数与上传结果不一致。");
   const archiveSha256 = await hashFile(archivePath);
   if (expectedArchiveSha256 && archiveSha256 !== expectedArchiveSha256) throw new Error("远端压缩包 SHA-256 与上传结果不一致。");

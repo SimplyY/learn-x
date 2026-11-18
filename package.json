@@ -30,6 +30,7 @@
     "input:coach": "node .agents/skills/learn-x-input/scripts/collect-daily-coach-weekly.mjs --source coach",
     "input:weread": "node .agents/skills/learn-x-input/scripts/collect-weread-weekly.mjs",
     "input:weread-range": "node .agents/skills/learn-x-input/scripts/collect-weread-range.mjs",
+    "input:flomo-reading-range": "node .agents/skills/learn-x-input/scripts/collect-flomo-reading-range.mjs",
     "reading:store": "node .agents/skills/learn-x-reading/scripts/store-reading.mjs",
     "test:input:weread": "node --test .agents/skills/learn-x-input/scripts/collect-weread-weekly.test.mjs",
     "input:weread-archive": "node .agents/skills/learn-x-input/scripts/collect-weread-archive.mjs",

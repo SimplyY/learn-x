@@ -28,7 +28,7 @@ test("Flomo writes verify the prepared editor text before save and read back aft
   const saveAt = script.indexOf('page.click(".editor-menu-bar .pin-right"');
   const readBackAt = script.indexOf("return await readMemo(page, memo)");
   assert.ok(selectAllAt >= 0 && selectAllAt < pasteAt && pasteAt < settleAt && settleAt < verifyAt && verifyAt < saveAt && saveAt < readBackAt);
-  assert.match(script, /const editorSelector = memoSelector\(memo\.memoId, "\.tiptap\.ProseMirror"\)/);
+  assert.match(script, /await page\.dblclick\(memoSelector\(memo\.memoId, "\.display"\), \{ label: "edit Flomo memo" \}\)/);
   assert.match(script, /extractFeedCards\(page\)/);
   assert.match(script, /await navigate\(page, returnUrl\)/);
   assert.doesNotMatch(script, /button\.cancel-btn/);

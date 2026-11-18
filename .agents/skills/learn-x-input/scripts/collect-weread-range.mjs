@@ -91,7 +91,7 @@ export async function collectWereadRange(options = {}) {
           const chapterTitles = new Map(bookmarkResponse.chapters.map((chapter) => [String(chapter.chapterUid), chapter.title]));
           const selected = selectRangeEntries(bookmarkResponse.updated, (item) => item.createTime, range);
           highlights = selected.items
-            .map((item) => normalizeHighlight(item, notebook, chapterTitles));
+            .map((item) => normalizeHighlight(item, notebook, chapterTitles, options.preserveRaw === true));
           if (selected.invalidTimestampCount) errors.push({
             bookId: String(notebook.bookId),
             title: notebook.book?.title || notebook.title || "未命名书籍",
@@ -107,15 +107,15 @@ export async function collectWereadRange(options = {}) {
       if (!reviewResult.complete) errors.push({ bookId: String(notebook.bookId), title: notebook.book?.title || notebook.title || "未命名书籍", reason: reviewResult.error });
       const selectedThoughts = selectRangeEntries(reviewResult.reviews, (item) => item.review?.createTime, range);
       const thoughts = selectedThoughts.items
-        .map((item) => normalizeThought(item, notebook));
+        .map((item) => normalizeThought(item, notebook, options.preserveRaw === true));
       if (selectedThoughts.invalidTimestampCount) errors.push({
         bookId: String(notebook.bookId),
         title: notebook.book?.title || notebook.title || "未命名书籍",
         reason: `${selectedThoughts.invalidTimestampCount} thought entries had missing or invalid createTime values.`
       });
 
-      const unusableContentCount = highlights.filter((item) => !item.text)
-        .length + thoughts.filter((item) => !item.content && !item.abstract).length;
+      const unusableContentCount = highlights.filter((item) => !item.text.trim())
+        .length + thoughts.filter((item) => !item.content.trim() && !item.abstract.trim()).length;
       if (unusableContentCount) errors.push({
         bookId: String(notebook.bookId),
         title: notebook.book?.title || notebook.title || "未命名书籍",
@@ -145,7 +145,7 @@ export async function collectWereadRange(options = {}) {
   books.sort((a, b) => a.title.localeCompare(b.title, "zh-Hans-CN") || a.bookId.localeCompare(b.bookId));
   const highlightCount = books.reduce((sum, book) => sum + book.highlights.length, 0);
   const thoughtCount = books.reduce((sum, book) => sum + book.thoughts.length, 0);
-  const unusableEntries = books.reduce((sum, book) => sum + book.highlights.filter((item) => !item.text).length + book.thoughts.filter((item) => !item.content && !item.abstract).length, 0);
+  const unusableEntries = books.reduce((sum, book) => sum + book.highlights.filter((item) => !item.text.trim()).length + book.thoughts.filter((item) => !item.content.trim() && !item.abstract.trim()).length, 0);
   return {
     source: "weread",
     timezone: "Asia/Shanghai",
@@ -252,9 +252,9 @@ async function collectBookReviews(callApi, bookId) {
   return { reviews, complete: false, error: "review-pagination-limit: exceeded 500 pages." };
 }
 
-function normalizeHighlight(item, notebook, chapterTitles) {
+function normalizeHighlight(item, notebook, chapterTitles, preserveRaw = false) {
   const id = item.bookmarkId ?? item.id;
-  const text = cleanText(item.markText);
+  const text = preserveRaw ? String(item.markText ?? "") : cleanText(item.markText);
   return {
     sourceId: id == null ? null : `weread-bookmark:${notebook.bookId}:${id}`,
     bookId: String(notebook.bookId),
@@ -269,11 +269,11 @@ function normalizeHighlight(item, notebook, chapterTitles) {
   };
 }
 
-function normalizeThought(item, notebook) {
+function normalizeThought(item, notebook, preserveRaw = false) {
   const review = item.review || {};
   const id = review.reviewId ?? item.reviewId ?? item.id;
-  const abstract = cleanText(review.abstract || review.contextAbstract || "");
-  const content = cleanText(review.content || "");
+  const abstract = preserveRaw ? String(review.abstract ?? review.contextAbstract ?? "") : cleanText(review.abstract || review.contextAbstract || "");
+  const content = preserveRaw ? String(review.content ?? "") : cleanText(review.content || "");
   return {
     sourceId: id == null ? null : `weread-review:${notebook.bookId}:${id}`,
     bookId: String(notebook.bookId),

@@ -25,7 +25,7 @@ export async function prepareWeeklyRangeMemory({ periodId, repoRoot = defaultRep
   const period = validateRange(periodId, rangeManifest.period);
   const firstLine = weeklyOutput.split(/\r?\n/).map((line) => line.trim()).find(Boolean) || "";
   if (firstLine !== "# " + periodId + " Weekly Output") throw new Error("weekly-range-memory-output-title-mismatch");
-  if (!weeklyOutput.replace(/\s/g, "").includes(coverageLabel(period.start, period.endInclusive))) {
+  if (!hasCoverageLabel(weeklyOutput, period.start, period.endInclusive)) {
     throw new Error("weekly-range-memory-output-coverage-mismatch");
   }
   const required = extractRequiredSections(weeklyOutput);
@@ -519,6 +519,20 @@ function coverageLabel(start, endInclusive) {
   const endYear = endDate.getUTCFullYear() === startDate.getUTCFullYear() ? "" : endDate.getUTCFullYear() + "年";
   const endText = endYear + (endDate.getUTCMonth() + 1) + "月" + endDate.getUTCDate() + "日";
   return startText + "—" + endText;
+}
+
+function hasCoverageLabel(content, start, endInclusive) {
+  const normalized = content.replace(/\s/g, "");
+  if (normalized.includes(coverageLabel(start, endInclusive))) return true;
+  const startDate = new Date(start + "T00:00:00Z");
+  const endDate = new Date(endInclusive + "T00:00:00Z");
+  const compactEnd = endDate.getUTCFullYear() === startDate.getUTCFullYear()
+    && endDate.getUTCMonth() === startDate.getUTCMonth()
+    ? String(endDate.getUTCDate()) + "日"
+    : coverageLabel(endInclusive, endInclusive);
+  const compactStart = startDate.getUTCFullYear() + "年" + (startDate.getUTCMonth() + 1)
+    + "月" + startDate.getUTCDate() + "日";
+  return normalized.includes(compactStart + "—" + compactEnd);
 }
 
 function isoMonday(year, week) {

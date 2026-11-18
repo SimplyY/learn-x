@@ -21,6 +21,7 @@
       "sourceEvidence": { "text": "采集器返回的对应标记文本", "range": "定位范围", "chapterUid": "chapter-id", "createTime": 1793672100 },
       "location": "第三章 / 小节标题",
       "date": "2026-11-03",
+      "time": "Flomo 记录的 Asia/Shanghai 精确时间；WeRead 条目可省略",
       "kind": "划线",
       "authorContent": "基于来源的简洁转述；纯用户想法记录可省略",
       "foundations": ["支撑该命题的思想基石"],
@@ -35,11 +36,11 @@
 }
 ```
 
-The store currently accepts only `source: "weread"`. Physical-book photos, OCR and mark identification are deferred by the user; do not pass physical material to this contract or imply it is supported. Images and image paths are never stored here.
+The store accepts `source: "weread"` or `source: "flomo"`. Physical-book photos, OCR and mark identification are deferred by the user; do not pass physical material to this contract or imply it is supported. Images and image paths are never stored here. Flomo entries must preserve the collector-provided Asia/Shanghai `timeText`.
 
 ## Identity and retry rules
 
-- The source record key is `source + SHA-256(identity)`. WeRead requires the collector-provided source ID; do not synthesize one from visible content.
+- The source record key is `source + SHA-256(identity)`. WeRead and Flomo require the collector-provided stable source ID; do not synthesize one from visible content.
 - A ready entry must contain source-grounded author content, an explicitly attributed user thought, or both. Do not invent author content for a thought-only WeRead review.
 - Every entry must pass the collector's private `sourceEvidence`; the store hashes a stable key-sorted representation into `sourceFingerprint` and discards the raw evidence from persisted record state. The inbox and latest collector snapshot remain private under `.runtime/reading/`.
 - Repeated source IDs within one batch are folded only when their normalized content agrees; conflicting content for one source identity fails the batch instead of choosing arbitrarily. On a later batch, an existing record is a duplicate when its raw-source fingerprint matches, so prior user edits are preserved; a changed fingerprint fails closed.

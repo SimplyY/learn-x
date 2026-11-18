@@ -59,12 +59,14 @@ test("backup keeps the active Flomo snapshot and rollback bundle, excludes stale
     const scanned = await collectBackupFiles(root);
     const paths = scanned.files.map((file) => file.path);
     assert.ok(paths.includes("04_output/_dist/flomo-review/online-full/snapshots/active-1.json"));
-    assert.ok(paths.includes("04_output/_dist/flomo-review/online-full/snapshots/active-1.catalog.json"));
+    assert.ok(!paths.includes("04_output/_dist/flomo-review/online-full/snapshots/active-1.catalog.json"));
     assert.ok(paths.includes("04_output/_dist/flomo-review/online-full/snapshots/active-1.ledger.json"));
     assert.ok(paths.includes("04_output/_dist/flomo-review/online-full/backups/active-rollback/legacy-catalog.json"));
     assert.ok(paths.includes("04_output/_dist/flomo-review/online-full/2026-11-01/decision.json"));
     assert.ok(!paths.some((file) => file.includes("old-1") || file.includes("staged/") || file.includes("obsolete-migration")));
     assert.ok(!paths.some((file) => file.startsWith("04_output/image.")));
+    assert.ok(scanned.excluded.some((entry) => entry.path === "04_output/_dist/flomo-review/online-full/snapshots/active-1.catalog.json"
+      && entry.reason.startsWith("user-authorized exclusion: oversized derived Flomo catalog")));
     assert.equal(scanned.excluded.filter((entry) => entry.reason === "image file (not backed up)").length, imageExtensions.length);
 
     const manifest = createManifest("2026-W44", scanned.files, scanned.excluded);
@@ -165,9 +167,9 @@ test("fails closed when active snapshot or rollback directory is reached through
   }
 });
 
-test("enforces the 10 MB compressed archive boundary exactly", () => {
+test("enforces the 15 MB compressed archive boundary exactly", () => {
   assert.equal(assertArchiveSizeWithinLimit(MAX_ARCHIVE_BYTES).archiveBytes, MAX_ARCHIVE_BYTES);
-  assert.throws(() => assertArchiveSizeWithinLimit(MAX_ARCHIVE_BYTES + 1, [{ path: "04_output/large.json", bytes: 99 }]), /backup-archive-over-10MB.*04_output\/large\.json=99B/);
+  assert.throws(() => assertArchiveSizeWithinLimit(MAX_ARCHIVE_BYTES + 1, [{ path: "04_output/large.json", bytes: 99 }]), /backup-archive-over-15MB.*04_output\/large\.json=99B/);
   assert.throws(() => assertArchiveSizeWithinLimit(Number.NaN), /大小无效/);
 });
 
