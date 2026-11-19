@@ -69,6 +69,9 @@ export async function collectWereadRange(options = {}) {
   if (!apiKey && !options.callApi) throw new Error(`WeRead API Key is not configured. Set WEREAD_API_KEY or store it in macOS Keychain service ${KEYCHAIN_SERVICE}.`);
   const skillVersion = options.skillVersion || await readInstalledWereadSkillVersion(options.skillPath);
   const callApi = options.callApi || ((payload) => callWereadApi(payload, apiKey, skillVersion));
+  if (options.checkpointMode === true) {
+    return collectWereadRangeCheckpointed({ options, now, range, skillVersion, callApi });
+  }
   const discovery = await collectCandidateBooks(callApi, range.startEpoch, range.endEpoch);
   const filter = options.book ? String(options.book).trim() : "";
   const matched = filter ? resolveBookFilter(discovery.books, filter) : discovery.books;
@@ -158,6 +161,358 @@ export async function collectWereadRange(options = {}) {
     errors,
     books
   };
+}
+
+async function collectWereadRangeCheckpointed({ options, now, range, skillVersion, callApi }) {
+  const from = String(options.from || "");
+  const to = String(options.to || "");
+  if (!from || !to || typeof options.onCheckpoint !== "function") {
+    throw new Error("weread-checkpoint: exact dates and an onCheckpoint handler are required.");
+  }
+
+  const defaults = {
+    schemaVersion: 1,
+    from,
+    to,
+    rangeEpoch: null,
+    phase: "discover",
+    discoveryCursor: null,
+    seenDiscoveryCursors: [],
+    candidateBooks: [],
+    bookProgress: {},
+    validationErrors: []
+  };
+  let state = options.checkpoint ? structuredClone(options.checkpoint) : defaults;
+  if (
+    state.schemaVersion !== 1
+    || state.from !== from
+    || state.to !== to
+    || !["discover", "books", "done"].includes(state.phase)
+    || !Array.isArray(state.candidateBooks)
+    || !Array.isArray(state.seenDiscoveryCursors)
+    || !state.bookProgress
+    || typeof state.bookProgress !== "object"
+    || !Array.isArray(state.validationErrors)
+  ) {
+    throw new Error("weread-checkpoint: stored checkpoint is invalid or belongs to a different range.");
+  }
+  if (state.rangeEpoch == null) {
+    state = {
+      ...state,
+      rangeEpoch: { startEpoch: range.startEpoch, endEpoch: range.endEpoch }
+    };
+    await options.onCheckpoint({ checkpoint: state, books: [] });
+  } else {
+    const startEpoch = Number(state.rangeEpoch.startEpoch);
+    const endEpoch = Number(state.rangeEpoch.endEpoch);
+    if (!Number.isFinite(startEpoch) || !Number.isFinite(endEpoch) || endEpoch <= startEpoch) {
+      throw new Error("weread-checkpoint: stored range bounds are invalid.");
+    }
+    range = { startEpoch, endEpoch };
+  }
+
+  const currentErrors = [];
+  const outputBooks = new Map();
+  const persist = async (nextState, books = []) => {
+    await options.onCheckpoint({ checkpoint: nextState, books });
+    state = nextState;
+  };
+  const addValidationError = (checkpoint, reason) => {
+    const existing = new Set(checkpoint.validationErrors);
+    existing.add(reason);
+    return { ...checkpoint, validationErrors: [...existing] };
+  };
+  const appendOutput = (notebook, highlights = [], thoughts = []) => {
+    if (!highlights.length && !thoughts.length) return;
+    const id = String(notebook.bookId);
+    const item = outputBooks.get(id) || {
+      bookId: id,
+      title: notebook.title || "未命名书籍",
+      author: notebook.author || "",
+      highlights: [],
+      thoughts: []
+    };
+    item.highlights.push(...highlights);
+    item.thoughts.push(...thoughts);
+    outputBooks.set(id, item);
+  };
+  const isBudgetError = (error) => error?.code === "REQUEST_BUDGET_EXCEEDED" || error?.message === "request budget exceeded";
+  const buildResult = (complete) => {
+    const books = [...outputBooks.values()].sort((a, b) => a.title.localeCompare(b.title, "zh-Hans-CN") || a.bookId.localeCompare(b.bookId));
+    const highlightCount = books.reduce((sum, book) => sum + book.highlights.length, 0);
+    const thoughtCount = books.reduce((sum, book) => sum + book.thoughts.length, 0);
+    const unusableEntries = books.reduce((sum, book) => sum
+      + book.highlights.filter((item) => !item.text.trim()).length
+      + book.thoughts.filter((item) => !item.content.trim() && !item.abstract.trim()).length, 0);
+    const reasons = [...new Set([...state.validationErrors, ...currentErrors])];
+    return {
+      source: "weread",
+      timezone: "Asia/Shanghai",
+      range: { start: formatShanghaiDateTime(range.startEpoch), endExclusive: formatShanghaiDateTime(range.endEpoch) },
+      complete: complete && reasons.length === 0,
+      skillVersion,
+      requestedBook: null,
+      dataSemantics: WEREAD_DATA_SEMANTICS,
+      counts: {
+        candidateBooks: state.candidateBooks.length,
+        books: books.length,
+        acquiredHighlights: highlightCount,
+        acquiredThoughts: thoughtCount,
+        unusableEntries
+      },
+      errors: reasons.map((reason) => ({ reason })),
+      books
+    };
+  };
+
+  if (state.phase === "discover") {
+    const discovery = await collectCandidateBooksCheckpointed({
+      callApi,
+      startEpoch: range.startEpoch,
+      checkpoint: state,
+      persist
+    });
+    state = discovery.checkpoint;
+    currentErrors.push(...discovery.errors);
+    if (!discovery.complete) return buildResult(false);
+  }
+
+  if (state.phase === "books") {
+    for (const notebook of state.candidateBooks) {
+      const bookId = String(notebook.bookId);
+      let progress = state.bookProgress[bookId] || {
+        bookmarkDone: false,
+        reviewDone: false,
+        reviewCursor: 0,
+        reviewCursorsSeen: []
+      };
+      if (progress.bookmarkDone && progress.reviewDone) continue;
+
+      if (!progress.bookmarkDone) {
+        let bookmarkResponse;
+        try {
+          bookmarkResponse = await callApi({ api_name: "/book/bookmarklist", bookId });
+        } catch (error) {
+          if (isBudgetError(error)) {
+            currentErrors.push("request-budget-exceeded: checkpoint retained at book " + bookId + ".");
+            return buildResult(false);
+          }
+          currentErrors.push("bookmark-fetch-failed: book " + bookId + ": " + error.message);
+        }
+        if (bookmarkResponse) {
+          if (!Array.isArray(bookmarkResponse.updated) || !Array.isArray(bookmarkResponse.chapters)) {
+            currentErrors.push("bookmark-response-invalid: book " + bookId + " is missing updated entries or chapters.");
+          } else {
+            const chapterTitles = new Map(bookmarkResponse.chapters.map((chapter) => [String(chapter.chapterUid), chapter.title]));
+            const selected = selectRangeEntries(bookmarkResponse.updated, (item) => item.createTime, range);
+            let nextState = state;
+            if (selected.invalidTimestampCount) {
+              nextState = addValidationError(nextState, selected.invalidTimestampCount + " highlight entries had missing or invalid createTime values in book " + bookId + ".");
+            }
+            const highlights = selected.items.map((item) => normalizeHighlight(item, notebook, chapterTitles, options.preserveRaw === true));
+            const missingIdentityCount = highlights.filter((item) => !item.identityVerified).length;
+            if (missingIdentityCount) {
+              nextState = addValidationError(nextState, missingIdentityCount + " highlights were missing stable WeRead source IDs in book " + bookId + ".");
+            }
+            const unusableCount = highlights.filter((item) => !item.text.trim()).length;
+            if (unusableCount) {
+              nextState = addValidationError(nextState, unusableCount + " highlights had no readable text in book " + bookId + ".");
+            }
+            progress = { ...progress, bookmarkDone: true };
+            nextState = {
+              ...nextState,
+              bookProgress: { ...nextState.bookProgress, [bookId]: progress }
+            };
+            await persist(nextState, [{
+              bookId,
+              title: notebook.title || bookmarkResponse.book?.title || "未命名书籍",
+              author: notebook.author || bookmarkResponse.book?.author || "",
+              highlights,
+              thoughts: []
+            }]);
+            appendOutput(notebook, highlights, []);
+          }
+        } else {
+          currentErrors.push("bookmark-response-invalid: book " + bookId + " returned no response.");
+        }
+      }
+
+      progress = state.bookProgress[bookId] || progress;
+      while (!progress.reviewDone) {
+        let reviewResponse;
+        try {
+          reviewResponse = await callApi({
+            api_name: "/review/list/mine",
+            bookid: bookId,
+            synckey: progress.reviewCursor ?? 0,
+            count: 100
+          });
+        } catch (error) {
+          if (isBudgetError(error)) {
+            currentErrors.push("request-budget-exceeded: checkpoint retained at review cursor for book " + bookId + ".");
+            return buildResult(false);
+          }
+          currentErrors.push("review-fetch-failed: book " + bookId + ": " + error.message);
+          break;
+        }
+        if (!reviewResponse || !Array.isArray(reviewResponse.reviews) || reviewResponse.hasMore == null) {
+          currentErrors.push("review-response-invalid: book " + bookId + " is missing reviews or hasMore.");
+          break;
+        }
+
+        const selected = selectRangeEntries(reviewResponse.reviews, (item) => item.review?.createTime, range);
+        let nextState = state;
+        if (selected.invalidTimestampCount) {
+          nextState = addValidationError(nextState, selected.invalidTimestampCount + " thoughts had missing or invalid createTime values in book " + bookId + ".");
+        }
+        const thoughts = selected.items.map((item) => normalizeThought(item, notebook, options.preserveRaw === true));
+        const missingIdentityCount = thoughts.filter((item) => !item.identityVerified).length;
+        if (missingIdentityCount) {
+          nextState = addValidationError(nextState, missingIdentityCount + " thoughts were missing stable WeRead source IDs in book " + bookId + ".");
+        }
+        const unusableCount = thoughts.filter((item) => !item.content.trim() && !item.abstract.trim()).length;
+        if (unusableCount) {
+          nextState = addValidationError(nextState, unusableCount + " thoughts had no readable content in book " + bookId + ".");
+        }
+
+        const hasMore = Boolean(reviewResponse.hasMore);
+        let nextProgress = { ...progress };
+        if (hasMore) {
+          const nextCursor = reviewResponse.synckey;
+          const nextCursorText = String(nextCursor);
+          const previousCursorText = String(progress.reviewCursor ?? 0);
+          const seenCursors = new Set(progress.reviewCursorsSeen || []);
+          if (nextCursor == null || nextCursorText === previousCursorText || seenCursors.has(nextCursorText)) {
+            currentErrors.push("review-pagination-cursor-invalid: book " + bookId + ".");
+            await persist(nextState, [{
+              bookId, title: notebook.title || "未命名书籍", author: notebook.author || "",
+              highlights: [], thoughts
+            }]);
+            appendOutput(notebook, [], thoughts);
+            break;
+          }
+          seenCursors.add(nextCursorText);
+          nextProgress = {
+            ...nextProgress,
+            reviewCursor: nextCursor,
+            reviewCursorsSeen: [...seenCursors]
+          };
+        } else {
+          nextProgress.reviewDone = true;
+        }
+        nextState = {
+          ...nextState,
+          bookProgress: { ...nextState.bookProgress, [bookId]: nextProgress }
+        };
+        await persist(nextState, [{
+          bookId, title: notebook.title || "未命名书籍", author: notebook.author || "",
+          highlights: [], thoughts
+        }]);
+        appendOutput(notebook, [], thoughts);
+        progress = nextProgress;
+      }
+    }
+
+    const allBooksComplete = state.candidateBooks.every((notebook) => {
+      const progress = state.bookProgress[String(notebook.bookId)];
+      return progress?.bookmarkDone === true && progress?.reviewDone === true;
+    });
+    if (allBooksComplete) {
+      await persist({ ...state, phase: "done" });
+    }
+  }
+
+  return buildResult(state.phase === "done");
+}
+
+async function collectCandidateBooksCheckpointed({ callApi, startEpoch, checkpoint, persist }) {
+  let state = checkpoint;
+  const errors = [];
+  const books = new Map(state.candidateBooks.map((book) => [String(book.bookId), book]));
+  let lastSort = state.discoveryCursor;
+  const seenCursors = new Set(state.seenDiscoveryCursors || []);
+
+  for (let pageNumber = 0; pageNumber < 500; pageNumber += 1) {
+    let response;
+    try {
+      response = await callApi({ api_name: "/user/notebooks", count: 100, ...(lastSort ? { lastSort } : {}) });
+    } catch (error) {
+      errors.push(error?.code === "REQUEST_BUDGET_EXCEEDED"
+        ? "request-budget-exceeded: notebook discovery checkpoint retained after page " + (pageNumber + 1) + "."
+        : "notebook-page-" + (pageNumber + 1) + ": " + error.message);
+      return { checkpoint: state, errors, complete: false };
+    }
+    if (!response || !Array.isArray(response.books) || response.hasMore == null) {
+      errors.push("notebook-page-" + (pageNumber + 1) + ": response missing books or hasMore.");
+      return { checkpoint: state, errors, complete: false };
+    }
+
+    for (const book of response.books) {
+      const id = book.bookId ?? book.book?.bookId;
+      if (!id) {
+        state = addCheckpointValidationError(state, "notebook page contained a book without a stable bookId.");
+        continue;
+      }
+      const sort = Number(book.sort);
+      if (book.sort == null || String(book.sort).trim() === "" || !Number.isFinite(sort) || sort <= 0) {
+        state = addCheckpointValidationError(state, "notebook page contained a book with an invalid recent-note sort value: " + String(id) + ".");
+        continue;
+      }
+      if (sort >= startEpoch) {
+        books.set(String(id), {
+          bookId: String(id),
+          sort,
+          title: book.book?.title || book.title || "未命名书籍",
+          author: book.book?.author || book.author || ""
+        });
+      }
+    }
+
+    let done = !response.hasMore || response.hasMore === 0;
+    let nextSort = lastSort;
+    let nextSeen = [...seenCursors];
+    if (!done) {
+      if (!response.books.length) {
+        errors.push("notebook-page-" + (pageNumber + 1) + ": hasMore was true for an empty page.");
+        return { checkpoint: state, errors, complete: false };
+      }
+      const candidateSort = Number(response.books.at(-1)?.sort);
+      const cursorText = String(candidateSort);
+      if (
+        !Number.isFinite(candidateSort)
+        || (lastSort != null && candidateSort >= Number(lastSort))
+        || seenCursors.has(cursorText)
+      ) {
+        errors.push("notebook-page-" + (pageNumber + 1) + ": pagination cursor did not advance.");
+        return { checkpoint: state, errors, complete: false };
+      }
+      nextSort = candidateSort;
+      nextSeen.push(cursorText);
+      seenCursors.add(cursorText);
+      if (candidateSort < startEpoch) done = true;
+    }
+
+    const nextState = {
+      ...state,
+      candidateBooks: [...books.values()],
+      discoveryCursor: nextSort,
+      seenDiscoveryCursors: nextSeen,
+      phase: done ? "books" : "discover"
+    };
+    await persist(nextState);
+    state = nextState;
+    lastSort = nextSort;
+    if (done) return { checkpoint: state, errors, complete: true };
+  }
+
+  errors.push("notebook-pagination-limit: exceeded 500 pages in this run.");
+  return { checkpoint: state, errors, complete: false };
+}
+
+function addCheckpointValidationError(checkpoint, reason) {
+  const errors = new Set(checkpoint.validationErrors || []);
+  errors.add(reason);
+  return { ...checkpoint, validationErrors: [...errors] };
 }
 
 function resolveBookFilter(books, filter) {
