@@ -43,7 +43,7 @@ test('older incomplete scan cannot consume the recent scan request budget', asyn
   else data={reviews:[],hasMore:0};
   return {ok:true,json:async()=>data};
  };
- try {db.prepare("INSERT INTO meta VALUES('baseline','2026-11-01')").run();const result=await synchronize(db,new Date('2026-11-20T04:00:00Z'),undefined,{requestBudget:6,requestSpacingMs:0});assert.equal(discoveries,2);assert.equal(result.ranges,2);assert.equal(result.complete,1);}
+ try {db.prepare("INSERT INTO meta VALUES('baseline','2026-11-01')").run();const result=await synchronize(db,new Date('2026-11-20T04:00:00Z'),undefined,{requestBudget:6,requestSpacingMs:0});assert.equal(discoveries,2);assert.equal(result.ranges,2);assert.equal(result.completed,1);assert.equal(result.incomplete,1);assert.equal(result.complete,false);}
  finally {globalThis.fetch=oldFetch;if(oldKey===undefined) delete process.env.WEREAD_API_KEY;else process.env.WEREAD_API_KEY=oldKey;db.close();rmSync(dir,{recursive:true,force:true});}
 });
 test('partial source with saved entries remains visibly partial', () => {

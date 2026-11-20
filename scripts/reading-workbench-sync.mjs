@@ -140,30 +140,45 @@ export async function synchronize(db, now = new Date(), collector = collectWerea
   let baseline = db.prepare("SELECT value FROM meta WHERE key='baseline'").get()?.value;
   if (!baseline) { baseline=shift(today,-3); db.prepare("INSERT INTO meta VALUES('baseline',?)").run(baseline); }
   let oldest=null;
-  const success = db.prepare('SELECT last_success FROM days WHERE date=?');
-  for(let d=baseline;d<=yesterday;d=shift(d,1)) if(!success.get(d)?.last_success){oldest=d;break;}
+  const success = db.prepare('SELECT status FROM days WHERE date=?');
+  for(let d=baseline;d<=yesterday;d=shift(d,1)) if(success.get(d)?.status !== 'success'){oldest=d;break;}
+  const checkpointed=collector===collectWereadRange;
   const tasks=[];
   const recoveryKey=checkpointKey('recovery'), recentKey=checkpointKey('recent');
-  let recoveryCheckpoint=loadCheckpoint(db,recoveryKey);
+  let recoveryCheckpoint=checkpointed?loadCheckpoint(db,recoveryKey):null;
   if(oldest){
-    if(!recoveryCheckpoint || recoveryCheckpoint.from!==oldest || recoveryCheckpoint.to<oldest || recoveryCheckpoint.to>yesterday){
-      recoveryCheckpoint=createCheckpoint(oldest,[shift(oldest,6),yesterday].sort()[0]);
+    if(checkpointed){
+      if(!recoveryCheckpoint || recoveryCheckpoint.from!==oldest || recoveryCheckpoint.to<oldest || recoveryCheckpoint.to>yesterday){
+        recoveryCheckpoint=createCheckpoint(oldest,[shift(oldest,6),yesterday].sort()[0]);
+      }
+      tasks.push({name:'recovery',key:recoveryKey,checkpoint:recoveryCheckpoint});
+    }else{
+      let recoveryDays=7;
+      const raw=db.prepare("SELECT value FROM meta WHERE key='recovery_window'").get()?.value;
+      if(raw){
+        let value;
+        try{value=JSON.parse(raw);}catch{throw new Error('invalid recovery window');}
+        if(value.oldest===oldest && Number.isInteger(value.days) && value.days>=1 && value.days<=7) recoveryDays=value.days;
+      }
+      tasks.push({name:'recovery',from:oldest,to:[shift(oldest,recoveryDays-1),yesterday].sort()[0],recoveryDays});
     }
-    tasks.push({name:'recovery',key:recoveryKey,checkpoint:recoveryCheckpoint});
   }else{
-    db.prepare('DELETE FROM meta WHERE key=?').run(recoveryKey);
+    if(checkpointed) db.prepare('DELETE FROM meta WHERE key=?').run(recoveryKey);
   }
-  let recentCheckpoint=loadCheckpoint(db,recentKey);
-  if(!recentCheckpoint || recentCheckpoint.to!==today){
-    recentCheckpoint=createCheckpoint(shift(today,-3),today);
+  if(checkpointed){
+    let recentCheckpoint=loadCheckpoint(db,recentKey);
+    if(!recentCheckpoint || recentCheckpoint.to!==today){
+      recentCheckpoint=createCheckpoint(shift(today,-3),today);
+    }
+    tasks.push({name:'recent',key:recentKey,checkpoint:recentCheckpoint});
+    db.prepare("DELETE FROM meta WHERE key='recovery_window'").run();
+  }else{
+    tasks.push({name:'recent',from:shift(today,-3),to:today});
   }
-  tasks.push({name:'recent',key:recentKey,checkpoint:recentCheckpoint});
-  db.prepare("DELETE FROM meta WHERE key='recovery_window'").run();
   let completed=0;
   let lastCall = 0;
   for (const task of tasks) {
-      const {from,to}=task.checkpoint;
-      const checkpointed=collector===collectWereadRange;
+      const {from,to}=task.checkpoint || task;
       let calls=0,chain=Promise.resolve();
       const budget=tasks.length>1?Math.floor(requestBudget/tasks.length):requestBudget;
       const originalFetch=globalThis.fetch;
@@ -180,7 +195,7 @@ export async function synchronize(db, now = new Date(), collector = collectWerea
       };
       let result;
       try {
-        const options={from,to,skillVersion:'1.0.6',preserveRaw:true};
+        const options={from,to,preserveRaw:true};
         if(checkpointed){
           options.checkpointMode=true;
           options.checkpoint=task.checkpoint;
@@ -194,8 +209,12 @@ export async function synchronize(db, now = new Date(), collector = collectWerea
       }
       saveRange(db,result,from,to,now);
       if(result.complete){
-        db.prepare('DELETE FROM meta WHERE key=?').run(task.key);
+        if(task.key) db.prepare('DELETE FROM meta WHERE key=?').run(task.key);
+        if(task.name==='recovery' && !checkpointed) db.prepare("DELETE FROM meta WHERE key='recovery_window'").run();
         completed++;
+      }else if(task.name==='recovery' && !checkpointed){
+        db.prepare('INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+          .run('recovery_window',JSON.stringify({oldest:from,days:Math.max(1,Math.floor(task.recoveryDays/2))}));
       }
   }
   const incomplete=tasks.length-completed;
