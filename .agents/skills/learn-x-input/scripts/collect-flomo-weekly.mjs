@@ -443,8 +443,11 @@ export function formatCliError(error) {
     const page = {};
     if (typeof source.host === "string" && /^[a-z0-9.-]{1,253}$/i.test(source.host)) page.host = source.host;
     if (typeof source.path === "string" && /^\/[a-z0-9/_-]{0,256}$/i.test(source.path)) page.path = source.path;
-    for (const field of ["pageTitleHasFlomo", "hasMemoList", "hasCountLabel", "loadingVisible", "emptyStateVisible", "loginIndicator", "captchaIndicator"]) {
+    for (const field of ["pageTitleHasFlomo", "hasMemoList", "hasCountLabel", "loadingVisible", "emptyStateVisible"]) {
       if (typeof source[field] === "boolean") page[field] = source[field];
+    }
+    for (const field of ["loginIndicator", "captchaIndicator"]) {
+      if (source[field] === true) page[field] = true;
     }
     for (const field of ["libraryCount", "memoCardCount"]) {
       if (source[field] === null || Number.isInteger(source[field]) && source[field] >= 0 && source[field] <= MAX_MEMOS) page[field] = source[field];
@@ -1195,6 +1198,26 @@ const waitForStableList = async () => {
   }
   throw new Error('pagination-incomplete');
 };
+const readStableLibraryCount = async () => {
+  let previousCount = null;
+  let stablePasses = 0;
+  for (let attempt = 0; attempt < 12 && stablePasses < 3; attempt += 1) {
+    const count = await page.evaluate(() => {
+      const label = [...document.querySelectorAll('.type.typography-foot-note')].find((item) => (item.innerText || '').trim() === '笔记');
+      const lines = label?.parentElement?.innerText?.split(String.fromCharCode(10)) || [];
+      const value = Number((lines[0] || '').replaceAll(',', '').replaceAll('，', '').trim());
+      return lines[1]?.trim() === '笔记' && Number.isInteger(value) && value >= 0 ? value : null;
+    });
+    if (!Number.isInteger(count) || count < 0) throw new Error('library-count-unavailable');
+    if (count !== previousCount) {
+      previousCount = count;
+      stablePasses = 1;
+    } else stablePasses += 1;
+    if (stablePasses < 3) await page.waitForTimeout(250);
+  }
+  if (stablePasses < 3) throw new Error('library-count-changed');
+  return previousCount;
+};
 try {
   stage = resumeTaskSpace ? 'taskspace-resume-preflight' : 'taskspace-acquire';
   if (resumeTaskSpace) {
@@ -1248,26 +1271,42 @@ try {
   stage = 'wait-initial-stability';
   await waitForStableList();
   stage = 'wait-initial-count';
-  let lastInitialLibraryCount = null;
-  let stableInitialLibraryCountPasses = 0;
-  while (stableInitialLibraryCountPasses < 3) {
-    const count = await page.evaluate(() => {
-      const label = [...document.querySelectorAll('.type.typography-foot-note')].find((item) => (item.innerText || '').trim() === '笔记');
-      const lines = label?.parentElement?.innerText?.split(String.fromCharCode(10)) || [];
-      const count = Number((lines[0] || '').replaceAll(',', '').replaceAll('，', '').trim());
-      return lines[1]?.trim() === '笔记' && Number.isInteger(count) ? count : null;
-    });
-    if (!Number.isInteger(count)) throw new Error('library-count-unavailable');
-    if (count !== lastInitialLibraryCount) {
-      lastInitialLibraryCount = count;
-      stableInitialLibraryCountPasses = 1;
-    } else stableInitialLibraryCountPasses += 1;
-    if (stableInitialLibraryCountPasses < 3) await page.waitForTimeout(250);
-  }
+  initialCount = await readStableLibraryCount();
   stage = 'scan-library';
   let priorSeenCount = 0;
   let failedIdlePasses = 0;
   let lastScrollHeight = -1;
+  let countChangeRestarts = 0;
+  const restartScanAfterCountChange = async () => {
+    if (countChangeRestarts >= 1) throw new Error('library-count-changed');
+    countChangeRestarts += 1;
+    stage = 'restart-after-library-count-change';
+    const reset = await page.evaluate((key) => {
+      const list = document.querySelector('.memos');
+      if (!list) return false;
+      window[key] = new Map();
+      list.scrollTop = 0;
+      list.dispatchEvent(new Event('scroll', { bubbles: true }));
+      return true;
+    }, scanKey);
+    if (!reset) throw new Error('list-unavailable');
+    await waitForStableList();
+    initialCount = await readStableLibraryCount();
+    seen.clear();
+    scanStep = -1;
+    pageCount = 1;
+    observedCards = 0;
+    complete = false;
+    detailTargetId = null;
+    detailMismatch = null;
+    idleCountMismatchPasses = 0;
+    priorSeenCount = 0;
+    failedIdlePasses = 0;
+    lastScrollHeight = -1;
+    stableScrollPasses = 0;
+    previousStableIds = null;
+    finalPageState = null;
+  };
   for (let step = 0; step < maxSteps; step += 1) {
     scanStep = step;
     stage = 'read-page-state';
@@ -1277,7 +1316,11 @@ try {
     if (!Number.isInteger(current.libraryCount) || current.libraryCount < 0) throw new Error('library-count-unavailable');
     if (current.libraryCount > 20000 || current.observedUniqueIds > 20000 || current.loadedCardCount > 20000) throw new Error('scan-capacity-exceeded');
     if (initialCount === null) initialCount = current.libraryCount;
-    if (current.libraryCount !== initialCount) throw new Error('library-count-changed');
+    if (current.libraryCount !== initialCount) {
+      await restartScanAfterCountChange();
+      step = -1;
+      continue;
+    }
     if (current.missingIdCount) throw new Error('memo-id-missing');
     if (current.incompleteBodyCount) throw new Error('body-incomplete');
     if (current.conflicts.length) throw new Error('scan-record-conflict');
@@ -1376,7 +1419,11 @@ try {
       stage = 'read-after-scroll';
       after = await state();
     }
-    if (after.libraryCount !== initialCount) throw new Error('library-count-changed');
+    if (after.libraryCount !== initialCount) {
+      await restartScanAfterCountChange();
+      step = -1;
+      continue;
+    }
     if (after.missingIdCount) throw new Error('memo-id-missing');
     if (after.incompleteBodyCount) throw new Error('body-incomplete');
     if (after.conflicts.length) throw new Error('scan-record-conflict');
@@ -1686,7 +1733,7 @@ try {
     termination: { reason: missingCount === 0 ? 'library-count-and-stable-ids' : 'stable-bottom-with-accepted-count-gap',
       enumerationComplete: true, expectedCount: initialCount, observedUniqueIds: browserRecords.length, missingCount,
       stableScrollPasses, atBottom: finalPageState.atBottom, hasMore: finalPageState.hasMore, loading: finalPageState.loading,
-      finalScrollHeight: lastScrollHeight },
+      finalScrollHeight: lastScrollHeight, countChangeRestarts },
     detailVerification,
   };
   if (!keepTaskSpace) {
@@ -1698,7 +1745,7 @@ try {
   stage = 'write-scan-result';
   await fs.writeFile(resultPath, JSON.stringify(result), { mode: 0o600 });
   cliLog(JSON.stringify({ ok: true, complete: true, scanned: result.scanned, expectedCount: result.libraryCount,
-    omittedCount: missingCount, pageCount: result.pageCount,
+    omittedCount: missingCount, pageCount: result.pageCount, countChangeRestarts,
     pinnedCount: browserRecords.filter((record) => record.isPinned).length, detailVerified: detailVerification?.verified === true }));
 } catch (error) {
   if (taskLeaseHeartbeat) clearInterval(taskLeaseHeartbeat);
