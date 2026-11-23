@@ -796,7 +796,7 @@ async function ensureWeeklyOutputShell(weekId, root = repoRoot) {
 
   const distId = distWeekId(weekId);
   const content = [
-    `# Learn-X Weekly Output｜${outputWeekId(weekId)}`,
+    `# ${distId} Weekly Output`,
     "",
     `> 基于 \`04_output/_dist/weekly/${distId}/\` 由用户使用 AI Chat 生成正文后填入。`,
     ""

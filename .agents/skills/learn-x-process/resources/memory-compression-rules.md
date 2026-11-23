@@ -6,6 +6,22 @@
 
 当前月、跨越当前月的周块、无法识别来源的条目默认保护。当前年使用季度文件；上一年度在新年度开始后才合并为一个年度文件。年度候选晋级前，旧季度文件先归档到 `01_core/memory-archive/`，归档哈希必须与源一致。
 
+## 季度审查模式（2026-11 起）
+
+新的长期 Memory 压缩按季度执行，由 `learn-x-quarterly-memory` Skill 与 `npm run memory:quarterly` 承载；语义审查与最终压缩文件由 ChatGPT 直接完成（Prompt 冻结于 `02_prompts/meta/chatgpt-quarterly-memory-review.md`），本引擎只做确定性工作：
+
+```bash
+npm run memory:quarterly -- pack [--as-of YYYY-MM-DD] [--quarter YYYY-QN]
+npm run memory:quarterly -- import <交付目录> [--quarter YYYY-QN]
+npm run memory:compress -- --validate 04_output/_dist/memory-compression/quarterly-YYYY-QN/<目标>
+npm run memory:compress -- --promote 04_output/_dist/memory-compression/quarterly-YYYY-QN/<目标> --confirm
+```
+
+- `pack` 生成 `04_output/_dist/memory-compression/quarterly-YYYY-QN/quarterly-compression-pack.md`（A 过去 / B 现在 / C 目标 / D 约束 / E 执行与交付五段）与 `quarterly-sources-manifest.json`（逐文件哈希）；不可得来源显式标记缺口，不编造。默认目标季度是最后一个在 as-of 之前完整结束的自然季度。
+- `import` 接收 ChatGPT 交付目录（每目标文件一个完整 Markdown + `changes.json`），程序按真实仓库计算 sourceHashes、预算、protectedUnitIds 并填充 sidecar；ChatGPT 提供的哈希/字数一律忽略。`changes` 按真实变化数量记录，不设固定条数；无需修改时 `noChange=true` 只落收据。已存在且内容不同的候选不会被覆盖。
+- 保护语义：目标季度文件内可归因单元可压缩；无法识别来源单元默认保护；目标季度之外的文件（跨期纠偏）所有单元默认保护，仅 `confirmedCorrections` 中逐条用户确认（targetFile + 逐字 unitText + evidence + summary）的单元允许修改，unitText 必须在目标文件中唯一匹配，否则拒绝导入。
+- 预算冲突照旧阻断：超硬上限停止晋级并报告，不静默删减。跨年（目标季度为 Q4）先晋级季度候选，再基于晋级后真实仓库状态导入年度合并候选，避免重复压缩。
+
 ## 预算
 
 按 Unicode 字符（`Array.from` 口径，含 Markdown 标题、符号和换行）统计：

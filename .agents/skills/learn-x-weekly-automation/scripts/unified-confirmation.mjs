@@ -221,8 +221,8 @@ export function createYwContextP1Executor({ contextRoot = null, learnXRoot = def
     resolve: async (_item, batch, _saved, memoryWriteEvidence) => {
       const result = await runYwContextP1Sync({ contextRoot: resolvedContextRoot, learnXRoot, mode: 'resolve', batch, memoryWriteEvidence });
       if (result.status === 'verified' && result.receipt) return { ok: true, status: 'verified', evidence: result.receipt };
-      if (result.status === 'not-applied') return { status: 'not-applied', baselineUnchanged: true, evidence: result };
-      if (result.status === 'p2-ready-for-p1') return { status: 'p2-ready-for-p1', evidence: result };
+      if (result.status === 'not-applied') return { status: 'not-applied', baselineUnchanged: true, evidence: result.evidence };
+      if (result.status === 'p2-ready-for-p1') return { status: 'p2-ready-for-p1', evidence: result.evidence };
       return result;
     }
   };
@@ -565,7 +565,11 @@ export async function recordCodexCard({ coreRoot = defaultCoreRoot, stateRoot = 
 export async function confirmCodexCard({ learnXRoot = defaultLearnXRoot, coreRoot = defaultCoreRoot, stateRoot = coreRoot, week, fingerprint, threadId, receiptFile, displayMessageId, messageId, host, validateCore }) {
   const unified = await loadPending({ coreRoot, stateRoot, week, fingerprint });
   const page = await host?.readThread?.(threadId);
-  const { parseCodexReadThreadPage } = await import(pathToFileURL(path.join(coreRoot, '.agents/skills/core-weekly/scripts/weekly-review-lib/codex-session-evidence.mjs')).href);
+  const [{ parseCodexReadThreadPage }, { isLearnXCardScopedConfirmation, LEARNX_CARD_CONFIRMATION_MODE }] = await Promise.all([
+    import(pathToFileURL(path.join(coreRoot, '.agents/skills/core-weekly/scripts/weekly-review-lib/codex-session-evidence.mjs')).href),
+    import(pathToFileURL(path.join(coreRoot, '.agents/skills/core-weekly/scripts/weekly-review-lib/confirmation.mjs')).href)
+  ]);
+  const learnXScoped = unified.card.items.some(item => item.domain === 'learn-x') && Boolean(unified.card.sourceBindings?.learnxMemoryFingerprint);
   const parsed = parseCodexReadThreadPage(page);
   if (parsed.thread?.id !== threadId) throw new Error('Codex thread identity mismatch');
   const matches = [];
@@ -577,7 +581,7 @@ export async function confirmCodexCard({ learnXRoot = defaultLearnXRoot, coreRoo
       const assistantText = item.type === 'agentMessage' ? item.text : null;
       const userText = item.type === 'userMessage' && Array.isArray(item.content) && item.content.length === 1 && item.content[0]?.type === 'text' ? item.content[0].text : null;
       if (assistantText === unified.display) matches.push({ role: 'assistant', item, turn, turnIndex, itemIndex });
-      if (userText === unified.card.confirmationText) matches.push({ role: 'user', item, turn, turnIndex, itemIndex });
+      if (userText != null && (userText === unified.card.confirmationText || (learnXScoped && isLearnXCardScopedConfirmation(unified.card, userText)))) matches.push({ role: 'user', item, turn, turnIndex, itemIndex });
     }
   }
   const confirmations = matches.filter(entry => entry.role === 'user');
@@ -594,7 +598,7 @@ export async function confirmCodexCard({ learnXRoot = defaultLearnXRoot, coreRoo
   const snapshotHost = { readThread: async () => page };
   if (!receiptFile) receiptFile = (await recordCodexCard({ coreRoot, stateRoot, unified, threadId, displayMessageId, host: snapshotHost })).file;
   const { session, display: fetchDisplay, reply } = await codexReaders(coreRoot, snapshotHost, threadId);
-  return session.confirmDisplayedCard({ root: stateRoot, receiptFile, messageId, chatId: threadId, expectedBot: 'codex-assistant', expectedSender: 'codex-user', fetchDisplay, fetchMessage: reply, validateBaselines: (card, message) => validateUnifiedBaselines({ learnXRoot, card, validateCore, confirmedAt: message.sentAt }) });
+  return session.confirmDisplayedCard({ root: stateRoot, receiptFile, messageId, chatId: threadId, expectedBot: 'codex-assistant', expectedSender: 'codex-user', fetchDisplay, fetchMessage: reply, validateBaselines: (card, message) => validateUnifiedBaselines({ learnXRoot, card, validateCore, confirmedAt: message.sentAt }), ...(learnXScoped ? { confirmationMode: LEARNX_CARD_CONFIRMATION_MODE } : {}) });
 }
 
 export async function validateCoreConfirmationTargets({ coreRoot = defaultCoreRoot, stateRoot = coreRoot, card, confirmedAt, ctx: injectedContext, adapter: injectedAdapter }) {
@@ -627,21 +631,24 @@ export async function validateCoreConfirmationTargets({ coreRoot = defaultCoreRo
   return { ok: true };
 }
 
-export async function verifyCodexConfirmationBatch({ coreRoot = defaultCoreRoot, batch, host }) {
+export async function verifyCodexConfirmationBatch({ coreRoot = defaultCoreRoot, stateRoot = coreRoot, batch, host }) {
   if (!batch || batch.schemaVersion !== 3 || !batch.hostEvidence || !host || typeof host.readThread !== 'function') return { ok: false, reason: 'official Codex evidence required' };
   const evidence = batch.hostEvidence;
   const threadId = evidence.threadId;
   if (batch.confirmation?.sender !== 'codex-user' || batch.confirmation?.messageId == null) return { ok: false, reason: 'confirmation identity invalid' };
   if (batch.items.some(item => item.domain === 'core') && !batch.sourceBindings?.coreReview) return { ok: false, reason: 'Core review source binding missing' };
-  const { prepareConfirmationCard } = await import(pathToFileURL(path.join(coreRoot, '.agents/skills/core-weekly/scripts/weekly-review-lib/confirmation.mjs')).href);
+  const { prepareConfirmationCard, isLearnXCardScopedConfirmation, LEARNX_CARD_CONFIRMATION_MODE } = await import(pathToFileURL(path.join(coreRoot, '.agents/skills/core-weekly/scripts/weekly-review-lib/confirmation.mjs')).href);
   const card = prepareConfirmationCard({ reviewWeek: batch.reviewWeek, items: batch.items, sourceBindings: batch.sourceBindings });
   if (card.fingerprint !== batch.cardFingerprint || card.confirmationText !== batch.confirmation.text) return { ok: false, reason: 'confirmed card no longer matches batch' };
-  const receiptFile = path.join(coreRoot, 'runtime/weekly-review', batch.reviewWeek, 'cards', `${card.fingerprint}--${evidence.displayMessageId}.json`);
+  const receiptFile = path.join(stateRoot, 'runtime/weekly-review', batch.reviewWeek, 'cards', `${card.fingerprint}--${evidence.displayMessageId}.json`);
   const receipt = JSON.parse(await readFile(receiptFile, 'utf8'));
   if (receipt.schemaVersion !== 1 || receipt.chatId !== threadId || receipt.displayMessageId !== evidence.displayMessageId || receipt.displayTurnId !== evidence.displayTurnId || receipt.displayHash !== hash(receipt.display) || receipt.card?.fingerprint !== card.fingerprint || receipt.display !== renderDisplay(card, receipt.excluded)) return { ok: false, reason: 'display receipt mismatch' };
   const { display, reply } = await codexReaders(coreRoot, host, threadId);
   const [actualDisplay, actualReply] = await Promise.all([display(evidence.displayMessageId), reply(batch.confirmation.messageId)]);
-  if (actualDisplay.text !== receipt.display || actualDisplay.sentAt !== receipt.displayedAt || actualDisplay.turnId !== evidence.displayTurnId || actualReply.text !== card.confirmationText || actualReply.sender !== 'codex-user' || actualReply.turnId !== evidence.confirmationTurnId || actualReply.sentAt !== batch.confirmedAt || actualReply.turnIndex >= actualDisplay.turnIndex) return { ok: false, reason: 'official Codex messages do not match confirmed batch' };
+  const scopedReplyValid = evidence.confirmationMode === LEARNX_CARD_CONFIRMATION_MODE
+    && hash(actualReply.text) === evidence.replySha256
+    && isLearnXCardScopedConfirmation(card, actualReply.text);
+  if (actualDisplay.text !== receipt.display || actualDisplay.sentAt !== receipt.displayedAt || actualDisplay.turnId !== evidence.displayTurnId || (actualReply.text !== card.confirmationText && !scopedReplyValid) || actualReply.sender !== 'codex-user' || actualReply.turnId !== evidence.confirmationTurnId || actualReply.sentAt !== batch.confirmedAt || actualReply.turnIndex >= actualDisplay.turnIndex) return { ok: false, reason: 'official Codex messages do not match confirmed batch' };
   return { ok: true, evidence: hash(JSON.stringify([threadId, actualDisplay.id, actualDisplay.text, actualDisplay.turnId, actualReply.id, actualReply.text, actualReply.sentAt, card.fingerprint])) };
 }
 
@@ -657,7 +664,7 @@ export async function syncCodexConfirmedBatch({ coreRoot = defaultCoreRoot, stat
   const ctx = await buildContext({ repoRoot: coreRoot });
   const adapter = createCoreFeishuAdapter(ctx);
   const batch = await readConfirmedBatch(batchFile);
-  const verifyConfirmation = current => verifyCodexConfirmationBatch({ coreRoot, batch: current, host });
+  const verifyConfirmation = current => verifyCodexConfirmationBatch({ coreRoot, stateRoot, batch: current, host });
   const coreSync = await syncConfirmedBatch({ root: coreRoot, batchFile, ...adapter, verifyConfirmation, feishuUrl });
   const ywContextMirror = await mirrorCoreOverviewToYWContext({ coreRoot, stateRoot, batch, coreSync });
   return { ...coreSync, ywContextMirror };
@@ -889,7 +896,7 @@ export async function recoverCodexConfirmedBatches({ coreRoot = defaultCoreRoot,
         continue;
       }
       let confirmation;
-      try { confirmation = await verifyConfirmation({ coreRoot, batch, host }); }
+      try { confirmation = await verifyConfirmation({ coreRoot, stateRoot, batch, host }); }
       catch (error) {
         results.pending.push({ batchId: batch.batchId, batchFile, threadId: batch.hostEvidence?.threadId ?? null, status: 'awaiting-host', reason: `official confirmation readback failed: ${error.message}` });
         continue;

@@ -182,6 +182,8 @@ test("confirmed weekly journal and valid daily produce a partial Process Pack wh
   assert.equal(result.processPayload.files.length, 2);
   assert.ok(result.processPayload.excludedSources.ai);
   const pack = await readFile(result.outputPath, "utf8");
+  const shell = await readFile(path.join(root, "04_output/weekly/2026-40.md"), "utf8");
+  assert.match(shell, /^# 2026-W40 Weekly Output\n/);
   assert.match(pack, /🔴 存在失败/);
   assert.match(pack, /AI 周回顾/);
   assert.match(pack, /🔴 \*\*未验收\*\*/);
@@ -549,6 +551,11 @@ test("Stage 3 prepares candidates before one confirmation and has no image actio
   assert.ok(candidateIndex >= 0 && candidateIndex < confirmationIndex);
   assert.ok(confirmationIndex >= 0 && confirmationIndex < memoryIndex);
   assert.ok(fingerprintVerifyIndex >= 0 && fingerprintVerifyIndex < memoryIndex);
+  assert.ok(stage3.includes("--fingerprint <confirmed.batch.sourceBindings.learnxMemoryFingerprint>"));
+  assert.match(stage3, /card\.fingerprint` 只用于官方 Codex 宿主确认/);
+  assert.match(stage3, /Codex 宿主必须将 `unified\.display` 原样作为一条独立助手消息展示/);
+  assert.match(stage3, /用户在同一线程只需回复「确认」「确认执行」或「确认继续」/);
+  assert.match(stage3, /同线程消息 ID、顺序和回复哈希/);
   assert.ok(memoryIndex >= 0 && memoryIndex < backupIndex);
   assert.ok(backupIndex >= 0 && backupIndex < ywcontextIndex);
   assert.doesNotMatch(stage3, /ywnext|YW Next/);

@@ -24,9 +24,9 @@ test('现有 Memory 指纹与全部具体收尾目标绑定后才生成逐项',a
  await writeFile(path.join(root,'04_output/weekly/2026-40.md'),'# Learn-X Weekly Output｜2026-40\n\n## 11. 全文核心重点纪要\n真实总结\n\n## 12. 芒格之魂的洞察\n真实洞察\n');
  await prepareWeeklyMemory({week:'2026-W40',repoRoot:root}); await writeFile(path.join(dir,'memory-proposed.md'),proposal);
  const binding=await bindWeeklyMemoryApproval({week:'2026-W40',repoRoot:root}); const s=binding.scope;
- const closeoutEntries=[{id:'backup',action:`备份 ${s.backupRoots.join('、')} 并按既有规则清理留存`,destination:s.backupDestination},{id:'flomo',action:'同步周记和季度记忆',sources:s.flomo,destination:'Flomo/已验证账户/周记与季度记忆'}];
+ const closeoutEntries=[{id:'backup',action:`备份 ${s.backupRoots.join('、')} 并按既有规则清理留存`,destination:s.backupDestination}];
  const result=await buildLearnXConfirmationInputs({root,week:'2026-W40',fingerprint:binding.fingerprint,closeoutEntries});
- assert.deepEqual(result.items.map(x=>x.id),['memory-1','memory-2','closeout-backup','closeout-flomo']);
+ assert.deepEqual(result.items.map(x=>x.id),['memory-1','memory-2','closeout-backup']);
  assert.equal(reconstructApprovedMemory({parts:result.parts,approved:Object.fromEntries(result.items.filter(x=>x.targets.includes('memory')).map(x=>[x.id,x.value]))}),proposal);
  const staged=await stageLearnXCard({root,week:'2026-W40',fingerprint:binding.fingerprint,closeoutEntries,selectedIds:['memory-2','closeout-backup'],edits:{'memory-2':'- 已修改\n'}});
  assert.equal(staged.staged,true); assert.notEqual(staged.fingerprint,binding.fingerprint); assert.deepEqual(staged.items.map(x=>x.id),['memory-1','closeout-backup']); assert.equal(staged.items[0].value,'- 已修改\n');
@@ -37,14 +37,27 @@ test('现有 Memory 指纹与全部具体收尾目标绑定后才生成逐项',a
  await assert.rejects(buildLearnXConfirmationInputs({root,week:'2026-W40',fingerprint:fresh,closeoutEntries}),/stale/);
 });
 
-test('Flomo cannot be selected while its approved prerequisites are excluded', async t=>{
+test('schema v2 approval keeps Flomo weekly-memory sync outside the Memory and backup confirmation card', async t=>{
  const root=await mkdtemp(path.join(os.tmpdir(),'learn-x-card-prereq-')); t.after(()=>rm(root,{recursive:true,force:true}));
  const dir=path.join(root,'04_output/_dist/weekly/2026-W40'); await mkdir(dir,{recursive:true}); await mkdir(path.join(root,'04_output/weekly'),{recursive:true});
  await writeFile(path.join(root,'04_output/weekly/2026-40.md'),'# Learn-X Weekly Output｜2026-40\n\n## 11. 全文核心重点纪要\n真实总结\n\n## 12. 芒格之魂的洞察\n真实洞察\n');
  await prepareWeeklyMemory({week:'2026-W40',repoRoot:root}); await writeFile(path.join(dir,'memory-proposed.md'),proposal);
  const binding=await bindWeeklyMemoryApproval({week:'2026-W40',repoRoot:root}); const s=binding.scope;
- const closeoutEntries=[{id:'backup',action:`备份 ${s.backupRoots.join('、')} 并按既有规则清理留存`,destination:s.backupDestination},{id:'flomo',action:'同步周记和季度记忆',sources:s.flomo,destination:'Flomo/已验证账户/周记与季度记忆'}];
- await assert.rejects(stageLearnXCard({root,week:'2026-W40',fingerprint:binding.fingerprint,closeoutEntries,selectedIds:['closeout-flomo']}),/requires the selected backup/);
+ assert.equal(Object.hasOwn(s,'flomo'),false);
+ const closeoutEntries=[{id:'backup',action:`备份 ${s.backupRoots.join('、')} 并按既有规则清理留存`,destination:s.backupDestination}];
+ const card=await buildLearnXConfirmationInputs({root,week:'2026-W40',fingerprint:binding.fingerprint,closeoutEntries});
+ assert.deepEqual(card.items.map(x=>x.id),['memory-1','memory-2','closeout-backup']);
+ await assert.rejects(buildLearnXConfirmationInputs({root,week:'2026-W40',fingerprint:binding.fingerprint,closeoutEntries:[...closeoutEntries,{id:'flomo',action:'同步周记和季度记忆',sources:['03_input/weekly/2026-W40/weekly.md'],destination:'Flomo/错误范围'}]}),/invalid closeout entry/);
+ const routedProposal=`# 拟写入内容｜2026-W40\n\n目标文件：\`${s.memoryPath}\`\n\n## 2026-W40｜Memory\n\n- 第一条\n\n## 排除项\n\n- 这条只解释排除原因，不应进入 Memory\n`;
+ await writeFile(path.join(dir,'memory-proposed.md'),routedProposal);
+ const routedBinding=await bindWeeklyMemoryApproval({week:'2026-W40',repoRoot:root});
+ const routedCard=await buildLearnXConfirmationInputs({root,week:'2026-W40',fingerprint:routedBinding.fingerprint,closeoutEntries});
+ assert.equal(routedCard.scope.memoryPath,s.memoryPath);
+ assert.deepEqual(routedCard.items.map(x=>x.id),['memory-1','closeout-backup']);
+ assert.equal(reconstructApprovedMemory({parts:routedCard.parts,approved:{'memory-1':routedCard.items.find(x=>x.id==='memory-1').value}}),'## 2026-W40｜Memory\n\n- 第一条\n');
+ await writeFile(path.join(dir,'memory-proposed.md'),routedProposal.replace(s.memoryPath,'01_core/memory/wrong-quarter.memory.md'));
+ const wrongTargetBinding=await bindWeeklyMemoryApproval({week:'2026-W40',repoRoot:root});
+ await assert.rejects(buildLearnXConfirmationInputs({root,week:'2026-W40',fingerprint:wrongTargetBinding.fingerprint,closeoutEntries}),/proposal target path differs/);
 });
 
 test('legacy v1 YWNext approval can be read but cannot generate a new confirmation card',async t=>{

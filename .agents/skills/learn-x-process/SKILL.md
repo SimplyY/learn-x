@@ -48,7 +48,8 @@ Memory 写入并完成目标文件读回后，自动尝试把已确认的完整 
 - 可以生成 metadata-only 的 `04_output/_dist/monthly/YYYY-MM/input.json`、压缩请求和自包含的 `process-pack.md`。
 - 可以读取 `04_output/weekly/YYYY-WW.md`，抽取“值得长期保留”中已勾选项（0–3 项，0 项合法）及系统确认章节，生成 `04_output/_dist/weekly/YYYY-Www/memory-candidates.md`；问题、背景与回答只留在 Weekly Output，默认整体排除，不进入 Memory 候选。
 - 可以读取 `04_output/monthly/YYYY-MM.md` 或 `04_output/yearly/YYYY.md`，抽取 Memory 候选包，供 Codex 无损整理写入季度或年度 Memory。
-- 可以运行 `npm run memory:compress -- --as-of YYYY-MM-DD` 生成只读压缩规划；Codex 将不含技术注释的语义压缩候选写入 `04_output/_dist/memory-compression/`，技术元数据、`changeSummary`、`coreDifferences` 和 `otherChanges` 放在同目录隐藏 sidecar，脚本再负责比较、哈希、保护范围和预算校验。`changeSummary` 必须由 Codex 通读原文与候选后按 `resources/memory-compression-rules.md` 生成，脚本不得用固定句式代写。
+- 可以运行 `npm run memory:compress -- --as-of YYYY-MM-DD` 生成只读压缩规划（历史 monthly-era 候选兼容路径）；Codex 将不含技术注释的语义压缩候选写入 `04_output/_dist/memory-compression/`，技术元数据、`changeSummary`、`coreDifferences` 和 `otherChanges` 放在同目录隐藏 sidecar，脚本再负责比较、哈希、保护范围和预算校验。`changeSummary` 必须由 Codex 通读原文与候选后按 `resources/memory-compression-rules.md` 生成，脚本不得用固定句式代写。
+- 新的长期 Memory 压缩按季度执行：`learn-x-quarterly-memory` Skill 与 `npm run memory:quarterly`（`pack` 生成季度上下文包、`import` 接收 ChatGPT 直接交付的完整 Markdown 候选并程序填充技术元数据）；本引擎复用同一套校验与晋级（quarterly mode 支持 `confirmedCorrections` 用户确认纠偏）。月度自动化不再生成历史 Memory 压缩候选。
 - comparison 报告必须把“核心变化”放在最前面，先说明整份文件实际减少量，再按上一版的简洁表格列出 5—10 条代表性核心变化：字数变化（风险写在括号内）、之前是什么、现在是什么，并按风险从高到低、同风险按净减少字数排序；实际改动量按字符级删除加新增计算，净减少不超过 10 字但替换超过 10 字的改写仍需展示。不把所有碎片逐条铺开。实际改动量不超过 10 字的变化按类型归类，超过 10 字但未入选核心的变化只做汇总。报告另设“非删除类变化”表，说明改动（风险写在括号内），并把原文和压缩后拆成两列；未逐字保留的来源单元再按候选池小节、Memory、洞察和继续追踪等类型细分，删除候选不得与普通合并混为一类。保护范围和量化校验后置；报告说明核心摘要与整份文件实际总压缩量的口径区别；缺少 5—10 条核心摘要时标记 `needs_review`，不允许晋级。
 - 来源审计不能把“整条原文未逐字出现”直接当成删除。若候选保留该单元的 `[YYYY-Www]` 或 `[Monthly｜YYYY-MM]` 来源标签，说明它可能已被归纳进核心判断，报告标记“已归纳（仍需语义核对）”；没有原文、来源标签和保护依据的单元才进入删除候选。
 - 语义压缩可以合并重复判断，但必须保留重要、反复出现且承载证据或行动的具象锚点，例如 `出门`、`读书会`、`写诗`、`运动`、人物、地点、项目和方法名；抽象标签不能替代全部具体词。
@@ -127,7 +128,7 @@ Memory 写入并完成目标文件读回后，自动尝试把已确认的完整 
    Weekly Memorize 完成后不再有 Action Feedback Base 同步步骤（已于 2026-10 退役，由 Core V1 接管周度行动复盘）。
    Weekly 自动化只迁移标题「全文核心重点纪要」「芒格之魂的洞察」和“值得长期保留”章节中已勾选项。问题、背景与回答保留在 Weekly Output，默认整体排除；只有用户本次明确指定具体问答内容时才可例外。新格式最多迁移 3 条长期候选；不再从新 Output 提取道 / 法 / 术候选。旧格式候选可按历史兼容规则识别，但不得当作新格式候选。禁止扫描普通正文或把关键词当作确认；重复执行不得追加同一条目。
 
-10. 如需维护历史 Memory，先读取 `resources/memory-compression-rules.md`，运行压缩规划并由 Codex 生成候选；对候选目录运行 `--validate`。只向用户报告 `ready`、`needs_review` 或 `stale`，不把校验结果描述为语义无损证明。只有用户另行明确确认晋级，才运行 `--promote --confirm`。
+10. 如需维护历史 Memory：新的季度审查走 `learn-x-quarterly-memory`（上下文包 → ChatGPT 多轮审查 → `memory:quarterly import` → 校验 → 用户确认 → 逐候选目录 `--promote --confirm`）；历史 monthly-era 候选继续读取 `resources/memory-compression-rules.md` 并按原路径 `--validate` / `--promote`。只向用户报告 `ready`、`needs_review`、`stale` 或 `no_change`，不把校验结果描述为语义无损证明。只有用户另行明确确认晋级，才运行 `--promote --confirm`。
 
 ## 输出要求
 

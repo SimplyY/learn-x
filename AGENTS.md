@@ -47,6 +47,7 @@
 | Prompt 治理与仓库备份 | `docs/PROMPT_GOVERNANCE.md`、`PROMPTS.md`、全局 `prompt-governance` Skill | 受治理 Prompt 的身份、飞书真源、运行时缓存边界及 Git 备份同步 |
 | Prompt 使用统计 | `docs/CHAT_PACK.md`、`.agents/skills/learn-x-prompt-usage/` | 合并或校验两端 Chat Pack 使用记录 |
 | Process / Output / Memory | `docs/LEARN_X_PROCESS.md`、`.agents/skills/learn-x-process/` | 处理周/月/年 Output、Process Pack、Memory 候选 |
+| 季度 Memory 审查 | `docs/LEARN_X_PROCESS.md`、`.agents/skills/learn-x-quarterly-memory/` | 季度长期 Memory 审查：上下文包、ChatGPT 交付导入、校验与晋级 |
 | ~~行动反馈周报 / Action Feedback Base~~（已退役） | `docs/ACTION_FEEDBACK.md`（仅历史留档） | Action Feedback 已于 2026-10 退役，由 Core V1（`/Users/yuwei/code/core`）接管；勿调用 `action:feedback` |
 | Input 流程 | `03_input/README.md`、`03_input/usage.md`、`.agents/skills/learn-x-input/` | 采集、校验或生成 `03_input/` |
 | 月度议题工作台 | `docs/MONTHLY_CORE_QUESTION_WORKBENCH.md`、`docs/TECH.md`、`.agents/skills/learn-x-monthly-question-workbench/` | 运行或修改工作台脚本、处理月度研究文档 |

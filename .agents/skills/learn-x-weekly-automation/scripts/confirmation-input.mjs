@@ -15,16 +15,33 @@ export function parseMemoryProposal(proposal) {
   const lines = proposal.match(/[^\n]*\n|[^\n]+$/g) ?? [];
   const parts = [];
   let item = null;
+  let metadataTargetPath = null;
+  let seenMemoryContent = false;
+  let excludedSection = false;
   for (const line of lines) {
     if (/^[-*] /.test(line)) {
-      item = { kind: 'item', text: line }; parts.push(item); continue;
+      seenMemoryContent = true;
+      item = { kind: excludedSection ? 'excluded' : 'item', text: line }; parts.push(item); continue;
     }
-    if (/^\s*$/.test(line)) { parts.push({ kind: 'structure', text: line }); item = null; continue; }
-    if (/^#{1,6}\s+/.test(line)) { parts.push({ kind: 'structure', text: line }); item = null; continue; }
+    if (/^\s*$/.test(line)) { parts.push({ kind: excludedSection ? 'excluded' : 'structure', text: line }); item = null; continue; }
+    if (/^#{1,6}\s+/.test(line)) {
+      const proposalTitle = /^#\s+/.test(line);
+      const heading = line.replace(/^#{1,6}\s+/, '').trim();
+      if (!proposalTitle) seenMemoryContent = true;
+      excludedSection = !proposalTitle && /^(?:排除项|排除|Excluded(?: Items)?)$/i.test(heading);
+      if (excludedSection && parts.at(-1)?.kind === 'structure' && /^\s*$/.test(parts.at(-1).text)) parts.at(-1).kind = 'excluded';
+      parts.push({ kind: proposalTitle ? 'metadata' : excludedSection ? 'excluded' : 'structure', text: line }); item = null; continue;
+    }
     if (item && /^(?: {2,}|\t)/.test(line)) { item.text += line; continue; }
+    const targetPath = line.match(/^目标文件：`([A-Za-z0-9_./-]+)`\n?$/);
+    if (targetPath && !seenMemoryContent && !metadataTargetPath) {
+      metadataTargetPath = targetPath[1];
+      parts.push({ kind: 'metadata', text: line }); item = null; continue;
+    }
     throw new Error('ambiguous memory proposal format');
   }
   if (parts.map(part => part.text).join('') !== proposal) throw new Error('proposal mapping incomplete');
+  Object.defineProperty(parts, 'metadataTargetPath', { value: metadataTargetPath, enumerable: false });
   return parts;
 }
 
@@ -39,13 +56,14 @@ export async function buildLearnXConfirmationInputs({ root, week, fingerprint, c
   const proposal = await readFile(path.join(dir, 'memory-proposed.md'), 'utf8');
   if (manifest.fingerprint !== fingerprint || manifest.hashes.proposal !== hash(proposal)) throw new Error('proposal fingerprint mismatch');
   const parts = parseMemoryProposal(proposal);
+  if (parts.metadataTargetPath && parts.metadataTargetPath !== manifest.scope.memoryPath) throw new Error('proposal target path differs from bound Memory destination');
   let index = 0;
   const memoryItems = parts.filter(part => part.kind === 'item').map(part => {
     const id = `memory-${++index}`;
     part.id = id;
     return { id, domain: 'learn-x', source: 'human', locator: `${manifest.scope.memoryPath}#${week}/${id}`, originalValue: '', value: part.text, targets: ['memory'] };
   });
-  const required = new Set(['backup', 'flomo']);
+  const required = new Set(['backup']);
   const ids = new Set();
   const closeoutItems = closeoutEntries.map(entry => {
     if (!entry || !required.has(entry.id) || ids.has(entry.id) || typeof entry.action !== 'string' || !entry.action.trim() || typeof entry.destination !== 'string' || !entry.destination.trim()) throw new Error('invalid closeout entry');
@@ -53,14 +71,13 @@ export async function buildLearnXConfirmationInputs({ root, week, fingerprint, c
     return { id: `closeout-${entry.id}`, domain: 'learn-x', source: 'human', locator: entry.destination, originalValue: '', value: entry.action, targets: ['weekly-closeout'] };
   });
   if (ids.size !== required.size) throw new Error('closeout scope incomplete');
-  // Avoid approving actions to targets outside the existing bound scope.
+  // The current Skill authorizes weekly-memory Flomo sync independently from
+  // this approval card. Schema v2 therefore binds only Memory and backup.
   const allowed = manifest.scope;
   const find = id => closeoutEntries.find(e => e.id === id).destination;
-  const flomo = closeoutEntries.find(e => e.id === 'flomo');
-  if (find('backup') !== allowed.backupDestination || !Array.isArray(flomo.sources) || JSON.stringify(flomo.sources) !== JSON.stringify(allowed.flomo) || !/^Flomo\/.+/.test(flomo.destination)) throw new Error('closeout destination differs from bound scope');
+  if (find('backup') !== allowed.backupDestination) throw new Error('closeout destination differs from bound scope');
   if (!allowed.backupRoots.every(root => closeoutEntries.find(e => e.id === 'backup').action.includes(root))) throw new Error('backup scope incomplete');
   if (!/留存|清理/.test(closeoutEntries.find(e => e.id === 'backup').action)) throw new Error('backup action must include its existing retention behavior');
-  closeoutItems.find(e => e.id === 'closeout-flomo').value += `；来源：${flomo.sources.join('、')}`;
   return { week, fingerprint, proposalHash: hash(proposal), parts, items: [...memoryItems, ...closeoutItems], scope: allowed };
 }
 
@@ -69,7 +86,14 @@ export function reconstructApprovedMemory({ parts, approved }) {
   if (!Array.isArray(parts) || !approved || typeof approved !== 'object' || Array.isArray(approved)) throw new Error('invalid approved entries');
   const ids = new Set(parts.filter(part => part.kind === 'item').map(part => part.id));
   if (Object.keys(approved).some(id => !ids.has(id) || typeof approved[id] !== 'string' || !/^[-*] /.test(approved[id]))) throw new Error('invalid approved memory item');
-  return parts.map(part => part.kind === 'structure' ? part.text : Object.hasOwn(approved, part.id) ? approved[part.id] : '').join('');
+  let started = false;
+  return parts.map(part => {
+    if (part.kind === 'metadata' || part.kind === 'excluded') return '';
+    if (part.kind === 'structure' && /^\s*$/.test(part.text) && !started) return '';
+    if (part.kind === 'structure' && !/^\s*$/.test(part.text)) started = true;
+    if (part.kind === 'item' && Object.hasOwn(approved, part.id)) { started = true; return approved[part.id]; }
+    return part.kind === 'structure' ? part.text : '';
+  }).join('');
 }
 
 // Edits/exclusions are staged before display and before approval. Rebind the

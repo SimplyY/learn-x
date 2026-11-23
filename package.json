@@ -56,6 +56,7 @@
     "memory:monthly": "node .agents/skills/learn-x-process/scripts/prepare-period-memory.mjs --month",
     "memory:yearly": "node .agents/skills/learn-x-process/scripts/prepare-period-memory.mjs --year",
     "memory:compress": "node .agents/skills/learn-x-process/scripts/memory-compression.mjs",
+    "memory:quarterly": "node .agents/skills/learn-x-process/scripts/quarterly-memory.mjs",
     "test:app": "node --test app/code/scripts/*.test.mjs",
     "release": "node app/code/scripts/release.mjs",
     "input:build-bot": "node .agents/skills/build-bot-log/scripts/generate-build-bot.mjs",

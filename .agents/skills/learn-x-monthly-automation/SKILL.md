@@ -20,7 +20,8 @@ description: Learn-X 月度自动化中文工作流。Use when the user asks to 
 ```bash
 npm run process:monthly -- --month 2026-06
 npm run memory:monthly -- 2026-06
-npm run memory:compress -- --as-of 2026-08-30
+# 历史 Memory 压缩已迁移季度流程，见 learn-x-quarterly-memory：
+# npm run memory:quarterly -- pack
 ```
 
 先解析唯一目标月，再只执行当前阶段需要的步骤。默认目标月是 `Asia/Shanghai` 的上个月；用户明确指定 `YYYY-MM`、`本月`、`这个月`、`上月` 时，按用户指定。
@@ -75,8 +76,8 @@ npm run memory:compress -- --as-of 2026-08-30
 5. 检查完成后调用 `learn-x-monthly-journal`。它只从可安全使用的相交周与月度目录本地文件读取事实，按现有月度聚合的日期过滤、去重与边界规则生成“可编辑的部分草稿”；不得重新读取 Daily Base 或线上周记作为事实源。月内完整周缺口在汇报中醒目标记并保留给用户手动补写；边界周常规来源只在汇报中提示、不写入飞书月记。历史 `jingdu.md` 已退役，不得纳入月记或被描述为本期精读结果。
 6. `learn-x-monthly-journal` 只在目标月不存在或有明确安全空位时写入主标题带 `【待优化】AI 基础草稿` 的部分草稿；若目标月已存在实质性正文、草稿或不存在安全空位，则跳过写回，只报告链接与原因。草稿生成不等于周记门槛确认。
 7. 只报告本地来源范围、已确认周范围、月记状态和缺口，不提前生成 Monthly Output。
-8. 月度输入准备完成后旁路运行一次 Memory 压缩预览：先执行 `npm run memory:compress -- --as-of YYYY-MM-DD`，再由 Codex 按 `learn-x-process/resources/memory-compression-rules.md` 在 `_dist/memory-compression/YYYY-MM/` 生成候选并执行 `--validate`。压缩预览失败只记录 `needs_review`，不阻断月记、月报或既有阶段门禁。
-9. 停止并提示用户在飞书月记中编辑确认、补齐月内完整周的缺失内容、移除所有草稿标记，然后回复 `继续`。边界周缺口只作醒目提示，不要求补齐、不写入文档；历史 `jingdu.md` 不写入目标月内容。阶段 2 仍会再次检查月内完整周是否确认；压缩候选另行等待人工修改；定时任务不执行晋级。
+8. 历史 Memory 压缩已于 2026-11 迁移至季度流程（`learn-x-quarterly-memory` Skill / `npm run memory:quarterly`）；月度自动化不再生成历史 Memory 压缩候选，也不运行 `memory:compress` 预览。历史 monthly-era 候选（`_dist/memory-compression/YYYY-MM/`）仍按原规则校验与晋级，与本流程解耦。
+9. 停止并提示用户在飞书月记中编辑确认、补齐月内完整周的缺失内容、移除所有草稿标记，然后回复 `继续`。边界周缺口只作醒目提示，不要求补齐、不写入文档；历史 `jingdu.md` 不写入目标月内容。阶段 2 仍会再次检查月内完整周是否确认；定时任务不执行晋级。
 
 阶段 1 汇报必须包含：目标月、两份手动 Prompt 已同时提供/待用户执行状态；结果成功回传时提供自我阅读版和 AI 记忆版的可点击本地文件链接，并基于实际前后版本压缩说明“新增、改动、删除”三类内容，不展开自我阅读版全文或完整 `diff` 代码。摘要按语义归纳；无法判断的变化标为未知。还要报告月记草稿状态（含可点击飞书草稿链接）、已确认周范围、使用的本地来源、可点击的 `03_input/monthly/YYYY-M/` 路径、缺口、当前位置、下一步、再下一步。
 
@@ -157,17 +158,11 @@ npm run memory:compress -- --as-of 2026-08-30
 
 阶段 3 汇报必须包含候选数量、实际迁移数量、目标文件、去重结果、验证结果、当前位置、下一步和下次运行。
 
-## Memory 月度压缩旁路
+## Memory 压缩入口（已迁移）
 
-每月目标月解析后最多生成一次压缩预览。当前月、跨越当前月的周块和无法识别来源的条目保护；当前季度较早月份可压缩。已有候选且源哈希未变时只报告“待人工审核”并保留用户修改，源变化时标记 `stale`，不覆盖候选。
+历史 Memory 压缩自 2026-11 起按季度执行，不再挂在月度自动化旁路。新季度审查入口：`learn-x-quarterly-memory` Skill 与 `npm run memory:quarterly`（pack / import）；确定性校验与安全晋级仍由 `learn-x-process` 的 `memory-compression.mjs` 引擎统一承担（`--validate`、`--promote --confirm`，定时任务永不自动晋级）。
 
-候选和 comparison 报告必须先展示 Codex 通读本文件原文与候选后生成的 `changeSummary`：具体说明 2—4 个最主要的实质变化，并只指出本次最核心的一项语义风险；至少包含两个当前文件特有的主题或具象锚点，禁止由脚本套用固定句式。详细提示词见 `learn-x-process/resources/memory-compression-rules.md`。随后以精简表格给出 5—10 条可读的“核心变化”，逐项说明字数变化（风险写在括号内）、之前/现在的内容，并按风险从高到低、同风险按净减少字数排序；实际改动量按字符级删除加新增计算，净减少不超过 10 字但替换超过 10 字的改写仍需展示。实际改动量不超过 10 字的变化按类型归类，超过 10 字但未入选核心的变化只做汇总，不逐条铺开。非删除类变化表把原文和压缩后拆成两列，风险并入改动说明；保护范围和量化校验后置。核心摘要不能代替整体压缩量。语义合并必须保留重要、反复出现且承载证据或行动的具象锚点，例如 `出门`、`读书会`、`写诗`、`运动`、人物、地点、项目和方法名，不能把它们全部改写成抽象标签。`changeSummary`、`coreDifferences` 和 `otherChanges` 位于候选旁的 `.memory-compression.json`，缺失时标记 `needs_review`。人工修改后先运行：
-
-```bash
-npm run memory:compress -- --validate 04_output/_dist/memory-compression/YYYY-MM
-```
-
-验证通过并完成单独确认后，才可运行 `--promote <候选目录> --confirm`。晋级会归档旧季度文件并原子替换；不会自动新增 Flomo、刷新外部系统或把“继续记忆”当作压缩确认。
+历史 monthly-era 候选（`04_output/_dist/memory-compression/YYYY-MM/`）继续按既有规则处理：已有候选且源哈希未变时只报告“待人工审核”并保留用户修改，源变化时标记 `stale`，不覆盖候选；人工修改后先 `--validate`，通过并完成单独确认后 `--promote <候选目录> --confirm`。详细规则见 `learn-x-process/resources/memory-compression-rules.md`。
 
 ## 边界
 

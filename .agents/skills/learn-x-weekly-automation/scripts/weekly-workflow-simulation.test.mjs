@@ -213,7 +213,8 @@ test("simulates the weekly workflow in a temporary repo, from cooldown rescue th
   assert.doesNotMatch(weeklyAutomationSkill, /图片生成和其他写入都必须等阶段 3 这一次确认/);
   assert.match(weeklyAutomationSkill, /memory:weekly -- --week YYYY-Www --bind-approval/);
   assert.match(weeklyAutomationSkill, /memory:weekly -- --week YYYY-Www --verify-approval/);
-  assert.match(weeklyAutomationSkill, /确认词只需指向这张最终确认卡及其指纹/);
+  assert.match(weeklyAutomationSkill, /用户无需手动输入指纹/);
+  assert.match(weeklyAutomationSkill, /「确认」「确认执行」或「确认继续」/);
   assert.match(weeklyAutomationSkill, /问题、背景和回答只保留在 Weekly Output，不自动迁移/);
   assert.match(weeklyAutomationSkill, /无需额外完成\/继续消息/);
   assert.match(weeklyAutomationSkill, /文件存在或 mtime 变化不算人工审核证据/);

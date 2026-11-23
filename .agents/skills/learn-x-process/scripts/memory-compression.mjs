@@ -293,11 +293,11 @@ function candidateDescriptor(repoRoot, reviewDir, sourcePath, metadata) {
   };
 }
 
-function budgetForAge(age) {
+export function budgetForAge(age) {
   return { age, hard: annualHardLimit(age), target: annualTargetLimit(age) };
 }
 
-async function readActiveMemoryFiles(repoRoot, currentMonth) {
+export async function readActiveMemoryFiles(repoRoot, currentMonth) {
   const root = path.join(repoRoot, MEMORY_ROOT);
   let entries = [];
   try { entries = await readdir(root, { withFileTypes: true }); } catch (error) {
@@ -327,7 +327,7 @@ async function readActiveMemoryFiles(repoRoot, currentMonth) {
   return files.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
 }
 
-function parseMemoryUnits(content, sourcePath, currentMonth) {
+export function parseMemoryUnits(content, sourcePath, currentMonth) {
   const lines = String(content).replace(/\r\n?/g, "\n").split("\n");
   const headings = [];
   for (let index = 0; index < lines.length; index += 1) {
@@ -512,7 +512,10 @@ async function validateCandidateFile(repoRoot, candidatePath) {
       sources.push({ relativePath, absolutePath, content, sha256: sha256(content), expectedSha256: metadata.sourceHashes[relativePath] });
     }
     const stale = sources.some((source) => source.sha256 !== source.expectedSha256);
-    const unitAudit = sources.flatMap((source) => parseMemoryUnits(source.content, source.relativePath, metadata.currentMonth).map((unit) => {
+    const unitAudit = sources.flatMap((source) => {
+      const units = parseMemoryUnits(source.content, source.relativePath, metadata.mode === "quarterly" ? null : metadata.currentMonth);
+      if (metadata.mode === "quarterly") applyQuarterlyProtection(units, metadata, source.relativePath);
+      return units.map((unit) => {
       const base = { id: unit.id, sourcePath: unit.sourcePath, lines: [unit.startLine, unit.endLine], chars: unit.chars, text: unit.text, period: unit.period, section: unit.section, protected: unit.protected };
       if (body.includes(unit.text)) return { ...base, category: "retained" };
       const tags = String(unit.text).match(/\[[^\]]+\]/g) ?? [];
@@ -522,7 +525,8 @@ async function validateCandidateFile(repoRoot, candidatePath) {
         : period.kind === "monthly" ? [`[Monthly｜${period.year}-${String(period.month).padStart(2, "0")}]`] : []);
       const hasTrace = [...tags, ...periodTags].some((tag) => body.includes(tag));
       return { ...base, category: hasTrace ? "represented_by_trace" : "removed_or_unclassified" };
-    }));
+      });
+    });
     const protectedMissing = unitAudit.filter((unit) => unit.protected && unit.category !== "retained").map((unit) => unit.id);
     return {
       candidatePath: candidatePathRelative,
@@ -987,6 +991,69 @@ function renderComparisonReport(result) {
   return `${lines.join("\n")}\n`;
 }
 
+// ===== 季度长期 Memory 审查（quarterly review）共享辅助 =====
+
+export function quarterEndDate(quarter) {
+  const match = String(quarter ?? "").match(/^(\d{4})-Q([1-4])$/);
+  if (!match) throw new Error("Invalid quarter label: " + quarter + ". Use YYYY-QN.");
+  return dateOnly(new Date(Date.UTC(Number(match[1]), Number(match[2]) * 3, 0)));
+}
+
+export function lastCompleteQuarter(asOfDate) {
+  const asOfTime = Date.parse(asOfDate + "T00:00:00Z");
+  const year = Number(asOfDate.slice(0, 4));
+  for (let targetYear = year; targetYear >= year - 2; targetYear -= 1) {
+    for (let q = 4; q >= 1; q -= 1) {
+      const label = targetYear + "-Q" + q;
+      if (Date.parse(quarterEndDate(label) + "T00:00:00Z") < asOfTime) return label;
+    }
+  }
+  throw new Error("Cannot resolve the last complete quarter as of " + asOfDate + ".");
+}
+
+export function isoWeekLabelFromDate(dateString) {
+  const date = new Date(dateString + "T00:00:00Z");
+  const day = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  const week = Math.ceil(((date.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+  return date.getUTCFullYear() + "-W" + String(week).padStart(2, "0");
+}
+
+export function weekLabelsInQuarter(quarter) {
+  const match = String(quarter).match(/^(\d{4})-Q([1-4])$/);
+  if (!match) throw new Error("Invalid quarter label: " + quarter + ".");
+  const year = Number(match[1]);
+  const startMonth = (Number(match[2]) - 1) * 3 + 1;
+  const start = Date.UTC(year, startMonth - 1, 1);
+  const end = Date.UTC(year, startMonth + 2, 0);
+  const labels = [];
+  for (let time = start; time <= end; time += 86400000) {
+    const label = isoWeekLabelFromDate(new Date(time).toISOString().slice(0, 10));
+    if (!labels.includes(label)) labels.push(label);
+  }
+  return labels;
+}
+
+export function applyQuarterlyProtection(units, metadata, sourcePath) {
+  const confirmedIds = new Set((metadata.confirmedCorrections ?? []).map((correction) => correction.unitId));
+  const quarterEnd = quarterEndDate(metadata.quarter);
+  const isReviewTarget = sourcePath === metadata.targetPath
+    && metadata.targetPath === "01_core/memory/" + metadata.quarter + ".memory.md";
+  for (const unit of units) {
+    if (confirmedIds.has(unit.id)) {
+      unit.protected = false;
+      continue;
+    }
+    if (!isReviewTarget || !unit.period) {
+      unit.protected = true;
+      continue;
+    }
+    const periods = Array.isArray(unit.period) ? unit.period : [unit.period];
+    unit.protected = periods.some((period) => period && period.end > quarterEnd);
+  }
+}
+
 function readMetadata(content) {
   const line = String(content).split("\n", 1)[0];
   if (!line.startsWith(METADATA_PREFIX) || !line.endsWith(METADATA_SUFFIX)) throw new Error("Candidate metadata is missing or invalid.");
@@ -1004,14 +1071,18 @@ async function readCandidateMetadata(candidatePath, candidateContent) {
 }
 
 function hasCoreDifferences(metadata) {
-  return Array.isArray(metadata?.coreDifferences) && metadata.coreDifferences.length >= 5 && metadata.coreDifferences.length <= 10 && metadata.coreDifferences.every((difference) => (
+  const inRange = metadata.mode === "quarterly"
+    ? metadata.coreDifferences.length >= 0
+    : metadata.coreDifferences.length >= 5 && metadata.coreDifferences.length <= 10;
+  return Array.isArray(metadata?.coreDifferences) && inRange && metadata.coreDifferences.every((difference) => (
     difference && typeof difference === "object" &&
     ["topic", "original", "candidate", "kind", "action", "review"].every((field) => typeof difference[field] === "string" && difference[field].trim())
   ));
 }
 
 function hasOtherChanges(metadata) {
-  return Array.isArray(metadata?.otherChanges) && metadata.otherChanges.length > 0 && metadata.otherChanges.every((change) => (
+  const nonEmpty = metadata.mode === "quarterly" || metadata.otherChanges.length > 0;
+  return Array.isArray(metadata?.otherChanges) && nonEmpty && metadata.otherChanges.every((change) => (
     change && typeof change === "object" &&
     ["topic", "before", "after", "examples"].every((field) => typeof change[field] === "string" && change[field].trim())
   ));
@@ -1025,7 +1096,7 @@ function hasChangeSummary(metadata) {
 }
 
 function validateMetadata(metadata) {
-  if (!metadata || !["current-year", "annualize"].includes(metadata.mode)) throw new Error("Candidate mode is invalid.");
+  if (!metadata || !["current-year", "annualize", "quarterly"].includes(metadata.mode)) throw new Error("Candidate mode is invalid.");
   if (typeof metadata.operationId !== "string" || !metadata.operationId) throw new Error("Candidate operationId is missing.");
   if (typeof metadata.asOf !== "string") throw new Error("Candidate asOf is missing.");
   const asOf = parseAsOf(metadata.asOf);
@@ -1057,6 +1128,22 @@ function validateMetadata(metadata) {
     if (!metadata.currentYearSourceChars || metadata.currentYearSources.some((source) => !Number.isInteger(metadata.currentYearSourceChars[source]))) {
       throw new Error("Candidate currentYearSourceChars are invalid.");
     }
+  } else if (metadata.mode === "quarterly") {
+    if (!/^\d{4}-Q[1-4]$/.test(String(metadata.quarter ?? ""))) throw new Error("Quarterly candidate quarter is invalid.");
+    if (Number(metadata.quarter.slice(0, 4)) !== targetYear) throw new Error("Quarterly candidate quarter must match its target file year.");
+    if (metadata.sourcePaths.length !== 1 || metadata.sourcePaths[0] !== metadata.targetPath) throw new Error("Quarterly candidate must target exactly its own memory file.");
+    if (!Array.isArray(metadata.confirmedCorrections)) throw new Error("Quarterly candidate confirmedCorrections must be an array.");
+    const correctionIds = new Set();
+    for (const correction of metadata.confirmedCorrections) {
+      if (!correction || typeof correction !== "object") throw new Error("Quarterly confirmed correction must be an object.");
+      if (correction.sourcePath !== metadata.targetPath) throw new Error("Quarterly confirmed correction must reference the candidate target source.");
+      if (typeof correction.unitId !== "string" || !correction.unitId.startsWith(`${metadata.targetPath}:`)) throw new Error("Quarterly confirmed correction unitId is invalid.");
+      if (typeof correction.evidence !== "string" || !correction.evidence.trim()) throw new Error("Quarterly confirmed correction evidence is missing.");
+      if (correction.confirmed !== true) throw new Error("Quarterly confirmed correction is not explicitly confirmed.");
+      correctionIds.add(correction.unitId);
+    }
+    if (correctionIds.size !== metadata.confirmedCorrections.length) throw new Error("Quarterly confirmed corrections contain duplicate unitIds.");
+    if (metadata.packRef !== undefined && (typeof metadata.packRef !== "string" || !metadata.packRef)) throw new Error("Quarterly packRef is invalid.");
   } else if (targetYear === Number(asOf.slice(0, 4)) || !/^\d{4}\.memory\.md$/.test(path.basename(metadata.targetPath))) {
     throw new Error("Annual candidate must target a yearly memory file.");
   }

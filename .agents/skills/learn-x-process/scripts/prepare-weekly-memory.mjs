@@ -1,8 +1,9 @@
-import { createHash } from "node:crypto";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { chmod, mkdir, open, readFile, rename, unlink, lstat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defaultWeeklyReviewWeek } from "./collect-weekly-input.mjs";
+import { acquireWeeklyFileLock } from "../../learn-x-input/scripts/lib/source-status.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
@@ -157,36 +158,188 @@ export async function verifyConfirmedWeeklyMemoryWrite({ batch, repoRoot: root =
   const week = batch.reviewWeek;
   const quarter = quarterFromIsoWeek(week);
   const targetPath = `01_core/memory/${quarter}.memory.md`;
-  await verifyWeeklyMemoryApprovalSources({ week, fingerprint: batch.sourceBindings.learnxMemoryFingerprint, repoRoot: root });
-  const target = path.join(root, targetPath);
-  const content = await readFile(target, 'utf8');
-  const lines = content.split('\n');
-  const weekHeadings = lines.map((line, index) => line.trimEnd() === `## ${week}` ? index : -1).filter(index => index >= 0);
-  if (weekHeadings.length !== 1) return { ok: false, status: 'unknown' };
-  const start = weekHeadings[0] + 1;
-  let end = lines.findIndex((line, index) => index >= start && /^##\s/.test(line));
-  if (end < 0) end = lines.length;
-  const weekLines = lines.slice(start, end);
-  const memoryHeadings = weekLines.map((line, index) => line.trimEnd() === '### Memory' ? index : -1).filter(index => index >= 0);
-  if (memoryHeadings.length !== 1) return { ok: false, status: 'unknown' };
-  const memoryStart = memoryHeadings[0] + 1;
-  let memoryEnd = weekLines.findIndex((line, index) => index >= memoryStart && /^#{1,3}\s/.test(line));
-  if (memoryEnd < 0) memoryEnd = weekLines.length;
-  const memoryText = weekLines.slice(memoryStart, memoryEnd).join('\n');
-  const seen = new Set();
-  for (const item of items) {
-    const expectedLocator = `${targetPath}#${week}/${item.id}`;
-    if (item.source !== 'human' || item.locator !== expectedLocator || typeof item.value !== 'string'
-      || !/^[-*] /.test(item.value) || item.value.includes('\r') || seen.has(item.value)) return { ok: false, status: 'unknown' };
-    seen.add(item.value);
-    const exact = item.value.replace(/\n+$/, '');
-    if (!exact || memoryText.split(exact).length - 1 !== 1) return { ok: false, status: 'unknown' };
+  try {
+    await verifyWeeklyMemoryApprovalSources({ week, fingerprint: batch.sourceBindings.learnxMemoryFingerprint, repoRoot: root });
+    const proposal = await readFile(path.join(root, '04_output/_dist/weekly', distWeekId(week), 'memory-proposed.md'), 'utf8');
+    const planned = confirmedMemoryPlan({ batch, proposal, targetPath });
+    const content = await readFile(path.join(root, targetPath), 'utf8');
+    for (const section of ['weekly', 'munger']) {
+      const group = planned.filter(item => item.section === section);
+      if (!group.length) continue;
+      const region = memorySection(content, week, section);
+      if (!region) return { ok: false, status: 'unknown' };
+      for (const item of group) {
+        const exact = item.value.replace(/\n+$/, '');
+        if (!exact || region.split(exact).length - 1 !== 1) return { ok: false, status: 'unknown' };
+      }
+    }
+    return {
+      ok: true,
+      status: 'verified',
+      evidence: { targetPath, week, itemIds: items.map(item => item.id), sha256: sha256(content) }
+    };
+  } catch {
+    return { ok: false, status: 'unknown' };
   }
-  return {
-    ok: true,
-    status: 'verified',
-    evidence: { targetPath, week, itemIds: items.map(item => item.id), sha256: sha256(content) }
-  };
+}
+
+// Apply only items in the already-confirmed batch. Proposal headings determine
+// the correct section in the same Memory file (weekly Memory or Munger pool).
+export async function applyConfirmedWeeklyMemory({ batch, repoRoot: root = repoRoot } = {}) {
+  if (!batch?.batchId || !/^[a-f0-9]{64}$/.test(batch.sourceBindings?.learnxMemoryFingerprint || '')) {
+    throw new Error('confirmed-weekly-memory-batch-required');
+  }
+  const week = normalizeWeekId(batch.reviewWeek);
+  const fingerprint = batch.sourceBindings.learnxMemoryFingerprint;
+  const approval = await verifyWeeklyMemoryApprovalSources({ week, fingerprint, repoRoot: root });
+  if (approval.schemaVersion !== 2) throw new Error('legacy-memory-approval-is-read-only');
+  const quarter = quarterFromIsoWeek(week);
+  const targetPath = `01_core/memory/${quarter}.memory.md`;
+  const target = path.join(root, targetPath);
+  const proposal = await readFile(path.join(root, '04_output/_dist/weekly', distWeekId(week), 'memory-proposed.md'), 'utf8');
+  const plan = confirmedMemoryPlan({ batch, proposal, targetPath });
+  if (!plan.length) return { status: 'not-applicable', evidence: { week, itemIds: [] } };
+
+  const release = await acquireWeeklyFileLock(path.dirname(target), `${quarter}.memory-write.lock`);
+  try {
+    const targetStat = await lstat(target);
+    if (!targetStat.isFile() || targetStat.isSymbolicLink()) throw new Error('memory-target-must-be-regular-file');
+    const original = await readFile(target, 'utf8');
+    const originalHash = sha256(original);
+    const alreadyWritten = await verifyConfirmedWeeklyMemoryWrite({ batch, repoRoot: root });
+    if (alreadyWritten.ok && alreadyWritten.status === 'verified') {
+      return { status: 'already-verified', memoryWriteEvidence: alreadyWritten };
+    }
+    if (originalHash !== approval.targetBaselineSha256) throw new Error('memory-target-changed-after-approval');
+    for (const item of plan) {
+      const region = memorySection(original, week, item.section);
+      const exact = item.value.replace(/\n+$/, '');
+      if (original.split(exact).length !== 1 || (region && region.includes(exact))) throw new Error('memory-write-partial-or-conflicting-content');
+    }
+
+    let updated = original;
+    const munger = plan.filter(item => item.section === 'munger');
+    if (munger.length) updated = appendMemorySectionItems(updated, '### 芒格之魂手动洞察候选', munger);
+    const weekly = plan.filter(item => item.section === 'weekly');
+    if (weekly.length) updated = appendWeeklyMemorySection(updated, batch.reviewWeek, weekly);
+
+    const temporary = `${target}.${randomUUID()}.tmp`;
+    let handle;
+    try {
+      handle = await open(temporary, 'wx', 0o600);
+      await handle.writeFile(updated, 'utf8');
+      await handle.sync();
+      await handle.close();
+      handle = null;
+      if (sha256(await readFile(target, 'utf8')) !== originalHash) throw new Error('memory-target-changed-during-write');
+      await rename(temporary, target);
+      await chmod(target, 0o600);
+    } finally {
+      if (handle) await handle.close();
+      await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    }
+    if (await readFile(target, 'utf8') !== updated) throw new Error('memory-write-readback-mismatch');
+    const memoryWriteEvidence = await verifyConfirmedWeeklyMemoryWrite({ batch, repoRoot: root });
+    if (!memoryWriteEvidence.ok || memoryWriteEvidence.status !== 'verified') throw new Error('memory-write-authoritative-readback-failed');
+    return { status: 'written-and-verified', memoryWriteEvidence };
+  } finally {
+    await release();
+  }
+}
+
+function confirmedMemoryPlan({ batch, proposal, targetPath }) {
+  const week = batch.reviewWeek;
+  const proposed = parseProposedMemoryItems(proposal);
+  const items = batch.items?.filter(item => item?.domain === 'learn-x' && item.targets?.includes('memory')) ?? [];
+  const seenIds = new Set();
+  const seenValues = new Set();
+  for (const item of items) {
+    const expected = proposed.get(item.id);
+    const expectedLocator = `${targetPath}#${week}/${item.id}`;
+    if (!/^memory-\d+$/.test(item.id || '') || seenIds.has(item.id) || seenValues.has(item.value)
+      || item.source !== 'human' || item.locator !== expectedLocator || typeof item.value !== 'string'
+      || item.value.includes('\r') || !expected || item.value !== expected.value) {
+      throw new Error('confirmed-memory-item-does-not-match-approved-proposal');
+    }
+    seenIds.add(item.id);
+    seenValues.add(item.value);
+    expected.value = item.value;
+  }
+  if (!items.length) return [];
+  return items.map(item => ({ ...item, section: proposed.get(item.id).section }));
+}
+
+function parseProposedMemoryItems(proposal) {
+  if (typeof proposal !== 'string' || proposal.includes('\r')) throw new Error('invalid-memory-proposal');
+  const lines = proposal.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  const items = new Map();
+  let section = 'weekly';
+  let excluded = false;
+  let current = null;
+  for (const line of lines) {
+    if (/^#{1,6}\s+/.test(line)) {
+      const heading = line.replace(/^#{1,6}\s+/, '').trim();
+      excluded = /^(?:排除项|排除|Excluded(?: Items)?)$/i.test(heading);
+      section = /芒格之魂手动洞察候选/.test(heading) ? 'munger' : 'weekly';
+      current = null;
+      continue;
+    }
+    if (/^[-*] /.test(line)) {
+      current = null;
+      if (excluded) continue;
+      const id = `memory-${items.size + 1}`;
+      current = { id, section, value: line };
+      items.set(id, current);
+      continue;
+    }
+    if (current && /^(?: {2,}|\t)/.test(line)) { current.value += line; continue; }
+    current = null;
+  }
+  return items;
+}
+
+function memorySection(content, week, section) {
+  const lines = content.split('\n');
+  let start = -1;
+  let end = lines.length;
+  if (section === 'weekly') {
+    const weeks = lines.map((line, index) => line.trimEnd() === `## ${week}` ? index : -1).filter(index => index >= 0);
+    if (weeks.length !== 1) return null;
+    const weekStart = weeks[0];
+    const weekEnd = lines.findIndex((line, index) => index > weekStart && /^##\s/.test(line));
+    end = weekEnd < 0 ? lines.length : weekEnd;
+    const headings = lines.map((line, index) => index > weekStart && index < end && line.trimEnd() === '### Memory' ? index : -1).filter(index => index >= 0);
+    if (headings.length !== 1) return null;
+    start = headings[0];
+  } else {
+    const headings = lines.map((line, index) => line.trimEnd() === '### 芒格之魂手动洞察候选' ? index : -1).filter(index => index >= 0);
+    if (headings.length !== 1) return null;
+    start = headings[0];
+  }
+  let sectionEnd = lines.findIndex((line, index) => index > start && /^#{1,3}\s/.test(line));
+  if (sectionEnd < 0 || sectionEnd > end) sectionEnd = end;
+  return lines.slice(start + 1, sectionEnd).join('\n');
+}
+
+function appendMemorySectionItems(content, heading, items) {
+  const lines = content.split('\n');
+  const starts = lines.map((line, index) => line.trimEnd() === heading ? index : -1).filter(index => index >= 0);
+  if (starts.length !== 1) throw new Error('memory-section-heading-conflict');
+  const start = starts[0];
+  let end = lines.findIndex((line, index) => index > start && /^#{1,3}\s/.test(line));
+  if (end < 0) end = lines.length;
+  const body = lines.slice(start + 1, end).join('\n').replace(/^\n+/, '').replace(/\n+$/, '');
+  const additions = items.map(item => item.value.replace(/\n+$/, '')).join('\n\n');
+  const nextBody = [body, additions].filter(Boolean).join('\n\n');
+  lines.splice(start + 1, end - start - 1, '', ...nextBody.split('\n'), '');
+  return lines.join('\n');
+}
+
+function appendWeeklyMemorySection(content, week, items) {
+  const starts = content.split('\n').map((line, index) => line.trimEnd() === `## ${week}` ? index : -1).filter(index => index >= 0);
+  if (starts.length) throw new Error('weekly-memory-section-already-exists');
+  const body = items.map(item => item.value.replace(/\n+$/, '')).join('\n\n');
+  return `${content.trimEnd()}\n\n## ${week}\n\n### Memory\n\n${body}\n\n### 继续追踪\n\n- 本期未形成已勾选的继续追踪候选。\n`;
 }
 
 function memoryApprovalScope(week, quarter, schemaVersion = 2) {
@@ -206,7 +359,6 @@ function memoryApprovalScope(week, quarter, schemaVersion = 2) {
     memoryPath,
     backupRoots,
     backupDestination,
-    flomo,
     ywcontext: {
       sourcePath: memoryPath,
       categoryId: "learn-x-memory.confirmed",
@@ -375,12 +527,15 @@ export function extractRequiredSections(content) {
 }
 
 function validateWeeklyOutput(week, content) {
-  const expectedTitles = new Set([
-    `# Learn-X Weekly Output｜${outputWeekFileId(week)}`,
-    `# Learn-X Weekly Output|${outputWeekFileId(week)}`
-  ]);
   const firstContentLine = String(content).split(/\r?\n/).map((line) => line.replace(/^\uFEFF/, "").trim()).find(Boolean) || "";
-  if (!expectedTitles.has(firstContentLine)) {
+  const canonicalTitle = firstContentLine.match(/^# (\d{4})-W(\d{2}) Weekly Output$/);
+  const legacyTitle = firstContentLine.match(/^# Learn-X Weekly Output[｜|](\d{4})-(\d{2})$/);
+  const titleWeek = canonicalTitle
+    ? `${canonicalTitle[1]}-${canonicalTitle[2]}`
+    : legacyTitle
+      ? `${legacyTitle[1]}-${legacyTitle[2]}`
+      : null;
+  if (titleWeek !== outputWeekFileId(week)) {
     throw new Error(`weekly-output-week-mismatch: expected ${outputWeekFileId(week)}`);
   }
 

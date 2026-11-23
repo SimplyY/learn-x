@@ -7,10 +7,10 @@ repo_path: "/Users/yuwei/code/learn-x"
 repo_url: null
 group_info_path: "/Users/yuwei/code/learn-x/GROUP_INFO.md"
 registry_source: "live"
-registry_fetched_at: "2026-11-03T21:01:31.804Z"
+registry_fetched_at: "2026-11-23T21:01:18.294Z"
 registry_age_seconds: 0
 registry_degraded: false
-updated_at: "2026-11-03T21:01:36.510Z"
+updated_at: "2026-11-23T21:01:22.861Z"
 icon: "🧠"
 name_zh: "learn-x"
 summary: "认知进化系统。核心功能 chat pack（chat 上下文提示词） + 定期（周、月、年）复盘 IPO (输入、处理、输出)"
@@ -50,12 +50,13 @@ priority: 1
 9. learn-x-periodic-insight
 10. learn-x-process：处理每周月度输入并生成输出壳与记忆候选
 11. learn-x-prompt-usage：合并 Learn-X 两端 Chat Pack 提
-12. learn-x-quarterly-question-overview：生成、审计和提交 Learn-X 人生核心议题季度
-13. learn-x-reading：把微信读书指定范围内的划线与用户想法整理为按书归档
-14. learn-x-voice-insight
-15. learn-x-weekly-automation：每周输入自动采集、Weekly Output 报告
-16. learn-x-weekly-journal：从 Learn-X 已落盘的周输入生成飞书周记草稿
-17. wechat-weekly-input：通过用户手动提供的微信聊天截图生成重点聊天周度
+12. learn-x-quarterly-memory：季度长期 Memory 审查与压缩
+13. learn-x-quarterly-question-overview：生成、审计和提交 Learn-X 人生核心议题季度
+14. learn-x-reading：把微信读书指定范围内的划线与用户想法整理为按书归档
+15. learn-x-voice-insight
+16. learn-x-weekly-automation：每周输入自动采集、Weekly Output 报告
+17. learn-x-weekly-journal：从 Learn-X 已落盘的周输入生成飞书周记草稿
+18. wechat-weekly-input：通过用户手动提供的微信聊天截图生成重点聊天周度
 
 ## 可用 Workflow
 1. learn-x-monthly-automation：月度自动化中文工作流
@@ -83,4 +84,4 @@ priority: 1
 - 链接数：7
 - Skill 扫描：正常
 - 注册表新鲜度：可用
-- 最近更新时间：2026-11-03T21:01:36.510Z
+- 最近更新时间：2026-11-23T21:01:22.861Z

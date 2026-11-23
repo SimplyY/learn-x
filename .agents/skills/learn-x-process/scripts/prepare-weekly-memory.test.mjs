@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { bindWeeklyMemoryApproval, extractRequiredSections, prepareWeeklyMemory, quarterFromIsoWeek, verifyConfirmedWeeklyMemoryWrite, verifyWeeklyMemoryApproval, verifyWeeklyMemoryApprovalSources } from "./prepare-weekly-memory.mjs";
+import { applyConfirmedWeeklyMemory, bindWeeklyMemoryApproval, extractRequiredSections, prepareWeeklyMemory, quarterFromIsoWeek, verifyConfirmedWeeklyMemoryWrite, verifyWeeklyMemoryApproval, verifyWeeklyMemoryApprovalSources } from "./prepare-weekly-memory.mjs";
 
 const sha256 = value => createHash("sha256").update(String(value), "utf8").digest("hex");
 
@@ -43,6 +43,74 @@ test("post-write recovery verifies the frozen proposal and exact approved Memory
   assert.deepEqual(await verifyConfirmedWeeklyMemoryWrite({ batch, repoRoot: root }), { ok: false, status: "unknown" });
 });
 
+test("confirmed Memory writer routes proposal items to weekly Memory and the Munger candidate pool, then reads back idempotently", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-memory-apply-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const week = "2026-W40";
+  const proposalRoot = path.join(root, "04_output/_dist/weekly", week);
+  const targetPath = path.join(root, "01_core/memory/2026-Q3.memory.md");
+  await mkdir(proposalRoot, { recursive: true });
+  await mkdir(path.join(root, "04_output/weekly"), { recursive: true });
+  await mkdir(path.dirname(targetPath), { recursive: true });
+  await writeFile(path.join(root, "04_output/weekly/2026-40.md"), weeklyOutput("2026-40"));
+  await prepareWeeklyMemory({ week, repoRoot: root });
+  await writeFile(path.join(proposalRoot, "memory-proposed.md"), [
+    "## 2026-W40｜Memory",
+    "",
+    "- Approved weekly memory",
+    "",
+    "## 候选观察池｜芒格之魂手动洞察候选",
+    "",
+    "- [2026-W40] Approved Munger insight",
+    ""
+  ].join("\n"));
+  await writeFile(targetPath, [
+    "# Learn-X Memory｜2026-Q3",
+    "",
+    "## 候选观察池",
+    "",
+    "### 道候选",
+    "",
+    "### 法候选",
+    "",
+    "### 术候选",
+    "",
+    "### 芒格之魂手动洞察候选",
+    "",
+    "## Monthly｜2026-09",
+    "",
+    "### Memory",
+    "",
+    "### 继续追踪",
+    ""
+  ].join("\n"));
+  const binding = await bindWeeklyMemoryApproval({ week, repoRoot: root });
+  const batch = {
+    batchId: "confirmed-memory-test",
+    reviewWeek: week,
+    sourceBindings: { learnxMemoryFingerprint: binding.fingerprint },
+    items: [
+      { id: "memory-1", domain: "learn-x", source: "human", locator: `${binding.scope.memoryPath}#${week}/memory-1`, value: "- Approved weekly memory\n", targets: ["memory"] },
+      { id: "memory-2", domain: "learn-x", source: "human", locator: `${binding.scope.memoryPath}#${week}/memory-2`, value: "- [2026-W40] Approved Munger insight\n", targets: ["memory"] }
+    ]
+  };
+
+  const applied = await applyConfirmedWeeklyMemory({ batch, repoRoot: root });
+  assert.equal(applied.status, "written-and-verified");
+  assert.deepEqual(applied.memoryWriteEvidence.evidence.itemIds, ["memory-1", "memory-2"]);
+  const written = await readFile(targetPath, "utf8");
+  const weekly = written.split("## 2026-W40")[1].split(/\n## (?!#)/)[0];
+  const candidatePool = written.split("### 芒格之魂手动洞察候选")[1].split("## Monthly")[0];
+  assert.match(weekly, /### Memory\n\n- Approved weekly memory/);
+  assert.doesNotMatch(weekly, /Approved Munger insight/);
+  assert.match(candidatePool, /- \[2026-W40\] Approved Munger insight/);
+
+  const beforeRetry = sha256(written);
+  const retry = await applyConfirmedWeeklyMemory({ batch, repoRoot: root });
+  assert.equal(retry.status, "already-verified");
+  assert.equal(sha256(await readFile(targetPath, "utf8")), beforeRetry);
+});
+
 test("binds one approval fingerprint to the source, exact proposed content, and fixed destinations", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-memory-approval-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -51,7 +119,7 @@ test("binds one approval fingerprint to the source, exact proposed content, and 
   await mkdir(path.join(root, "04_output/weekly"), { recursive: true });
   const weeklyOutputPath = path.join(root, "04_output/weekly/2026-40.md");
   await writeFile(weeklyOutputPath, [
-    "# Learn-X Weekly Output｜2026-40",
+    "# 2026-W40 Weekly Output",
     "",
     "## 11. 全文核心重点纪要",
     "A source-backed conclusion.",
@@ -73,7 +141,7 @@ test("binds one approval fingerprint to the source, exact proposed content, and 
   assert.equal(binding.scope.ywcontext.trigger, "automatic after verified Memory writeback; no per-record confirmation");
   assert.equal(Object.hasOwn(binding.scope, "imagePath"), false);
   assert.deepEqual(binding.scope.backupRoots, ["01_core", "03_input", "04_output", "05_library"]);
-  assert.deepEqual(binding.scope.flomo, ["03_input/weekly/2026-W40/weekly.md", "01_core/memory/2026-Q3.memory.md"]);
+  assert.equal(Object.hasOwn(binding.scope, "flomo"), false);
   assert.equal((await verifyWeeklyMemoryApproval({ week: "2026-W40", fingerprint: binding.fingerprint, repoRoot: root })).verified, true);
 
   const candidatesPath = path.join(proposalRoot, "memory-candidates.md");
@@ -234,6 +302,22 @@ test("preparation and approval binding reject wrong-week or incomplete Weekly Ou
       );
     });
   }
+});
+
+test("accepts the current Chat Pack title and the legacy shell title, while binding the title to the requested week", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learn-x-output-title-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const outputDir = path.join(root, "04_output/weekly");
+  await mkdir(outputDir, { recursive: true });
+  const current = weeklyOutput("2026-40").replace("# Learn-X Weekly Output｜2026-40", "# 2026-W40 Weekly Output");
+  await writeFile(path.join(outputDir, "2026-40.md"), current);
+  await assert.doesNotReject(prepareWeeklyMemory({ week: "2026-W40", repoRoot: root }));
+  await writeFile(path.join(outputDir, "2026-40.md"), weeklyOutput("2026-40"));
+  await assert.doesNotReject(prepareWeeklyMemory({ week: "2026-W40", repoRoot: root }));
+  await writeFile(path.join(outputDir, "2026-40.md"), current.replace("2026-W40", "2026-W41"));
+  await assert.rejects(prepareWeeklyMemory({ week: "2026-W40", repoRoot: root }), /weekly-output-week-mismatch/);
+  await writeFile(path.join(outputDir, "2026-40.md"), current.replace("# 2026-W40 Weekly Output", "# Weekly Output"));
+  await assert.rejects(prepareWeeklyMemory({ week: "2026-W40", repoRoot: root }), /weekly-output-week-mismatch/);
 });
 
 test("does not mistake ordinary discussion of TODO or pending data for placeholders", async (t) => {

@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { prepareWeeklyMemory, bindWeeklyMemoryApproval } from '../../learn-x-process/scripts/prepare-weekly-memory.mjs';
-import { executeConfirmedLearnXCloseout, mirrorCoreOverviewToYWContext, prepareUnifiedPreview, validateUnifiedBaselines } from './unified-confirmation.mjs';
+import { createYwContextP1Executor, executeConfirmedLearnXCloseout, mirrorCoreOverviewToYWContext, prepareUnifiedPreview, validateUnifiedBaselines } from './unified-confirmation.mjs';
 import { recordDisplayedCard, confirmDisplayedCard } from '../../../../../core/.agents/skills/core-weekly/scripts/weekly-review-lib/confirmation-session.mjs';
 
 async function fixture(t) {
@@ -13,7 +13,7 @@ async function fixture(t) {
  await writeFile(path.join(root,'04_output/weekly/2026-40.md'),'# Learn-X Weekly Output｜2026-40\n\n## 11. 全文核心重点纪要\n本周总结\n\n## 12. 芒格之魂的洞察\n本周洞察\n');
  await prepareWeeklyMemory({week:'2026-W40',repoRoot:root}); await writeFile(path.join(dir,'memory-proposed.md'),'## 2026-W40\n\n- 第一条\n- 第二条\n');
  const binding=await bindWeeklyMemoryApproval({week:'2026-W40',repoRoot:root}); const s=binding.scope;
- const closeoutEntries=[{id:'backup',action:`备份 ${s.backupRoots.join('、')} 并按既有规则清理留存`,destination:s.backupDestination},{id:'flomo',action:'同步周记和季度记忆',sources:s.flomo,destination:'Flomo/本人已验证账户/周记及季度记忆'}];
+ const closeoutEntries=[{id:'backup',action:`备份 ${s.backupRoots.join('、')} 并按既有规则清理留存`,destination:s.backupDestination}];
  return {root,binding,closeoutEntries};
 }
 const core = [{id:'core-human',domain:'core',source:'human',locator:'复盘/本周思考',originalValue:'',value:'本人思考',targets:['export']},{id:'core-ai',domain:'core',source:'ai',locator:'复盘/挑战',originalValue:'',value:'AI候选',targets:['export']}];
@@ -53,6 +53,36 @@ test('模拟 Codex 宿主：真实提案修改排除后展示、确认与 Memory
  assert.deepEqual(accepted.batch.items.map(x=>x.id),['memory-1','closeout-backup','core-human']);
  await verifyWeeklyMemoryApproval({week:'2026-W40',fingerprint:accepted.batch.sourceBindings.learnxMemoryFingerprint,repoRoot:root});
  await assert.rejects(recordCodexCard({stateRoot:root,unified:result.unified,threadId,displayMessageId:displayId,host:{...host,readThread:async()=>({thread:{id:'other'},turns:[]})}}));
+});
+
+test('Learn-X 卡片确认允许首行确认并附带后续要求，仍绑定原样展示与完整官方回复',async t=>{
+ const {root,binding,closeoutEntries}=await fixture(t);
+ const {recordCodexCard,confirmCodexCard,verifyCodexConfirmationBatch}=await import('./unified-confirmation.mjs');
+ const result=await prepareUnifiedPreview({learnXRoot:root,stateRoot:root,week:'2026-W40',learnX:{fingerprint:binding.fingerprint,selectedIds:['memory-2','closeout-backup'],closeoutEntries}});
+ const threadId='thread-card-scoped', turnId='turn-card-scoped', displayId='display-card-scoped', replyId='reply-card-scoped';
+ const replyText=`${result.unified.card.confirmationText}\n\n以后我说确认就可以。`;
+ const host={readThread:async()=>({thread:{id:threadId},page:{order:'newest_first'},turns:[{id:'confirmation-turn',startedAt:1793326523,items:[{type:'userMessage',id:replyId,content:[{type:'text',text:replyText}]}]},{id:turnId,startedAt:1793326522,items:[{type:'agentMessage',id:displayId,text:result.unified.display}]}]})};
+ const recorded=await recordCodexCard({stateRoot:root,unified:result.unified,threadId,displayMessageId:displayId,host});
+ const accepted=await confirmCodexCard({learnXRoot:root,stateRoot:root,week:'2026-W40',fingerprint:result.unified.card.fingerprint,threadId,receiptFile:recorded.file,displayMessageId:displayId,messageId:replyId,host,validateCore:async()=>({ok:true})});
+ assert.equal(accepted.batch.confirmation.text,result.unified.card.confirmationText);
+ assert.equal(accepted.batch.hostEvidence.confirmationMode,'learnx-card-scoped/v1');
+ assert.match(accepted.batch.hostEvidence.replySha256,/^[a-f0-9]{64}$/);
+ assert.match(accepted.file,/confirmations/);
+ const verified=await verifyCodexConfirmationBatch({stateRoot:root,batch:accepted.batch,host});
+ assert.equal(verified.ok,true);
+});
+
+test('官方线程中的短回复确认绑定最近原样展示的 Learn-X 卡片',async t=>{
+ const {root,binding,closeoutEntries}=await fixture(t);
+ const {recordCodexCard,confirmCodexCard,verifyCodexConfirmationBatch}=await import('./unified-confirmation.mjs');
+ const result=await prepareUnifiedPreview({learnXRoot:root,stateRoot:root,week:'2026-W40',learnX:{fingerprint:binding.fingerprint,selectedIds:['memory-2','closeout-backup'],closeoutEntries}});
+ const threadId='thread-short-confirm', turnId='turn-short-confirm', displayId='display-short-confirm', replyId='reply-short-confirm';
+ const host={readThread:async()=>({thread:{id:threadId},page:{order:'newest_first'},turns:[{id:'confirmation-turn',startedAt:1793326523,items:[{type:'userMessage',id:replyId,content:[{type:'text',text:'确认'}]}]},{id:turnId,startedAt:1793326522,items:[{type:'agentMessage',id:displayId,text:result.unified.display}]}]})};
+ const recorded=await recordCodexCard({stateRoot:root,unified:result.unified,threadId,displayMessageId:displayId,host});
+ const accepted=await confirmCodexCard({learnXRoot:root,stateRoot:root,week:'2026-W40',fingerprint:result.unified.card.fingerprint,threadId,receiptFile:recorded.file,displayMessageId:displayId,messageId:replyId,host,validateCore:async()=>({ok:true})});
+ assert.equal(accepted.batch.cardFingerprint,result.unified.card.fingerprint);
+ assert.equal(accepted.batch.confirmation.text,result.unified.card.confirmationText);
+ assert.equal((await verifyCodexConfirmationBatch({stateRoot:root,batch:accepted.batch,host})).ok,true);
 });
 
 test('确认收尾入口绑定已认可批次，只在 Memory 读回成功后执行获准动作', async t => {
@@ -104,6 +134,16 @@ test('legacy v1 Memory scope never creates a new automatic YWContext action', as
  assert.equal(result.status,'not-applicable');
  assert.equal(result.results.ywcontext,undefined);
  assert.equal(calls,0);
+});
+
+test('YWContext resolver exposes the authoritative not-applied receipt for safe retry checks', async t => {
+ const contextRoot=await mkdtemp(path.join(os.tmpdir(),'ywcontext-resolver-contract-')); t.after(()=>rm(contextRoot,{recursive:true,force:true}));
+ const entrypoint=path.join(contextRoot,'scripts/adapters/import-learn-x-memory-p1-content.mjs'); await mkdir(path.dirname(entrypoint),{recursive:true});
+ const evidence={schema:'yw-context-p1-resolution/v1',source_id:'learn-x-memory-p1-content',p1_batch_id:'p1-batch-1',p2_batch_id:'p2-batch-1',source_sha256:'a'.repeat(64),targetPath:'01_core/memory/2026-Q3.memory.md',itemIds:['memory-1'],source_revision:'2026-W40:source',record_count:1,remote_commit:'b'.repeat(40),catalog_sha256:'c'.repeat(64),p2_present:false,p1_present:false};
+ await writeFile(entrypoint,`process.stdin.resume(); process.stdin.on('end',()=>process.stdout.write(JSON.stringify({status:'not-applied',evidence:${JSON.stringify(evidence)}})));`);
+ const resolver=createYwContextP1Executor({contextRoot,learnXRoot:'/tmp/learn-x-test'});
+ const result=await resolver.resolve(null,{reviewWeek:'2026-W40'},null,{ok:true,status:'verified',evidence:{}});
+ assert.equal(result.status,'not-applied'); assert.equal(result.baselineUnchanged,true); assert.deepEqual(result.evidence,evidence);
 });
 
 test('Core 同步抛错不撤销已保存认可，也不阻塞 Learn-X 收尾',async t=>{

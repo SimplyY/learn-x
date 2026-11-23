@@ -60,17 +60,19 @@ Memory 写入并读回后，自动尝试把完整 P1 内容同步到 YWContext�
 - Action Feedback 已于 2026-10 退役（Core V1 接管周度行动复盘）：周度行动与反馈直接来自 Process Pack 材料正文。历史机制见 [ACTION_FEEDBACK.md](ACTION_FEEDBACK.md)。
 - 不引入数据库、RAG、自动抓取、多 Agent 或全自动价值判断。
 
-## Memory 月度压缩
+## Memory 季度审查与压缩
 
-月度目标月解析后旁路生成一次压缩预览：
+历史 Memory 压缩自 2026-11 起按季度执行（默认刚结束的完整自然季度），由 `learn-x-quarterly-memory` Skill 与 `npm run memory:quarterly` 承载：
 
 ```text
-读取活动 Memory 与源哈希 -> 计算保护范围和预算
-  -> Codex 生成候选 -> 脚本生成 comparison 并校验
-  -> 人工修改 -> 显式 --promote --confirm 才晋级
+读取活动 Memory 与源哈希 -> 清点季度可信材料并标记缺口
+  -> 生成 quarterly-compression-pack.md（含冻结 ChatGPT Prompt 与交付契约）
+  -> ChatGPT 多轮认知审查并直接交付完整 Markdown 候选 + changes.json
+  -> memory:quarterly import 确定性导入并填充技术元数据 -> 引擎校验
+  -> 用户确认 -> 逐候选目录 --promote --confirm 才晋级
 ```
 
-候选始终位于 `04_output/_dist/memory-compression/`，正文只保留 Markdown 记忆；源哈希、预算和保护范围放在同目录隐藏 sidecar，并在 comparison 中展示。已有候选不覆盖；源变化标记 `stale`。当前年仍按季度文件组织，上一年度在新年度开始后合并为年度文件；年度晋级先归档旧季度到 `01_core/memory-archive/` 并校验哈希。归档目录不参与活动 Memory、Chat Pack 或公开静态图。
+候选始终位于 `04_output/_dist/memory-compression/quarterly-YYYY-QN/`（历史 monthly-era 候选仍在 `YYYY-MM/` 目录，兼容保留），正文只保留 Markdown 记忆；源哈希、预算、保护单元和用户确认的跨期纠偏（`confirmedCorrections`）放在同目录隐藏 sidecar。目标季度已关闭，其可归因单元可压缩；无法识别来源的单元与目标季度之外的文件默认保护，修改须逐单元用户确认。已有候选不覆盖；源变化标记 `stale`；无需修改时交付 no-change 收据。当前年仍按季度文件组织，上一年度在新年度开始后合并为年度文件；跨年时先晋级 Q4 季度候选，再基于晋级后状态生成年度合并候选。年度晋级先归档旧季度到 `01_core/memory-archive/` 并校验哈希。归档目录不参与活动 Memory、Chat Pack 或公开静态图。
 
 ## 与 Chat Pack 的关系
 

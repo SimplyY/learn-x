@@ -11,7 +11,7 @@
 | Prompt | `02_prompts/` | 单次任务或可复用对话方式，不承载完整工作流；受治理副本由 `00_config/prompt-assets.json` 校验。 |
 | Core | `01_core/` | 人工确认后的长期认知资产，不由脚本自动写入。 |
 
-周期 Process 的确定性读取、日期过滤、去重、压缩校验和材料包生成统一放在 `.agents/skills/learn-x-process/scripts/`。月度语义压缩规则由 `learn-x-monthly-automation` 的 Markdown 维护；不要在代码中调用外部 AI，也不要在 `app/code/scripts/` 复制工作流。
+周期 Process 的确定性读取、日期过滤、去重、压缩校验和材料包生成统一放在 `.agents/skills/learn-x-process/scripts/`。月度语义压缩规则由 `learn-x-monthly-automation` 的 Markdown 维护；历史 Memory 压缩规则由 `learn-x-process/resources/memory-compression-rules.md` 维护，季度审查流程由 `learn-x-quarterly-memory` 编排。不要在代码中调用外部 AI，也不要在 `app/code/scripts/` 复制工作流。
 
 ## 项目内 Skills
 
@@ -20,6 +20,7 @@
 | `learn-x-input` | 把外部周度证据确定性写入 `03_input/`，保留来源，不做长期判断。 |
 | `learn-x-process` | 从指定周期 Input 生成可追溯的 Process Pack、Output 最小壳和 Memory 候选。 |
 | `learn-x-monthly-automation` | 编排月记、周度与月度原始输入、Codex 事件压缩、Monthly Process 与审核后 Memory。 |
+| `learn-x-quarterly-memory` | 季度长期 Memory 审查：生成上下文包、导入 ChatGPT 直接交付的候选并复用确定性校验与安全晋级。 |
 | `learn-x-prompt-review` | 评审和优化 `02_prompts/` 与 Chat Pack Prompt，要求先定义契约和代表性评测案例。 |
 | `learn-x-question-review` | 已停用的旧周/月复盘 Skill；保留代码与未提交改动，未来周机制会独立重做。 |
 | `learn-x-monthly-question-workbench` | 月度议题工作台：确定性推荐、选择、Wiki 研究现场、提案校验、可审计回写与撤回。 |
