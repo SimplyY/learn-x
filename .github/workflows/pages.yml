@@ -41,7 +41,7 @@ jobs:
           git config user.email "yuwei@users.noreply.github.com"
           export GIT_INDEX_FILE="$RUNNER_TEMP/gh-pages-index"
           git read-tree --empty
-          git add -A dist
+          git add -A -f dist
           TREE=$(git write-tree --prefix=dist/)
           COMMIT=$(git commit-tree "$TREE" -m "deploy: learn-x pages build from $(git rev-parse --short HEAD)")
           git push -f origin "$COMMIT:refs/heads/gh-pages"
