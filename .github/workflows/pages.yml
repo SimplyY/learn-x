@@ -30,7 +30,10 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: npm run test:app
+      # server.test.mjs loads server.mjs, which imports the private sibling
+      # skills checkout (../../../skills) that CI cannot fetch without a PAT;
+      # it stays a local-gate test (docs/TECH.md 开发验证).
+      - run: node --test $(ls app/code/scripts/*.test.mjs | grep -v server.test.mjs)
       - run: npm run build:public
       - run: npm run build:public:no-context
       - uses: actions/configure-pages@v5
