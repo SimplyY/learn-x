@@ -7,11 +7,12 @@ on:
       - main
   workflow_dispatch:
 
+# Contents write: the deploy job pushes the built dist/ tree to the gh-pages
+# branch (Pages source = legacy branch deployment). The Actions artifact
+# metadata service returned "Found 0 artifacts" for every deploy since
+# 2026-11-24 even with artifacts present, so we bypass it entirely.
 permissions:
-  contents: read
-  actions: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages
@@ -19,9 +20,6 @@ concurrency:
 
 jobs:
   deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -37,12 +35,16 @@ jobs:
       - run: node --test $(ls app/code/scripts/*.test.mjs | grep -v server.test.mjs)
       - run: npm run build:public
       - run: npm run build:public:no-context
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v4
-        with:
-          path: dist
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Publish dist to gh-pages branch (deterministic tree commit)
+        run: |
+          git config user.name "learn-x-pages-bot"
+          git config user.email "yuwei@users.noreply.github.com"
+          export GIT_INDEX_FILE="$RUNNER_TEMP/gh-pages-index"
+          git read-tree --empty
+          git add -A dist
+          TREE=$(git write-tree --prefix=dist/)
+          COMMIT=$(git commit-tree "$TREE" -m "deploy: learn-x pages build from $(git rev-parse --short HEAD)")
+          git push -f origin "$COMMIT:refs/heads/gh-pages"
 
   # 全量测试含跨仓绝对路径依赖套件（本机兄弟仓 checkout），CI 无法解析；
   # 独立可见但不阻塞 Pages 部署。背景见 docs/cases/2026-11-learnx-pages-deploy-fix/。
