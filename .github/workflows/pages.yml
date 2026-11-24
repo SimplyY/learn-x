@@ -30,7 +30,7 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: npm test
+      - run: npm run test:app
       - run: npm run build:public
       - run: npm run build:public:no-context
       - uses: actions/configure-pages@v5
@@ -39,3 +39,18 @@ jobs:
           path: dist
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  # 全量测试含跨仓绝对路径依赖套件（本机兄弟仓 checkout），CI 无法解析；
+  # 独立可见但不阻塞 Pages 部署。背景见 docs/cases/2026-11-learnx-pages-deploy-fix/。
+  test-full:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npm test
