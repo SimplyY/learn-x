@@ -34,7 +34,7 @@ flowchart LR
 - Chat Pack 本地服务将全部已登记 Prompt 与 Core《道》《法》放入 Chat Pack 专用磁盘缓存，逐项校验身份、正文 hash 和有效期；有效期为最近一次真实成功读取后的 14 天。它只服务本地 Chat Pack，不改变共享读取器、Core 原始读取器或其他自动化的实时读取语义。缓存失败不覆盖有效旧项；缓存服务不可用或必需项缺失、过期、校验失败时，生成停止并显示原因。
 - `GET /api/chatpack/cache/status` 仅返回缓存状态与元数据；`POST /api/chatpack/cache/refresh` 请求全量后台更新并支持当前必需项优先；`POST /api/chatpack/cache/read` 只在本次必需项完整有效时返回正文。三者只接受本机回环与同源请求。服务启动、每日、每次生成和手动操作共用一分钟刷新节流与并发去重；后台刷新最多同时读取两个资源。正文缓存放在 Git 忽略的本地运行目录，不进入公开构建。
 - `POST /api/chatpack/prompts/latest` 保留为兼容入口：它仍按登记 ID 实时读取，并可查询当前进程中的兼容缓存，但新本地 UI 生成链路使用 Chat Pack 专用磁盘缓存接口。
-- Chat Pack 本地生成使用所选有效缓存 Prompt 与 Core 正文组装。公开静态版不打包受治理正文，也不读取本地缓存；其他自动化仍直接读取 latest。未登记为受治理 Prompt 的本地适配内容继续按现有方式工作。
+- Chat Pack 本地生成使用所选有效缓存 Prompt 与 Core 正文组装。公开静态版默认不打包受治理正文；仅将用户明确批准公开的 `chatpack.munger-soul` 与 `chatpack.one-step-deeper` 放入 Pages 快照，构建时逐项校验身份、revision、正文哈希与固定 ID 白名单。快照文件只保存在 `gh-pages` 发布分支，主分支不保存这两份最新正文；每次 Pages 构建从上一版 `gh-pages` 恢复快照并再次校验。其他受治理 Prompt 继续在公开版标记不可用，也不读取本地缓存。快照只代表最近一次获批发布版本；飞书后续更新须重新读取并发布新快照。未登记为受治理 Prompt 的本地适配内容继续按现有方式工作。
 - `learn-x-weekly-journal` 和 `learn-x-monthly-journal` 每次生成前分别读取 `learn-x.weekly-journal`、`learn-x.monthly-journal`，不再读取本地旧正文。
 - 周期洞察运行时按当前子类型映射读取受治理 Prompt latest。状态只记录 `prompt_id`、revision、hash 和 `prompt_fetched_at`，不保存正文；读取失败时不启动 Bridge。
 - Weekly、Monthly、Yearly Output 主 Prompt 分别使用 `chatpack.weekly-output`、`chatpack.monthly-output`、`chatpack.yearly-output`。Chat Pack 本地生成入口负责读取并标注专用缓存中的正文；缓存无效时等待其后台 latest 刷新，失败后停止。其他入口须先运行共享读取器并遵循本次返回的 `content`。

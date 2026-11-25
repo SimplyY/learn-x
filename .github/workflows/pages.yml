@@ -33,6 +33,12 @@ jobs:
       # skills checkout (../../../skills) that CI cannot fetch without a PAT;
       # it stays a local-gate test (docs/TECH.md 开发验证).
       - run: node --test $(ls app/code/scripts/*.test.mjs | grep -v server.test.mjs)
+      - name: Restore approved public Chat Pack Prompt snapshots
+        run: |
+          git fetch origin gh-pages
+          git show origin/gh-pages:public-chatpack-prompts.json > "$RUNNER_TEMP/public-chatpack-prompts.json"
+          test -s "$RUNNER_TEMP/public-chatpack-prompts.json"
+          echo "LEARN_X_PUBLIC_CHATPACK_PROMPTS_FILE=$RUNNER_TEMP/public-chatpack-prompts.json" >> "$GITHUB_ENV"
       - run: npm run build:public
       - run: npm run build:public:no-context
       - name: Publish dist to gh-pages branch (deterministic tree commit)

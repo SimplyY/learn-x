@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -61,6 +62,11 @@ const CUSTOM_CONTEXT_IGNORED_DIRS = new Set([".git", ".test-tmp", "node_modules"
 const CUSTOM_CONTEXT_IGNORED_FILES = new Set(["AGENTS.md", "CONTEXT_MASTER.md"]);
 const PROMPT_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
 const CHATPACK_PROMPT_ROOT = "02_prompts/chatpack";
+export const PUBLIC_CHATPACK_PROMPT_IDS = Object.freeze([
+  "chatpack.munger-soul",
+  "chatpack.one-step-deeper"
+]);
+const PUBLIC_CHATPACK_PROMPT_SCHEMA = "learn-x-public-chatpack-prompts/v1";
 const PUBLIC_PRIVATE_PREFIXES = ["Core/", "03_input/", "05_library/", ".agents/skills/learn-x-process/", ".agents/skills/learn-x-periodic-insight/", ".agents/skills/learn-x-weekly-automation/", "04_output/_dist/", "01_core/memory/", "01_core/memory-archive/", "02_prompts/chatpack/insight/"];
 const CORE_TRUTH_METADATA = [
   { path: "Core/道", title: "道", kind: "dao", layer: "dao" },
@@ -191,7 +197,12 @@ export function buildContext(files, label = "Learn-X") {
   return `# CONTEXT_MASTER\n\nSource: ${label}\nGenerated from Learn-X at ${generatedAt}.\n\n${body}\n`;
 }
 
-export async function buildGraphPayload({ includeContent = false, target = "public", contextEnabled = true } = {}) {
+export async function buildGraphPayload({
+  includeContent = false,
+  target = "public",
+  contextEnabled = true,
+  publicChatPackSnapshots = {}
+} = {}) {
   if (!new Set(["local", "public"]).has(target)) throw new Error(`Unknown build target: ${target}`);
   const appConfig = await readAppConfig();
   const clientAppConfig = target === "public" ? withoutCoreTruthWeights(appConfig) : appConfig;
@@ -200,7 +211,7 @@ export async function buildGraphPayload({ includeContent = false, target = "publ
   const managedPromptPaths = new Set(Object.values(promptManifest.assets).map((asset) => asset.local_path));
   const hydratedChatPackConfig = await hydrateChatPackMetadata(
     target === "public" ? publicChatPackConfig(sourceChatPackConfig) : sourceChatPackConfig,
-    { target, manifest: promptManifest }
+    { target, manifest: promptManifest, publicChatPackSnapshots }
   );
   const chatPackConfig = target === "public"
     ? omitManagedPromptPaths(hydratedChatPackConfig, managedPromptPaths)
@@ -300,7 +311,7 @@ export async function buildContentPayload({ target = "public", contextEnabled = 
   };
 }
 
-export async function buildChatPackPromptPayload({ target = "public" } = {}) {
+export async function buildChatPackPromptPayload({ target = "public", publicChatPackSnapshots = {} } = {}) {
   if (!new Set(["local", "public"]).has(target)) throw new Error(`Unknown build target: ${target}`);
   const sourceChatPackConfig = await readChatPackConfig();
   const config = target === "public" ? publicChatPackConfig(sourceChatPackConfig) : sourceChatPackConfig;
@@ -314,8 +325,9 @@ export async function buildChatPackPromptPayload({ target = "public" } = {}) {
       (type.subtypes || []).map(async (subtype) => {
         const promptPath = subtypePromptRelativePath(type.id, subtype.id);
         const promptId = managedPromptIdForPath(manifest, promptPath);
-        subtypes[subtype.id] = promptId ? "" : await readChatPackPrompt(type.id, subtype.id);
-        if (promptId) assets[subtype.id] = managedPromptDescriptor(promptId, target);
+        const snapshot = target === "public" && promptId ? publicChatPackSnapshots[promptId] : null;
+        subtypes[subtype.id] = snapshot?.content || (promptId ? "" : await readChatPackPrompt(type.id, subtype.id));
+        if (promptId && !snapshot) assets[subtype.id] = managedPromptDescriptor(promptId, target);
       })
     )
   );
@@ -323,12 +335,51 @@ export async function buildChatPackPromptPayload({ target = "public" } = {}) {
     (config.enhancers || []).map(async (enhancer) => {
       const promptPath = enhancer.promptPath || `${CHATPACK_PROMPT_ROOT}/enhancers/${enhancer.id}.md`;
       const promptId = managedPromptIdForPath(manifest, promptPath);
-      enhancers[enhancer.id] = promptId ? "" : await readEnhancerPrompt(enhancer);
-      if (promptId) assets[enhancer.id] = managedPromptDescriptor(promptId, target);
+      const snapshot = target === "public" && promptId ? publicChatPackSnapshots[promptId] : null;
+      enhancers[enhancer.id] = snapshot?.content || (promptId ? "" : await readEnhancerPrompt(enhancer));
+      if (promptId && !snapshot) assets[enhancer.id] = managedPromptDescriptor(promptId, target);
     })
   );
 
   return { subtypes, enhancers, assets };
+}
+
+export async function readPublicChatPackPromptSnapshots(filePath) {
+  if (!filePath) return {};
+  const payload = JSON.parse(await readFile(filePath, "utf8"));
+  if (!payload || payload.schema_version !== PUBLIC_CHATPACK_PROMPT_SCHEMA ||
+      !payload.assets || typeof payload.assets !== "object" || Array.isArray(payload.assets)) {
+    throw new Error("Invalid public Chat Pack Prompt snapshot schema");
+  }
+
+  const actualIds = Object.keys(payload.assets).sort();
+  const expectedIds = [...PUBLIC_CHATPACK_PROMPT_IDS].sort();
+  if (actualIds.length !== expectedIds.length || actualIds.some((id, index) => id !== expectedIds[index])) {
+    throw new Error("Public Chat Pack Prompt snapshot IDs do not match the approved allowlist");
+  }
+
+  const snapshots = {};
+  for (const promptId of expectedIds) {
+    const entry = payload.assets[promptId];
+    const allowedFields = ["content", "prompt_fetched_at", "prompt_id", "prompt_revision", "prompt_sha256"];
+    if (!entry || typeof entry !== "object" || Array.isArray(entry) ||
+        Object.keys(entry).sort().join("\n") !== allowedFields.sort().join("\n") ||
+        entry.prompt_id !== promptId || !Number.isInteger(entry.prompt_revision) || entry.prompt_revision < 1 ||
+        !/^[a-f0-9]{64}$/.test(entry.prompt_sha256 || "") || typeof entry.content !== "string" || !entry.content.trim() ||
+        !Number.isFinite(Date.parse(entry.prompt_fetched_at || ""))) {
+      throw new Error(`Invalid public Chat Pack Prompt snapshot entry: ${promptId}`);
+    }
+    const actualHash = createHash("sha256").update(entry.content, "utf8").digest("hex");
+    if (actualHash !== entry.prompt_sha256) throw new Error(`Public Chat Pack Prompt hash mismatch: ${promptId}`);
+    snapshots[promptId] = {
+      prompt_id: entry.prompt_id,
+      prompt_revision: entry.prompt_revision,
+      prompt_sha256: entry.prompt_sha256,
+      prompt_fetched_at: entry.prompt_fetched_at,
+      content: entry.content
+    };
+  }
+  return snapshots;
 }
 
 function subtypePromptRelativePath(typeId, subtypeId) {
@@ -430,16 +481,17 @@ function publicChatPackConfig(config) {
   };
 }
 
-async function hydrateChatPackMetadata(config, { target, manifest }) {
+async function hydrateChatPackMetadata(config, { target, manifest, publicChatPackSnapshots }) {
   const dialogueTypes = await Promise.all(
     (config.dialogueTypes || []).map(async (type) => {
       const subtypes = await Promise.all(
         (type.subtypes || []).map(async (subtype) => {
           const promptId = managedPromptIdForPath(manifest, subtypePromptRelativePath(type.id, subtype.id));
+          const publicSnapshot = target === "public" && promptId && publicChatPackSnapshots[promptId];
           const protocol = promptId ? "" : await readChatPackPrompt(type.id, subtype.id);
           return {
             ...subtype,
-            ...(promptId ? { managedPrompt: managedPromptDescriptor(promptId, target) } : {}),
+            ...(promptId && !publicSnapshot ? { managedPrompt: managedPromptDescriptor(promptId, target) } : {}),
             tooltip: buildChatPackTooltip(subtype.summary, promptId ? "" : extractPromptTooltipSource(protocol))
           };
         })
@@ -456,10 +508,11 @@ async function hydrateChatPackMetadata(config, { target, manifest }) {
     (config.enhancers || []).map(async (enhancer) => {
       const promptPath = enhancer.promptPath || `${CHATPACK_PROMPT_ROOT}/enhancers/${enhancer.id}.md`;
       const promptId = managedPromptIdForPath(manifest, promptPath);
+      const publicSnapshot = target === "public" && promptId && publicChatPackSnapshots[promptId];
       const protocol = promptId ? "" : await readEnhancerPrompt(enhancer);
       return {
         ...enhancer,
-        ...(promptId ? { managedPrompt: managedPromptDescriptor(promptId, target) } : {}),
+        ...(promptId && !publicSnapshot ? { managedPrompt: managedPromptDescriptor(promptId, target) } : {}),
         tooltip: buildChatPackTooltip(enhancer.summary, enhancer.applicationNote, promptId ? "" : extractPromptTooltipSource(protocol))
       };
     })

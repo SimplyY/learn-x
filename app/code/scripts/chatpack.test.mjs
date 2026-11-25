@@ -118,7 +118,16 @@ test("异步 Prompt 装载后刷新自动装配，切换与失败重试不丢失
           }
         ]
       }],
-      enhancers: [{ id: "munger-soul", name: "芒格之魂" }]
+      enhancers: [{
+        id: "munger-soul",
+        name: "芒格之魂",
+        managedPrompt: {
+          prompt_id: "chatpack.munger-soul",
+          runtime: "feishu-latest",
+          unavailable: true,
+          unavailable_reason: "受治理 Prompt 需要读取飞书最新版本；公开静态版无法访问本地读取服务。"
+        }
+      }]
     },
     files: [],
     sources: [],
@@ -274,7 +283,15 @@ test("异步 Prompt 装载后刷新自动装配，切换与失败重试不丢失
       .map((option) => option.textContent)
       .find((text) => text.includes("第二"));
     assert.equal(hiddenOption, "第二（低）");
-    assert.equal(document.querySelector("#enhancerList .dialogue-subtype-btn").textContent, "芒格之魂（中）");
+    const unavailableEnhancer = document.querySelector("#enhancerList .dialogue-subtype-btn");
+    assert.equal(unavailableEnhancer.textContent, "芒格之魂（中）（仅本地版可用）");
+    assert.equal(unavailableEnhancer.disabled, true);
+    assert.match(unavailableEnhancer.title, /公开静态版/);
+    delete graph.chatPackConfig.enhancers[0].managedPrompt;
+    app.renderEnhancers();
+    const snapshotEnhancer = document.querySelector("#enhancerList .dialogue-subtype-btn");
+    assert.equal(snapshotEnhancer.disabled, false, "an approved public snapshot enables the enhancer");
+    assert.equal(snapshotEnhancer.textContent, "芒格之魂（中）");
     assert.doesNotMatch(document.querySelector("#dialogueSubtypeList").textContent, /（\d+）$/);
 
     const hiddenSelect = document.querySelector('#dialogueSubtypeList select[aria-label="其他提示词"]');

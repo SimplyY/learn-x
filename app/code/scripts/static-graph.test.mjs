@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -11,6 +13,8 @@ import {
   buildGraphPayload,
   extractPromptTooltipSource,
   isPublicPrivatePath,
+  PUBLIC_CHATPACK_PROMPT_IDS,
+  readPublicChatPackPromptSnapshots,
   renderMarkdown
 } from "./static-graph.mjs";
 import { readPromptAssets } from "./prompt-assets.mjs";
@@ -116,7 +120,60 @@ test("public static payload excludes governed prompt paths and bodies while keep
   assert.match(publicSubtype.managedPrompt.unavailable_reason, /公开静态版/);
   assert.equal(prompts.subtypes["learning-insight.first-principles"], "");
   assert.equal(prompts.assets["learning-insight.first-principles"].unavailable, true);
+  for (const id of ["munger-soul", "one-step-deeper"]) {
+    const enhancer = graph.chatPackConfig.enhancers.find((item) => item.id === id);
+    assert.equal(enhancer.managedPrompt.unavailable, true, `${id} remains local-only in the public build`);
+    assert.equal(prompts.enhancers[id], "", `${id} body is not packaged in the public prompt payload`);
+    assert.equal(prompts.assets[id].unavailable, true, `${id} is marked unavailable in the public payload`);
+  }
   assert.ok(prompts.subtypes["learning-insight.ljg-learn"].length > 0, "non-governed Chat Pack prompts remain available");
+});
+
+test("approved public Prompt snapshots are hash-checked and limited to the allowlist", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "learn-x-public-prompts-"));
+  const snapshotPath = path.join(directory, "public-chatpack-prompts.json");
+  const assets = Object.fromEntries(PUBLIC_CHATPACK_PROMPT_IDS.map((promptId, index) => {
+    const content = `Public test Prompt ${index + 1}\n`;
+    return [promptId, {
+      prompt_id: promptId,
+      prompt_revision: index + 1,
+      prompt_sha256: createHash("sha256").update(content, "utf8").digest("hex"),
+      prompt_fetched_at: "2026-11-25T00:00:00.000Z",
+      content
+    }];
+  }));
+  const snapshotFile = { schema_version: "learn-x-public-chatpack-prompts/v1", assets };
+
+  try {
+    await writeFile(snapshotPath, JSON.stringify(snapshotFile), "utf8");
+    const snapshots = await readPublicChatPackPromptSnapshots(snapshotPath);
+    assert.deepEqual(Object.keys(snapshots).sort(), [...PUBLIC_CHATPACK_PROMPT_IDS].sort());
+
+    const [graph, prompts] = await Promise.all([
+      buildGraphPayload({ includeContent: false, target: "public", publicChatPackSnapshots: snapshots }),
+      buildChatPackPromptPayload({ target: "public", publicChatPackSnapshots: snapshots })
+    ]);
+    for (const promptId of PUBLIC_CHATPACK_PROMPT_IDS) {
+      const enhancerId = promptId.slice("chatpack.".length);
+      const enhancer = graph.chatPackConfig.enhancers.find((item) => item.id === enhancerId);
+      assert.ok(enhancer, `${promptId} remains selectable`);
+      assert.equal(enhancer.managedPrompt, undefined, `${promptId} uses its approved static snapshot`);
+      assert.equal(prompts.enhancers[enhancerId], snapshots[promptId].content);
+      assert.equal(prompts.assets[enhancerId], undefined);
+    }
+
+    const unapproved = JSON.parse(JSON.stringify(snapshotFile));
+    unapproved.assets["chatpack.learning-insight.first-principles"] = assets[PUBLIC_CHATPACK_PROMPT_IDS[0]];
+    await writeFile(snapshotPath, JSON.stringify(unapproved), "utf8");
+    await assert.rejects(readPublicChatPackPromptSnapshots(snapshotPath), /approved allowlist/);
+
+    const tampered = JSON.parse(JSON.stringify(snapshotFile));
+    tampered.assets[PUBLIC_CHATPACK_PROMPT_IDS[0]].content += "tampered";
+    await writeFile(snapshotPath, JSON.stringify(tampered), "utf8");
+    await assert.rejects(readPublicChatPackPromptSnapshots(snapshotPath), /hash mismatch/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("chat pack tooltips prefer prompt purpose and clean markdown noise", () => {

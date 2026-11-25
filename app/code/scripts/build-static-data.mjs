@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildChatPackPromptPayload, buildContentPayload, buildGraphPayload, isPublicPrivatePath } from "./static-graph.mjs";
+import { buildChatPackPromptPayload, buildContentPayload, buildGraphPayload, isPublicPrivatePath, readPublicChatPackPromptSnapshots } from "./static-graph.mjs";
 import { readPromptAssets } from "./prompt-assets.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -17,14 +17,17 @@ const outDirArg = process.argv.find((argument) => argument.startsWith("--out-dir
 const distRoot = resolveDistRoot(outDirArg?.slice("--out-dir=".length));
 const dataRoot = path.join(distRoot, "data");
 const contextEnabled = process.env.LEARN_X_CHATPACK_CONTEXT !== "off";
-const graph = await buildGraphPayload({ includeContent: false, target, contextEnabled });
+const publicChatPackSnapshots = target === "public"
+  ? await readPublicChatPackPromptSnapshots(process.env.LEARN_X_PUBLIC_CHATPACK_PROMPTS_FILE)
+  : {};
+const graph = await buildGraphPayload({ includeContent: false, target, contextEnabled, publicChatPackSnapshots });
 const content = await buildContentPayload({ target, contextEnabled });
-const prompts = await buildChatPackPromptPayload({ target });
+const prompts = await buildChatPackPromptPayload({ target, publicChatPackSnapshots });
 const assetReferences = new Map();
 
 if (target === "public") {
   const promptManifest = await readPromptAssets(repoRoot, { optional: false });
-  await assertPublicArtifact(graph, content, prompts, promptManifest);
+  await assertPublicArtifact(graph, content, prompts, promptManifest, publicChatPackSnapshots);
 }
 
 await rm(distRoot, { recursive: true, force: true });
@@ -33,6 +36,13 @@ await cp(publicRoot, distRoot, {
   filter: (source) => path.basename(source) !== "data" && path.basename(source) !== ".nojekyll"
 });
 await mkdir(dataRoot, { recursive: true });
+if (Object.keys(publicChatPackSnapshots).length) {
+  await writeFile(
+    path.join(distRoot, "public-chatpack-prompts.json"),
+    JSON.stringify({ schema_version: "learn-x-public-chatpack-prompts/v1", assets: publicChatPackSnapshots }),
+    "utf8"
+  );
+}
 const graphJson = JSON.stringify(graph);
 const graphJsonPath = await writeHashedFile(dataRoot, "graph", ".json", graphJson);
 const contentJsonPath = await writeHashedFile(dataRoot, "content", ".json", JSON.stringify(content));
@@ -71,7 +81,7 @@ function resolveDistRoot(outDir) {
   return resolved;
 }
 
-async function assertPublicArtifact(graphPayload, contentPayload, promptPayload, promptManifest) {
+async function assertPublicArtifact(graphPayload, contentPayload, promptPayload, promptManifest, publicChatPackSnapshots) {
   const exposedPaths = [
     ...(graphPayload.files || []).map((file) => file.path),
     ...(graphPayload.contextFiles || []).map((file) => file.path),
@@ -109,6 +119,7 @@ async function assertPublicArtifact(graphPayload, contentPayload, promptPayload,
     }
     try {
       const promptBody = (await readFile(path.join(repoRoot, promptPath), "utf8")).trim();
+      if (Object.hasOwn(publicChatPackSnapshots, promptId)) continue;
       if (promptBody && serialized.includes(promptBody)) {
         throw new Error(`Public build exposes governed Prompt body: ${promptId}`);
       }
