@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 33191)
-Total output lines: 3023
-
 import { searchCustomContext } from "./custom-context-search.js";
 import { renderExecutionContract, renderFinalTaskAnchor } from "./chatpack.js";
 import { buildContext, demoteMarkdownHeadings, filterFilesByIncludes } from "./context.js";
@@ -1398,7 +1395,321 @@ function normalizeEnhancerIds(ids) {
 function applyRecommendedSources() {
   const recommended = recommendedSourcesForSelection()
     .map((sourcePath) => renderPromptTemplate(sourcePath));
-  const availableFiles = recommended.length ? state.customContext…3191 tokens truncated…content || file.content || file.preview || "";
+  const availableFiles = recommended.length ? state.customContextFiles : state.contextFiles;
+  state.contextSelections = new Map();
+
+  for (const file of availableFiles) {
+    const matched = recommended.some(
+      (sourcePath) => file.path === sourcePath || file.path.startsWith(`${sourcePath}/`)
+    );
+    state.contextSelections.set(file.path, matched ? normalizeStrategy(file.defaultStrategy) : "none");
+  }
+  resetExpandedContextDirs();
+}
+
+function selectAllContextSources() {
+  const files = sourceTreeFiles();
+  for (const file of files) state.contextSelections.set(file.path, "normal");
+  renderSourceChecklist();
+  resetGeneratedContext(`已全选上下文：${files.length} 个文件。`);
+}
+
+function invertContextSources() {
+  const files = sourceTreeFiles();
+  for (const file of files) {
+    const current = state.contextSelections.get(file.path) || "none";
+    state.contextSelections.set(file.path, current === "none" ? "normal" : "none");
+  }
+  renderSourceChecklist();
+  resetGeneratedContext("已反选当前上下文树。");
+}
+
+function recommendedSourcesForSelection() {
+  const subtype = activeDialogueSubtype();
+  const type = activeDialogueType();
+  const includeBase = subtype?.includeBaseRecommendedSources !== false;
+  const baseSources = includeBase && type?.id !== "diagram-generate" ? ["Core/道", "01_core/memory"] : [];
+  const configured = subtype?.recommendedSources?.length ? subtype.recommendedSources : type?.recommendedSources || [];
+  const recommended = uniqueList([...baseSources, ...configured]);
+  const periodMode = activePeriodOutputMode();
+  if (!periodMode || !state.activeEnhancerIds.has(MUNGER_SOUL_ENHANCER_ID)) return recommended;
+
+  const excludedSources = new Set([
+    `.agents/skills/learn-x-process/resources/${periodMode}-output-rules.md`,
+    "04_output/README.md",
+    "04_output/usage.md"
+  ]);
+  return recommended.filter((sourcePath) => !excludedSources.has(sourcePath));
+}
+
+function uniqueList(items) {
+  return [...new Set(items.filter(Boolean))];
+}
+
+function openCustomContextDialog() {
+  state.customDraftSelections = new Set(selectedContextFiles().map((file) => file.path));
+  els.customContextSearch.value = "";
+  renderCustomContextList();
+  els.customContextDialog.showModal();
+}
+
+function renderCustomContextList() {
+  const query = els.customContextSearch.value.trim().toLowerCase();
+  els.customContextList.innerHTML = "";
+
+  if (query) {
+    for (const node of searchCustomContext(state.customContextFiles, query)) renderCustomContextPickerNode(node, 0, true);
+  } else {
+    const tree = buildContextTree(state.customContextFiles);
+    for (const node of tree.children) renderCustomContextPickerNode(node, 0);
+  }
+
+  renderCustomContextCount();
+}
+
+function renderCustomContextPickerNode(node, depth, searchResult = false) {
+  const row = document.createElement("div");
+  row.className = `custom-context-item ${node.type}`;
+  row.style.setProperty("--depth", String(depth));
+  row.title = node.path;
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "tree-toggle";
+  if (node.type === "folder" && !searchResult) {
+    const expanded = state.expandedCustomContextDirs.has(node.path);
+    toggle.textContent = expanded ? "▾" : "▸";
+    toggle.addEventListener("click", () => {
+      if (expanded) state.expandedCustomContextDirs.delete(node.path);
+      else state.expandedCustomContextDirs.add(node.path);
+      renderCustomContextList();
+    });
+  } else {
+    toggle.classList.add("spacer");
+  }
+
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  const files = node.type === "folder" ? node.files : [node.file];
+  const selectedCount = files.filter((file) => state.customDraftSelections.has(file.path)).length;
+  checkbox.checked = files.length > 0 && selectedCount === files.length;
+  checkbox.indeterminate = selectedCount > 0 && selectedCount < files.length;
+  checkbox.addEventListener("change", () => {
+    for (const file of files) {
+      if (checkbox.checked) state.customDraftSelections.add(file.path);
+      else state.customDraftSelections.delete(file.path);
+    }
+    renderCustomContextList();
+  });
+
+  const text = document.createElement("button");
+  text.type = "button";
+  text.className = "custom-context-label";
+  text.innerHTML = node.type === "folder"
+    ? `<strong>${escapeHtml(node.name)}/</strong><em>${searchResult ? `${escapeHtml(node.path)} · ` : ""}${node.files.length} 个 Markdown</em>`
+    : `<strong>${escapeHtml(node.file.title || node.path)}</strong><em>${escapeHtml(node.path)}</em>`;
+  text.addEventListener("click", () => checkbox.click());
+  row.append(toggle, checkbox, text);
+  els.customContextList.append(row);
+
+  if (node.type === "folder" && state.expandedCustomContextDirs.has(node.path)) {
+    for (const child of node.children) renderCustomContextPickerNode(child, depth + 1);
+  }
+}
+
+function selectAllVisibleCustomContext() {
+  const query = els.customContextSearch.value.trim().toLowerCase();
+  const nodes = query ? searchCustomContext(state.customContextFiles, query) : state.customContextFiles.map((file) => ({ type: "file", file }));
+  for (const node of nodes) {
+    for (const file of node.type === "folder" ? node.files : [node.file]) state.customDraftSelections.add(file.path);
+  }
+  renderCustomContextList();
+}
+
+function applyCustomContextSelections() {
+  state.contextSelections = new Map();
+  for (const path of state.customDraftSelections) {
+    state.contextSelections.set(path, normalizeStrategy(state.contextFileMap.get(path)?.defaultStrategy || "normal"));
+  }
+  for (const file of state.customContextFiles) {
+    if (!state.contextSelections.has(file.path)) state.contextSelections.set(file.path, "none");
+  }
+  resetExpandedContextDirs();
+  renderSourceChecklist();
+  resetGeneratedContext(`已应用自定义上下文：${state.customDraftSelections.size} 个文件。`);
+  els.customContextDialog.close();
+}
+
+function renderCustomContextCount() {
+  const files = state.customContextFiles.filter((file) => state.customDraftSelections.has(file.path));
+  const missing = files.filter((file) => contextFileCharCount(file) === null);
+  const knownChars = files.reduce((total, file) => total + (contextFileCharCount(file) ?? 0), 0);
+  const charsLabel = missing.length ? `已知 ${formatNumber(knownChars)} 字` : `总计 ${formatNumber(knownChars)} 字`;
+  els.customContextCount.textContent = `已选 ${files.length} 个文件 · ${charsLabel}`;
+}
+
+function renderSourceChecklist() {
+  els.sourceChecklist.innerHTML = "";
+  const tree = buildContextTree(sourceTreeFiles());
+  for (const node of tree.children) renderContextNode(node, els.sourceChecklist, 0);
+}
+
+function resetExpandedContextDirs() {
+  const expanded = new Set();
+  const tree = buildContextTree(sourceTreeFiles());
+  collectPartialContextDirs(tree, expanded);
+  state.expandedContextDirs = expanded;
+}
+
+function collectPartialContextDirs(node, expanded) {
+  if (node.type !== "folder") return;
+  if (node.path && directoryStrategy(node) === "partial") expanded.add(node.path);
+  for (const child of node.children || []) collectPartialContextDirs(child, expanded);
+}
+
+function sourceTreeFiles() {
+  const selectedCustomFiles = [...state.contextSelections.keys()]
+    .filter((filePath) => !state.contextFiles.some((file) => file.path === filePath))
+    .map((filePath) => state.contextFileMap.get(filePath))
+    .filter(Boolean);
+  return [...state.contextFiles, ...selectedCustomFiles].sort((a, b) => a.path.localeCompare(b.path, "zh-Hans-CN"));
+}
+
+function buildContextTree(files) {
+  const root = { name: "", path: "", type: "folder", children: [], files: [] };
+  for (const file of files) {
+    const parts = file.path.split("/");
+    let cursor = root;
+    for (const [index, part] of parts.entries()) {
+      const nodePath = parts.slice(0, index + 1).join("/");
+      const isFile = index === parts.length - 1;
+      if (isFile) {
+        cursor.children.push({ name: part, path: nodePath, type: "file", file });
+        continue;
+      }
+
+      let folder = cursor.children.find((child) => child.type === "folder" && child.path === nodePath);
+      if (!folder) {
+        folder = { name: part, path: nodePath, type: "folder", children: [], files: [] };
+        cursor.children.push(folder);
+      }
+      folder.files.push(file);
+      cursor = folder;
+    }
+  }
+  sortContextTree(root);
+  return root;
+}
+
+function sortContextTree(node) {
+  if (!node.children) return;
+  node.children.sort((a, b) => {
+    if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
+    return a.path.localeCompare(b.path, "zh-Hans-CN");
+  });
+  for (const child of node.children) sortContextTree(child);
+}
+
+function renderContextNode(node, container, depth) {
+  const row = document.createElement("div");
+  row.className = `context-row ${node.type}`;
+  row.style.setProperty("--depth", String(depth));
+
+  if (node.type === "folder") {
+    const expanded = state.expandedContextDirs.has(node.path);
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "tree-toggle";
+    toggle.textContent = expanded ? "▾" : "▸";
+    toggle.title = expanded ? "收起目录" : "展开目录";
+    toggle.addEventListener("click", () => {
+      if (expanded) state.expandedContextDirs.delete(node.path);
+      else state.expandedContextDirs.add(node.path);
+      renderSourceChecklist();
+    });
+
+    const strategy = directoryStrategy(node);
+    const stateButton = makeStrategyButton(strategy, () => {
+      const next = strategy === "checked" ? "none" : "normal";
+      for (const file of node.files) state.contextSelections.set(file.path, next);
+      resetGeneratedContext(`已将 ${node.path}/ 切换为「${strategyLabel(next)}」。`);
+      renderSourceChecklist();
+    }, "folder");
+
+    const label = document.createElement("button");
+    label.type = "button";
+    label.className = "context-label";
+    label.title = node.path;
+    const folderChars = node.files.reduce((total, file) => {
+      const count = contextFileCharCount(file);
+      return total === null || count === null ? null : total + count;
+    }, 0);
+    const folderCharsLabel = folderChars === null ? "字数待读取" : `总计 ${formatNumber(folderChars)} 字`;
+    label.innerHTML = `<strong>${escapeHtml(node.name)}/</strong><span>${node.files.length} 个文件 · ${folderCharsLabel}</span>`;
+    label.addEventListener("click", () => {
+      if (expanded) state.expandedContextDirs.delete(node.path);
+      else state.expandedContextDirs.add(node.path);
+      renderSourceChecklist();
+    });
+
+    row.append(toggle, stateButton, label);
+    container.append(row);
+
+    if (expanded) {
+      for (const child of node.children) renderContextNode(child, container, depth + 1);
+    }
+    return;
+  }
+
+  const previewExpanded = state.expandedContextFilePreviews.has(node.path);
+  const previewText = contextFilePreview(node.file);
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "tree-toggle";
+  toggle.textContent = previewExpanded ? "▾" : "▸";
+  toggle.title = previewExpanded ? "收起预览" : "展开预览";
+  toggle.disabled = !previewText;
+  toggle.addEventListener("click", () => {
+    toggleContextFilePreview(node.path);
+  });
+
+  const strategy = state.contextSelections.get(node.path) || "none";
+  const stateButton = makeStrategyButton(strategy, () => {
+    const next = nextStrategy(strategy);
+    state.contextSelections.set(node.path, next);
+    resetGeneratedContext(`已将 ${node.path} 切换为「${strategyLabel(next)}」。`);
+    renderSourceChecklist();
+  });
+  const label = document.createElement("button");
+  label.type = "button";
+  label.className = "context-label";
+  label.title = node.path;
+  const charCount = contextFileCharCount(node.file);
+  const charCountLabel = charCount === null ? "字数待读取" : `${formatNumber(charCount)} 字`;
+  label.innerHTML = `<strong>${escapeHtml(node.name)}</strong><span>${escapeHtml(node.path)} · ${charCountLabel}</span>`;
+  label.addEventListener("click", () => {
+    if (previewText) toggleContextFilePreview(node.path);
+  });
+  row.append(toggle, stateButton, label);
+  container.append(row);
+
+  if (previewExpanded && previewText) {
+    const preview = document.createElement("div");
+    preview.className = "context-preview";
+    preview.style.setProperty("--depth", String(depth));
+    preview.textContent = previewText;
+    container.append(preview);
+  }
+}
+
+function toggleContextFilePreview(filePath) {
+  if (state.expandedContextFilePreviews.has(filePath)) state.expandedContextFilePreviews.delete(filePath);
+  else state.expandedContextFilePreviews.add(filePath);
+  renderSourceChecklist();
+}
+
+function contextFileContent(file) {
+  return state.contextFileMap.get(file.path)?.content || file.content || file.preview || "";
 }
 
 function contextFilePreview(file) {
