@@ -1782,8 +1782,13 @@ async function generateContext({ coreAssets = {}, signal, isCurrent = () => true
   setProgress(0);
   const selectedFiles = selectedContextFiles();
   if (!selectedFiles.length) {
-    els.learningStatus.textContent = "建议选择一个上下文来源。";
-    return false;
+    if (activePeriodOutputMode()) {
+      els.learningStatus.textContent = "周期洞察或 Output 需要对应材料；请先选择 Context 来源。";
+      return false;
+    }
+    els.learningStatus.textContent = "未选择 Context；本次仅按问题、Prompt 和已选增强器生成。";
+    setProgress(100);
+    return true;
   }
 
   setProgress(18);
@@ -2011,7 +2016,12 @@ async function generateChatPack() {
     if (chatPackContextEnabled()) {
       const contextReady = await generateContext({ coreAssets, signal: controller.signal, isCurrent });
       ensureCurrent();
-      if (!contextReady) throw new Error("Context 尚未就绪，本次未复制。请检查选择后重试。");
+      if (!contextReady) {
+        const errorMessage = activePeriodOutputMode()
+          ? "周期 Output 缺少对应材料，本次未复制。"
+          : "Context 尚未就绪，本次未复制。请检查选择或读取状态后重试。";
+        throw new Error(errorMessage);
+      }
     }
     ensureCurrent();
     generatedText = buildChatPack({ livePromptAssets: promptAssets });
@@ -2458,18 +2468,19 @@ function buildChatPack({ livePromptAssets = {} } = {}) {
     : "";
   const prompt = [getCurrentPrompt(), livePrompt, deferredPromptNote].filter(Boolean).join("\n\n---\n\n");
   const emptyPrompt = isEmptyPromptSelection(dialogueType, dialogueSubtype);
-  const contextEnabled = chatPackContextEnabled();
-  const typeSystem = renderTypeSystem(dialogueType, dialogueSubtype, enhancers, emptyPrompt);
+  const includeContext = chatPackContextEnabled() &&
+    (dialogueType?.id === "insight" || selectedContextFiles().length > 0);
+  const typeSystem = renderTypeSystem(dialogueType, dialogueSubtype, enhancers, emptyPrompt, includeContext);
   const promptSection = prompt ? `## Assembled Prompt
 
 ${prompt}
 ` : "";
   const answerGoal = emptyPrompt
-    ? `直接围绕 Current Question 回答；不额外套用场景提示词，只根据 Current Question、已选增强器${contextEnabled ? "和 Context" : ""}回答。`
-    : `直接围绕 Current Question 回答；大类定目标，子类型定场景，增强器定思考方式${contextEnabled ? "，Context 提供材料" : ""}。`;
+    ? `直接围绕 Current Question 回答；不额外套用场景提示词，只根据 Current Question、已选增强器${includeContext ? "和 Context" : ""}回答。`
+    : `直接围绕 Current Question 回答；大类定目标，子类型定场景，增强器定思考方式${includeContext ? "，Context 提供材料" : ""}。`;
   const lengthRequirement = renderOutputLengthRequirement(lengthEnhancer);
   const chatOnlyRequirement = renderChatOnlyRequirement(dialogueType);
-  const priorityBasis = !contextEnabled
+  const priorityBasis = !includeContext
     ? prompt ? "Current Question、Assembled Prompt" : "Current Question"
     : emptyPrompt
     ? prompt ? "Current Question、Assembled Prompt、High Priority Context" : "Current Question、High Priority Context"
@@ -2483,7 +2494,7 @@ ${prompt}
     subtypeEnabled: !emptyPrompt && Boolean(dialogueSubtype),
     enhancerEnabled: enhancers.length > 0
   });
-  const contextSection = contextEnabled
+  const contextSection = includeContext
     ? `## Context Priority Map
 
 - High Priority：本次回答优先依据。
@@ -2528,12 +2539,12 @@ function renderChatOnlyRequirement(dialogueType) {
   return "- Chat 输出：只给用户要的最终正文。原 Skill 中关于时间戳、保存路径、文件名、文件读写、命令执行和环境能力的要求一律静默忽略，也不要解释为何忽略。";
 }
 
-function renderTypeSystem(type, subtype, enhancers, emptyPrompt) {
+function renderTypeSystem(type, subtype, enhancers, emptyPrompt, includeContext) {
   const categoryEnabled = !emptyPrompt && Boolean(type);
   const subtypeEnabled = !emptyPrompt && Boolean(subtype);
   const enhancerEnabled = enhancers.length > 0;
   const modeParts = ["Current Question"];
-  if (chatPackContextEnabled()) modeParts.push("Context");
+  if (includeContext) modeParts.push("Context");
   if (categoryEnabled) modeParts.splice(1, 0, "大类 Prompt");
   if (subtypeEnabled) modeParts.splice(2, 0, "子类型 Prompt");
   if (enhancerEnabled) modeParts.push("增强器 Prompt");
@@ -2545,7 +2556,7 @@ function renderTypeSystem(type, subtype, enhancers, emptyPrompt) {
 
   if (emptyPrompt) {
     return `${promptInventory}
-- 装配说明：不加入大类行为协议或子类型 Prompt；只使用 Current Question${chatPackContextEnabled() ? "、Context" : ""} 和已选增强器。`;
+- 装配说明：不加入大类行为协议或子类型 Prompt；只使用 Current Question${includeContext ? "、Context" : ""} 和已选增强器。`;
   }
 
   return `${promptInventory}

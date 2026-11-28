@@ -21,7 +21,11 @@ test("有上下文生成后只记录使用次数，不重绘选择器，并提�
     chatPackConfig: {
       contextBudget: { models: [] },
       usage: { schemaVersion: 1, mergedThrough: "2026-08", subtypes: { "test-type.example": 20 }, enhancers: { "munger-soul": 20 } },
-      dialogueTypes: [{ id: "test-type", name: "测试", subtypes: [{ id: "test-type.example", name: "示例", recommendedSources: ["README.md", "Documents/extra.md"] }] }],
+      dialogueTypes: [
+        { id: "test-type", name: "测试", subtypes: [{ id: "test-type.example", name: "示例", recommendedSources: ["README.md", "Documents/extra.md"] }] },
+        { id: "other-prompts", name: "其他", subtypes: [{ id: "other-prompts.empty-prompt", name: "空提示词" }] },
+        { id: "reflective-decision", name: "learn-x 相关", subtypes: [{ id: "reflective-decision.weekly-output", name: "周输出" }] }
+      ],
       enhancers: [{ id: "munger-soul", name: "芒格之魂" }, { id: "length-100", name: "100字", group: "length" }]
     },
     files: [{ path: "README.md", title: "README", content: "context", size: 7, links: [], preview: "context", previewHtml: "", defaultStrategy: "high" }],
@@ -93,6 +97,30 @@ test("有上下文生成后只记录使用次数，不重绘选择器，并提�
     assert.match(copied, /learn-x-prompt-usage/);
     const exported = JSON.parse(copied.match(/```json\n([\s\S]*?)\n```/)[1]);
     assert.deepEqual(Object.keys(exported).sort(), ["months", "schemaVersion"]);
+
+    const { state } = await import("../public/runtime.js");
+    document.querySelectorAll("#dialogueTypeList .dialogue-type-btn")[1].click();
+    assert.equal(state.activeDialogueSubtypeId, "other-prompts.empty-prompt");
+    assert.equal([...state.contextSelections.values()].every((strategy) => strategy === "none"), true,
+      "public recommendations may have no matching Context files");
+    const copiedBeforeEmptyContext = copied;
+    document.querySelector("#generateChatPackBtn").click();
+    for (let attempt = 0; attempt < 100 && copied === copiedBeforeEmptyContext; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.notEqual(copied, copiedBeforeEmptyContext,
+      `an empty Context selection should still generate a Chat Pack; status=${document.querySelector("#chatPackOperationStatus").textContent}`);
+    assert.match(copied, /# Chat Pack/);
+    assert.doesNotMatch(copied, /## Context Priority Map|Context 尚未生成/);
+    assert.doesNotMatch(copied, /当前模式：Current Question \+ Context/);
+
+    document.querySelectorAll("#dialogueTypeList .dialogue-type-btn")[2].click();
+    assert.equal(state.activeDialogueSubtypeId, "reflective-decision.weekly-output");
+    assert.equal([...state.contextSelections.values()].every((strategy) => strategy === "none"), true,
+      "period Output has no selected Process Pack in this fixture");
+    const copiedBeforeMissingPeriodContext = copied;
+    document.querySelector("#generateChatPackBtn").click();
+    for (let attempt = 0; attempt < 100 && !document.querySelector("#chatPackOperationStatus").textContent.includes("缺少对应材料"); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(copied, copiedBeforeMissingPeriodContext, "period Output must not copy without its required material");
+    assert.match(document.querySelector("#chatPackOperationStatus").textContent, /缺少对应材料/);
   } finally {
     dom.window.close();
     for (const [key, value] of Object.entries(previous)) {
