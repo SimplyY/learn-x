@@ -1720,8 +1720,19 @@ button:disabled {
   .prompt-category-head {
     align-items: stretch;
     flex-direction: column;
+    flex-wrap: nowrap;
     gap: 9px;
     padding: 10px;
+  }
+
+  .chatpack-feedback {
+    flex: 0 0 auto;
+    width: 100%;
+  }
+
+  .toast-message {
+    top: auto;
+    bottom: 16px;
   }
 
   .prompt-category-head .primary-action {

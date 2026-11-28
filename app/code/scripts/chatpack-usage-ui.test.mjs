@@ -109,6 +109,8 @@ test("有上下文生成后只记录使用次数，不重绘选择器，并提�
     assert.notEqual(copied, copiedBeforeEmptyContext,
       `an empty Context selection should still generate a Chat Pack; status=${document.querySelector("#chatPackOperationStatus").textContent}`);
     assert.match(copied, /# Chat Pack/);
+    assert.match(document.querySelector("#chatPackOperationStatus").textContent, /未选择 Context.*已选增强器生成/);
+    assert.notEqual(document.querySelector("#chatPackOperationStatus").dataset.state, "error");
     assert.doesNotMatch(copied, /## Context Priority Map|Context 尚未生成/);
     assert.doesNotMatch(copied, /当前模式：Current Question \+ Context/);
 
@@ -129,4 +131,18 @@ test("有上下文生成后只记录使用次数，不重绘选择器，并提�
       else globalThis[key] = value;
     }
   }
+});
+
+test("手机宽度下 Chat Pack 反馈区保持在分类卡片内", async () => {
+  const css = await readFile(new URL("../public/styles.css", import.meta.url), "utf8");
+  const mobileCss = css.slice(css.indexOf("@media (max-width: 640px) {"));
+  const headerRule = mobileCss.match(/\.prompt-category-head\s*\{([^}]*)\}/)?.[1] || "";
+  const feedbackRule = mobileCss.match(/\.chatpack-feedback\s*\{([^}]*)\}/)?.[1] || "";
+  const toastRule = mobileCss.match(/\.toast-message\s*\{([^}]*)\}/)?.[1] || "";
+
+  assert.match(headerRule, /flex-wrap:\s*nowrap\s*;/);
+  assert.match(feedbackRule, /flex:\s*0 0 auto\s*;/);
+  assert.match(feedbackRule, /width:\s*100%\s*;/);
+  assert.match(toastRule, /top:\s*auto\s*;/);
+  assert.match(toastRule, /bottom:\s*16px\s*;/);
 });

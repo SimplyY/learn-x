@@ -1925,6 +1925,7 @@ async function generateChatPack() {
   let cacheRead = null;
   let generatedText = "";
   let generationCopyOutcome = null;
+  let contextWasOmitted = false;
   let restoreSelectionControls = null;
   const isCurrent = () => {
     try {
@@ -2013,6 +2014,10 @@ async function generateChatPack() {
 
     els.generateChatPack.textContent = "组装中…";
     setStage("组装中：正在读取本地 Context 并生成 Chat Pack…", "busy");
+    contextWasOmitted = chatPackContextEnabled() &&
+      activeDialogueType()?.id !== "insight" &&
+      !activePeriodOutputMode() &&
+      selectedContextFiles().length === 0;
     if (chatPackContextEnabled()) {
       const contextReady = await generateContext({ coreAssets, signal: controller.signal, isCurrent });
       ensureCurrent();
@@ -2059,7 +2064,8 @@ async function generateChatPack() {
     if (copied) {
       chatPackCopyRetryText = "";
       els.retryCopyChatPack.hidden = true;
-      setChatPackOperationStatus(`已完成：Chat Pack 已复制（使用 ${cacheUseDescription(lastChatPackCacheUse)}）。 · ${formatElapsed(Date.now() - startedAt)}`);
+      const contextNotice = contextWasOmitted ? "；未选择 Context，本次仅按问题、Prompt 和已选增强器生成" : "";
+      setChatPackOperationStatus(`已完成：Chat Pack 已复制${contextNotice}（使用 ${cacheUseDescription(lastChatPackCacheUse)}）。 · ${formatElapsed(Date.now() - startedAt)}`);
       showToast("已复制到剪贴板，请去 ai chat");
     } else {
       els.chatPackPreview.value = generatedText;
