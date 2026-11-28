@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Learn-X</title>
+    <link rel="stylesheet" href="styles.6935368869d7.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="app-header">
+        <header class="brand">
+          <span id="brandMark" class="brand-mark">LX</span>
+          <div>
+            <h1 id="brandTitle">Learn-X</h1>
+            <p id="brandSubtitle">学习动力引擎</p>
+          </div>
+        </header>
+        <nav id="topNav" class="top-nav" aria-label="顶级模块" hidden></nav>
+        <nav id="localExternalLinks" class="local-external-links" aria-label="线上版本" hidden>
+          <a
+            class="local-external-link"
+            href="https://simplyy.github.io/learn-x/"
+            target="_blank"
+            rel="noopener noreferrer"
+          >线上版</a>
+          <a
+            class="local-external-link"
+            href="https://simplyy.github.io/learn-x/no-context/#learning"
+            target="_blank"
+            rel="noopener noreferrer"
+          >线上版（无上下文）</a>
+        </nav>
+      </header>
+
+      <main>
+        <section id="browseModule" class="browse-shell">
+          <aside class="sidebar">
+            <label class="search-box">
+              <span>搜索</span>
+              <input id="searchInput" type="search" placeholder="路径、标题、正文" autocomplete="off" />
+            </label>
+            <nav id="tree" class="tree" aria-label="文档目录"></nav>
+          </aside>
+
+          <section class="reader-shell">
+            <section class="topbar">
+              <div>
+                <p id="currentPath" class="path">正在加载</p>
+                <h2 id="currentTitle">Learn-X</h2>
+              </div>
+            </section>
+
+            <section id="readerWorkspace" class="workspace reader-workspace">
+              <article id="reader" class="reader"></article>
+              <aside class="action-panel compact-panel">
+                <h3>Browse Context</h3>
+                <dl>
+                  <div>
+                    <dt>核心文件</dt>
+                    <dd id="fileCount">0</dd>
+                  </div>
+                  <div>
+                    <dt>当前文件</dt>
+                    <dd id="readerCurrentFile">-</dd>
+                  </div>
+                </dl>
+                <p id="statusText" class="status">读取当前仓库 Markdown 中。</p>
+              </aside>
+            </section>
+          </section>
+        </section>
+
+        <section id="learningWorkspace" class="learning-workspace module-shell" hidden>
+          <section class="action-panel learning-panel">
+            <div class="panel-header">
+              <div>
+                <p id="scenarioEyebrow" class="path">Learning Mode</p>
+                <h3 id="scenarioTitle">学习工作台</h3>
+              </div>
+            </div>
+
+            <div class="learning-grid">
+              <section class="control-section">
+                <label class="field" id="domainField">
+                  <span>研究领域</span>
+                  <select id="domainSelect"></select>
+                </label>
+
+                <div id="contextControls" class="source-box">
+                  <div class="section-title context-section-title">
+                    <div class="context-heading">
+                      <h4>上下文编排</h4>
+                      <em id="selectedContextSummary">已选 0 个文件 · 总计 0 字</em>
+                    </div>
+                    <div class="section-actions">
+                      <button id="selectAllSourcesBtn" type="button">全选</button>
+                      <button id="invertSourcesBtn" type="button">全反选</button>
+                      <button id="customSourcesBtn" type="button">自定义</button>
+                      <button id="resetSourcesBtn" type="button">推荐路径</button>
+                    </div>
+                  </div>
+                  <div id="sourceChecklist" class="source-checklist"></div>
+                </div>
+
+                <div class="progress-track" aria-label="生成进度">
+                  <span id="progressBar"></span>
+                </div>
+                <p id="learningStatus" class="status" role="status" aria-live="polite">选择场景后生成学习上下文。</p>
+              </section>
+
+              <section class="prompt-section">
+                <section class="dialogue-type-box" aria-label="对话类型">
+                  <div class="prompt-category-head">
+                    <div>
+                      <span>提示词分类</span>
+                      <p>简单&客观问题直接问 AI，无需 Chat Pack。</p>
+                    </div>
+                    <div class="prompt-category-actions">
+                      <button id="editPromptCategoriesBtn" class="local-desktop-only" type="button" hidden>编辑大类</button>
+                      <button id="sortPromptCatalogBtn" class="local-desktop-only" type="button" hidden>调整顺序</button>
+                      <button id="editPromptCatalogBtn" class="local-desktop-only" type="button" hidden>编辑提示词</button>
+                      <button id="copyChatPackUsageBtn" type="button" hidden>复制使用记录</button>
+                      <button id="generateChatPackBtn" class="primary-action" type="button">生成 Chat Pack</button>
+                    </div>
+                    <div class="chatpack-feedback">
+                      <p id="chatPackOperationStatus" class="chatpack-operation-status" role="status" aria-live="polite">就绪，可生成 Chat Pack。</p>
+                      <section id="chatPackCachePanel" class="chatpack-cache-panel" aria-label="Chat Pack 缓存状态" hidden>
+                        <div class="chatpack-cache-heading">
+                          <span id="chatPackCacheSummary">正在读取缓存状态…</span>
+                          <div class="chatpack-cache-actions">
+                            <button id="refreshChatPackCacheBtn" type="button">刷新全部缓存</button>
+                            <button id="retryCopyChatPackBtn" type="button" hidden>复制</button>
+                            <button id="reloadChatPackAfterClipboardHangBtn" type="button" hidden>刷新页面恢复操作</button>
+                          </div>
+                        </div>
+                        <div id="chatPackCacheRefreshStatus" class="chatpack-cache-refresh-status" aria-live="polite"></div>
+                        <details id="chatPackCacheDetails" class="chatpack-cache-details">
+                          <summary>查看缓存详情</summary>
+                          <ul id="chatPackCacheResourceList"></ul>
+                        </details>
+                      </section>
+                    </div>
+                  </div>
+                  <div class="section-title compact">
+                    <span>大类</span>
+                  </div>
+                  <div id="dialogueTypeList" class="dialogue-type-list"></div>
+                  <div class="section-title compact">
+                    <span>子类型</span>
+                  </div>
+                  <div id="dialogueSubtypeList" class="dialogue-subtype-list" aria-label="对话小类"></div>
+                  <div id="periodPicker" class="period-picker" hidden>
+                    <label class="period-field">
+                      <span id="periodPickerLabel">周期</span>
+                      <select id="periodSelect"></select>
+                    </label>
+                    <div id="insightControls" class="period-picker" hidden>
+                      <label class="period-field"><span>洞察对象</span><select id="insightTargetSelect"><option value="auto">自动选择（最近完整月，缺失则周）</option></select></label>
+                      <label class="period-field"><span>历史范围</span><select id="insightRangeSelect"><option value="1m">最近 1 月</option><option value="3m">最近 3 月</option><option value="6m">最近半年</option><option value="1y" selected>最近 1 年</option><option value="all">全部</option><option value="custom">自定义</option></select></label>
+                      <div id="insightCustomRange" class="period-picker" hidden><label class="period-field"><span>从</span><input id="insightFromDate" type="date"></label><label class="period-field"><span>到</span><input id="insightToDate" type="date"></label></div>
+                      <div id="insightMaterialTypes" class="period-picker">
+                        <label class="period-field"><input id="insightTypeTargetOutput" type="checkbox" checked disabled><span>目标周期输出（必选）</span></label>
+                        <label class="period-field"><input class="insight-type-toggle" type="checkbox" value="life-core" checked><span>人生核心议题</span></label>
+                        <label class="period-field"><input class="insight-type-toggle" type="checkbox" value="target-journal" checked><span>目标周期周记</span></label>
+                        <label class="period-field"><input class="insight-type-toggle" type="checkbox" value="history-backbone" checked><span>历史骨架</span></label>
+                        <label class="period-field"><input class="insight-type-toggle" type="checkbox" value="flomo" checked><span>Flomo 精选</span></label>
+                      </div>
+                      <p id="insightContextSummary" class="status">默认最近一年，目标周期与历史范围分开。</p>
+                      <details id="insightManifestDetails" hidden><summary>材料清单（纳入与排除逐项可审计）</summary><pre id="insightManifestList"></pre></details>
+                    </div>
+                  </div>
+                  <div class="section-title compact">
+                    <span>增强器</span>
+                  </div>
+                  <div id="enhancerList" class="dialogue-subtype-list" aria-label="增强器"></div>
+                  <dialog id="promptCatalogEditor" class="modal-dialog prompt-catalog-dialog local-desktop-only" hidden>
+                    <section class="prompt-catalog-editor">
+                      <header class="editor-header">
+                        <div>
+                          <strong id="promptEditorTitle">编辑提示词</strong>
+                          <p id="promptEditorHint">修改会保存到项目源文件。</p>
+                        </div>
+                        <button id="closePromptEditorBtn" type="button">取消</button>
+                      </header>
+                      <div id="promptSortEditor" hidden></div>
+                      <div id="promptCategoryEditor" hidden></div>
+                      <div id="promptContentEditor" class="prompt-content-editor" hidden>
+                        <label class="editor-field">
+                          <span>编辑对象</span>
+                          <select id="promptEntitySelect"></select>
+                        </label>
+                        <div id="promptEntityFields" class="prompt-entity-fields"></div>
+                      </div>
+                      <footer class="editor-footer">
+                        <span id="promptEditorStatus" role="status" aria-live="polite"></span>
+                        <button id="savePromptEditorBtn" class="primary-action" type="button">保存修改</button>
+                      </footer>
+                    </section>
+                  </dialog>
+                </section>
+                <label class="prompt-editor">
+                  <span>当前问题</span>
+                  <p id="chatPackWarning" class="context-warning" hidden></p>
+                  <textarea id="currentQuestion" class="question-input" spellcheck="false" placeholder="写下这次要带给 AI 的真实问题。"></textarea>
+                </label>
+                <label class="prompt-editor">
+                  <span>装配 Prompt</span>
+                  <textarea id="metaPrompt" spellcheck="false" placeholder="可临时修改或清空本次要装配的 Prompt。"></textarea>
+                </label>
+                <div class="prompt-actions">
+                  <button id="resetPromptBtn" type="button">刷新装配</button>
+                </div>
+              </section>
+
+              <section class="chat-pack-section">
+                <section class="chat-pack-frame" aria-label="Chat Pack 上下文框架预览">
+                  <label class="prompt-editor">
+                    <span>Chat Pack 框架</span>
+                    <textarea id="chatPackFramePreview" class="frame-preview" spellcheck="false" readonly></textarea>
+                  </label>
+                  <label class="prompt-editor">
+                    <span>上下文摘要</span>
+                    <textarea id="chatPackContextSummary" class="frame-preview" spellcheck="false" readonly></textarea>
+                  </label>
+                </section>
+                <label class="prompt-editor">
+                  <span>Chat Pack 预览</span>
+                  <textarea id="chatPackPreview" class="chat-pack-preview" spellcheck="false" readonly></textarea>
+                </label>
+              </section>
+
+            </div>
+          </section>
+        </section>
+
+        <section id="actionWorkspace" class="action-workspace module-shell" hidden>
+          <section class="placeholder-panel">
+            <p id="actionEyebrow" class="path">Action Mode</p>
+            <h2 id="actionTitle">行动动力引擎</h2>
+            <p id="actionDescription">这里预留给“知行合一”的行动系统：任务实验、复盘闭环、真实世界反馈和下一步行动编排。</p>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="customContextDialog" class="modal-dialog">
+      <form method="dialog" class="modal-panel">
+        <header class="modal-header">
+          <div>
+            <h3>自定义上下文</h3>
+            <p>选择可进入 Chat Pack 的上下文文件。</p>
+          </div>
+          <button id="closeCustomContextBtn" type="button" aria-label="关闭">×</button>
+        </header>
+        <div class="modal-toolbar">
+          <input id="customContextSearch" type="search" placeholder="搜索路径或标题" autocomplete="off" />
+          <button id="selectAllCustomContextBtn" type="button">全选</button>
+          <button id="clearCustomContextBtn" type="button">清空</button>
+        </div>
+        <div id="customContextList" class="custom-context-list"></div>
+        <footer class="modal-footer">
+          <span id="customContextCount">已选 0 个文件</span>
+          <button id="applyCustomContextBtn" class="primary-action" type="button">应用</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <div id="toastMessage" class="toast-message" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+    <div id="preview" class="preview" hidden></div>
+    <script src="data/graph.2acacae22059.js"></script>
+    <script type="module" src="app.7c89af2d6c10.js"></script>
+  </body>
+</html>

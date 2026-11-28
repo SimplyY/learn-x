@@ -1,0 +1,3040 @@
+import { searchCustomContext } from "./custom-context-search.js";
+import { renderExecutionContract, renderFinalTaskAnchor } from "./chatpack.js";
+import { buildContext, demoteMarkdownHeadings, filterFilesByIncludes } from "./context.js";
+import { els, state } from "./runtime.js";
+import { closePromptEditor, openPromptEditor, renderEditorAvailability, savePromptEditor } from "./editor.js";
+import {
+  USAGE_SCHEMA_VERSION,
+  USAGE_STORAGE_KEY,
+  addUsageCount,
+  buildUsageExport,
+  compareMonths,
+  currentShanghaiMonth,
+  emptyMonthCounts,
+  emptyUsageStore,
+  isValidUsageMonth,
+  isLowFrequencyUsage,
+  normalizeUsageStore,
+  sortUsageItems,
+  usageFrequencyLabel
+} from "./chatpack-usage.js";
+
+const STORAGE_PREFIX = "learn-x";
+const MUNGER_SOUL_ENHANCER_ID = "munger-soul";
+const MUNGER_SOUL_SUBTYPE_ID = "insight.munger-soul";
+const MUNGER_SOUL_QUESTION = "使用芒格之魂的提示词来解析上面我们对话的内容。";
+const MUNGER_SOUL_PERIOD_QUESTIONS = {
+  weekly: "不要输出 Weekly Output，使用芒格之魂的提示词来解析上面我们对话的内容。",
+  monthly: "不要输出 Monthly Output，使用芒格之魂的提示词来解析上面我们对话的内容。",
+  yearly: "不要输出 Yearly Output，使用芒格之魂的提示词来解析上面我们对话的内容。",
+  voiceInsight: "按每条 Voice-X 记录先写核心总结，再按芒格之魂六层生成洞察。"
+};
+const GRAPH_DATA_URL = window.LEARN_X_GRAPH_URL || "data/graph.json";
+const CONTENT_DATA_URL = window.LEARN_X_CONTENT_URL || "data/content.json";
+const PROMPTS_DATA_URL = window.LEARN_X_PROMPTS_URL || "data/prompts.json";
+const CHATPACK_CACHE_STATUS_TIMEOUT_MS = 8_000;
+const CHATPACK_CACHE_MANUAL_REFRESH_TIMEOUT_MS = 10_000;
+let APP_CONFIG = {
+  brand: { title: "Learn-X", subtitle: "AI native 的知行进化系统", mark: "LX" },
+  promptDirectory: "01_meta-prompts",
+  menu: [
+    { id: "browse", label: "知", module: "browse", title: "知识库浏览" },
+    { id: "learning", label: "学", module: "learning", title: "AI native 的知行进化系统" },
+    { id: "action", label: "行", module: "action", title: "行动动力引擎" }
+  ]
+};
+let CHATPACK_CONFIG = {
+  dialogueTypes: [],
+  enhancers: []
+};
+export let DIALOGUE_TYPES = CHATPACK_CONFIG.dialogueTypes;
+export let ENHANCERS = CHATPACK_CONFIG.enhancers;
+const PERIOD_OUTPUTS = {
+  weekly: {
+    subtypeIds: ["reflective-decision.weekly-output"],
+    label: "第几周（可多选）",
+    emptyLabel: "暂无周输出包",
+    pattern: /^04_output\/_dist\/weekly\/(\d{4}-W\d{2}(?:-W\d{2}|-\d{4}-W\d{2})?)\/process-pack\.md$/,
+    valueFromMatch: (match) => match[1],
+    labelFromValue: (value) => {
+      const sameYear = value.match(/^(\d{4})-W(\d{2})(?:-W(\d{2}))?$/);
+      if (sameYear) {
+        return sameYear[3]
+          ? `${sameYear[1]} 年第 ${Number(sameYear[2])}–${Number(sameYear[3])} 周`
+          : `${sameYear[1]} 年第 ${Number(sameYear[2])} 周`;
+      }
+      const crossYear = value.match(/^(\d{4})-W(\d{2})-(\d{4})-W(\d{2})$/);
+      return crossYear
+        ? `${crossYear[1]} 年第 ${Number(crossYear[2])} 周–${crossYear[3]} 年第 ${Number(crossYear[4])} 周`
+        : value;
+    },
+    prefixFromValue: (value) => `04_output/_dist/weekly/${value}/`
+  },
+  monthly: {
+    subtypeId: "reflective-decision.monthly-output",
+    label: "第几月",
+    emptyLabel: "暂无月输出包",
+    pattern: /^04_output\/_dist\/monthly\/(\d{4})-(\d{2})\//,
+    valueFromMatch: (match) => `${match[1]}-${match[2]}`,
+    labelFromValue: (value) => {
+      const match = value.match(/^(\d{4})-(\d{2})$/);
+      return match ? `${match[1]} 年第 ${Number(match[2])} 月` : value;
+    },
+    prefixFromValue: (value) => `04_output/_dist/monthly/${value}/`
+  },
+  yearly: {
+    subtypeId: "reflective-decision.yearly-output",
+    label: "第几年",
+    emptyLabel: "暂无年输出包",
+    pattern: /^04_output\/_dist\/yearly\/(\d{4})\//,
+    valueFromMatch: (match) => match[1],
+    optionPatterns: [
+      {
+        pattern: /^04_output\/monthly\/(\d{4})-\d{2}\.md$/,
+        valueFromMatch: (match) => match[1]
+      }
+    ],
+    labelFromValue: (value) => `${value} 年`,
+    prefixFromValue: (value) => `04_output/_dist/yearly/${value}/`
+  },
+  voiceInsight: {
+    subtypeId: "reflective-decision.voice-insight",
+    label: "第几周",
+    emptyLabel: "暂无 Voice-X 洞察上下文",
+    pattern: /^03_input\/weekly\/(\d{4})-W(\d{2})\/_voice-insight-context\.md$/,
+    valueFromMatch: (match) => `${match[1]}-W${match[2]}`,
+    labelFromValue: (value) => {
+      const match = value.match(/^(\d{4})-W(\d{2})$/);
+      return match ? `${match[1]} 年第 ${Number(match[2])} 周` : value;
+    },
+    prefixFromValue: (value) => `03_input/weekly/${value}/`
+  }
+};
+
+let toastTimer;
+let toastHideTimer;
+let promptTooltip;
+let contentIndexPromise;
+let promptPayloadPromise;
+let promptProtocolsLoaded = false;
+let lastAutoAssembledPrompt = "";
+let periodicInsightRequestId = 0;
+let selectedContextStatsRequestId = 0;
+let contextGenerationSequence = 0;
+let chatPackGenerationRequestId = 0;
+let chatPackGenerationController = null;
+let chatPackGenerationBusy = false;
+let chatPackGenerationMonitor = null;
+let chatPackCachePollTimer = null;
+let chatPackCacheStatusRequestId = 0;
+let chatPackCacheStatusRequest = null;
+let chatPackCacheSnapshot = null;
+let lastChatPackCacheUse = null;
+let chatPackCopyRetryText = "";
+let clipboardWriteInProgress = false;
+const contextFileContentPromises = new Map();
+const periodicInsightContextApi = window.LEARN_X_PERIODIC_INSIGHT_CONTEXT_API || "";
+
+async function boot() {
+  const graph = await loadGraph();
+  state.runtime = graph.runtime || state.runtime;
+  els.localExternalLinks.hidden = state.runtime.target !== "local";
+  els.contextControls.hidden = !chatPackContextEnabled();
+  APP_CONFIG = graph.appConfig || APP_CONFIG;
+  CHATPACK_CONFIG = graph.chatPackConfig || CHATPACK_CONFIG;
+  DIALOGUE_TYPES = CHATPACK_CONFIG.dialogueTypes || [];
+  ENHANCERS = CHATPACK_CONFIG.enhancers || [];
+  if (state.runtime.target === "local") await refreshLocalUsage();
+  else applyBrowserUsage();
+  state.mode = initialMode();
+  state.activeDialogueTypeId =
+    localStorage.getItem(dialogueTypeKey()) || state.activeDialogueTypeId || DIALOGUE_TYPES[0]?.id || "";
+  let migratedDialogueSubtypeId = "";
+  if (state.activeDialogueTypeId === "plain-context") state.activeDialogueTypeId = "other-prompts";
+  if (state.activeDialogueTypeId === "create-execute") {
+    const legacySubtypeId = localStorage.getItem(dialogueSubtypeKey("create-execute")) || "";
+    state.activeDialogueTypeId = "reflective-decision";
+    migratedDialogueSubtypeId = legacySubtypeId.replace(/^create-execute\./, "reflective-decision.");
+    localStorage.setItem(dialogueTypeKey(), state.activeDialogueTypeId);
+    if (migratedDialogueSubtypeId) {
+      localStorage.setItem(dialogueSubtypeKey(state.activeDialogueTypeId), migratedDialogueSubtypeId);
+    }
+  }
+  if (!DIALOGUE_TYPES.some((type) => type.id === state.activeDialogueTypeId)) {
+    state.activeDialogueTypeId = DIALOGUE_TYPES[0]?.id || "";
+  }
+  state.activeDialogueSubtypeId =
+    migratedDialogueSubtypeId || localStorage.getItem(dialogueSubtypeKey(state.activeDialogueTypeId)) || "";
+  state.activeEnhancerIds = new Set(readEnhancerIds());
+  ensureActiveDialogueSubtype();
+  applyAppConfig();
+  state.files = graph.files;
+  state.sources = graph.sources;
+  state.contextFiles = graph.contextFiles || graph.files || [];
+  const documentsContextFiles = state.runtime.target === "local" ? await loadDocumentsContextFiles() : [];
+  state.customContextFiles = [...(graph.customContextFiles || state.contextFiles), ...documentsContextFiles];
+  state.contextFileMap = new Map([...state.contextFiles, ...state.customContextFiles].map((file) => [file.path, file]));
+  state.domains = graph.domains;
+  state.selectedDomain = state.domains[0] || "";
+
+  els.fileCount.textContent = String(graph.files.length);
+  renderTree(graph.files);
+  renderDomains();
+  renderDialogueTypes();
+  renderEnhancers();
+  els.copyChatPackUsage.hidden = state.runtime.target !== "public" || !chatPackContextEnabled();
+  renderTopNav();
+  renderEditorAvailability();
+  bindEvents();
+  initializeChatPackCacheUI();
+  applyChatPackSelection("已加载 Chat Pack 类型体系。");
+  setMode(state.mode);
+  window.addEventListener("hashchange", applyModeFromRoute);
+
+  if (state.mode === "browse") {
+    const first = graph.files.find((file) => file.path === "README.md") || graph.files[0];
+    if (first) await openFile(first.path);
+  }
+  scheduleWarmup();
+}
+
+function initializeChatPackCacheUI() {
+  const local = state.runtime?.target === "local";
+  if (els.chatPackCachePanel) els.chatPackCachePanel.hidden = !local;
+  if (!local) return;
+  void refreshChatPackCacheStatus();
+  if (chatPackCachePollTimer === null) {
+    chatPackCachePollTimer = window.setInterval(() => { void refreshChatPackCacheStatus(); }, 5_000);
+  }
+}
+
+async function refreshChatPackCacheStatus({ signal } = {}) {
+  if (state.runtime?.target !== "local" || !els.chatPackCachePanel) return null;
+  if (chatPackCacheStatusRequest) return waitForSignal(chatPackCacheStatusRequest, signal);
+  const requestId = ++chatPackCacheStatusRequestId;
+  let request;
+  request = (async () => {
+    try {
+      const { response, payload } = await withRequestTimeout(async (requestSignal) => {
+        const response = await fetch("api/chatpack/cache/status", { cache: "no-store", signal: requestSignal });
+        return { response, payload: await response.json() };
+      }, CHATPACK_CACHE_STATUS_TIMEOUT_MS, "缓存状态查询超过 8 秒", signal);
+      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      if (requestId !== chatPackCacheStatusRequestId) return null;
+      chatPackCacheSnapshot = payload;
+      renderChatPackCacheStatus();
+      return payload;
+    } catch (error) {
+      if (requestId !== chatPackCacheStatusRequestId) return null;
+      if (signal?.aborted) return null;
+      chatPackCacheSnapshot = null;
+      if (els.chatPackCacheSummary) els.chatPackCacheSummary.textContent = `缓存服务不可用：${error.message || "连接失败"}`;
+      if (els.chatPackCacheRefreshStatus) {
+        els.chatPackCacheRefreshStatus.dataset.state = "error";
+        els.chatPackCacheRefreshStatus.textContent = "缓存状态无法读取；请检查本地服务后重试。";
+      }
+      if (els.chatPackCacheResourceList) els.chatPackCacheResourceList.replaceChildren();
+      return null;
+    } finally {
+      if (chatPackCacheStatusRequest === request) chatPackCacheStatusRequest = null;
+    }
+  })();
+  chatPackCacheStatusRequest = request;
+  return request;
+}
+
+function waitForSignal(promise, signal) {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.resolve(null);
+  return new Promise((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const onAbort = () => {
+      cleanup();
+      resolve(null);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then((value) => {
+      cleanup();
+      resolve(value);
+    }, (error) => {
+      cleanup();
+      reject(error);
+    });
+  });
+}
+
+async function withRequestTimeout(request, timeoutMs, timeoutMessage, externalSignal = null) {
+  const controller = new AbortController();
+  if (externalSignal?.aborted) {
+    controller.abort();
+    throw new Error("request aborted");
+  }
+  let timeoutId;
+  let abortListener;
+  const timeout = new Promise((_resolve, reject) => {
+    timeoutId = window.setTimeout(() => {
+      reject(new Error(timeoutMessage));
+      controller.abort();
+    }, timeoutMs);
+  });
+  const promises = [Promise.resolve().then(() => request(controller.signal)), timeout];
+  if (externalSignal) {
+    promises.push(new Promise((_resolve, reject) => {
+      abortListener = () => {
+        controller.abort();
+        reject(new Error("request aborted"));
+      };
+      externalSignal.addEventListener("abort", abortListener, { once: true });
+    }));
+  }
+  try {
+    return await Promise.race(promises);
+  } finally {
+    window.clearTimeout(timeoutId);
+    if (abortListener) externalSignal.removeEventListener("abort", abortListener);
+  }
+}
+
+function renderChatPackCacheStatus() {
+  const payload = chatPackCacheSnapshot;
+  if (!payload || !els.chatPackCacheSummary) return;
+  const available = payload.summary?.available || 0;
+  const total = payload.summary?.total || 0;
+  const used = lastChatPackCacheUse;
+  if (used?.length) {
+    const oldest = Math.max(...used.map((item) => item.age_ms || 0));
+    const remaining = Math.max(0, 14 * 24 * 60 * 60 * 1000 - oldest);
+    els.chatPackCacheSummary.textContent = `本次使用：${formatAge(oldest)}拉取的缓存 · 有效期剩余 ${formatDuration(remaining)}`;
+  } else {
+    els.chatPackCacheSummary.textContent = `缓存可用 ${available}/${total} 项 · 14 天有效`;
+  }
+  const refresh = payload.refresh || {};
+  const refreshLabels = {
+    running: `正在更新 ${refresh.completed || 0}/${refresh.total || total}${refresh.current ? ` · ${cacheResourceLabel(refresh.current)}` : ""}`,
+    recovering: `正在确认刷新锁；如无活跃更新，将于 ${formatWait(refresh.retry_at)} 后自动恢复`,
+    cooldown: `冷却等待 ${formatWait(refresh.next_allowed_at)}`,
+    succeeded: `更新成功 ${refresh.succeeded || total}/${refresh.total || total}`,
+    partial: `部分失败 ${refresh.failed || 0}/${refresh.total || total}`,
+    failed: `更新失败${refresh.error ? `：${refresh.error}` : ""}`,
+    idle: available ? "待更新；生成时将触发后台全量更新。" : "尚未完成首次拉取。"
+  };
+  const refreshLabel = refreshLabels[refresh.state] || refreshLabels.idle;
+  const storageSuffix = [
+    refresh.storage_error ? `持久保存失败：${refresh.storage_error}` : "",
+    refresh.file_corrupt ? `缓存文件校验失败：${refresh.file_error || "文件结构无效"}` : ""
+  ].filter(Boolean).join(" · ");
+  if (els.chatPackCacheRefreshStatus) {
+    els.chatPackCacheRefreshStatus.dataset.state = refresh.state === "failed" || (refresh.state === "partial" && refresh.failed) || storageSuffix ? "error" : "";
+    els.chatPackCacheRefreshStatus.textContent = `后台更新：${refreshLabel}${storageSuffix ? ` · ${storageSuffix}` : ""}`;
+  }
+  if (els.chatPackCacheResourceList) {
+    const nodes = (payload.resources || []).map((resource) => {
+      const item = document.createElement("li");
+      item.dataset.state = resource.cache_status === "available" ? "available" : "error";
+      const age = resource.fetched_at ? `上次成功 ${formatDateTime(resource.fetched_at)}（${formatAge(resource.age_ms || 0)}前） · revision ${resource.revision}` : "未成功拉取";
+      const cacheState = {
+        not_fetched: "未拉取",
+        available: "可用",
+        expired: "已过期",
+        integrity_invalid: "校验失败",
+        source_changed: "来源映射已变化"
+      }[resource.cache_status] || resource.cache_status;
+      const error = resource.refresh_error ? ` · 更新失败：${resource.refresh_error}` : "";
+      item.textContent = `${cacheResourceLabel(resource.key)}：${cacheState} · ${age}${error}`;
+      return item;
+    });
+    els.chatPackCacheResourceList.replaceChildren(...nodes);
+  }
+}
+
+function cacheResourceLabel(key) {
+  if (key === "core:dao") return "Core《道》";
+  if (key === "core:fa") return "Core《法》";
+  return key.startsWith("prompt:") ? `Prompt ${key.slice("prompt:".length)}` : key;
+}
+
+function formatAge(milliseconds) {
+  const minutes = Math.max(0, Math.floor(milliseconds / 60_000));
+  if (minutes < 60) return `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时`;
+  const days = Math.floor(hours / 24);
+  return `${days} 天`;
+}
+
+function formatElapsed(milliseconds) {
+  const seconds = Math.max(0, milliseconds) / 1000;
+  return `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)} 秒`;
+}
+
+function formatDuration(milliseconds) {
+  const days = Math.floor(milliseconds / (24 * 60 * 60 * 1000));
+  if (days) return `${days} 天`;
+  const hours = Math.floor(milliseconds / (60 * 60 * 1000));
+  return `${hours} 小时`;
+}
+
+function formatWait(value) {
+  const remaining = Math.max(0, Date.parse(value) - Date.now());
+  if (!Number.isFinite(remaining)) return "时间未知";
+  const seconds = Math.ceil(remaining / 1000);
+  return seconds >= 60 ? `${Math.ceil(seconds / 60)} 分钟` : `${seconds} 秒`;
+}
+
+function formatDateTime(value) {
+  if (!value) return "未知";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "未知" : new Intl.DateTimeFormat("zh-CN", { dateStyle: "short", timeStyle: "short" }).format(date);
+}
+
+async function refreshChatPackCacheManually() {
+  if (state.runtime?.target !== "local") return;
+  els.refreshChatPackCache.disabled = true;
+  try {
+    if (els.chatPackCacheRefreshStatus) {
+      els.chatPackCacheRefreshStatus.dataset.state = "busy";
+      els.chatPackCacheRefreshStatus.textContent = "手动刷新：正在提交请求…";
+    }
+    const { response, payload } = await withRequestTimeout(async (signal) => {
+      const response = await fetch("api/chatpack/cache/refresh", {
+        method: "POST", cache: "no-store", headers: { "content-type": "application/json" }, body: JSON.stringify({}), signal
+      });
+      return { response, payload: await response.json() };
+    }, CHATPACK_CACHE_MANUAL_REFRESH_TIMEOUT_MS, "缓存刷新请求超过 10 秒，结果未知");
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    if (els.chatPackCacheRefreshStatus) els.chatPackCacheRefreshStatus.textContent = "手动刷新：请求已受理，正在更新状态…";
+    void refreshChatPackCacheStatus();
+  } catch (error) {
+    if (els.chatPackCacheRefreshStatus) {
+      els.chatPackCacheRefreshStatus.dataset.state = "error";
+      els.chatPackCacheRefreshStatus.textContent = `手动刷新失败：${error.message || "未知错误"}`;
+    }
+  } finally {
+    els.refreshChatPackCache.disabled = false;
+  }
+}
+
+function setChatPackOperationStatus(message, stateName = "") {
+  if (!els.chatPackOperationStatus) return;
+  els.chatPackOperationStatus.textContent = message;
+  if (stateName) els.chatPackOperationStatus.dataset.state = stateName;
+  else delete els.chatPackOperationStatus.dataset.state;
+}
+
+async function loadGraph() {
+  if (window.LEARN_X_GRAPH) return window.LEARN_X_GRAPH;
+  const response = await fetch(GRAPH_DATA_URL);
+  if (!response.ok) throw new Error(`Static graph missing: ${response.status}`);
+  return response.json();
+}
+
+function usageView() {
+  if (!CHATPACK_CONFIG.usage) {
+    CHATPACK_CONFIG.usage = { schemaVersion: USAGE_SCHEMA_VERSION, mergedThrough: "0000-00", subtypes: {}, enhancers: {} };
+  }
+  CHATPACK_CONFIG.usage.subtypes ||= {};
+  CHATPACK_CONFIG.usage.enhancers ||= {};
+  return CHATPACK_CONFIG.usage;
+}
+
+function applyBrowserUsage() {
+  if (!CHATPACK_CONFIG.usage) return;
+  const usage = CHATPACK_CONFIG.usage;
+  let stored;
+  try {
+    stored = normalizeUsageStore(JSON.parse(localStorage.getItem(USAGE_STORAGE_KEY) || "null"));
+  } catch {
+    stored = emptyUsageStore("browser");
+  }
+  const allowedSubtypes = new Set(DIALOGUE_TYPES.flatMap((type) => (type.subtypes || []).map((subtype) => typeof subtype === "string" ? slugify(subtype) : subtype.id)));
+  const allowedEnhancers = new Set(ENHANCERS.filter((enhancer) => enhancer.group !== "length").map((enhancer) => enhancer.id));
+  for (const [month, counts] of Object.entries(stored.months)) {
+    if (!isValidUsageMonth(month) || compareMonths(month, usage.mergedThrough || "0000-00") <= 0) continue;
+    if (compareMonths(month, currentShanghaiMonth()) >= 0) continue;
+    for (const [id, count] of Object.entries(counts?.subtypes || {})) {
+      const migratedId = id === "learning-insight.munger-soul" ? "insight.munger-soul" : id;
+      if (allowedSubtypes.has(migratedId) && Number.isSafeInteger(count) && count >= 0) addUsageCount(usage, "subtypes", migratedId, count);
+    }
+    for (const [id, count] of Object.entries(counts?.enhancers || {})) {
+      if (allowedEnhancers.has(id) && Number.isSafeInteger(count) && count >= 0) addUsageCount(usage, "enhancers", id, count);
+    }
+  }
+}
+
+async function refreshLocalUsage() {
+  try {
+    const response = await fetch("api/chatpack/usage");
+    if (response.ok) {
+      const payload = await response.json();
+      if (payload.usage) CHATPACK_CONFIG.usage = payload.usage;
+    }
+  } catch {
+    // The static build remains usable when the optional local usage endpoint is unavailable.
+  }
+}
+
+async function getJson(url, { signal } = {}) {
+  const parsedUrl = new URL(url, window.location.href);
+  if (parsedUrl.pathname.endsWith("/api/file")) {
+    const filePath = parsedUrl.searchParams.get("path");
+    const file = state.contextFileMap.get(filePath) || state.files.find((item) => item.path === filePath);
+    if (!file) throw new Error(`File not found in static graph: ${filePath}`);
+    if (file.external) {
+      const response = await fetch(parsedUrl, { ...(file.live ? { cache: "no-store" } : {}), ...(signal ? { signal } : {}) });
+      if (!response.ok) throw new Error(`Unable to read Documents context: ${response.status}`);
+      return response.json();
+    }
+    const indexed = await loadContentEntry(file.path);
+    return {
+      path: file.path,
+      title: file.title,
+      content: indexed.content || file.content || "",
+      html: indexed.html || file.html || "",
+      links: indexed.links || file.links || []
+    };
+  }
+
+  if (parsedUrl.pathname.endsWith("/api/context")) {
+    const includes = parsedUrl.searchParams.getAll("include").filter(Boolean);
+    const scene = parsedUrl.searchParams.get("scene") || "learn-x";
+    const selectedFiles = filterFilesByIncludes(state.files, includes);
+    const content = buildContext(selectedFiles, scene);
+    return {
+      fileName: "CONTEXT_MASTER.md",
+      generatedAt: new Date().toISOString(),
+      fileCount: selectedFiles.length,
+      bytes: new Blob([content]).size,
+      includedPaths: selectedFiles.map((file) => file.path),
+      content
+    };
+  }
+
+  throw new Error(`Static route not found: ${url}`);
+}
+
+async function loadContentEntry(filePath) {
+  const cached = state.contextFileMap.get(filePath) || state.files.find((file) => file.path === filePath);
+  if (cached?.content) return cached;
+  const index = await loadContentIndex();
+  const entry = index.files?.[filePath] || index.customContextFiles?.[filePath] || {};
+  if (cached && entry.content) Object.assign(cached, entry);
+  return entry;
+}
+
+async function loadContentIndex() {
+  if (!contentIndexPromise) {
+    contentIndexPromise = fetch(CONTENT_DATA_URL).then((response) => {
+      if (!response.ok) throw new Error(`Static content missing: ${response.status}`);
+      return response.json();
+    });
+  }
+  return contentIndexPromise;
+}
+
+export async function ensurePromptProtocols() {
+  if (promptProtocolsLoaded) return;
+  if (!promptPayloadPromise) {
+    promptPayloadPromise = fetch(PROMPTS_DATA_URL).then((response) => {
+      if (!response.ok) throw new Error(`Static prompts missing: ${response.status}`);
+      return response.json();
+    }).catch((error) => {
+      promptPayloadPromise = null;
+      throw error;
+    });
+  }
+  const payload = await promptPayloadPromise;
+  state.managedAssets = payload.assets || {};
+  for (const type of DIALOGUE_TYPES) {
+    for (const subtype of type.subtypes || []) {
+      subtype.managedAsset = state.managedAssets[subtype.id] || subtype.managedPrompt || null;
+      subtype.protocol = subtype.managedAsset ? "" : payload.subtypes?.[subtype.id] || subtype.protocol || "";
+    }
+  }
+  for (const enhancer of ENHANCERS) {
+    enhancer.managedAsset = state.managedAssets[enhancer.id] || enhancer.managedPrompt || null;
+    enhancer.protocol = enhancer.managedAsset ? "" : payload.enhancers?.[enhancer.id] || enhancer.protocol || "";
+  }
+  promptProtocolsLoaded = true;
+  if (els.metaPrompt.value === lastAutoAssembledPrompt) setAutoAssembledPrompt();
+  renderChatPackPreview();
+}
+
+function scheduleWarmup() {
+  const warmup = () => {
+    loadContentIndex().catch((error) => console.warn(`Content preload failed: ${error.message}`));
+    ensurePromptProtocols().catch((error) => console.warn(`Prompt preload failed: ${error.message}`));
+  };
+  if ("requestIdleCallback" in window) {
+    window.requestIdleCallback(warmup, { timeout: 2500 });
+  } else {
+    window.setTimeout(warmup, 1200);
+  }
+}
+
+async function loadDocumentsContextFiles() {
+  try {
+    const response = await fetch("api/context-files");
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return (await response.json()).files || [];
+  } catch (error) {
+    console.warn(`Documents context unavailable: ${error.message}`);
+    return [];
+  }
+}
+
+function bindEvents() {
+  els.search.addEventListener("input", () => {
+    const query = els.search.value.trim().toLowerCase();
+    renderTree(
+      query
+        ? state.files.filter((file) =>
+            `${file.path}\n${file.title}\n${file.preview}`.toLowerCase().includes(query)
+          )
+        : state.files
+    );
+  });
+
+  els.domainSelect.addEventListener("change", () => {
+    state.selectedDomain = els.domainSelect.value;
+    applyChatPackSelection("研究领域已更新。");
+  });
+
+  els.resetSources.addEventListener("click", () => {
+    applyRecommendedSources();
+    const mode = activePeriodOutputMode();
+    if (mode) applyPeriodContextSelection(mode, state.activePeriodValues[mode]);
+    resetExpandedContextDirs();
+    renderSourceChecklist();
+    resetGeneratedContext("已恢复该场景推荐的上下文路径。");
+  });
+  els.selectAllSources.addEventListener("click", selectAllContextSources);
+  els.invertSources.addEventListener("click", invertContextSources);
+  els.customSources.addEventListener("click", openCustomContextDialog);
+  els.closeCustomContext.addEventListener("click", () => els.customContextDialog.close());
+  els.customContextSearch.addEventListener("input", renderCustomContextList);
+  els.selectAllCustomContext.addEventListener("click", selectAllVisibleCustomContext);
+  els.clearCustomContext.addEventListener("click", () => {
+    state.customDraftSelections = new Set();
+    renderCustomContextList();
+  });
+  els.applyCustomContext.addEventListener("click", applyCustomContextSelections);
+
+  els.generateChatPack.addEventListener("click", generateChatPack);
+  els.refreshChatPackCache?.addEventListener("click", refreshChatPackCacheManually);
+  els.retryCopyChatPack?.addEventListener("click", retryCopyChatPack);
+  els.reloadChatPackAfterClipboardHang?.addEventListener("click", () => window.location.reload());
+  els.copyChatPackUsage.addEventListener("click", copyChatPackUsage);
+  els.resetPrompt.addEventListener("click", resetPrompt);
+  els.editPromptCategories.addEventListener("click", () => openPromptEditor("category"));
+  els.sortPromptCatalog.addEventListener("click", () => openPromptEditor("sort"));
+  els.editPromptCatalog.addEventListener("click", () => openPromptEditor("content"));
+  els.closePromptEditor.addEventListener("click", closePromptEditor);
+  els.promptCatalogEditor.addEventListener("close", closePromptEditor);
+  els.savePromptEditor.addEventListener("click", savePromptEditor);
+  els.promptEntitySelect.addEventListener("change", () => {
+    state.promptEditorEntityId = els.promptEntitySelect.value;
+    state.promptEditorDraft = structuredClone({ dialogueTypes: DIALOGUE_TYPES, enhancers: ENHANCERS });
+    renderPromptEntityFields();
+  });
+  els.periodSelect.addEventListener("change", () => {
+    const mode = activePeriodOutputMode();
+    if (!mode) return;
+    const selectedValue = mode === "weekly"
+      ? [...els.periodSelect.selectedOptions].map((option) => option.value).filter(Boolean)
+      : els.periodSelect.value;
+    state.activePeriodValues[mode] = selectedValue;
+    applyRecommendedSources();
+    const count = applyPeriodContextSelection(mode, selectedValue);
+    resetExpandedContextDirs();
+    renderSourceChecklist();
+    resetGeneratedContext(count ? `已选择${PERIOD_OUTPUTS[mode].label}：${selectedPeriodLabel(mode)}。` : "未找到对应周期过程包。");
+  });
+  els.insightTargetSelect?.addEventListener("change", () => {
+    state.periodicInsight.target = els.insightTargetSelect.value;
+    loadPeriodicInsightContext().catch((error) => { els.learningStatus.textContent = `洞察 Context 失败：${error.message}`; });
+  });
+  els.insightRangeSelect?.addEventListener("change", () => {
+    state.periodicInsight.range = els.insightRangeSelect.value;
+    els.insightCustomRange.hidden = els.insightRangeSelect.value !== "custom";
+    loadPeriodicInsightContext().catch((error) => { els.learningStatus.textContent = `洞察 Context 失败：${error.message}`; });
+  });
+  for (const input of [els.insightFromDate, els.insightToDate]) input?.addEventListener("change", () => loadPeriodicInsightContext().catch((error) => { els.learningStatus.textContent = `洞察 Context 失败：${error.message}`; }));
+  els.insightMaterialTypes?.addEventListener("change", () => loadPeriodicInsightContext().catch((error) => { els.learningStatus.textContent = `洞察 Context 失败：${error.message}`; }));
+
+  els.currentQuestion.addEventListener("input", () => {
+    state.currentQuestionTouched = true;
+    renderChatPackPreview();
+  });
+
+  els.metaPrompt.addEventListener("input", () => {
+    renderChatPackPreview();
+  });
+
+  window.addEventListener("scroll", hidePromptTooltip, true);
+  window.addEventListener("resize", hidePromptTooltip);
+}
+
+function bindPromptTooltip(button, text) {
+  const tooltip = String(text || "").trim();
+  if (!tooltip) return;
+  button.dataset.tooltip = tooltip;
+  button.addEventListener("mouseenter", () => showPromptTooltip(button));
+  button.addEventListener("focus", () => showPromptTooltip(button));
+  button.addEventListener("mouseleave", hidePromptTooltip);
+  button.addEventListener("blur", hidePromptTooltip);
+}
+
+function showPromptTooltip(anchor) {
+  const text = anchor.dataset.tooltip;
+  if (!text) return;
+  const tooltip = ensurePromptTooltip();
+  tooltip.textContent = text;
+  tooltip.hidden = false;
+
+  const anchorRect = anchor.getBoundingClientRect();
+  const tooltipRect = tooltip.getBoundingClientRect();
+  const gap = 8;
+  const left = Math.min(
+    window.innerWidth - tooltipRect.width - 12,
+    Math.max(12, anchorRect.left + anchorRect.width / 2 - tooltipRect.width / 2)
+  );
+  const top =
+    anchorRect.bottom + tooltipRect.height + gap < window.innerHeight
+      ? anchorRect.bottom + gap
+      : Math.max(12, anchorRect.top - tooltipRect.height - gap);
+
+  tooltip.style.left = `${left}px`;
+  tooltip.style.top = `${top}px`;
+  tooltip.classList.add("visible");
+}
+
+function hidePromptTooltip() {
+  if (!promptTooltip) return;
+  promptTooltip.classList.remove("visible");
+  promptTooltip.hidden = true;
+}
+
+function ensurePromptTooltip() {
+  if (promptTooltip) return promptTooltip;
+  promptTooltip = document.createElement("div");
+  promptTooltip.className = "prompt-tooltip";
+  promptTooltip.hidden = true;
+  document.body.append(promptTooltip);
+  return promptTooltip;
+}
+
+function applyAppConfig() {
+  els.brandMark.textContent = APP_CONFIG.brand.mark;
+  els.brandTitle.textContent = APP_CONFIG.brand.title;
+  els.brandSubtitle.textContent = APP_CONFIG.brand.subtitle;
+}
+
+function renderTopNav() {
+  els.topNav.innerHTML = "";
+  for (const item of APP_CONFIG.menu) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `top-nav-btn${item.id === state.mode ? " active" : ""}`;
+    button.dataset.mode = item.id;
+    button.textContent = item.label;
+    button.addEventListener("click", () => navigateMode(item.id));
+    els.topNav.append(button);
+  }
+}
+
+function initialMode() {
+  const hashMode = window.location.hash.replace(/^#\/?/, "");
+  return APP_CONFIG.menu.some((item) => item.id === hashMode)
+    ? hashMode
+    : getMenuIdByModule("learning");
+}
+
+function navigateMode(mode) {
+  const nextHash = `#${mode}`;
+  if (window.location.hash === nextHash) {
+    setMode(mode);
+    return;
+  }
+  window.location.hash = mode;
+}
+
+function applyModeFromRoute() {
+  setMode(initialMode());
+}
+
+function setMode(mode) {
+  state.mode = mode;
+  const activeMenu = getMenuItem(mode);
+  const module = activeMenu?.module || mode;
+  els.browseModule.hidden = module !== "browse";
+  els.learningWorkspace.hidden = module !== "learning";
+  els.actionWorkspace.hidden = module !== "action";
+  els.topNav.querySelectorAll(".top-nav-btn").forEach((button) => {
+    button.classList.toggle("active", button.dataset.mode === mode);
+  });
+
+  if (module === "browse") {
+    els.currentPath.textContent = state.currentPath || "Browse Mode";
+    els.currentTitle.textContent = currentFileTitle();
+  }
+  if (module === "action") {
+    els.actionEyebrow.textContent = `${activeMenu.label} Mode`;
+    els.actionTitle.textContent = activeMenu.title || activeMenu.label;
+    els.actionDescription.textContent = activeMenu.placeholder || "该模块已预留，可在 config.js 中继续配置。";
+  }
+}
+
+function getMenuItem(mode) {
+  return APP_CONFIG.menu.find((item) => item.id === mode) || APP_CONFIG.menu[0];
+}
+
+function getMenuIdByModule(moduleName) {
+  return APP_CONFIG.menu.find((item) => item.module === moduleName)?.id || moduleName;
+}
+
+function currentModule() {
+  return getMenuItem(state.mode)?.module || state.mode;
+}
+
+function renderTree(files) {
+  els.tree.innerHTML = "";
+  const groups = new Map();
+
+  for (const file of files) {
+    const group = file.path.includes("/") ? file.path.split("/")[0] : "根目录";
+    if (!groups.has(group)) groups.set(group, []);
+    groups.get(group).push(file);
+  }
+
+  for (const [group, groupFiles] of groups) {
+    const section = document.createElement("div");
+    section.className = "tree-section";
+    section.textContent = group;
+    els.tree.append(section);
+
+    for (const file of groupFiles) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `file-btn${file.path === state.currentPath ? " active" : ""}`;
+      button.textContent = file.path.replace(`${group}/`, "");
+      button.title = file.path;
+      button.addEventListener("click", () => {
+        navigateMode(getMenuIdByModule("browse"));
+        openFile(file.path);
+      });
+      els.tree.append(button);
+    }
+  }
+}
+
+function renderDomains() {
+  els.domainSelect.innerHTML = "";
+  for (const domain of state.domains) {
+    const option = document.createElement("option");
+    option.value = domain;
+    option.textContent = domain;
+    els.domainSelect.append(option);
+  }
+}
+
+export function renderDialogueTypes() {
+  els.dialogueTypeList.innerHTML = "";
+  for (const type of DIALOGUE_TYPES) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `dialogue-type-btn${type.id === state.activeDialogueTypeId ? " active" : ""}`;
+    bindPromptTooltip(button, type.tooltip || type.useCases || type.name);
+    button.innerHTML = `
+      <strong>${escapeHtml(type.name)}</strong>
+      <span>${escapeHtml(type.outputGoal || type.useCases || "")}</span>
+    `;
+    button.addEventListener("click", () => {
+      if (type.id === state.activeDialogueTypeId) return;
+      state.activeDialogueTypeId = type.id;
+      state.activeDialogueSubtypeId = localStorage.getItem(dialogueSubtypeKey(type.id)) || "";
+      ensureActiveDialogueSubtype();
+      localStorage.setItem(dialogueTypeKey(), state.activeDialogueTypeId);
+      renderDialogueTypes();
+      renderEnhancers();
+      applyChatPackSelection(`大类已切换为「${type.name}」。`);
+    });
+    els.dialogueTypeList.append(button);
+  }
+  renderDialogueSubtypes();
+}
+
+// 无上下文构建不记录使用次数，任何次数都只是构建时的冻结基线，
+// 因此名称后只显示频率档位而不是具体次数。
+function usageBadge(count) {
+  return `（${chatPackContextEnabled() ? count : usageFrequencyLabel(count)}）`;
+}
+
+export function renderDialogueSubtypes() {
+  els.dialogueSubtypeList.innerHTML = "";
+  const type = activeDialogueType();
+  const subtypes = normalizedSubtypes(type);
+  if (!subtypes.length) return;
+
+  const usage = CHATPACK_CONFIG.usage;
+  const ordered = usage ? sortUsageItems(subtypes, usage) : subtypes;
+  const visible = usage && type.id !== "insight"
+    ? ordered.filter((subtype, index) => !isLowFrequencyUsage(subtype.usageCount, index, ordered.length))
+    : ordered;
+  const hidden = usage && type.id !== "insight" ? ordered.filter((subtype) => !visible.some((item) => item.id === subtype.id)) : [];
+
+  for (const subtype of visible) {
+    const button = document.createElement("button");
+    const unavailableReason = managedPromptUnavailableReason(subtype);
+    button.type = "button";
+    button.className = `dialogue-subtype-btn${subtype.id === state.activeDialogueSubtypeId ? " active" : ""}`;
+    bindPromptTooltip(button, subtype.tooltip || subtype.summary || subtype.protocol || subtype.name);
+    button.disabled = Boolean(unavailableReason);
+    if (unavailableReason) button.title = unavailableReason;
+    button.textContent = `${usage ? `${subtype.name}${usageBadge(subtype.usageCount)}` : subtype.name}${unavailableReason ? "（仅本地版可用）" : ""}`;
+    button.addEventListener("click", () => {
+      if (unavailableReason) return;
+      if (subtype.id === state.activeDialogueSubtypeId) {
+        if (activePeriodOutputMode()) applyChatPackSelection(`已恢复「${subtype.name}」推荐上下文。`);
+        return;
+      }
+      state.activeDialogueSubtypeId = subtype.id;
+      localStorage.setItem(dialogueSubtypeKey(type.id), subtype.id);
+      renderDialogueSubtypes();
+      applyChatPackSelection(`子类型已切换为「${subtype.name}」。`);
+    });
+    els.dialogueSubtypeList.append(button);
+  }
+
+  if (hidden.length) {
+    const field = document.createElement("label");
+    field.className = "prompt-usage-select";
+    field.innerHTML = `<span>其他提示词</span>`;
+    const select = document.createElement("select");
+    select.setAttribute("aria-label", "其他提示词");
+    select.innerHTML = `<option value="">选择低频提示词</option>${hidden
+      .map((subtype) => {
+        const unavailableReason = managedPromptUnavailableReason(subtype);
+        return `<option value="${escapeHtml(subtype.id)}"${subtype.id === state.activeDialogueSubtypeId ? " selected" : ""}${unavailableReason ? " disabled" : ""}>${escapeHtml(subtype.name)}${usageBadge(subtype.usageCount)}${unavailableReason ? "（不可用）" : ""}</option>`;
+      })
+      .join("")}`;
+    select.addEventListener("change", () => {
+      const subtype = hidden.find((item) => item.id === select.value);
+      if (!subtype) return;
+      state.activeDialogueSubtypeId = subtype.id;
+      localStorage.setItem(dialogueSubtypeKey(type.id), subtype.id);
+      renderDialogueSubtypes();
+      applyChatPackSelection(`子类型已切换为「${subtype.name}」。`);
+    });
+    field.append(select);
+    els.dialogueSubtypeList.append(field);
+  }
+}
+
+export function renderEnhancers() {
+  els.enhancerList.innerHTML = "";
+  const lengthItems = ENHANCERS.filter((enhancer) => enhancer.group === "length");
+  const buttonItems = ENHANCERS.filter((enhancer) => enhancer.group !== "length");
+  const usage = CHATPACK_CONFIG.usage;
+  const orderedButtonItems = usage ? sortUsageItems(buttonItems, usage, "enhancers") : buttonItems;
+
+  for (const enhancer of orderedButtonItems) {
+    const button = document.createElement("button");
+    const unavailableReason = managedPromptUnavailableReason(enhancer);
+    button.type = "button";
+    button.className = `dialogue-subtype-btn${state.activeEnhancerIds.has(enhancer.id) ? " active" : ""}`;
+    bindPromptTooltip(button, enhancer.tooltip || enhancer.summary || enhancer.protocol || enhancer.name);
+    button.disabled = Boolean(unavailableReason);
+    if (unavailableReason) button.title = unavailableReason;
+    button.textContent = `${usage ? `${enhancer.name}${usageBadge(enhancer.usageCount)}` : enhancer.name}${unavailableReason ? "（仅本地版可用）" : ""}`;
+    button.addEventListener("click", () => {
+      if (unavailableReason) return;
+      const enhancerWasActive = state.activeEnhancerIds.has(enhancer.id);
+      if (state.activeEnhancerIds.has(enhancer.id)) {
+        state.activeEnhancerIds.delete(enhancer.id);
+      } else {
+        clearEnhancerGroup(enhancer);
+        state.activeEnhancerIds.add(enhancer.id);
+      }
+      state.activeEnhancerIds = new Set(normalizeEnhancerIds([...state.activeEnhancerIds]));
+      const periodMode = activePeriodOutputMode();
+      localStorage.setItem(enhancerKey(), JSON.stringify([...state.activeEnhancerIds]));
+      renderEnhancers();
+      syncCurrentQuestionDefault(undefined, undefined, {
+        force: enhancer.id === MUNGER_SOUL_ENHANCER_ID && !enhancerWasActive
+      });
+      const message = `增强器已更新：${selectedEnhancers().map((item) => item.name).join("、") || "无"}。`;
+      if (enhancer.id === MUNGER_SOUL_ENHANCER_ID && periodMode) {
+        applyRecommendedSources();
+        applyPeriodContextSelection(periodMode, state.activePeriodValues[periodMode]);
+        resetExpandedContextDirs();
+        renderSourceChecklist();
+        setAutoAssembledPrompt();
+        resetGeneratedContext(message);
+      } else {
+        applyPromptOnlySelection(message);
+      }
+    });
+    els.enhancerList.append(button);
+  }
+
+  if (lengthItems.length) {
+    const field = document.createElement("label");
+    field.className = "enhancer-length-field";
+    field.innerHTML = `<span>字数</span>`;
+
+    const select = document.createElement("select");
+    select.setAttribute("aria-label", "输出字数");
+    select.innerHTML = `<option value="">自然字数</option>${lengthItems
+      .map((enhancer) => `<option value="${escapeHtml(enhancer.id)}">${escapeHtml(enhancer.name)}</option>`)
+      .join("")}`;
+    select.value = activeLengthEnhancer()?.id || "";
+    select.addEventListener("change", () => {
+      for (const enhancer of lengthItems) state.activeEnhancerIds.delete(enhancer.id);
+      if (select.value) state.activeEnhancerIds.add(select.value);
+      state.activeEnhancerIds = new Set(normalizeEnhancerIds([...state.activeEnhancerIds]));
+      localStorage.setItem(enhancerKey(), JSON.stringify([...state.activeEnhancerIds]));
+      renderEnhancers();
+      syncCurrentQuestionDefault();
+      applyPromptOnlySelection(`增强器已更新：${selectedEnhancers().map((item) => item.name).join("、") || "无"}。`);
+    });
+
+    field.append(select);
+    els.enhancerList.append(field);
+  }
+}
+
+function clearEnhancerGroup(enhancer) {
+  if (!enhancer.group) return;
+  for (const item of ENHANCERS) {
+    if (item.group === enhancer.group) state.activeEnhancerIds.delete(item.id);
+  }
+}
+
+async function openFile(filePath) {
+  const file = await getJson(`api/file?path=${encodeURIComponent(filePath)}`);
+  state.currentPath = file.path;
+  els.currentPath.textContent = file.path;
+  els.currentTitle.textContent = file.title;
+  els.readerCurrentFile.textContent = file.path;
+  els.reader.innerHTML = file.html;
+  renderTree(filteredFiles());
+  attachPreviewHandlers();
+  els.status.textContent = `已读取 ${file.path}`;
+}
+
+function filteredFiles() {
+  const query = els.search.value.trim().toLowerCase();
+  if (!query) return state.files;
+  return state.files.filter((item) =>
+    `${item.path}\n${item.title}\n${item.preview}`.toLowerCase().includes(query)
+  );
+}
+
+function currentFileTitle() {
+  const file = state.files.find((item) => item.path === state.currentPath);
+  return file?.title || "Learn-X";
+}
+
+export function applyChatPackSelection(message) {
+  resetEnhancersForSubtype();
+  const type = activeDialogueType();
+  const subtype = activeDialogueSubtype();
+  els.scenarioEyebrow.textContent = subtype?.needsDomain
+    ? `Learning Mode · ${state.selectedDomain || "未发现领域"}`
+    : "Learning Mode · Chat Pack";
+  els.scenarioTitle.textContent = subtype ? `${type?.name || "大类"} · ${subtype.name}` : type?.name || "Chat Pack";
+  els.domainField.hidden = !subtype?.needsDomain;
+  setAutoAssembledPrompt();
+  syncCurrentQuestionDefault(type, subtype);
+  if (chatPackContextEnabled()) {
+    applyRecommendedSources();
+    renderPeriodPicker();
+    renderSourceChecklist();
+  } else {
+    state.contextSelections = new Map();
+    els.periodPicker.hidden = true;
+    els.insightManifestDetails.hidden = true;
+  }
+  resetGeneratedContext(message);
+}
+
+function chatPackContextEnabled() {
+  return state.runtime.contextEnabled !== false;
+}
+
+export function applyPromptOnlySelection(message) {
+  setAutoAssembledPrompt();
+  els.learningStatus.textContent = message;
+  renderChatPackPreview();
+}
+
+function defaultQuestionText(type, subtype) {
+  const periodMode = activePeriodOutputMode();
+  if (periodMode && state.activeEnhancerIds.has(MUNGER_SOUL_ENHANCER_ID)) {
+    return MUNGER_SOUL_PERIOD_QUESTIONS[periodMode];
+  }
+  if (shouldUseMungerSoulQuestion(subtype)) return MUNGER_SOUL_QUESTION;
+  return subtype?.currentQuestion?.trim() || subtype?.name || type?.name || "";
+}
+
+function shouldFillEmptyCurrentQuestion(subtype) {
+  return shouldUseMungerSoulQuestion(subtype) && !els.currentQuestion.value.trim();
+}
+
+function shouldUseMungerSoulQuestion(subtype = activeDialogueSubtype()) {
+  return subtype?.id === MUNGER_SOUL_SUBTYPE_ID || state.activeEnhancerIds.has(MUNGER_SOUL_ENHANCER_ID);
+}
+
+function syncCurrentQuestionDefault(type = activeDialogueType(), subtype = activeDialogueSubtype(), options = {}) {
+  if (options.force || !state.currentQuestionTouched || shouldFillEmptyCurrentQuestion(subtype)) {
+    els.currentQuestion.value = defaultQuestionText(type, subtype);
+  }
+}
+
+function activePeriodOutputMode() {
+  const subtypeId = activeDialogueSubtype()?.id;
+  return Object.keys(PERIOD_OUTPUTS).find((mode) => PERIOD_OUTPUTS[mode].subtypeIds?.includes(subtypeId) || PERIOD_OUTPUTS[mode].subtypeId === subtypeId) || "";
+}
+
+function renderPeriodPicker() {
+  if (activeDialogueType()?.id === "insight") {
+    els.periodPicker.hidden = false;
+    els.periodPickerLabel.textContent = "周期洞察";
+    els.periodSelect.hidden = true;
+    els.insightControls.hidden = false;
+    state.periodicInsight.contextStats = null;
+    els.insightManifestDetails.hidden = true;
+    els.insightManifestList.textContent = "";
+    renderInsightTargets();
+    els.insightTargetSelect.value = state.periodicInsight.target || "auto";
+    els.insightRangeSelect.value = state.periodicInsight.range || "1y";
+    els.insightCustomRange.hidden = state.periodicInsight.range !== "custom";
+    loadPeriodicInsightContext().catch((error) => { els.learningStatus.textContent = `洞察 Context 失败：${error.message}`; });
+    return;
+  }
+  periodicInsightRequestId += 1;
+  els.periodSelect.hidden = false;
+  els.insightControls.hidden = true;
+  els.insightManifestDetails.hidden = true;
+  const mode = activePeriodOutputMode();
+  if (!mode) {
+    els.periodPicker.hidden = true;
+    return;
+  }
+
+  const config = PERIOD_OUTPUTS[mode];
+  const options = periodOptions(mode);
+  const multiSelect = mode === "weekly";
+  const currentValue = state.activePeriodValues[mode];
+  const currentValues = multiSelect
+    ? (Array.isArray(currentValue) ? currentValue : currentValue ? [currentValue] : [])
+    : [currentValue];
+  const selectedValues = currentValues.filter((value) => options.some((option) => option.value === value));
+  if (!selectedValues.length && options[0]) selectedValues.push(options[0].value);
+
+  state.activePeriodValues[mode] = multiSelect ? selectedValues : (selectedValues[0] || "");
+  els.periodPicker.hidden = false;
+  els.periodPickerLabel.textContent = config.label;
+  els.periodSelect.multiple = multiSelect;
+  els.periodSelect.size = multiSelect ? Math.min(4, Math.max(options.length, 1)) : 1;
+  els.periodSelect.title = multiSelect ? "按住 ⌘/Ctrl 或 Shift 点击可多选" : "";
+  els.periodSelect.disabled = !options.length;
+  els.periodSelect.innerHTML = options.length
+    ? options.map((option) => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>`).join("")
+    : `<option value="">${escapeHtml(config.emptyLabel)}</option>`;
+  for (const option of els.periodSelect.options) option.selected = selectedValues.includes(option.value);
+  applyPeriodContextSelection(mode, state.activePeriodValues[mode]);
+  resetExpandedContextDirs();
+}
+
+async function loadPeriodicInsightContext() {
+  if (activeDialogueType()?.id !== "insight" || state.runtime.target !== "local" || !periodicInsightContextApi) return;
+  const requestId = ++periodicInsightRequestId;
+  const taskId = activeDialogueSubtype()?.id?.replace(/^insight\./, "") || "munger-soul";
+  const params = new URLSearchParams({ taskId, target: state.periodicInsight.target || "auto", range: state.periodicInsight.range || "1y" });
+  if (state.periodicInsight.range === "custom") { if (els.insightFromDate.value) params.set("from", els.insightFromDate.value); if (els.insightToDate.value) params.set("to", els.insightToDate.value); }
+  const checkedTypes = [...(els.insightMaterialTypes?.querySelectorAll(".insight-type-toggle:checked") || [])].map((input) => input.value);
+  const allTypesSelected = checkedTypes.length === els.insightMaterialTypes?.querySelectorAll(".insight-type-toggle").length;
+  if (els.insightMaterialTypes && !allTypesSelected) params.set("includeTypes", ["target-output", ...checkedTypes].join(","));
+  els.insightContextSummary.textContent = "正在按日期和预算装配 Context…";
+  const response = await fetch(`${periodicInsightContextApi}?${params}`);
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+  if (requestId !== periodicInsightRequestId) return payload;
+  if (!payload.target) { state.context = ""; state.periodicInsight.contextStats = null; els.insightManifestDetails.hidden = true; els.insightManifestList.textContent = ""; els.insightContextSummary.textContent = "没有合格的目标月/周，本轮不会调用 ChatGPT。"; renderChatPackPreview(); return payload; }
+  state.context = payload.content || "";
+  const budget = payload.budget || {};
+  state.periodicInsight.contextStats = { chars: payload.chars, budget };
+  els.insightContextSummary.textContent = `目标 ${payload.target.id} · 历史 ${payload.range.id} · Context ${formatNumber(payload.chars)}/${formatNumber(budget.contextChars || 0)} 字符 · 纳入 ${payload.included.length} 项 · 排除 ${payload.excluded.length} 项`;
+  els.insightManifestList.textContent = renderPeriodicManifest(payload);
+  els.insightManifestDetails.hidden = false;
+  els.learningStatus.textContent = "周期洞察 Context 已就绪。";
+  renderChatPackPreview();
+  return payload;
+}
+
+function renderPeriodicManifest(payload) {
+  const lines = [`材料类型：${(payload.selectedTypes || []).map((type) => periodicMaterialTypeLabel(type)).join("、")}`];
+  if ((payload.availableTypes || []).length !== (payload.selectedTypes || []).length) {
+    const disabled = (payload.availableTypes || []).filter((type) => type !== "target-output" && !payload.selectedTypes.includes(type));
+    if (disabled.length) lines.push(`已取消勾选：${disabled.map((type) => periodicMaterialTypeLabel(type)).join("、")}`);
+  }
+  lines.push("", `纳入（${payload.included.length}）`);
+  for (const item of payload.included) {
+    lines.push(`- [${periodicMaterialTypeLabel(item.role)}] ${item.path} · ${formatNumber(item.chars)} 字${item.items > 1 ? ` · ${item.items} 项` : ""}${item.dateRange || item.dateBasis ? ` · ${item.dateRange || item.dateBasis}` : ""}${item.sync ? ` · 同步 ${item.sync.status}${item.sync.syncedAt ? `（${item.sync.syncedAt}）` : ""}` : ""}`);
+  }
+  lines.push("", `排除（${payload.excluded.length}）`);
+  for (const item of payload.excluded) {
+    const reason = item.reason === "user-disabled" ? "界面取消勾选" : item.reason || "未说明原因";
+    lines.push(`- [${periodicMaterialTypeLabel(item.role)}] ${item.path || "（未定位材料）"}${item.items > 1 ? ` · ${item.items} 项` : ""}${item.chars ? ` · ${formatNumber(item.chars)} 字` : ""}${item.dateBasis ? ` · ${item.dateBasis}` : ""} · ${reason}`);
+  }
+  return lines.join("\n");
+}
+
+function periodicMaterialTypeLabel(role) {
+  return {
+    "target-output": "目标周期输出",
+    "life-core": "人生核心议题",
+    "target-journal": "目标周期周记",
+    "history-backbone": "历史骨架",
+    "flomo": "Flomo",
+    "process-pack": "Process Pack",
+    "confirmed-output": "历史已确认输出",
+    "quarterly-memory": "季度 Memory"
+  }[role] || role || "系统判定";
+}
+
+function renderInsightTargets() {
+  const options = [{ value: "auto", label: "自动选择（最近完整月，缺失则周）" }];
+  const seen = new Set(["auto"]);
+  for (const file of state.customContextFiles) {
+    const month = file.path.match(/^04_output\/monthly\/(\d{4}-\d{2})\.md$/);
+    const week = file.path.match(/^04_output\/weekly\/(\d{4})-W?(\d{2})\.md$/);
+    const value = month?.[1] || (week ? `${week[1]}-W${week[2]}` : "");
+    if (!value || seen.has(value)) continue;
+    seen.add(value); options.push({ value, label: value });
+  }
+  els.insightTargetSelect.innerHTML = options.map((option) => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>`).join("");
+}
+
+function periodOptions(mode) {
+  const config = PERIOD_OUTPUTS[mode];
+  const options = new Map();
+  for (const file of state.customContextFiles) {
+    for (const pattern of periodOptionPatterns(config)) {
+      const match = file.path.match(pattern.pattern);
+      if (!match) continue;
+      const value = pattern.valueFromMatch(match);
+      options.set(value, { value, label: config.labelFromValue(value) });
+    }
+  }
+  return [...options.values()].sort((a, b) => b.value.localeCompare(a.value, "zh-Hans-CN"));
+}
+
+function periodOptionPatterns(config) {
+  return [
+    { pattern: config.pattern, valueFromMatch: config.valueFromMatch },
+    ...(config.optionPatterns || [])
+  ];
+}
+
+function applyPeriodContextSelection(mode, value) {
+  const values = (Array.isArray(value) ? value : [value]).filter(Boolean);
+  if (!mode || !values.length) return 0;
+  let count = 0;
+  for (const file of state.customContextFiles) {
+    const strategy = values.map((period) => periodContextStrategy(mode, period, file.path)).find(Boolean);
+    if (!strategy) continue;
+    state.contextSelections.set(file.path, strategy);
+    count += 1;
+  }
+  return count;
+}
+
+function periodContextStrategy(mode, value, filePath) {
+  if (mode === "weekly") {
+    return filePath === `${PERIOD_OUTPUTS.weekly.prefixFromValue(value)}process-pack.md`
+      ? normalizeStrategy(state.contextFileMap.get(filePath)?.defaultStrategy || "normal")
+      : "";
+  }
+  if (mode === "monthly") return monthlyContextStrategy(value, filePath);
+  if (mode === "yearly") return yearlyContextStrategy(value, filePath);
+  if (mode === "voiceInsight") return filePath === `${PERIOD_OUTPUTS.voiceInsight.prefixFromValue(value)}_voice-insight-context.md` ? "high" : "";
+  return "";
+}
+
+function monthlyContextStrategy(value, filePath) {
+  if (!value.match(/^\d{4}-\d{2}$/) || filePath.endsWith("/input.json")) return "";
+  return filePath === `04_output/_dist/monthly/${value}/process-pack.md` ? "high" : "";
+}
+
+function yearlyContextStrategy(value, filePath) {
+  if (!/^\d{4}$/.test(value) || filePath.endsWith("/input.json")) return "";
+  const yearlyProcessPackPath = `04_output/_dist/yearly/${value}/process-pack.md`;
+
+  if (state.contextFileMap.has(yearlyProcessPackPath)) {
+    return filePath === yearlyProcessPackPath ? "high" : "";
+  }
+
+  if (
+    filePath.match(new RegExp(`^04_output/monthly/${value}-\\d{2}\\.md$`))
+  ) {
+    return "high";
+  }
+  return "";
+}
+
+function selectedPeriodLabel(mode) {
+  const values = (Array.isArray(state.activePeriodValues[mode])
+    ? state.activePeriodValues[mode]
+    : [state.activePeriodValues[mode]])
+    .filter(Boolean);
+  return values.map((value) => PERIOD_OUTPUTS[mode].labelFromValue(value)).join("、");
+}
+
+function activeDialogueType() {
+  return DIALOGUE_TYPES.find((type) => type.id === state.activeDialogueTypeId) || DIALOGUE_TYPES[0];
+}
+
+export function activeDialogueSubtype() {
+  return normalizedSubtypes(activeDialogueType()).find((subtype) => subtype.id === state.activeDialogueSubtypeId);
+}
+
+function ensureActiveDialogueSubtype() {
+  const subtypes = normalizedSubtypes(activeDialogueType());
+  if (!subtypes.length) {
+    state.activeDialogueSubtypeId = "";
+    return;
+  }
+  if (!subtypes.some((subtype) => subtype.id === state.activeDialogueSubtypeId)) {
+    state.activeDialogueSubtypeId = subtypes[0].id;
+  }
+}
+
+function normalizedSubtypes(type) {
+  return (type?.subtypes || []).map((subtype, index) => {
+    if (typeof subtype === "string") {
+      return { id: slugify(subtype) || `subtype-${index}`, name: subtype, protocol: "" };
+    }
+    return {
+      id: subtype.id || slugify(subtype.name) || `subtype-${index}`,
+      name: subtype.name || subtype.id || `小类 ${index + 1}`,
+      summary: subtype.summary || "",
+      currentQuestion: subtype.currentQuestion || "",
+      needsDomain: Boolean(subtype.needsDomain),
+      includeBaseRecommendedSources: subtype.includeBaseRecommendedSources !== false,
+      recommendedSources: subtype.recommendedSources || [],
+      defaultEnhancerIds: subtype.defaultEnhancerIds || [],
+      protocol: subtype.protocol || "",
+      managedAsset: subtype.managedAsset || null
+    };
+  });
+}
+
+function resetEnhancersForSubtype() {
+  const defaults = normalizeEnhancerIds(activeDialogueSubtype()?.defaultEnhancerIds || []);
+  const next = new Set(defaults);
+  const same =
+    state.activeEnhancerIds.size === next.size && [...state.activeEnhancerIds].every((id) => next.has(id));
+  if (same) return;
+  state.activeEnhancerIds = next;
+  localStorage.setItem(enhancerKey(), JSON.stringify([...state.activeEnhancerIds]));
+  renderEnhancers();
+}
+
+function isEmptyPromptType(type) {
+  return Boolean(type?.emptyPrompt || type?.id === "plain-context");
+}
+
+function isEmptyPromptSelection(type, subtype) {
+  return Boolean(isEmptyPromptType(type) || subtype?.emptyPrompt || subtype?.id === "other-prompts.empty-prompt");
+}
+
+function renderPromptTemplate(template) {
+  return template.replaceAll("{{domain}}", state.selectedDomain || "当前领域");
+}
+
+function dialogueTypeKey() {
+  return `${STORAGE_PREFIX}:dialogue-type`;
+}
+
+function dialogueSubtypeKey(typeId) {
+  return `${STORAGE_PREFIX}:dialogue-subtype:${typeId || "global"}`;
+}
+
+function enhancerKey() {
+  return `${STORAGE_PREFIX}:enhancers`;
+}
+
+function readEnhancerIds() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(enhancerKey()) || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return normalizeEnhancerIds(parsed).filter((id) => ENHANCERS.find((enhancer) => enhancer.id === id)?.group !== "length");
+  } catch {
+    return [];
+  }
+}
+
+function normalizeEnhancerIds(ids) {
+  const byId = new Map(ENHANCERS.map((enhancer) => [enhancer.id, enhancer]));
+  const normalized = [];
+  for (const id of ids) {
+    const enhancer = byId.get(id);
+    if (!enhancer) continue;
+    if (enhancer.group) {
+      for (let index = normalized.length - 1; index >= 0; index -= 1) {
+        if (byId.get(normalized[index])?.group === enhancer.group) normalized.splice(index, 1);
+      }
+    }
+    if (!normalized.includes(id)) normalized.push(id);
+  }
+  return normalized;
+}
+
+function applyRecommendedSources() {
+  const recommended = recommendedSourcesForSelection()
+    .map((sourcePath) => renderPromptTemplate(sourcePath));
+  const availableFiles = recommended.length ? state.customContextFiles : state.contextFiles;
+  state.contextSelections = new Map();
+
+  for (const file of availableFiles) {
+    const matched = recommended.some(
+      (sourcePath) => file.path === sourcePath || file.path.startsWith(`${sourcePath}/`)
+    );
+    state.contextSelections.set(file.path, matched ? normalizeStrategy(file.defaultStrategy) : "none");
+  }
+  resetExpandedContextDirs();
+}
+
+function selectAllContextSources() {
+  const files = sourceTreeFiles();
+  for (const file of files) state.contextSelections.set(file.path, "normal");
+  renderSourceChecklist();
+  resetGeneratedContext(`已全选上下文：${files.length} 个文件。`);
+}
+
+function invertContextSources() {
+  const files = sourceTreeFiles();
+  for (const file of files) {
+    const current = state.contextSelections.get(file.path) || "none";
+    state.contextSelections.set(file.path, current === "none" ? "normal" : "none");
+  }
+  renderSourceChecklist();
+  resetGeneratedContext("已反选当前上下文树。");
+}
+
+function recommendedSourcesForSelection() {
+  const subtype = activeDialogueSubtype();
+  const type = activeDialogueType();
+  const includeBase = subtype?.includeBaseRecommendedSources !== false;
+  const baseSources = includeBase && type?.id !== "diagram-generate" ? ["Core/道", "01_core/memory"] : [];
+  const configured = subtype?.recommendedSources?.length ? subtype.recommendedSources : type?.recommendedSources || [];
+  const recommended = uniqueList([...baseSources, ...configured]);
+  const periodMode = activePeriodOutputMode();
+  if (!periodMode || !state.activeEnhancerIds.has(MUNGER_SOUL_ENHANCER_ID)) return recommended;
+
+  const excludedSources = new Set([
+    `.agents/skills/learn-x-process/resources/${periodMode}-output-rules.md`,
+    "04_output/README.md",
+    "04_output/usage.md"
+  ]);
+  return recommended.filter((sourcePath) => !excludedSources.has(sourcePath));
+}
+
+function uniqueList(items) {
+  return [...new Set(items.filter(Boolean))];
+}
+
+function openCustomContextDialog() {
+  state.customDraftSelections = new Set(selectedContextFiles().map((file) => file.path));
+  els.customContextSearch.value = "";
+  renderCustomContextList();
+  els.customContextDialog.showModal();
+}
+
+function renderCustomContextList() {
+  const query = els.customContextSearch.value.trim().toLowerCase();
+  els.customContextList.innerHTML = "";
+
+  if (query) {
+    for (const node of searchCustomContext(state.customContextFiles, query)) renderCustomContextPickerNode(node, 0, true);
+  } else {
+    const tree = buildContextTree(state.customContextFiles);
+    for (const node of tree.children) renderCustomContextPickerNode(node, 0);
+  }
+
+  renderCustomContextCount();
+}
+
+function renderCustomContextPickerNode(node, depth, searchResult = false) {
+  const row = document.createElement("div");
+  row.className = `custom-context-item ${node.type}`;
+  row.style.setProperty("--depth", String(depth));
+  row.title = node.path;
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "tree-toggle";
+  if (node.type === "folder" && !searchResult) {
+    const expanded = state.expandedCustomContextDirs.has(node.path);
+    toggle.textContent = expanded ? "▾" : "▸";
+    toggle.addEventListener("click", () => {
+      if (expanded) state.expandedCustomContextDirs.delete(node.path);
+      else state.expandedCustomContextDirs.add(node.path);
+      renderCustomContextList();
+    });
+  } else {
+    toggle.classList.add("spacer");
+  }
+
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  const files = node.type === "folder" ? node.files : [node.file];
+  const selectedCount = files.filter((file) => state.customDraftSelections.has(file.path)).length;
+  checkbox.checked = files.length > 0 && selectedCount === files.length;
+  checkbox.indeterminate = selectedCount > 0 && selectedCount < files.length;
+  checkbox.addEventListener("change", () => {
+    for (const file of files) {
+      if (checkbox.checked) state.customDraftSelections.add(file.path);
+      else state.customDraftSelections.delete(file.path);
+    }
+    renderCustomContextList();
+  });
+
+  const text = document.createElement("button");
+  text.type = "button";
+  text.className = "custom-context-label";
+  text.innerHTML = node.type === "folder"
+    ? `<strong>${escapeHtml(node.name)}/</strong><em>${searchResult ? `${escapeHtml(node.path)} · ` : ""}${node.files.length} 个 Markdown</em>`
+    : `<strong>${escapeHtml(node.file.title || node.path)}</strong><em>${escapeHtml(node.path)}</em>`;
+  text.addEventListener("click", () => checkbox.click());
+  row.append(toggle, checkbox, text);
+  els.customContextList.append(row);
+
+  if (node.type === "folder" && state.expandedCustomContextDirs.has(node.path)) {
+    for (const child of node.children) renderCustomContextPickerNode(child, depth + 1);
+  }
+}
+
+function selectAllVisibleCustomContext() {
+  const query = els.customContextSearch.value.trim().toLowerCase();
+  const nodes = query ? searchCustomContext(state.customContextFiles, query) : state.customContextFiles.map((file) => ({ type: "file", file }));
+  for (const node of nodes) {
+    for (const file of node.type === "folder" ? node.files : [node.file]) state.customDraftSelections.add(file.path);
+  }
+  renderCustomContextList();
+}
+
+function applyCustomContextSelections() {
+  state.contextSelections = new Map();
+  for (const path of state.customDraftSelections) {
+    state.contextSelections.set(path, normalizeStrategy(state.contextFileMap.get(path)?.defaultStrategy || "normal"));
+  }
+  for (const file of state.customContextFiles) {
+    if (!state.contextSelections.has(file.path)) state.contextSelections.set(file.path, "none");
+  }
+  resetExpandedContextDirs();
+  renderSourceChecklist();
+  resetGeneratedContext(`已应用自定义上下文：${state.customDraftSelections.size} 个文件。`);
+  els.customContextDialog.close();
+}
+
+function renderCustomContextCount() {
+  const files = state.customContextFiles.filter((file) => state.customDraftSelections.has(file.path));
+  const missing = files.filter((file) => contextFileCharCount(file) === null);
+  const knownChars = files.reduce((total, file) => total + (contextFileCharCount(file) ?? 0), 0);
+  const charsLabel = missing.length ? `已知 ${formatNumber(knownChars)} 字` : `总计 ${formatNumber(knownChars)} 字`;
+  els.customContextCount.textContent = `已选 ${files.length} 个文件 · ${charsLabel}`;
+}
+
+function renderSourceChecklist() {
+  els.sourceChecklist.innerHTML = "";
+  const tree = buildContextTree(sourceTreeFiles());
+  for (const node of tree.children) renderContextNode(node, els.sourceChecklist, 0);
+}
+
+function resetExpandedContextDirs() {
+  const expanded = new Set();
+  const tree = buildContextTree(sourceTreeFiles());
+  collectPartialContextDirs(tree, expanded);
+  state.expandedContextDirs = expanded;
+}
+
+function collectPartialContextDirs(node, expanded) {
+  if (node.type !== "folder") return;
+  if (node.path && directoryStrategy(node) === "partial") expanded.add(node.path);
+  for (const child of node.children || []) collectPartialContextDirs(child, expanded);
+}
+
+function sourceTreeFiles() {
+  const selectedCustomFiles = [...state.contextSelections.keys()]
+    .filter((filePath) => !state.contextFiles.some((file) => file.path === filePath))
+    .map((filePath) => state.contextFileMap.get(filePath))
+    .filter(Boolean);
+  return [...state.contextFiles, ...selectedCustomFiles].sort((a, b) => a.path.localeCompare(b.path, "zh-Hans-CN"));
+}
+
+function buildContextTree(files) {
+  const root = { name: "", path: "", type: "folder", children: [], files: [] };
+  for (const file of files) {
+    const parts = file.path.split("/");
+    let cursor = root;
+    for (const [index, part] of parts.entries()) {
+      const nodePath = parts.slice(0, index + 1).join("/");
+      const isFile = index === parts.length - 1;
+      if (isFile) {
+        cursor.children.push({ name: part, path: nodePath, type: "file", file });
+        continue;
+      }
+
+      let folder = cursor.children.find((child) => child.type === "folder" && child.path === nodePath);
+      if (!folder) {
+        folder = { name: part, path: nodePath, type: "folder", children: [], files: [] };
+        cursor.children.push(folder);
+      }
+      folder.files.push(file);
+      cursor = folder;
+    }
+  }
+  sortContextTree(root);
+  return root;
+}
+
+function sortContextTree(node) {
+  if (!node.children) return;
+  node.children.sort((a, b) => {
+    if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
+    return a.path.localeCompare(b.path, "zh-Hans-CN");
+  });
+  for (const child of node.children) sortContextTree(child);
+}
+
+function renderContextNode(node, container, depth) {
+  const row = document.createElement("div");
+  row.className = `context-row ${node.type}`;
+  row.style.setProperty("--depth", String(depth));
+
+  if (node.type === "folder") {
+    const expanded = state.expandedContextDirs.has(node.path);
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "tree-toggle";
+    toggle.textContent = expanded ? "▾" : "▸";
+    toggle.title = expanded ? "收起目录" : "展开目录";
+    toggle.addEventListener("click", () => {
+      if (expanded) state.expandedContextDirs.delete(node.path);
+      else state.expandedContextDirs.add(node.path);
+      renderSourceChecklist();
+    });
+
+    const strategy = directoryStrategy(node);
+    const stateButton = makeStrategyButton(strategy, () => {
+      const next = strategy === "checked" ? "none" : "normal";
+      for (const file of node.files) state.contextSelections.set(file.path, next);
+      resetGeneratedContext(`已将 ${node.path}/ 切换为「${strategyLabel(next)}」。`);
+      renderSourceChecklist();
+    }, "folder");
+
+    const label = document.createElement("button");
+    label.type = "button";
+    label.className = "context-label";
+    label.title = node.path;
+    const folderChars = node.files.reduce((total, file) => {
+      const count = contextFileCharCount(file);
+      return total === null || count === null ? null : total + count;
+    }, 0);
+    const folderCharsLabel = folderChars === null ? "字数待读取" : `总计 ${formatNumber(folderChars)} 字`;
+    label.innerHTML = `<strong>${escapeHtml(node.name)}/</strong><span>${node.files.length} 个文件 · ${folderCharsLabel}</span>`;
+    label.addEventListener("click", () => {
+      if (expanded) state.expandedContextDirs.delete(node.path);
+      else state.expandedContextDirs.add(node.path);
+      renderSourceChecklist();
+    });
+
+    row.append(toggle, stateButton, label);
+    container.append(row);
+
+    if (expanded) {
+      for (const child of node.children) renderContextNode(child, container, depth + 1);
+    }
+    return;
+  }
+
+  const previewExpanded = state.expandedContextFilePreviews.has(node.path);
+  const previewText = contextFilePreview(node.file);
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "tree-toggle";
+  toggle.textContent = previewExpanded ? "▾" : "▸";
+  toggle.title = previewExpanded ? "收起预览" : "展开预览";
+  toggle.disabled = !previewText;
+  toggle.addEventListener("click", () => {
+    toggleContextFilePreview(node.path);
+  });
+
+  const strategy = state.contextSelections.get(node.path) || "none";
+  const stateButton = makeStrategyButton(strategy, () => {
+    const next = nextStrategy(strategy);
+    state.contextSelections.set(node.path, next);
+    resetGeneratedContext(`已将 ${node.path} 切换为「${strategyLabel(next)}」。`);
+    renderSourceChecklist();
+  });
+  const label = document.createElement("button");
+  label.type = "button";
+  label.className = "context-label";
+  label.title = node.path;
+  const charCount = contextFileCharCount(node.file);
+  const charCountLabel = charCount === null ? "字数待读取" : `${formatNumber(charCount)} 字`;
+  label.innerHTML = `<strong>${escapeHtml(node.name)}</strong><span>${escapeHtml(node.path)} · ${charCountLabel}</span>`;
+  label.addEventListener("click", () => {
+    if (previewText) toggleContextFilePreview(node.path);
+  });
+  row.append(toggle, stateButton, label);
+  container.append(row);
+
+  if (previewExpanded && previewText) {
+    const preview = document.createElement("div");
+    preview.className = "context-preview";
+    preview.style.setProperty("--depth", String(depth));
+    preview.textContent = previewText;
+    container.append(preview);
+  }
+}
+
+function toggleContextFilePreview(filePath) {
+  if (state.expandedContextFilePreviews.has(filePath)) state.expandedContextFilePreviews.delete(filePath);
+  else state.expandedContextFilePreviews.add(filePath);
+  renderSourceChecklist();
+}
+
+function contextFileContent(file) {
+  return state.contextFileMap.get(file.path)?.content || file.content || file.preview || "";
+}
+
+function contextFilePreview(file) {
+  return compactPreviewText(contextFileContent(file), 220);
+}
+
+function contextFileCharCount(file) {
+  if (Number.isInteger(file.visibleChars) && file.visibleChars >= 0) return file.visibleChars;
+  const content = state.contextFileMap.get(file.path)?.content ?? file.content;
+  return typeof content === "string" ? estimateTextStats(content).visibleChars : null;
+}
+
+function compactPreviewText(content, maxChars) {
+  const text = content
+    .replace(/^---[\s\S]*?---\s*/m, "")
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/[#>*_`[\]()~-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return "";
+  return text.length > maxChars ? `${text.slice(0, maxChars)}...` : text;
+}
+
+function directoryStrategy(node) {
+  const selectedCount = node.files.filter((file) => (state.contextSelections.get(file.path) || "none") !== "none").length;
+  if (selectedCount === 0) return "none";
+  if (selectedCount === node.files.length) return "checked";
+  return "partial";
+}
+
+function makeStrategyButton(strategy, onClick, scope = "file") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `state-toggle ${scope} ${strategy}`;
+  button.textContent = strategySymbol(strategy, scope);
+  button.title = strategyTooltip(strategy, scope);
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+function nextStrategy(strategy) {
+  const order = ["none", "normal", "high"];
+  return order[(order.indexOf(strategy) + 1) % order.length] || "none";
+}
+
+function strategySymbol(strategy, scope = "file") {
+  if (scope === "folder") return { checked: "✓", partial: "−", none: "" }[strategy] || "";
+  return { none: "", normal: "✓", high: "↑" }[strategy] || "";
+}
+
+function strategyLabel(strategy) {
+  return { checked: "全选", partial: "部分选择", none: "不选", normal: "使用", high: "置顶" }[strategy] || "不选";
+}
+
+function strategyTooltip(strategy, scope = "file") {
+  if (scope === "folder") return `${strategyLabel(strategy)}；点击切换整组选择`;
+  return `${strategyLabel(strategy)}；点击切换为下一个状态`;
+}
+
+async function generateContext({ coreAssets = {}, signal, isCurrent = () => true } = {}) {
+  if (activeDialogueType()?.id === "insight") {
+    const payload = await loadPeriodicInsightContext();
+    if (!isCurrent() || !payload?.content) return false;
+    setProgress(100);
+    return true;
+  }
+  const generationId = ++contextGenerationSequence;
+  state.context = "";
+  renderChatPackPreview();
+  setProgress(0);
+  const selectedFiles = selectedContextFiles();
+  if (!selectedFiles.length) {
+    if (activePeriodOutputMode()) {
+      els.learningStatus.textContent = "周期洞察或 Output 需要对应材料；请先选择 Context 来源。";
+      return false;
+    }
+    els.learningStatus.textContent = "未选择 Context；本次仅按问题、Prompt 和已选增强器生成。";
+    setProgress(100);
+    return true;
+  }
+
+  setProgress(18);
+  els.learningStatus.textContent = "正在读取并编排上下文。";
+
+  try {
+    setProgress(48);
+    const filesWithContent = await loadContextContents(selectedFiles, {
+      coreAssets,
+      signal,
+      requireCachedCore: state.runtime?.target === "local"
+    });
+    if (generationId !== contextGenerationSequence || !isCurrent()) return false;
+    setProgress(82);
+    const weighted = buildWeightedContext(filesWithContent);
+    state.context = weighted;
+    setProgress(100);
+    const contextChars = filesWithContent.reduce((total, file) => total + estimateTextStats(file.content || "").visibleChars, 0);
+    els.learningStatus.textContent = `已编排 ${filesWithContent.length} 个文件的上下文，总计 ${formatNumber(contextChars)} 字。`;
+    renderChatPackPreview();
+    return true;
+  } catch (error) {
+    if (generationId !== contextGenerationSequence || !isCurrent()) return false;
+    state.context = "";
+    setProgress(0);
+    els.learningStatus.textContent = `上下文读取失败，本轮未生成：${error.message || "未知错误"}`;
+    renderChatPackPreview();
+    return false;
+  }
+}
+
+function resetGeneratedContext(message) {
+  contextGenerationSequence += 1;
+  state.context = "";
+  setProgress(0);
+  els.learningStatus.textContent = message;
+  renderChatPackPreview();
+}
+
+function refreshSelectedContextStats() {
+  const requestId = ++selectedContextStatsRequestId;
+  if (activeDialogueType()?.id === "insight") {
+    const stats = state.periodicInsight.contextStats;
+    const summary = stats ? `自动 Context · ${formatNumber(stats.chars)}/${formatNumber(stats.budget?.contextChars || 0)} 字符` : "自动 Context 尚未生成";
+    if (els.selectedContextSummary) { els.selectedContextSummary.textContent = summary; els.selectedContextSummary.className = stats && stats.chars > (stats.budget?.contextChars || Infinity) ? "danger" : ""; }
+    return;
+  }
+  const files = selectedContextFiles();
+  const fileCount = files.length;
+  const measurableFiles = files.filter((file) => !file.live);
+  const hasLiveFiles = measurableFiles.length !== fileCount;
+  const missing = measurableFiles.filter((file) => contextFileCharCount(file) === null);
+  const knownChars = measurableFiles.reduce((total, file) => total + (contextFileCharCount(file) ?? 0), 0);
+  const totalChars = missing.length || hasLiveFiles ? null : knownChars;
+  const coreStatus = state.runtime.target === "local" ? "Core 正文使用 Chat Pack 缓存" : "Core 正文在生成时实时读取";
+  const status = missing.length ? "正在统计字数" : hasLiveFiles ? coreStatus : "";
+  renderSelectedContextStats(fileCount, knownChars, totalChars, status);
+
+  if (missing.length) {
+    loadContextContents(missing).then(() => {
+      if (requestId === selectedContextStatsRequestId) refreshSelectedContextStats();
+    }).catch(() => {
+      if (requestId === selectedContextStatsRequestId) renderSelectedContextStats(fileCount, knownChars, null, "字数读取失败");
+    });
+  }
+}
+
+function renderSelectedContextStats(fileCount, knownChars, totalChars, status = "") {
+  const warning = fileCount > 20 ? " · 过多，建议 20 个以内" : "";
+  const count = totalChars === null
+    ? `已知 ${formatNumber(knownChars)} 字${status ? ` · ${status}` : ""}`
+    : `总计 ${formatNumber(totalChars)} 字`;
+  if (!els.selectedContextSummary) return;
+  els.selectedContextSummary.textContent = `已选 ${formatNumber(fileCount)} 个文件 · ${count}${warning}`;
+  els.selectedContextSummary.className = fileCount > 20 ? "danger" : "";
+}
+
+function setProgress(value) {
+  els.progressBar.style.width = `${value}%`;
+}
+
+function getCurrentPrompt() {
+  return els.metaPrompt.value.trim();
+}
+
+function setAutoAssembledPrompt() {
+  lastAutoAssembledPrompt = assembledPrompt();
+  els.metaPrompt.value = lastAutoAssembledPrompt;
+}
+
+async function resetPrompt() {
+  await ensurePromptProtocols();
+  setAutoAssembledPrompt();
+  els.learningStatus.textContent = "装配 Prompt 已刷新。";
+  renderChatPackPreview();
+}
+
+async function generateChatPack() {
+  if (chatPackGenerationBusy) return;
+  if (clipboardWriteInProgress) {
+    setChatPackOperationStatus("已有剪贴板写入仍在处理；完成后再生成，避免旧结果晚到覆盖。", "error");
+    return;
+  }
+  const generationRequestId = ++chatPackGenerationRequestId;
+  chatPackGenerationBusy = true;
+  els.generateChatPack.disabled = true;
+  const originalButtonText = els.generateChatPack.textContent;
+  els.generateChatPack.textContent = "准备 Chat Pack…";
+  els.retryCopyChatPack.hidden = true;
+  els.reloadChatPackAfterClipboardHang.hidden = true;
+  chatPackCopyRetryText = "";
+  const startedAt = Date.now();
+  let stageMessage = "准备中：正在载入提示词配置…";
+  let stageState = "busy";
+  let lastDurationPaint = 0;
+  const setStage = (message, stateName = "busy") => {
+    stageMessage = message;
+    stageState = stateName;
+    lastDurationPaint = Date.now();
+    setChatPackOperationStatus(`${message} · ${formatElapsed(Date.now() - startedAt)}`, stateName);
+  };
+  const controller = new AbortController();
+  chatPackGenerationController = controller;
+  let timeoutReached = false;
+  let cancelledForChange = false;
+  const deadlineTimer = window.setTimeout(() => {
+    timeoutReached = true;
+    controller.abort("generation-timeout");
+  }, 90_000);
+  let initialSelection;
+  let initialPrompt;
+  let initialPromptWasAuto;
+  let generationSnapshot = null;
+  let cacheRead = null;
+  let generatedText = "";
+  let generationCopyOutcome = null;
+  let contextWasOmitted = false;
+  let restoreSelectionControls = null;
+  const isCurrent = () => {
+    try {
+      return generationRequestId === chatPackGenerationRequestId && Boolean(generationSnapshot) &&
+        captureChatPackGenerationSnapshot() === generationSnapshot;
+    } catch { return false; }
+  };
+  const ensureCurrent = () => {
+    if (generationRequestId !== chatPackGenerationRequestId) throw new Error("本次生成已取消。");
+    if (generationSnapshot && !isCurrent()) {
+      cancelledForChange = true;
+      controller.abort("selection-changed");
+      throw new Error("生成期间的问题、Prompt、周期或 Context 选择发生变化，本次已取消。");
+    }
+    if (timeoutReached) throw new Error("生成等待超过 90 秒，本次已超时。后台缓存更新仍会继续。");
+  };
+  try {
+    initialSelection = captureChatPackGenerationSelection();
+    initialPrompt = els.metaPrompt.value;
+    initialPromptWasAuto = initialPrompt === lastAutoAssembledPrompt;
+    setStage(stageMessage, stageState);
+    await raceWithSignal(ensurePromptProtocols(), controller.signal);
+    if (captureChatPackGenerationSelection() !== initialSelection) {
+      cancelledForChange = true;
+      throw new Error("等待准备期间的选择发生变化，本次已取消。");
+    }
+    if (initialPromptWasAuto) {
+      if (els.metaPrompt.value !== lastAutoAssembledPrompt) {
+        cancelledForChange = true;
+        throw new Error("等待准备期间装配 Prompt 被修改，本次已取消。");
+      }
+    } else if (els.metaPrompt.value !== initialPrompt) {
+      cancelledForChange = true;
+      throw new Error("等待准备期间装配 Prompt 被修改，本次已取消。");
+    }
+    if (!els.metaPrompt.value.trim()) setAutoAssembledPrompt();
+    generationSnapshot = captureChatPackGenerationSnapshot();
+    chatPackGenerationMonitor = window.setInterval(() => {
+      if (!isCurrent()) {
+        cancelledForChange = true;
+        controller.abort("selection-changed");
+      } else if (Date.now() - lastDurationPaint >= 500) {
+        lastDurationPaint = Date.now();
+        setChatPackOperationStatus(`${stageMessage} · ${formatElapsed(Date.now() - startedAt)}`, stageState);
+      }
+    }, 75);
+    ensureCurrent();
+
+    const promptIds = selectedManagedPromptIds();
+    let promptAssets = {};
+    let coreAssets = {};
+    if (state.runtime?.target === "local") {
+      const coreKinds = requiredChatPackCoreKinds();
+      els.generateChatPack.textContent = "等待缓存资源…";
+      setStage("准备中：请求后台全量更新，并检查本次所需资源…", "busy");
+      let refreshError = "";
+      try {
+        const refreshResponse = await fetch("api/chatpack/cache/refresh", {
+          method: "POST", cache: "no-store", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ prompt_ids: promptIds, core_kinds: coreKinds }), signal: controller.signal
+        });
+        const refreshPayload = await readJsonResponse(refreshResponse, "缓存刷新接口");
+        if (!refreshResponse.ok) refreshError = refreshPayload.error || `缓存刷新接口失败（HTTP ${refreshResponse.status}）`;
+      } catch (error) {
+        if (controller.signal.aborted) throw error;
+        refreshError = error.message || "缓存刷新请求失败";
+      }
+      void refreshChatPackCacheStatus({ signal: controller.signal });
+      if (refreshError) setStage(`准备中：后台更新失败（${refreshError}），正在检查本次所需缓存…`, "busy");
+      ensureCurrent();
+
+      cacheRead = await readRequiredChatPackCache({ promptIds, coreKinds, controller, ensureCurrent, timeoutReached: () => timeoutReached, onStage: setStage });
+      ensureCurrent();
+      promptAssets = cacheRead.prompts || {};
+      coreAssets = cacheRead.cores || {};
+    } else if (promptIds.length) {
+      setChatPackOperationStatus("准备中：正在读取可用的受治理 Prompt…", "busy");
+      promptAssets = await raceWithSignal(fetchSelectedLivePromptAssets(promptIds), controller.signal);
+    }
+    lastChatPackCacheUse = [
+      ...Object.values(promptAssets).map((asset) => ({ age_ms: asset.cache_age_ms || 0 })),
+      ...Object.values(coreAssets).map((asset) => ({ age_ms: asset.cache_age_ms || 0 }))
+    ];
+    renderChatPackCacheStatus();
+    logPromptFetchEvidence(promptAssets);
+
+    els.generateChatPack.textContent = "组装中…";
+    setStage("组装中：正在读取本地 Context 并生成 Chat Pack…", "busy");
+    contextWasOmitted = chatPackContextEnabled() &&
+      activeDialogueType()?.id !== "insight" &&
+      !activePeriodOutputMode() &&
+      selectedContextFiles().length === 0;
+    if (chatPackContextEnabled()) {
+      const contextReady = await generateContext({ coreAssets, signal: controller.signal, isCurrent });
+      ensureCurrent();
+      if (!contextReady) {
+        const errorMessage = activePeriodOutputMode()
+          ? "周期 Output 缺少对应材料，本次未复制。"
+          : "Context 尚未就绪，本次未复制。请检查选择或读取状态后重试。";
+        throw new Error(errorMessage);
+      }
+    }
+    ensureCurrent();
+    generatedText = buildChatPack({ livePromptAssets: promptAssets });
+    state.chatPack = generatedText;
+    els.chatPackPreview.value = generatedText;
+    chatPackCopyRetryText = generatedText;
+    const promptSelection = captureChatPackPromptSelection();
+    setStage("复制中：正在写入剪贴板…", "busy");
+    els.generateChatPack.textContent = "复制中…";
+    ensureCurrent();
+    restoreSelectionControls = lockChatPackSelectionControls();
+    const copied = await copyText(generatedText, "Chat Pack 已生成并复制。", {
+      statusElement: els.chatPackOperationStatus,
+      signal: controller.signal,
+      onWriteSettled: ({ copied }) => {
+        restoreSelectionControls?.();
+        restoreSelectionControls = null;
+        generationCopyOutcome = copied ? "copied" : "failed";
+        if (timeoutReached && generationRequestId === chatPackGenerationRequestId) {
+          els.reloadChatPackAfterClipboardHang.hidden = true;
+          if (copied) {
+            chatPackCopyRetryText = "";
+            els.retryCopyChatPack.hidden = true;
+            setChatPackOperationStatus("复制状态已确认：Chat Pack 已在超时后写入剪贴板。", "success");
+          } else {
+            els.retryCopyChatPack.hidden = false;
+            setChatPackOperationStatus("复制状态已确认：剪贴板写入失败，结果已保留，可点击“复制”重试。", "error");
+          }
+          if (!chatPackGenerationBusy) els.generateChatPack.disabled = false;
+        }
+      }
+    });
+    ensureCurrent();
+    if (generationRequestId !== chatPackGenerationRequestId) return;
+    if (copied) {
+      chatPackCopyRetryText = "";
+      els.retryCopyChatPack.hidden = true;
+      const contextNotice = contextWasOmitted ? "；未选择 Context，本次仅按问题、Prompt 和已选增强器生成" : "";
+      setChatPackOperationStatus(`已完成：Chat Pack 已复制${contextNotice}（使用 ${cacheUseDescription(lastChatPackCacheUse)}）。 · ${formatElapsed(Date.now() - startedAt)}`);
+      showToast("已复制到剪贴板，请去 ai chat");
+    } else {
+      els.chatPackPreview.value = generatedText;
+      els.retryCopyChatPack.hidden = false;
+      setChatPackOperationStatus(`生成已完成，但剪贴板未确认写入。结果已保留，可点击“复制”重试。 · ${formatElapsed(Date.now() - startedAt)}`, "error");
+    }
+    void recordGeneratedUsage(promptAssets, promptSelection).then((result) => {
+      if (generationRequestId !== chatPackGenerationRequestId || !result.warning) return;
+      setChatPackOperationStatus(`${copied ? "已完成并复制。" : "已生成，尚未复制。"}${result.warning}`, "error");
+    }).catch((error) => {
+      if (generationRequestId === chatPackGenerationRequestId) setChatPackOperationStatus(`Chat Pack 已交付；使用统计异常：${error.message || "未知错误"}`, "error");
+    });
+  } catch (error) {
+    if (generationRequestId !== chatPackGenerationRequestId) return;
+    if (cancelledForChange || controller.signal.reason === "selection-changed") {
+      setChatPackOperationStatus(`已取消：生成期间的选择发生变化，本次未复制；请按当前选择重新生成。 · ${formatElapsed(Date.now() - startedAt)}`, "error");
+    } else if (timeoutReached || controller.signal.reason === "generation-timeout") {
+      if (clipboardWriteInProgress && generatedText) {
+        els.reloadChatPackAfterClipboardHang.hidden = false;
+        setChatPackOperationStatus(`复制状态未知：浏览器剪贴板请求超过 90 秒仍未返回，结果已保留，页面正等待该请求结束。可刷新页面恢复操作。 · ${formatElapsed(Date.now() - startedAt)}`, "error");
+      } else if (generationCopyOutcome === "copied") {
+        setChatPackOperationStatus(`生成等待超过 90 秒，但剪贴板写入已确认；后台缓存更新仍会继续。 · ${formatElapsed(Date.now() - startedAt)}`, "error");
+      } else if (generationCopyOutcome === "failed") {
+        els.retryCopyChatPack.hidden = false;
+        setChatPackOperationStatus(`生成等待超过 90 秒，剪贴板写入已确认失败；结果已保留，可点击“复制”重试。 · ${formatElapsed(Date.now() - startedAt)}`, "error");
+      } else {
+        setChatPackOperationStatus(`失败：生成等待超过 90 秒，已停止本次生成；后台缓存更新仍会继续。 · ${formatElapsed(Date.now() - startedAt)}`, "error");
+      }
+    } else {
+      setChatPackOperationStatus(`失败：${error.message || "未知系统错误"}；请修复后点击重试。 · ${formatElapsed(Date.now() - startedAt)}`, "error");
+    }
+  } finally {
+    window.clearTimeout(deadlineTimer);
+    if (chatPackGenerationMonitor !== null) window.clearInterval(chatPackGenerationMonitor);
+    chatPackGenerationMonitor = null;
+    if (restoreSelectionControls && !clipboardWriteInProgress) {
+      restoreSelectionControls();
+      restoreSelectionControls = null;
+    }
+    if (chatPackGenerationController === controller) chatPackGenerationController = null;
+    if (generationRequestId === chatPackGenerationRequestId) {
+      chatPackGenerationBusy = false;
+      els.generateChatPack.disabled = clipboardWriteInProgress;
+      els.generateChatPack.textContent = originalButtonText;
+    }
+    if (!controller.signal.aborted) void refreshChatPackCacheStatus();
+  }
+}
+
+function lockChatPackSelectionControls() {
+  const workspace = document.querySelector("#learningWorkspace");
+  if (!workspace) return () => {};
+  const excluded = new Set(["generateChatPackBtn", "refreshChatPackBtn", "retryCopyChatPackBtn", "reloadChatPackAfterClipboardHangBtn"]);
+  const previous = [...workspace.querySelectorAll("button, input, select, textarea")]
+    .filter((element) => !excluded.has(element.id))
+    .map((element) => [element, element.disabled]);
+  for (const [element] of previous) element.disabled = true;
+  return () => {
+    for (const [element, wasDisabled] of previous) element.disabled = wasDisabled;
+  };
+}
+
+function captureChatPackGenerationSelection() {
+  return JSON.stringify({
+    typeId: state.activeDialogueTypeId,
+    subtypeId: state.activeDialogueSubtypeId,
+    enhancerIds: [...state.activeEnhancerIds],
+    domain: state.selectedDomain,
+    question: els.currentQuestion.value,
+    contextEnabled: chatPackContextEnabled(),
+    periods: { ...state.activePeriodValues },
+    contextFiles: selectedContextFiles().map(({ path, strategy }) => ({ path, strategy })),
+    periodicInsight: {
+      target: state.periodicInsight.target,
+      range: state.periodicInsight.range,
+      from: els.insightFromDate?.value || "",
+      to: els.insightToDate?.value || "",
+      materialTypes: [...(els.insightMaterialTypes?.querySelectorAll(".insight-type-toggle:checked") || [])].map((input) => input.value)
+    }
+  });
+}
+
+function captureChatPackGenerationSnapshot() {
+  return JSON.stringify({ selection: captureChatPackGenerationSelection(), prompt: els.metaPrompt.value });
+}
+
+function requiredChatPackCoreKinds() {
+  if (!chatPackContextEnabled() || activeDialogueType()?.id === "insight") return [];
+  const kinds = new Set();
+  for (const file of selectedContextFiles().filter((item) => item.live)) {
+    const kind = file.path === "Core/道" ? "dao" : file.path === "Core/法" ? "fa" : "";
+    if (!kind) throw new Error(`不支持的实时 Context 来源：${file.path}`);
+    kinds.add(kind);
+  }
+  return [...kinds];
+}
+
+async function readRequiredChatPackCache({ promptIds, coreKinds, controller, ensureCurrent, timeoutReached, onStage }) {
+  let retriedAfterAvailableStatus = false;
+  while (true) {
+    ensureCurrent();
+    if (timeoutReached()) throw new Error("生成等待超过 90 秒");
+    const response = await fetch("api/chatpack/cache/read", {
+      method: "POST", cache: "no-store", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt_ids: promptIds, core_kinds: coreKinds }), signal: controller.signal
+    });
+    const payload = await readJsonResponse(response, "缓存读取接口");
+    if (response.ok) {
+      validateChatPackCacheRead(payload, promptIds, coreKinds);
+      return payload;
+    }
+    if (response.status !== 409) throw new Error(payload.error || `缓存读取失败（HTTP ${response.status}）`);
+    const status = await refreshChatPackCacheStatus({ signal: controller.signal });
+    if (!status) throw new Error("缓存服务不可用，无法确认必需资源状态");
+    const missing = payload.missing || [];
+    const currentMissing = missing
+      .map((item) => status.resources?.find((resource) => resource.key === item.key) || item)
+      .filter((item) => item.cache_status !== "available");
+    if (!currentMissing.length) {
+      if (retriedAfterAvailableStatus) throw new Error("缓存状态显示必需资源可用，但完整缓存读取仍缺失；请重试");
+      retriedAfterAvailableStatus = true;
+      continue;
+    }
+    retriedAfterAvailableStatus = false;
+    const missingLabels = currentMissing.map((item) => cacheResourceLabel(item.key)).join("、");
+    onStage(`等待资源：${missingLabels || "必需缓存"}（${currentMissing.map((item) => item.cache_status).join("、")}）。`, "busy");
+    const requiredFailure = currentMissing.find((item) => item.refresh_status === "failed");
+    if (requiredFailure) {
+      throw new Error(`${cacheResourceLabel(requiredFailure.key)}更新失败：${requiredFailure.refresh_error}`);
+    }
+    if (status?.refresh?.state === "partial" || status?.refresh?.state === "failed" || status?.refresh?.state === "succeeded") {
+      const stuck = currentMissing[0];
+      throw new Error(`${cacheResourceLabel(stuck?.key || "必需资源")}仍不可用：${stuck?.cache_status || "缓存刷新已结束"}${stuck?.refresh_error ? `；${stuck.refresh_error}` : ""}`);
+    }
+    await delayWithSignal(500, controller.signal);
+  }
+}
+
+function validateChatPackCacheRead(payload, promptIds, coreKinds) {
+  if (payload?.source !== "learn-x-chatpack-cache" || !payload.prompts || !payload.cores) throw new Error("缓存读取结果缺少来源标记或资源集合");
+  if (Object.keys(payload.prompts).length !== promptIds.length || promptIds.some((id) => !Object.hasOwn(payload.prompts, id))) throw new Error("缓存读取未返回全部必需 Prompt");
+  if (Object.keys(payload.cores).length !== coreKinds.length || coreKinds.some((id) => !Object.hasOwn(payload.cores, id))) throw new Error("缓存读取未返回全部必需 Core 正文");
+  for (const id of promptIds) {
+    const asset = payload.prompts[id];
+    if (asset?.contract_version !== "prompt-asset/v1" || asset.prompt_id !== id || !Number.isInteger(asset.prompt_revision) ||
+        typeof asset.content !== "string" || !asset.content.trim() || !/^[a-f0-9]{64}$/.test(asset.prompt_sha256 || "") ||
+        !asset.prompt_fetched_at || Number.isNaN(Date.parse(asset.prompt_fetched_at)) || !Number.isFinite(asset.cache_age_ms)) {
+      throw new Error(`缓存中的 Prompt ${id} 校验失败`);
+    }
+  }
+  for (const id of coreKinds) {
+    const asset = payload.cores[id];
+    if (asset?.kind !== id || typeof asset.content !== "string" || !asset.content.trim() || !/^[a-f0-9]{64}$/.test(asset.sha256 || "") ||
+        !asset.documentId || !asset.sourceUrl || !Number.isInteger(asset.revision) || !Number.isFinite(asset.cache_age_ms)) {
+      throw new Error(`缓存中的 Core ${id} 校验失败`);
+    }
+  }
+}
+
+async function readJsonResponse(response, label) {
+  try { return await response.json(); }
+  catch { throw new Error(`${label}返回无效 JSON（HTTP ${response.status}）`); }
+}
+
+function delayWithSignal(milliseconds, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) { reject(new Error("本次生成已取消")); return; }
+    const timer = window.setTimeout(done, milliseconds);
+    function done() { signal.removeEventListener("abort", abort); resolve(); }
+    function abort() { window.clearTimeout(timer); signal.removeEventListener("abort", abort); reject(new Error("本次生成已取消")); }
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
+function raceWithSignal(promise, signal) {
+  if (signal.aborted) return Promise.reject(new Error("本次生成已取消"));
+  return new Promise((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener("abort", abort);
+    const abort = () => { cleanup(); reject(new Error("本次生成已取消")); };
+    signal.addEventListener("abort", abort, { once: true });
+    promise.then((value) => { cleanup(); resolve(value); }, (error) => { cleanup(); reject(error); });
+  });
+}
+
+function cacheUseDescription(resources) {
+  if (!resources?.length) return "无外部缓存资源";
+  return `最旧资源 ${formatAge(Math.max(...resources.map((item) => item.age_ms || 0)))}前拉取`;
+}
+
+async function retryCopyChatPack() {
+  if (!chatPackCopyRetryText || clipboardWriteInProgress) return;
+  const retryText = chatPackCopyRetryText;
+  const controller = new AbortController();
+  let timeoutReached = false;
+  let copyOutcome = null;
+  const deadlineTimer = window.setTimeout(() => {
+    timeoutReached = true;
+    controller.abort("clipboard-timeout");
+  }, 90_000);
+  els.retryCopyChatPack.disabled = true;
+  els.generateChatPack.disabled = true;
+  els.reloadChatPackAfterClipboardHang.hidden = true;
+  setChatPackOperationStatus("复制中：正在重试写入剪贴板…", "busy");
+  try {
+    const copied = await copyText(retryText, "Chat Pack 已生成并复制。", {
+      statusElement: els.chatPackOperationStatus,
+      signal: controller.signal,
+      onWriteSettled: ({ copied: settledCopied }) => {
+        copyOutcome = settledCopied ? "copied" : "failed";
+        if (!timeoutReached) return;
+        els.reloadChatPackAfterClipboardHang.hidden = true;
+        if (settledCopied) {
+          chatPackCopyRetryText = "";
+          els.retryCopyChatPack.hidden = true;
+          setChatPackOperationStatus("复制状态已确认：重试在超时后写入剪贴板。", "success");
+        } else {
+          els.retryCopyChatPack.hidden = false;
+          setChatPackOperationStatus("复制状态已确认：重试写入失败，结果已保留，可再次点击“复制”。", "error");
+        }
+        els.retryCopyChatPack.disabled = false;
+        if (!chatPackGenerationBusy) els.generateChatPack.disabled = false;
+      }
+    });
+    if (timeoutReached && clipboardWriteInProgress) {
+      els.reloadChatPackAfterClipboardHang.hidden = false;
+      setChatPackOperationStatus("复制状态未知：浏览器剪贴板请求超过 90 秒仍未返回，结果已保留，页面正等待该请求结束。可刷新页面恢复操作。", "error");
+    } else if (copied || copyOutcome === "copied") {
+      chatPackCopyRetryText = "";
+      els.retryCopyChatPack.hidden = true;
+      setChatPackOperationStatus(timeoutReached ? "复制状态已确认：重试在超时后写入剪贴板。" : "已完成：Chat Pack 已复制。", "success");
+      showToast("已复制到剪贴板，请去 ai chat");
+    } else if (copyOutcome === "failed") {
+      els.retryCopyChatPack.hidden = false;
+      setChatPackOperationStatus("复制状态已确认：剪贴板写入失败，结果已保留，可点击“复制”重试。", "error");
+    } else {
+      setChatPackOperationStatus("剪贴板仍未确认写入；生成结果已保留，请稍后重试。", "error");
+    }
+  } finally {
+    window.clearTimeout(deadlineTimer);
+    els.retryCopyChatPack.disabled = clipboardWriteInProgress;
+    if (!clipboardWriteInProgress && !chatPackGenerationBusy) els.generateChatPack.disabled = false;
+  }
+}
+
+function managedPromptUnavailableReason(item) {
+  const managed = item?.managedAsset || item?.managedPrompt;
+  if (state.runtime?.target === "public" && managed?.unavailable) {
+    return managed.unavailable_reason || "公开静态版无法读取飞书受治理 Prompt。";
+  }
+  return "";
+}
+
+function selectedManagedPromptIds() {
+  const selected = [
+    activeDialogueSubtype(),
+    ...selectedEnhancers().filter((enhancer) => enhancer.group !== "length")
+  ].filter(Boolean);
+  const managed = selected
+    .map((item) => ({ item, asset: item.managedAsset || item.managedPrompt }))
+    .filter(({ asset }) => asset?.prompt_id);
+  if (!managed.length) return [];
+
+  const unavailable = managed.find(({ item, asset }) => managedPromptUnavailableReason(item) || asset.unavailable);
+  if (unavailable) {
+    throw new Error(managedPromptUnavailableReason(unavailable.item) || unavailable.asset.unavailable_reason || "此 Prompt 在当前构建中不可用。");
+  }
+  if (state.runtime?.target !== "local") {
+    throw new Error("当前运行环境无法读取受治理 Prompt 的飞书最新版本。");
+  }
+
+  return [...new Set(managed.map(({ asset }) => asset.prompt_id))];
+}
+
+async function fetchSelectedLivePromptAssets(promptIds = selectedManagedPromptIds(), { cacheOnly = false } = {}) {
+  if (!promptIds.length) return {};
+  const response = await fetch("api/chatpack/prompts/latest", {
+    method: "POST",
+    cache: "no-store",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ prompt_ids: promptIds, ...(cacheOnly ? { cache_only: true } : {}) })
+  });
+  let payload;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new Error(`实时读取接口返回无效 JSON（HTTP ${response.status}）。`);
+  }
+  if (!response.ok) throw new Error(payload.error || `实时读取接口失败（HTTP ${response.status}）。`);
+  if (cacheOnly && payload?.cache_hit !== true) return null;
+  const assets = payload?.assets;
+  if (!assets || typeof assets !== "object" || Array.isArray(assets) ||
+      Object.keys(assets).length !== promptIds.length || promptIds.some((id) => !Object.hasOwn(assets, id))) {
+    throw new Error("实时读取接口未返回全部所需 Prompt；本轮已停止。");
+  }
+  for (const promptId of promptIds) {
+    const asset = assets[promptId];
+    if (!asset || asset.contract_version !== "prompt-asset/v1" || asset.prompt_id !== promptId ||
+        !Number.isInteger(asset.prompt_revision) || asset.prompt_revision < 0 ||
+        typeof asset.content !== "string" || !asset.content.trim() ||
+        !/^[a-f0-9]{64}$/.test(asset.prompt_sha256) || !asset.prompt_fetched_at ||
+        Number.isNaN(Date.parse(asset.prompt_fetched_at))) {
+      throw new Error(`飞书返回的 Prompt ${promptId} 不完整；本轮已停止。`);
+    }
+  }
+  return assets;
+}
+
+function logPromptFetchEvidence(assets) {
+  const evidence = Object.values(assets || {}).map((asset) => ({
+    prompt_id: asset.prompt_id,
+    revision: asset.prompt_revision,
+    sha256: asset.prompt_sha256,
+    fetched_at: asset.prompt_fetched_at,
+    source: asset.cache_age_ms === undefined ? "latest" : "chatpack-cache",
+    cache_age_ms: asset.cache_age_ms
+  }));
+  if (evidence.length) console.info("Learn-X Chat Pack Prompt source", evidence);
+}
+
+function createUsageEventId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `usage-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function readBrowserUsageStore() {
+  try {
+    return normalizeUsageStore(JSON.parse(localStorage.getItem(USAGE_STORAGE_KEY) || "null"));
+  } catch {
+    // A malformed local record is replaced by a clean store; it cannot affect the Chat Pack itself.
+  }
+  return emptyUsageStore("browser");
+}
+
+async function recordGeneratedUsage(livePromptAssets = {}, promptSelection = captureChatPackPromptSelection()) {
+  if (!chatPackContextEnabled()) return { recorded: false };
+  if (!promptSelection.subtypeId) return { recorded: false };
+  const { subtypeId, enhancerIds } = promptSelection;
+  const month = currentShanghaiMonth();
+  const managedVersions = Object.fromEntries(Object.values(livePromptAssets).map((asset) => [asset.prompt_id, {
+    month,
+    revision: asset.prompt_revision,
+    sha256: asset.prompt_sha256,
+    fetched_at: asset.prompt_fetched_at
+  }]));
+
+  if (state.runtime.target === "local") {
+    const payload = { eventId: createUsageEventId(), month, subtypeId, enhancerIds, ...(Object.keys(managedVersions).length ? { managedVersions } : {}) };
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const response = await fetch("api/chatpack/usage", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (response.ok) {
+          return { recorded: true };
+        }
+      } catch {}
+    }
+    return { recorded: false, warning: " 使用次数未记录，请稍后重试。" };
+  }
+
+  const write = async () => {
+    const store = readBrowserUsageStore();
+    const monthCounts = store.months[month] || emptyMonthCounts();
+    addUsageCount(monthCounts, "subtypes", subtypeId);
+    for (const enhancerId of enhancerIds) addUsageCount(monthCounts, "enhancers", enhancerId);
+    if (Object.keys(managedVersions).length) monthCounts.managedVersions = { ...(monthCounts.managedVersions || {}), ...managedVersions };
+    store.months[month] = monthCounts;
+    localStorage.setItem(USAGE_STORAGE_KEY, JSON.stringify(store));
+    return { recorded: true };
+  };
+  try {
+    // Native Web Locks serializes multi-tab read-modify-write; older browsers retain the best-effort path.
+    return navigator.locks?.request ? await navigator.locks.request("learn-x-chatpack-usage", write) : await write();
+  } catch {
+    return { recorded: false, warning: " 使用次数未记录，请稍后重试。" };
+  }
+}
+
+async function copyChatPackUsage() {
+  if (state.runtime.target !== "public" || !chatPackContextEnabled()) return;
+  const usage = usageView();
+  const payload = buildUsageExport(readBrowserUsageStore(), usage.mergedThrough);
+  const text = [
+    "请使用 $learn-x-prompt-usage 合并以下 Learn-X 提示词使用记录。正常时自动提交并推送；发现异常请停止并提醒我。",
+    "",
+    "```json",
+    JSON.stringify(payload, null, 2),
+    "```"
+  ].join("\n");
+  const copied = await copyText(text, "使用记录已复制，请发送给 Learn-X。");
+  if (copied) showToast("使用记录已复制，请发送给 Learn-X");
+}
+
+function buildChatPack({ livePromptAssets = {} } = {}) {
+  const question = els.currentQuestion.value.trim() || "（未填写）";
+  const questionReference = buildQuestionReference(question);
+  const dialogueType = activeDialogueType();
+  const dialogueSubtype = activeDialogueSubtype();
+  const enhancers = selectedEnhancers();
+  const lengthEnhancer = activeLengthEnhancer(enhancers);
+  const livePrompt = renderLiveSelectedPromptAssets(livePromptAssets);
+  const deferredPromptNote = !Object.keys(livePromptAssets).length && hasSelectedManagedPrompt()
+    ? "（受治理 Prompt 将在本地生成时从飞书读取最新正文；此预览不含其正文。）"
+    : "";
+  const prompt = [getCurrentPrompt(), livePrompt, deferredPromptNote].filter(Boolean).join("\n\n---\n\n");
+  const emptyPrompt = isEmptyPromptSelection(dialogueType, dialogueSubtype);
+  const includeContext = chatPackContextEnabled() &&
+    (dialogueType?.id === "insight" || selectedContextFiles().length > 0);
+  const typeSystem = renderTypeSystem(dialogueType, dialogueSubtype, enhancers, emptyPrompt, includeContext);
+  const promptSection = prompt ? `## Assembled Prompt
+
+${prompt}
+` : "";
+  const answerGoal = emptyPrompt
+    ? `直接围绕 Current Question 回答；不额外套用场景提示词，只根据 Current Question、已选增强器${includeContext ? "和 Context" : ""}回答。`
+    : `直接围绕 Current Question 回答；大类定目标，子类型定场景，增强器定思考方式${includeContext ? "，Context 提供材料" : ""}。`;
+  const lengthRequirement = renderOutputLengthRequirement(lengthEnhancer);
+  const chatOnlyRequirement = renderChatOnlyRequirement(dialogueType);
+  const priorityBasis = !includeContext
+    ? prompt ? "Current Question、Assembled Prompt" : "Current Question"
+    : emptyPrompt
+    ? prompt ? "Current Question、Assembled Prompt、High Priority Context" : "Current Question、High Priority Context"
+    : "Current Question、Type System、Assembled Prompt、High Priority Context";
+  const context = state.context
+    ? contextToText(state.context, { questionReference, dialogueType, dialogueSubtype, enhancers, emptyPrompt })
+    : "（Context 尚未生成）";
+  const finalTaskAnchor = renderFinalTaskAnchor(questionReference, priorityBasis);
+  const executionProtocol = renderExecutionContract({
+    categoryEnabled: !emptyPrompt && Boolean(dialogueType),
+    subtypeEnabled: !emptyPrompt && Boolean(dialogueSubtype),
+    enhancerEnabled: enhancers.length > 0
+  });
+  const contextSection = includeContext
+    ? `## Context Priority Map
+
+- High Priority：本次回答优先依据。
+- Normal：背景参考。
+- Memory 只作为被选中的上下文材料出现，不在此处重复生成 Review 或 Weekly Output。
+- Context Note 只解释文件角色和使用边界，不作为新的证据来源。
+- 若上下文冲突，优先依据 ${priorityBasis}。
+
+${context}
+
+`
+    : "";
+
+  state.chatPack = `# Chat Pack
+
+## Current Question
+
+${questionReference.currentText}
+
+## Type System
+
+${typeSystem}
+
+${promptSection}
+## Output Requirements
+
+- 回答目标：${answerGoal}
+- 长度：${lengthRequirement}
+- 禁止事项：不要编造；不要强行合并冲突材料；不要让背景 Context 覆盖 Current Question。
+${chatOnlyRequirement}
+
+${executionProtocol}
+
+${contextSection}
+${finalTaskAnchor}
+`;
+  return state.chatPack;
+}
+
+function renderChatOnlyRequirement(dialogueType) {
+  if (dialogueType?.id !== "ljg-skills") return "";
+  return "- Chat 输出：只给用户要的最终正文。原 Skill 中关于时间戳、保存路径、文件名、文件读写、命令执行和环境能力的要求一律静默忽略，也不要解释为何忽略。";
+}
+
+function renderTypeSystem(type, subtype, enhancers, emptyPrompt, includeContext) {
+  const categoryEnabled = !emptyPrompt && Boolean(type);
+  const subtypeEnabled = !emptyPrompt && Boolean(subtype);
+  const enhancerEnabled = enhancers.length > 0;
+  const modeParts = ["Current Question"];
+  if (includeContext) modeParts.push("Context");
+  if (categoryEnabled) modeParts.splice(1, 0, "大类 Prompt");
+  if (subtypeEnabled) modeParts.splice(2, 0, "子类型 Prompt");
+  if (enhancerEnabled) modeParts.push("增强器 Prompt");
+
+  const promptInventory = `- 当前模式：${modeParts.join(" + ")}
+- 大类 Prompt：${categoryEnabled ? `已启用（${type.name}）` : "未启用"}
+- 子类型 Prompt：${subtypeEnabled ? `已启用（${subtype.name}）` : "未启用"}
+- 增强器 Prompt：${enhancerEnabled ? `已启用（${enhancers.map((enhancer) => enhancer.name).join("、")}）` : "未启用"}`;
+
+  if (emptyPrompt) {
+    return `${promptInventory}
+- 装配说明：不加入大类行为协议或子类型 Prompt；只使用 Current Question${includeContext ? "、Context" : ""} 和已选增强器。`;
+  }
+
+  return `${promptInventory}
+
+${renderDialogueProtocol(type, subtype, enhancers)}`;
+}
+
+function renderDialogueProtocol(type, subtype, enhancers) {
+  if (!type) return "（未选择对话类型）";
+  return `### 大类行为协议
+
+**适用场景**：${type.useCases || "按当前问题选择对话方式。"}
+
+**AI 行为方向**
+${renderList(type.behaviorDirections)}
+
+**输出目标**：${type.outputGoal || "围绕当前问题给出高质量回应。"}
+
+${subtype ? `### 子类型\n\n**${subtype.name}**：${subtype.summary || "按该场景完成任务。"}\n` : ""}
+
+${enhancers.length ? `### 已选增强器\n\n${enhancers.map((enhancer) => `- ${enhancer.name}：${enhancer.summary || ""}`).join("\n")}\n` : ""}
+
+**避免事项**
+${renderList(type.avoid)}`;
+}
+
+function assembledPrompt() {
+  const type = activeDialogueType();
+  const subtype = activeDialogueSubtype();
+  const enhancers = selectedEnhancers();
+  const emptyPrompt = isEmptyPromptSelection(type, subtype);
+  return [
+    subtype && !emptyPrompt ? `**子类型 Prompt：${subtype.name}**\n\n${demotePromptMarkdownHeadings(subtype.protocol || "")}` : "",
+    ...enhancers.map(renderEnhancerPrompt)
+  ].filter(Boolean).join("\n\n---\n\n");
+}
+
+function renderEnhancerPrompt(enhancer) {
+  const note = enhancer.applicationNote ? `**使用说明**：${enhancer.applicationNote}\n\n` : "";
+  return `**增强器 Prompt：${enhancer.name}**\n\n${note}${demotePromptMarkdownHeadings(enhancer.protocol || "")}`;
+}
+
+function selectedEnhancers() {
+  const normalizedIds = new Set(normalizeEnhancerIds([...state.activeEnhancerIds]));
+  return ENHANCERS.filter((enhancer) => normalizedIds.has(enhancer.id));
+}
+
+function renderList(items) {
+  if (!items?.length) return "- 无";
+  return items.map((item) => `- ${item}`).join("\n");
+}
+
+function activeLengthEnhancer(enhancers = selectedEnhancers()) {
+  return enhancers.find((enhancer) => enhancer.group === "length");
+}
+
+function renderOutputLengthRequirement(lengthEnhancer) {
+  if (!lengthEnhancer) return "按问题需要自然控制。";
+  return `以增强器「${lengthEnhancer.name}」为准；如果 Current Question 中出现其它字数要求，视为旧约束，忽略旧字数。`;
+}
+
+function selectedContextFiles() {
+  return [...state.contextFileMap.values()]
+    .map((file) => ({ ...file, strategy: state.contextSelections.get(file.path) || "none" }))
+    .filter((file) => file.strategy !== "none");
+}
+
+async function loadContextContents(files, { coreAssets = {}, signal, requireCachedCore = false } = {}) {
+  return Promise.all(
+    files.map(async (file) => {
+      if (file.live) {
+        const coreKind = file.path === "Core/道" ? "dao" : file.path === "Core/法" ? "fa" : "";
+        const loaded = coreKind ? coreAssets[coreKind] : null;
+        if (!loaded && requireCachedCore) throw new Error(`必需 Core 缓存不可用：${file.path}`);
+        const live = loaded || await getJson(`api/file?path=${encodeURIComponent(file.path)}`, { signal });
+        if (!live) throw new Error(`Core 来源不可用：${file.path}`);
+        if (typeof live.content !== "string" || !live.content.trim()) throw new Error(`Core 来源内容为空：${file.path}`);
+        return { ...file, ...live, path: file.path, content: live.content };
+      }
+      if (typeof file.content === "string") return file;
+      const content = await loadContextFileContent(file, { signal });
+      return { ...file, content };
+    })
+  );
+}
+
+function loadContextFileContent(file, { signal } = {}) {
+  if (file.live) {
+    return getJson(`api/file?path=${encodeURIComponent(file.path)}`, { signal }).then((loaded) => {
+      if (typeof loaded.content !== "string" || !loaded.content.trim()) throw new Error(`Core 来源内容为空：${file.path}`);
+      return loaded.content;
+    });
+  }
+  if (typeof file.content === "string") return Promise.resolve(file.content);
+  const pending = contextFileContentPromises.get(file.path);
+  if (pending) return pending;
+  const request = getJson(`api/file?path=${encodeURIComponent(file.path)}`, { signal }).then((loaded) => {
+    if (typeof loaded.content !== "string" || !loaded.content.trim()) throw new Error(`上下文来源内容为空：${file.path}`);
+    const content = loaded.content || "";
+    file.content = content;
+    const cached = state.contextFileMap.get(file.path);
+    if (cached) cached.content = content;
+    return content;
+  }).finally(() => contextFileContentPromises.delete(file.path));
+  contextFileContentPromises.set(file.path, request);
+  return request;
+}
+
+function buildWeightedContext(files) {
+  const mode = activeDialogueSubtype()?.id || activeDialogueType()?.id || state.mode;
+  const weightedFiles = files
+    .map((file) => {
+      const userMultiplier = userMultiplierFor(file.strategy);
+      const modeMultiplier = file.modeMultipliers?.[mode] ?? 1;
+      const finalWeight = (file.baseWeight || 50) * modeMultiplier * userMultiplier;
+      return { ...file, mode, userMultiplier, modeMultiplier, finalWeight };
+    })
+    .sort((a, b) => b.finalWeight - a.finalWeight || a.path.localeCompare(b.path, "zh-Hans-CN"));
+
+  return {
+    high: weightedFiles.filter((file) => file.strategy === "high"),
+    normal: weightedFiles.filter((file) => file.strategy === "normal")
+  };
+}
+
+function userMultiplierFor(strategy) {
+  if (strategy === "high") return 2;
+  return 1;
+}
+
+function normalizeStrategy(strategy) {
+  return ["high", "normal"].includes(strategy) ? strategy : "normal";
+}
+
+function contextToText(context, options = {}) {
+  if (typeof context === "string") return context;
+  return [
+    renderContextAssemblyIntent(context, options),
+    renderContextSection("High Priority Context", "High Priority · Full", context.high),
+    renderContextSection("Normal Context", "Normal · Full", context.normal)
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function renderContextSection(title, label, files) {
+  if (!files?.length) return "";
+  const body = files
+    .map((file) => {
+      const content = demoteContextMarkdownHeadings((file.content || "").trim());
+      return `### [${label}] ${file.path}\n\n${renderContextNote(file)}\n\n${content}`;
+    })
+    .join("\n\n---\n\n");
+  return `## ${title}\n\n${body}`;
+}
+
+function renderContextAssemblyIntent(context, options = {}) {
+  const highCount = context.high?.length || 0;
+  const normalCount = context.normal?.length || 0;
+  const questionReference = options.questionReference || buildQuestionReference(els.currentQuestion.value.trim() || "当前问题");
+  const typeName = options.emptyPrompt ? "空提示词" : options.dialogueSubtype?.name || options.dialogueType?.name || "当前类型";
+  const promptMode = options.emptyPrompt
+    ? "本次不加入大类或子类型场景约束；如已选增强器，只按增强器改变思考方式。"
+    : `本次按「${typeName}」使用上下文；材料必须服务所选对话目标。`;
+
+  return `## Context Assembly Intent
+
+- 本次上下文装配服务的问题：${questionReference.contextIntentText}
+- 使用协议：High Priority 是本次回答优先依据；Normal 只作为背景、补充证据或约束参考。
+- 当前分层：High Priority ${highCount} 个文件，Normal ${normalCount} 个文件。
+- 文件边界：每个 \`### [High/Normal] path\` 是一个 Context File；其内容到下一个 \`---\` 分隔符或下一个 Context File 为止。
+- Context Note：只说明单个文件的角色和使用边界；不补充新事实，不替代文件正文。
+- 注意：不要把背景材料当成任务本身；所有上下文都必须回到 Current Question。
+- ${promptMode}`;
+}
+
+function renderContextNote(file) {
+  const title = file.title && file.title !== file.path ? `《${file.title}》` : file.path;
+  const note = `> Context Note：${title}：${contextProfileForFile(file)}`;
+  if (!file.live) return note;
+  return `${note}\n> Core 来源证据：${file.sourceUrl} · 文档 ${file.documentId} · revision ${file.revision} · sha256 ${file.sha256} · readAt ${file.readAt}`;
+}
+
+function contextProfileForFile(file) {
+  const path = file.path || "";
+  if (path === "README.md") return "Learn-X 总目标、Chat Pack 定位和最小飞轮；用于校准系统初衷，避免把普通问题过度系统化。";
+  if (path === "Core/道") return "Core 正式道：长期价值与原则；只以返回的正式正文为准，不包含待整理附录。";
+  if (path === "Core/法") return "Core 薄法：跨系统原则与专业系统接口；专业领域完整方法见其权威系统。";
+  if (file.layer === "memory" || path.includes("/memory/")) {
+    return "用户近期输入、关注点和已沉淀判断；用于理解用户最近在做什么，但不能覆盖当前问题的新证据。";
+  }
+  if (file.layer === "dao" || path.includes("/道/")) {
+    return "道层 why 和价值方向；用于校准长期原则、人生母题和真实优先级，不替代事实核查或执行细节。";
+  }
+  if (file.layer === "fa" || path.includes("/法/")) {
+    return "法层 what 和领域判断框架；用于识别结构、边界、反例和行动抓手，不当作现实证据本身。";
+  }
+  if (file.layer === "prompt" || path.includes("/02_prompts/")) {
+    return "Prompt 和术层模板；用于约束回答方式和复用表达，不作为事实来源或当前问题的替代品。";
+  }
+  if (path.includes("/app/code/") || path.includes("/app/assets/") || path.includes("/scripts/") || path.includes("/.agents/")) {
+    return "器层工具实现、脚本或 Skill；用于理解工程边界和可改位置，不能反过来定义道和法。";
+  }
+  if (path.startsWith("03_input/")) {
+    return "原始输入、行动证据或自我反馈；用于提供事实材料，不直接等同长期结论。";
+  }
+  if (path.startsWith("04_output/")) {
+    return "阶段性输出或候选总结；用于理解最近一轮处理结果，不等同 Memory 或正式长期资产。";
+  }
+  if (file.layer === "qi") {
+    return "器层 tool 和实现环境；用于理解载体、脚本、平台和操作条件，不替代任务目标。";
+  }
+  if (file.layer === "shu" || file.layer === "read") {
+    return "术层 how、素材或行动线索；用于形成步骤、方法和下一步动作，不上升为长期原则。";
+  }
+  return "补充背景、证据或约束；只提取与 Current Question 直接相关的部分。";
+}
+
+function buildQuestionReference(question) {
+  const isLong = estimateTextStats(question).visibleChars > 300;
+  return {
+    text: question,
+    isLong,
+    currentText: isLong ? "见最后的 Final Task Anchor；长问题全文只在末尾保留。" : question,
+    contextIntentText: isLong ? "见最后的 Final Task Anchor；此处不重复长问题全文。" : "见上方 Current Question。",
+    finalText: question
+  };
+}
+
+function demotePromptMarkdownHeadings(content) {
+  return content.replace(/^(#{1,6})\s+/gm, (_match, hashes) => {
+    const level = hashes.length + 3;
+    return `${"#".repeat(level)} `;
+  });
+}
+
+function demoteContextMarkdownHeadings(content) {
+  return content.replace(/^(#{1,6})\s+/gm, (_match, hashes) => {
+    const level = hashes.length + 3;
+    return `${"#".repeat(level)} `;
+  });
+}
+
+function hasSelectedManagedPrompt() {
+  return [activeDialogueSubtype(), ...selectedEnhancers().filter((enhancer) => enhancer.group !== "length")]
+    .some((item) => (item?.managedAsset || item?.managedPrompt)?.prompt_id);
+}
+
+function captureChatPackPromptSelection() {
+  const subtypeId = activeDialogueSubtype()?.id || null;
+  const enhancerIds = selectedEnhancers()
+    .filter((enhancer) => enhancer.group !== "length")
+    .map((enhancer) => enhancer.id);
+  return { subtypeId, enhancerIds, signature: JSON.stringify({ subtypeId, enhancerIds }) };
+}
+
+function sameChatPackPromptSelection(selection) {
+  return Boolean(selection) && captureChatPackPromptSelection().signature === selection.signature;
+}
+
+function renderLiveSelectedPromptAssets(livePromptAssets) {
+  const sections = [];
+  const subtype = activeDialogueSubtype();
+  const subtypeManaged = subtype?.managedAsset || subtype?.managedPrompt;
+  const subtypeAsset = subtypeManaged?.prompt_id ? livePromptAssets[subtypeManaged.prompt_id] : null;
+  if (subtypeAsset) sections.push(`**子类型 Prompt：${subtype.name}**\n\n${demotePromptMarkdownHeadings(subtypeAsset.content)}`);
+  for (const enhancer of selectedEnhancers().filter((item) => item.group !== "length")) {
+    const managed = enhancer.managedAsset || enhancer.managedPrompt;
+    const asset = managed?.prompt_id ? livePromptAssets[managed.prompt_id] : null;
+    if (asset) {
+      const note = enhancer.applicationNote ? `**使用说明**：${enhancer.applicationNote}\n\n` : "";
+      sections.push(`**增强器 Prompt：${enhancer.name}**\n\n${note}${demotePromptMarkdownHeadings(asset.content)}`);
+    }
+  }
+  return sections.join("\n\n---\n\n");
+}
+
+function renderChatPackPreview() {
+  const chatPack = buildChatPack();
+  renderFramePreview();
+  els.chatPackPreview.value = chatPack;
+  refreshSelectedContextStats();
+  renderChatPackWarning();
+}
+
+function renderFramePreview() {
+  const type = activeDialogueType();
+  const subtype = activeDialogueSubtype();
+  const enhancers = selectedEnhancers();
+  const emptyPrompt = isEmptyPromptSelection(type, subtype);
+  const selectedFiles = selectedContextFiles();
+  const highCount = selectedFiles.filter((file) => file.strategy === "high").length;
+  const normalCount = selectedFiles.filter((file) => file.strategy === "normal").length;
+  const questionState = els.currentQuestion.value.trim() ? "已填写" : "未填写";
+  const contextEnabled = chatPackContextEnabled();
+
+  const frame = [
+    "# Chat Pack 装配框架",
+    "1. Current Question",
+    `2. 大类行为协议：${emptyPrompt ? "无" : type?.name || "未选择"}`,
+    `3. 子类型 Prompt：${emptyPrompt ? "无" : subtype?.name || "未选择"}`,
+    `4. 增强器 Prompt：${enhancers.length ? enhancers.map((item) => item.name).join(" + ") : "无"}`,
+    "5. Output Requirements",
+    "6. Execution Protocol"
+  ];
+  if (contextEnabled) frame.push(`7. Context Priority Map：High ${highCount} / Normal ${normalCount}`, "8. High Priority Context", "9. Normal Context");
+  frame.push(`${contextEnabled ? "10" : "7"}. 末尾任务锚定`);
+  els.chatPackFramePreview.value = frame.join("\n");
+
+  const summary = [
+    `当前问题：${questionState}`,
+    `大类目标：${emptyPrompt ? `空提示词：只装配问题${contextEnabled ? "和上下文" : ""}` : type?.outputGoal || "-"}`,
+    `子类型：${emptyPrompt ? "无" : subtype?.summary || subtype?.name || "-"}`,
+    `增强器：${enhancers.length ? enhancers.map((item) => item.summary || item.name).join("；") : "无"}`
+  ];
+  if (contextEnabled && type?.id === "insight") {
+    const stats = state.periodicInsight.contextStats;
+    summary.push("", stats ? `自动 Context：${formatNumber(stats.chars)}/${formatNumber(stats.budget?.contextChars || 0)} 字符` : "自动 Context 尚未生成");
+  } else if (contextEnabled) {
+    summary.push("", `上下文文件：${selectedFiles.length}`, ...selectedFiles.slice(0, 12).map((file) => `- [${strategyLabel(file.strategy)}] ${file.path}`));
+    if (selectedFiles.length > 12) summary.push(`- ... 另 ${selectedFiles.length - 12} 个文件`);
+  }
+  els.chatPackContextSummary.value = summary.join("\n");
+}
+
+function estimateTextStats(text) {
+  const compact = String(text ?? "").replace(/\s/gu, "");
+  return { visibleChars: Array.from(compact).length };
+}
+
+function renderChatPackWarning() {
+  const warnings = [];
+  if (!els.currentQuestion.value.trim()) {
+    warnings.push("当前问题为空，容易让 AI 泛泛审计；建议先写清这次真实问题。");
+  }
+
+  els.chatPackWarning.hidden = !warnings.length;
+  els.chatPackWarning.textContent = warnings.join(" ");
+}
+
+function formatNumber(value) {
+  return new Intl.NumberFormat("zh-CN").format(value);
+}
+
+async function copyText(text, message, { statusElement, signal, onWriteSettled } = {}) {
+  const target = statusElement || (currentModule() === "learning" ? els.learningStatus : els.status);
+  if (clipboardWriteInProgress) {
+    if (target) target.textContent = "已有一次剪贴板写入仍在处理，请稍后重试。";
+    return false;
+  }
+  clipboardWriteInProgress = true;
+  let write;
+  let settled = false;
+  const settleWrite = (copied) => {
+    if (settled) return;
+    settled = true;
+    clipboardWriteInProgress = false;
+    onWriteSettled?.({ copied });
+  };
+  try {
+    write = Promise.resolve(navigator.clipboard.writeText(text));
+    write.then(() => settleWrite(true), () => settleWrite(false));
+    await (signal ? raceWithSignal(write, signal) : write);
+    if (target) target.textContent = message;
+    return true;
+  } catch {
+    if (target) target.textContent = `${message.replace("已生成并复制", "已生成")}（剪贴板未确认写入）`;
+    return false;
+  } finally {
+    if (!write) settleWrite(false);
+  }
+}
+
+function showToast(message) {
+  window.clearTimeout(toastTimer);
+  window.clearTimeout(toastHideTimer);
+  els.toastMessage.textContent = message;
+  els.toastMessage.hidden = false;
+  requestAnimationFrame(() => els.toastMessage.classList.add("visible"));
+  toastTimer = window.setTimeout(() => {
+    els.toastMessage.classList.remove("visible");
+    toastHideTimer = window.setTimeout(() => {
+      els.toastMessage.hidden = true;
+    }, 180);
+  }, 2200);
+}
+
+function attachPreviewHandlers() {
+  document.querySelectorAll(".wiki-link").forEach((link) => {
+    link.addEventListener("click", async (event) => {
+      event.preventDefault();
+      const target = resolveTarget(link.dataset.target);
+      if (target) await openFile(target.path);
+    });
+
+    link.addEventListener("mouseenter", (event) => showPreview(event.currentTarget));
+    link.addEventListener("mouseleave", hidePreview);
+  });
+}
+
+function resolveTarget(target) {
+  const normalized = target.replace(/\.md$/, "");
+  return (
+    state.files.find((file) => file.path === target) ||
+    state.files.find((file) => file.path.replace(/\.md$/, "") === normalized) ||
+    state.files.find((file) => file.title === target) ||
+    state.files.find((file) => file.path.endsWith(`${target}.md`))
+  );
+}
+
+function showPreview(node) {
+  const target = resolveTarget(node.dataset.target);
+  if (!target) {
+    els.preview.innerHTML = `<strong>未找到双链</strong><span>${escapeHtml(node.dataset.target)}</span>`;
+  } else {
+    els.preview.innerHTML = `<strong>${escapeHtml(target.path)}</strong>${target.previewHtml || ""}`;
+  }
+
+  const rect = node.getBoundingClientRect();
+  els.preview.hidden = false;
+  const left = Math.min(rect.left, window.innerWidth - 380);
+  els.preview.style.left = `${Math.max(16, left)}px`;
+  els.preview.style.top = `${Math.min(rect.bottom + 10, window.innerHeight - 180)}px`;
+}
+
+function hidePreview() {
+  els.preview.hidden = true;
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+export function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function slugify(value) {
+  return String(value)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+export function asciiSlugify(value) {
+  return String(value)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+export function uniquePromptId(value, existing = state.promptEditorDraft.dialogueTypes.map((type) => type.id)) {
+  const base = asciiSlugify(value);
+  if (!base) return "";
+  let candidate = base;
+  let index = 2;
+  while (existing.includes(candidate)) {
+    candidate = `${base}-${index}`;
+    index += 1;
+  }
+  return candidate;
+}
+
+boot().catch((error) => {
+  els.status.textContent = error.message;
+});
